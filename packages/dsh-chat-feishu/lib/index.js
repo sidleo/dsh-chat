@@ -27591,7 +27591,7 @@ __export(es_exports, {
   messageCard: () => messageCard,
   normalize: () => normalize,
   normalizeBotAdded: () => normalizeBotAdded,
-  normalizeCardAction: () => normalizeCardAction,
+  normalizeCardAction: () => normalizeCardAction2,
   normalizeComment: () => normalizeComment,
   normalizeReaction: () => normalizeReaction,
   registerApp: () => registerApp,
@@ -28940,7 +28940,7 @@ function dispatchConvert(raw, msgType, ctx) {
     }
   });
 }
-function normalizeCardAction(event, opts) {
+function normalizeCardAction2(event, opts) {
   var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
   const messageId = (_b = (_a = event.context) === null || _a === void 0 ? void 0 : _a.open_message_id) !== null && _b !== void 0 ? _b : event.open_message_id;
   const chatId = (_d = (_c = event.context) === null || _c === void 0 ? void 0 : _c.open_chat_id) !== null && _d !== void 0 ? _d : event.open_chat_id;
@@ -126403,7 +126403,7 @@ ${lines.join("\n")}
           // collapsed by the dedup cache. A genuine Feishu re-delivery
           // of the same click still hashes to the same key.
           "card.action.trigger": (raw) => __awaiter(this, void 0, void 0, function* () {
-            const evt = normalizeCardAction(raw, { includeRaw });
+            const evt = normalizeCardAction2(raw, { includeRaw });
             if (!evt)
               return;
             const actionId = cardActionId(evt.action);
@@ -126992,7 +126992,10 @@ ${question?.question ?? ""}`
     const value = event?.action?.value ?? {};
     const operatorId = event?.operator?.openId;
     const chatId = event?.chatId;
-    if (!operatorId || !chatId) return void 0;
+    if (!operatorId || !chatId) {
+      logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u7F3A\u5C11\u4F1A\u8BDD\u6216\u64CD\u4F5C\u8005\uFF0C\u65E0\u6CD5\u8BA4\u9886\uFF08chatId=${chatId ?? "\u65E0"} operator=${operatorId ?? "\u65E0"}\uFF09`);
+      return void 0;
+    }
     if (value.dsh === "approval") {
       const decision = value.decision === "allowed-once" ? "allowed-once" : "rejected";
       const claimed = deps.interactions?.offer?.({
@@ -127225,6 +127228,27 @@ var FILE_TYPES = new Map(Object.entries({
   ppt: "ppt",
   pptx: "ppt"
 }));
+function normalizeCardAction(raw) {
+  if (raw === null || typeof raw !== "object") return null;
+  const context = raw.context ?? {};
+  const operator = raw.operator ?? {};
+  const action = raw.action ?? {};
+  const messageId = context.open_message_id ?? raw.open_message_id ?? raw.messageId;
+  const chatId = context.open_chat_id ?? raw.open_chat_id ?? raw.chatId;
+  const openId = operator.open_id ?? operator.openId;
+  if (typeof chatId !== "string" || !chatId || typeof openId !== "string" || !openId) return null;
+  return Object.freeze({
+    messageId: typeof messageId === "string" ? messageId : void 0,
+    chatId,
+    operator: Object.freeze({ openId }),
+    action: Object.freeze({
+      tag: action.tag ?? "unknown",
+      value: action.value ?? {},
+      ...action.name === void 0 ? {} : { name: action.name }
+    }),
+    raw
+  });
+}
 function fileTypeFor(name2) {
   const ext = String(name2 ?? "").split(".").pop()?.toLowerCase() ?? "";
   return FILE_TYPES.get(ext) ?? "stream";
@@ -127301,8 +127325,13 @@ function createLarkGateway({
         // 注意：卡片回调的返回值就是飞书客户端的应答（toast / 替换卡片），
         // 必须把处理结果返回给 SDK，否则用户点了按钮只会看到一个失败提示。
         "card.action.trigger": (event) => {
-          logger.info?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\uFF08event=${event?.action?.tag ?? "?"} value=${JSON.stringify(event?.action?.value ?? {})}\uFF09`);
-          return Promise.resolve().then(() => onCardAction?.(event)).catch((error) => {
+          const normalized = normalizeCardAction(event);
+          if (!normalized) {
+            logger.warn?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\u4F46\u5B57\u6BB5\u8BA4\u4E0D\u51FA\uFF1A${JSON.stringify(event ?? null).slice(0, 300)}`);
+            return void 0;
+          }
+          logger.info?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\uFF1A\u4F1A\u8BDD=${normalized.chatId} \u64CD\u4F5C\u8005=${normalized.operator.openId} \u503C=${JSON.stringify(normalized.action.value)}`);
+          return Promise.resolve().then(() => onCardAction?.(normalized)).catch((error) => {
             logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u5361\u7247\u56DE\u8C03\u5931\u8D25\uFF1A${error?.message ?? error}`);
             return void 0;
           });

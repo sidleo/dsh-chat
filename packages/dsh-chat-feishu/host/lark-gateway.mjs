@@ -32,6 +32,41 @@ const FILE_TYPES = new Map(Object.entries({
   pptx: 'ppt',
 }));
 
+/**
+ * 把飞书卡片回调归一化成一种形状。
+ *
+ * 为什么必须做：我们注册在**裸 EventDispatcher** 上，拿到的是原始回调体
+ * （`operator.open_id` / `context.open_chat_id` / `action.value`），
+ * 而不是 SDK 高层封装里那份 camelCase 版本（`operator.openId` / `chatId`）。
+ * 真机上就是因为按后者读字段，回调进来后被"缺 operator/chatId"静默丢掉。
+ *
+ * 两种形状都认：缺字段就返回 null，由调用方记一条可检索的日志。
+ *
+ * @param raw - 原始回调体。
+ * @returns 归一化事件，或 null。
+ */
+export function normalizeCardAction(raw) {
+  if (raw === null || typeof raw !== 'object') return null;
+  const context = raw.context ?? {};
+  const operator = raw.operator ?? {};
+  const action = raw.action ?? {};
+  const messageId = context.open_message_id ?? raw.open_message_id ?? raw.messageId;
+  const chatId = context.open_chat_id ?? raw.open_chat_id ?? raw.chatId;
+  const openId = operator.open_id ?? operator.openId;
+  if (typeof chatId !== 'string' || !chatId || typeof openId !== 'string' || !openId) return null;
+  return Object.freeze({
+    messageId: typeof messageId === 'string' ? messageId : undefined,
+    chatId,
+    operator: Object.freeze({ openId }),
+    action: Object.freeze({
+      tag: action.tag ?? 'unknown',
+      value: action.value ?? {},
+      ...(action.name === undefined ? {} : { name: action.name }),
+    }),
+    raw,
+  });
+}
+
 function fileTypeFor(name) {
   const ext = String(name ?? '').split('.').pop()?.toLowerCase() ?? '';
   return FILE_TYPES.get(ext) ?? 'stream';
@@ -134,10 +169,18 @@ export function createLarkGateway({
         // 注意：卡片回调的返回值就是飞书客户端的应答（toast / 替换卡片），
         // 必须把处理结果返回给 SDK，否则用户点了按钮只会看到一个失败提示。
         'card.action.trigger': (event) => {
-          logger.info?.('[dsh-chat-feishu] 收到卡片回调'
-            + `（event=${event?.action?.tag ?? '?'} value=${JSON.stringify(event?.action?.value ?? {})}）`);
+          const normalized = normalizeCardAction(event);
+          if (!normalized) {
+            // 到了但认不出：把原始键名记下来，别让"点了没反应"再次无从查起。
+            logger.warn?.('[dsh-chat-feishu] 收到卡片回调但字段认不出：'
+              + `${JSON.stringify(event ?? null).slice(0, 300)}`);
+            return undefined;
+          }
+          logger.info?.('[dsh-chat-feishu] 收到卡片回调：'
+            + `会话=${normalized.chatId} 操作者=${normalized.operator.openId}`
+            + ` 值=${JSON.stringify(normalized.action.value)}`);
           return Promise.resolve()
-          .then(() => onCardAction?.(event))
+          .then(() => onCardAction?.(normalized))
           .catch((error) => {
             logger.error?.(`[dsh-chat-feishu] 处理卡片回调失败：${error?.message ?? error}`);
             return undefined;

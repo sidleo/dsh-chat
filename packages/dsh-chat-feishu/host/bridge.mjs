@@ -452,7 +452,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     const value = event?.action?.value ?? {};
     const operatorId = event?.operator?.openId;
     const chatId = event?.chatId;
-    if (!operatorId || !chatId) return undefined;
+    if (!operatorId || !chatId) {
+      // 绝不静默：到了这里却认不出会话/操作者，一定留痕（字段名对不上就是在这里暴露的）。
+      logger.warn?.('[dsh-chat-feishu] 卡片回调缺少会话或操作者，无法认领'
+        + `（chatId=${chatId ?? '无'} operator=${operatorId ?? '无'}）`);
+      return undefined;
+    }
 
     // 审批卡片：直接按按钮里的结论回答
     if (value.dsh === 'approval') {
