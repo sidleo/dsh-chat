@@ -145,6 +145,42 @@ test('渠道挂载：发现候选、发送分派、注销后能力消失', async
   }
 });
 
+test('同一会话的两套 id（旧 tgt_xxx 与渠道 group_xxx）只出现一次', async () => {
+  const app = await makeService();
+  try {
+    // 旧 dsh-im 设置里的目标 id 与渠道现在派生出来的 id 不一样，但路由是同一个群。
+    await app.service.save({
+      channelId: 'feishu', botId: 'bot_1',
+      target: {
+        id: 'tgt_d0b1cfe07dc87567',
+        name: '项目群',
+        kind: 'group',
+        route: { chatId: 'oc_5086' },
+      },
+    });
+    app.service.attach('feishu', {
+      async send() {
+        throw new Error('本用例不该发送');
+      },
+      async discover() {
+        return [
+          { id: 'group_oc_5086', kind: 'group', route: { chatId: 'oc_5086' } },
+          // 同一个候选重复返回也只算一个。
+          { id: 'group_oc_5086_dup', kind: 'group', route: { chatId: 'oc_5086' } },
+          { id: 'group_oc_other', kind: 'group', route: { chatId: 'oc_9999' } },
+        ];
+      },
+    });
+
+    const listed = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.deepEqual(listed.targets.map((item) => item.id), ['tgt_d0b1cfe07dc87567', 'group_oc_other']);
+    assert.equal(listed.targets[0].discovered, undefined);
+    assert.equal(listed.targets[1].discovered, true);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('发送前的兜底：空文本、未知渠道、渠道实现抛错都给出稳定错误码', async () => {
   const app = await makeService();
   try {

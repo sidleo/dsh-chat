@@ -75,9 +75,23 @@ export function normalizeTarget(input) {
   return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
 }
 
+/**
+ * 会话身份键：同一会话可能以不同 id 出现（旧数据 `tgt_xxx` vs 渠道派生的 `group_xxx`），
+ * 因此判重按"类型 + 路由"而不是 id。
+ *
+ * @param target - 归一化后的目标。
+ * @returns 稳定的字符串键。
+ */
+function routeKey(target) {
+  const route = Object.entries(target.route)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\u0001');
+  return `${target.kind}\u0000${route}`;
+}
+
 /** 容错归一化（读取历史数据用）：坏条目丢弃而不是让整表读不出来。 */
-function normalizeStoredTargets(value) {
-  if (!isPlainObject(value)) return {};
+function normalizeStoredTargets(value) {  if (!isPlainObject(value)) return {};
   const targets = {};
   for (const [id, target] of Object.entries(value)) {
     try {
@@ -133,17 +147,24 @@ export function createDeliveryService({ settings, logger = console }) {
           logger.warn?.(`[dsh-chat] 渠道 ${channelId} 发现投递目标失败：${error?.message ?? error}`);
         }
       }
+      const savedList = Object.values(saved);
+      // 同一个会话可能有两套 id（旧设置里的 tgt_xxx 与渠道派生的 group_xxx），
+      // 因此除了 id，还要按"类型 + 路由"判重，否则设置页和 agent 会看到重复条目。
+      const known = new Set(savedList.map(routeKey));
       const candidates = [];
       for (const candidate of Array.isArray(discovered) ? discovered : []) {
         try {
           const target = normalizeTarget(candidate);
-          if (!saved[target.id]) candidates.push(Object.freeze({ ...target, discovered: true }));
+          const key = routeKey(target);
+          if (saved[target.id] || known.has(key)) continue;
+          known.add(key);
+          candidates.push(Object.freeze({ ...target, discovered: true }));
         } catch {
           // 忽略无法识别的候选
         }
       }
       return Object.freeze({
-        targets: Object.freeze([...Object.values(saved), ...candidates]),
+        targets: Object.freeze([...savedList, ...candidates]),
         canSend: providers.has(channelId),
       });
     },

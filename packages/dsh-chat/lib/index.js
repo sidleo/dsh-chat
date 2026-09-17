@@ -1470,6 +1470,10 @@ function normalizeTarget(input) {
   }
   return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
 }
+function routeKey(target) {
+  const route = Object.entries(target.route).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("");
+  return `${target.kind}\0${route}`;
+}
 function normalizeStoredTargets(value) {
   if (!isPlainObject5(value)) return {};
   const targets = {};
@@ -1515,16 +1519,21 @@ function createDeliveryService({ settings, logger = console }) {
           logger.warn?.(`[dsh-chat] \u6E20\u9053 ${channelId} \u53D1\u73B0\u6295\u9012\u76EE\u6807\u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
       }
+      const savedList = Object.values(saved);
+      const known = new Set(savedList.map(routeKey));
       const candidates = [];
       for (const candidate of Array.isArray(discovered) ? discovered : []) {
         try {
           const target = normalizeTarget(candidate);
-          if (!saved[target.id]) candidates.push(Object.freeze({ ...target, discovered: true }));
+          const key = routeKey(target);
+          if (saved[target.id] || known.has(key)) continue;
+          known.add(key);
+          candidates.push(Object.freeze({ ...target, discovered: true }));
         } catch {
         }
       }
       return Object.freeze({
-        targets: Object.freeze([...Object.values(saved), ...candidates]),
+        targets: Object.freeze([...savedList, ...candidates]),
         canSend: providers.has(channelId)
       });
     },
