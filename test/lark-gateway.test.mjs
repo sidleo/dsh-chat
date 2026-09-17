@@ -135,3 +135,31 @@ test('上传没给 key：抛可读错误，绝不假装发送成功', async () =
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('提问元素：已回答部分的容器标题极简 `❓ N/M 已回答`，答完收起但仍可展开', () => {
+  const gateway = makeGateway(createFakeSdk());
+  const questions = [
+    { id: 'q1', header: '选一个', question: '选一个', options: [{ label: 'A' }] },
+    { id: 'q2', header: '再选', question: '再选', options: [{ label: 'B' }] },
+  ];
+
+  // 一题已答、还有一题要答 → 面板展开，控件在面板外
+  const partial = gateway.renderQuestionElements({
+    questions, answered: { q1: { selected: ['A'] } }, final: false,
+  });
+  const panel = partial.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.equal(panel.header.title.content, '❓ 1/2 已回答');
+  assert.equal(panel.header.title.tag, 'plain_text');
+  assert.equal(panel.expanded, true, '还有题要答时展开对照');
+  assert.equal(partial.current.id, 'q2');
+
+  // 全部答完 → 面板收起但仍在卡里（真机要求：收起而不是消失）
+  const done = gateway.renderQuestionElements({
+    questions, answered: { q1: { selected: ['A'] }, q2: { selected: ['B'] } }, final: true,
+  });
+  assert.equal(done.current, null);
+  const donePanel = done.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.equal(donePanel.header.title.content, '❓ 2/2 已回答');
+  assert.equal(donePanel.expanded, false);
+  assert.match(JSON.stringify(donePanel), /A/, '答过的内容还能展开回看');
+});

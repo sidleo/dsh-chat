@@ -1266,7 +1266,7 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
         elements.push({
           tag: 'collapsible_panel',
           expanded: Boolean(current),
-          header: { title: { tag: 'markdown', content: current ? '已回答（点标题展开）' : '✅ 已全部回答（点标题展开回看）' } },
+          header: { title: { tag: 'plain_text', content: `❓ ${answeredList.length}/${questions.length} 已回答` } },
           elements: answeredList.map((q) => ({
             tag: 'markdown',
             content: `✅ ${q.question} → ${[...(answered[q.id].selected ?? [])].join('、')}`,
@@ -1313,7 +1313,7 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
   assert.doesNotMatch(last, /等你确认/);
   assert.match(last, /collapsible_panel/, '收起要保留可展开的面板，而不是整块删掉');
   assert.match(last, /"expanded":false/, '默认收起');
-  assert.match(last, /已全部回答（点标题展开回看）/, '标题要告诉用户还能展开回看');
+  assert.match(last, /❓ 1\/1 已回答/, '提问容器标题简化为 N/M 已回答');
   assert.match(last, /最终答案/);
 });
 
@@ -1405,12 +1405,12 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.doesNotMatch(running, /张三-DSH/, '标题里不要机器人名');
   assert.match(running, /collapsible_panel/, '工具与思考放进一个折叠面板');
   assert.match(running, /"expanded":false/, '默认收起');
-  assert.match(running, /最新：🛠 bash · 检查 try 结构/, '收起时标题显示最新一条');
+  assert.match(running, /"content":"工具与思考\(2\)"|"content":"工具与思考\(1\)"/, '标题极简：工具与思考(N)');
   // 第二条（思考）会被节流合并，收尾时一定会补上
   await presenter.finish('答案', { kind: 'completed' });
   const withThink = JSON.stringify(cards.at(-1));
   assert.match(withThink, /💭 先看 bridge 的 try 块/, '思考也在同一个面板里');
-  assert.match(withThink, /工具与思考（2 条）/, '收尾把节流掉的过程补上');
+  assert.match(withThink, /工具与思考\(2\)/, '收尾把节流掉的过程补上');
 
   const done = JSON.stringify(cards.at(-1));
   assert.match(done, /✅ 已完成/, '完成后标题要变成已完成');
@@ -1433,7 +1433,7 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.match(failed, /"template":"orange"/);
 });
 
-test('工具与思考合并进一个折叠面板：默认收起、标题显示最新、展开看全部', () => {
+test('工具与思考合并进一个折叠面板：标题极简、默认收起、展开看全部', () => {
   const card = renderStepCard({
     title: '正在处理',
     lines: ['🛠 Bash · 检查 try 结构', '💭 先看有没有外层 try', '🛠 read · 读 bridge'],
@@ -1442,8 +1442,8 @@ test('工具与思考合并进一个折叠面板：默认收起、标题显示�
   const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
   assert.ok(panel, '工具与思考要在一个折叠面板里');
   assert.equal(panel.expanded, false, '默认收起');
-  assert.match(panel.header.title.content, /工具与思考（3 条）/);
-  assert.match(panel.header.title.content, /最新：🛠 read · 读 bridge/, '收起时标题显示最新一条');
+  assert.equal(panel.header.title.content, '工具与思考(3)', '标题只留名称与条数');
+  assert.doesNotMatch(panel.header.title.content, /最新|🛠/, '不要前缀也不要"最新："');
   const bodyText = panel.elements.map((element) => element.content).join('\n');
   assert.match(bodyText, /🛠 Bash · 检查 try 结构/, '展开能看到全部');
   assert.match(bodyText, /💭 先看有没有外层 try/, '思考也在里面');

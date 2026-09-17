@@ -145,5 +145,5 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   const done = JSON.stringify(card);
   assert.match(done, /随便聊聊/, '答案仍可回看');
   assert.match(done, /"expanded":false/, '全部答完默认收起');
-  assert.match(done, /点标题展开回看/, '要告诉用户还能展开');
+  assert.match(done, /❓ 3\/3 已回答/, '提问容器标题简化为 N/M 已回答');
 });

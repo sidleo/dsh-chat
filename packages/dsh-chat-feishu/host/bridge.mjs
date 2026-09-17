@@ -138,6 +138,29 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   const activePresenters = new Map();
 
 
+  /**
+   * 从工具调用参数里挑一句"人看得懂"的摘要。
+   *
+   * 真机反馈：只显示工具名等于没信息；而各工具的"关键参数"名字五花八门
+   * （bash 用 description/command、search 用 query、read 用 path…），
+   * 因此按优先级挑常见键，最后退化到"第一个像人话的短字符串值"。
+   */
+  function toolSummary(args) {
+    if (args === null || typeof args !== 'object') return '';
+    const preferred = [
+      'description', 'command', 'query', 'pattern', 'url', 'path', 'file_path',
+      'objective', 'prompt', 'text', 'name', 'target_id', 'sql',
+    ];
+    for (const key of preferred) {
+      const value = args[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    for (const value of Object.values(args)) {
+      if (typeof value === 'string' && value.trim() && value.length <= 200) return value.trim();
+    }
+    return '';
+  }
+
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
     const separator = key.indexOf(':');
@@ -444,9 +467,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
               const args = typeof toolEvent?.data?.arguments === 'string'
                 ? JSON.parse(toolEvent.data.arguments)
                 : toolEvent?.data?.arguments;
-              summary = typeof args?.description === 'string' && args.description
-                ? args.description
-                : (typeof args?.command === 'string' ? args.command : '');
+              summary = toolSummary(args);
             } catch {
               // 参数不是 JSON 就算了，只留工具名
             }

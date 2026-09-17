@@ -50,10 +50,9 @@ export function renderStepCard({
         expanded: false,
         border: { color: 'grey', corner_radius: '4px' },
         header: {
-          title: {
-            tag: 'markdown',
-            content: `🛠 工具与思考（${lines.length} 条）· 最新：${clamp(lines.at(-1)).slice(0, 60)}`,
-          },
+          // 标题保持极简：只要"工具与思考(N)"。真机反馈：不要 🛠 前缀、也不要"最新：…"
+          // （最新那条常常是又长又碎的思考摘要，反而干扰阅读）。
+          title: { tag: 'plain_text', content: `工具与思考(${lines.length})` },
           width: 'fill',
           icon_position: 'right',
           icon_expanded_angle: -180,

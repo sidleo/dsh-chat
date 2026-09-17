@@ -126510,10 +126510,9 @@ function renderStepCard({
         expanded: false,
         border: { color: "grey", corner_radius: "4px" },
         header: {
-          title: {
-            tag: "markdown",
-            content: `\u{1F6E0} \u5DE5\u5177\u4E0E\u601D\u8003\uFF08${lines.length} \u6761\uFF09\xB7 \u6700\u65B0\uFF1A${clamp(lines.at(-1)).slice(0, 60)}`
-          },
+          // 标题保持极简：只要"工具与思考(N)"。真机反馈：不要 🛠 前缀、也不要"最新：…"
+          // （最新那条常常是又长又碎的思考摘要，反而干扰阅读）。
+          title: { tag: "plain_text", content: `\u5DE5\u5177\u4E0E\u601D\u8003(${lines.length})` },
           width: "fill",
           icon_position: "right",
           icon_expanded_angle: -180
@@ -126850,6 +126849,32 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
   const activePresenters = /* @__PURE__ */ new Map();
+  function toolSummary(args) {
+    if (args === null || typeof args !== "object") return "";
+    const preferred = [
+      "description",
+      "command",
+      "query",
+      "pattern",
+      "url",
+      "path",
+      "file_path",
+      "objective",
+      "prompt",
+      "text",
+      "name",
+      "target_id",
+      "sql"
+    ];
+    for (const key of preferred) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    for (const value of Object.values(args)) {
+      if (typeof value === "string" && value.trim() && value.length <= 200) return value.trim();
+    }
+    return "";
+  }
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -127116,7 +127141,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
             let summary = "";
             try {
               const args = typeof toolEvent?.data?.arguments === "string" ? JSON.parse(toolEvent.data.arguments) : toolEvent?.data?.arguments;
-              summary = typeof args?.description === "string" && args.description ? args.description : typeof args?.command === "string" ? args.command : "";
+              summary = toolSummary(args);
             } catch {
             }
             const oneLine = summary.replace(/\s+/g, " ").trim().slice(0, 60);
@@ -127584,9 +127609,10 @@ function createLarkGateway({
         expanded: Boolean(current),
         border: { color: "grey", corner_radius: "4px" },
         header: {
+          // 标题极简：`❓ 2/3 已回答`（真机反馈：不要长句，仍然是折叠面板，点标题可展开回看）
           title: {
-            tag: "markdown",
-            content: current ? `\u2705 \u5DF2\u56DE\u7B54 ${answeredList.length}/${questions.length} \u9898\uFF08\u70B9\u6807\u9898\u5C55\u5F00\u56DE\u770B\uFF09` : `\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54\uFF08\u5171 ${questions.length} \u9898\uFF0C\u70B9\u6807\u9898\u5C55\u5F00\u56DE\u770B\uFF09`
+            tag: "plain_text",
+            content: `\u2753 ${answeredList.length}/${questions.length} \u5DF2\u56DE\u7B54`
           },
           width: "fill",
           icon_position: "right",

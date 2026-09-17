@@ -226,11 +226,10 @@ export function createLarkGateway({
         expanded: Boolean(current),
         border: { color: 'grey', corner_radius: '4px' },
         header: {
+          // 标题极简：`❓ 2/3 已回答`（真机反馈：不要长句，仍然是折叠面板，点标题可展开回看）
           title: {
-            tag: 'markdown',
-            content: current
-              ? `✅ 已回答 ${answeredList.length}/${questions.length} 题（点标题展开回看）`
-              : `✅ 已全部回答（共 ${questions.length} 题，点标题展开回看）`,
+            tag: 'plain_text',
+            content: `❓ ${answeredList.length}/${questions.length} 已回答`,
           },
           width: 'fill',
           icon_position: 'right',
