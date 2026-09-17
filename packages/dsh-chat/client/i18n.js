@@ -41,6 +41,17 @@ export const zh = {
   '已保存，现在可以主动发消息了。': '已保存，现在可以主动发消息了。',
   '已删除。': '已删除。',
   '候选目标需要先保存，保存后才能主动发送。': '候选目标需要先保存，保存后才能主动发送。',
+  // 版本与更新（version-panel.js）
+  '版本与更新': '版本与更新',
+  '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':
+    '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。',
+  'Chat机器人内核': 'Chat机器人内核',
+  '渠道契约版本': '渠道契约版本',
+  '数据目录': '数据目录',
+  '日志目录': '日志目录',
+  '读取失败': '读取失败',
+  '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。':
+    '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。',
   '发一条测试消息': '发一条测试消息',
   '选择目标': '选择目标',
   '发送': '发送',
@@ -86,6 +97,16 @@ export const en = {
   '已删除。': 'Deleted.',
   '候选目标需要先保存，保存后才能主动发送。':
     'A candidate must be saved before it can receive proactive messages.',
+  '版本与更新': 'Version & updates',
+  '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':
+    'Upgrading the plugin needs a dsh restart; settings-only changes just need a page refresh.',
+  'Chat机器人内核': 'Chat bot core',
+  '渠道契约版本': 'Channel contract version',
+  '数据目录': 'Data directory',
+  '日志目录': 'Log directory',
+  '读取失败': 'Failed to read',
+  '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。':
+    'To update: pull the repo, rebuild, then let DSH reload the plugin.',
   '发一条测试消息': 'Send a test message',
   '选择目标': 'Choose a target',
   '发送': 'Send',

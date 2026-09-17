@@ -173,6 +173,11 @@ test('hub 发布契约版本与控制端点', async () => {
     const { result } = await callRoute(app.routes, HUB_PATH, 'channel.list', {});
     assert.equal(result.ok, true);
     assert.equal(result.value.contractVersion, 1);
+    // 「版本与更新」面板的数据来源：hub 版本、包名、数据/日志目录、各渠道包版本
+    assert.match(result.value.hubVersion, /^\d+\.\d+\.\d+/);
+    assert.equal(result.value.hubPackage, 'dsh-chat');
+    assert.ok(result.value.dataDir, '要给出数据目录');
+    assert.equal(result.value.logDir, `${result.value.dataDir}/logs`, '日志目录固定在其下的 logs');
     assert.deepEqual(result.value.channels.map((channel) => channel.id), ['fixture']);
     assert.equal(result.value.channels[0].status, 'running');
   } finally {

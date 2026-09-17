@@ -128901,6 +128901,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
+var CHANNEL_VERSION = "0.0.1";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;
@@ -128916,6 +128917,7 @@ function apply(ctx) {
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: "\u98DE\u4E66",
+    version: CHANNEL_VERSION,
     order: 20,
     legacy: { dir: "dsh-feishu" },
     async createChannel(deps) {

@@ -72,7 +72,7 @@ export function requireContract(service, owner) {
  */
 export function validateChannelDefinition(definition) {
   if (!isPlainObject(definition)) throw new TypeError('registerChannel 需要一份渠道定义对象。');
-  const { id, label, order, createChannel, legacy } = definition;
+  const { id, label, order, createChannel, legacy, version } = definition;
   if (typeof id !== 'string' || !CHANNEL_ID_PATTERN.test(id)) {
     throw new TypeError('渠道 id 必须是 2–32 位小写字母/数字/连字符，且以字母开头。');
   }
@@ -89,12 +89,17 @@ export function validateChannelDefinition(definition) {
       throw new TypeError('渠道 legacy 只接受 { dir: "dsh-<name>" } 形式的迁移来源。');
     }
   }
+  if (version !== undefined && (typeof version !== 'string' || !/^\d+\.\d+\.\d+/u.test(version))) {
+    throw new TypeError('渠道 version 必须是形如 1.2.3 的版本号。');
+  }
   const resolveLabel = typeof label === 'function' ? label : () => label;
   return Object.freeze({
     id,
     label: resolveLabel,
     order,
     createChannel,
+    // 渠道包的版本（设置页的"版本与更新"面板用它对照 package.json）。
+    version: version === undefined ? null : version,
     legacy: legacy === undefined ? null : Object.freeze({ dir: legacy.dir }),
   });
 }

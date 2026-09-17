@@ -235,7 +235,15 @@ export function apply(ctx, config = {}) {
         || Object.keys(payload).length > 0)) {
         return fail('chat/bad-request', 'channel.list 不接受参数。');
       }
-      return ok({ contractVersion: CONTRACT_VERSION, channels: registry.list() });
+      return ok({
+        contractVersion: CONTRACT_VERSION,
+        // 「版本与更新」面板要的三个层次：hub 版本、渠道契约版本、各渠道包版本。
+        hubVersion: HUB_VERSION,
+        hubPackage: 'dsh-chat',
+        dataDir: hubDataDir(config.dataDir),
+        logDir: logsDir,
+        channels: registry.list(),
+      });
     }
     if (method === 'bot.settings.get') {
       if (!validBotPayload(payload)) return fail('chat/bad-request', 'bot.settings.get 需要 channelId 与 botId。');

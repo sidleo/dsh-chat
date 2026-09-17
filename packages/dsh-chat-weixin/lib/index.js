@@ -1861,6 +1861,7 @@ function createWeixinController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-weixin/host/index.mjs
+var CHANNEL_VERSION = "0.0.1";
 var name = "dsh-chat-weixin-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;
@@ -1876,6 +1877,7 @@ function apply(ctx) {
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: "\u5FAE\u4FE1",
+    version: CHANNEL_VERSION,
     order: 10,
     legacy: { dir: "dsh-weixin" },
     async createChannel(deps) {

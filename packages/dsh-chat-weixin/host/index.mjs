@@ -8,6 +8,9 @@
 
 import { createWeixinController } from './controller.mjs';
 
+/** 渠道包版本：设置页的「版本与更新」面板用它，`npm run check` 会与 package.json 对账。 */
+const CHANNEL_VERSION = '0.0.1';
+
 export const name = 'dsh-chat-weixin-host';
 
 export const inject = ['dshChat'];
@@ -34,6 +37,7 @@ export function apply(ctx) {
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: '微信',
+    version: CHANNEL_VERSION,
     order: 10,
     legacy: { dir: 'dsh-weixin' },
     async createChannel(deps) {

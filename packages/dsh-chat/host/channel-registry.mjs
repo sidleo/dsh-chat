@@ -52,6 +52,7 @@ export function createChannelRegistry({
       id: record.definition.id,
       label: channelLabel(record.definition),
       order: record.definition.order,
+      version: record.definition.version ?? null,
       status: record.status,
       error: record.error,
       startedAt: record.startedAt,

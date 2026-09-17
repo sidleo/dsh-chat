@@ -63,7 +63,9 @@ export function apply(ctx) {
     order: SETTINGS_SECTION_ORDER,
     label: () => t(SETTINGS_LABEL_KEY),
     locale: LOCALE_NAMESPACE,
-    inject: () => ({ channels, chatUi, translate: t, contractVersion: CONTRACT_VERSION }),
+    inject: () => ({
+      channels, chatUi, translate: t, contractVersion: CONTRACT_VERSION, connection: ctx.connection,
+    }),
     children: {
       [CHANNEL_PAGE_SLOT]: { kind: 'keyed', scope: 'root' },
     },

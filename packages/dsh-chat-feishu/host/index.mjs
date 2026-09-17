@@ -8,6 +8,9 @@
 
 import { createFeishuController } from './controller.mjs';
 
+/** 渠道包版本：设置页的「版本与更新」面板用它，`npm run check` 会与 package.json 对账。 */
+const CHANNEL_VERSION = '0.0.1';
+
 export const name = 'dsh-chat-feishu-host';
 
 /** 只依赖 hub 服务；hub 未就绪时 Cordis 会自动挂起等待。 */
@@ -36,6 +39,7 @@ export function apply(ctx) {
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: '飞书',
+    version: CHANNEL_VERSION,
     order: 20,
     legacy: { dir: 'dsh-feishu' },
     async createChannel(deps) {

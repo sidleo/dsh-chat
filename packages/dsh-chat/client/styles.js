@@ -155,6 +155,23 @@ const CSS = `
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-primary);
 }
+.dchat-versionMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dchat-updateHint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+.dchat-codeBlock {
+  display: block;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
 .dchat-empty {
   display: flex;
   flex-direction: column;

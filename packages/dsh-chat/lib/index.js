@@ -26,7 +26,7 @@ function isPlainObject(value) {
 }
 function validateChannelDefinition(definition) {
   if (!isPlainObject(definition)) throw new TypeError("registerChannel \u9700\u8981\u4E00\u4EFD\u6E20\u9053\u5B9A\u4E49\u5BF9\u8C61\u3002");
-  const { id, label, order, createChannel, legacy } = definition;
+  const { id, label, order, createChannel, legacy, version } = definition;
   if (typeof id !== "string" || !CHANNEL_ID_PATTERN.test(id)) {
     throw new TypeError("\u6E20\u9053 id \u5FC5\u987B\u662F 2\u201332 \u4F4D\u5C0F\u5199\u5B57\u6BCD/\u6570\u5B57/\u8FDE\u5B57\u7B26\uFF0C\u4E14\u4EE5\u5B57\u6BCD\u5F00\u5934\u3002");
   }
@@ -42,12 +42,17 @@ function validateChannelDefinition(definition) {
       throw new TypeError('\u6E20\u9053 legacy \u53EA\u63A5\u53D7 { dir: "dsh-<name>" } \u5F62\u5F0F\u7684\u8FC1\u79FB\u6765\u6E90\u3002');
     }
   }
+  if (version !== void 0 && (typeof version !== "string" || !/^\d+\.\d+\.\d+/u.test(version))) {
+    throw new TypeError("\u6E20\u9053 version \u5FC5\u987B\u662F\u5F62\u5982 1.2.3 \u7684\u7248\u672C\u53F7\u3002");
+  }
   const resolveLabel = typeof label === "function" ? label : () => label;
   return Object.freeze({
     id,
     label: resolveLabel,
     order,
     createChannel,
+    // 渠道包的版本（设置页的"版本与更新"面板用它对照 package.json）。
+    version: version === void 0 ? null : version,
     legacy: legacy === void 0 ? null : Object.freeze({ dir: legacy.dir })
   });
 }
@@ -928,6 +933,7 @@ function createChannelRegistry({
       id: record.definition.id,
       label: channelLabel(record.definition),
       order: record.definition.order,
+      version: record.definition.version ?? null,
       status: record.status,
       error: record.error,
       startedAt: record.startedAt
@@ -3206,7 +3212,15 @@ function apply(ctx, config = {}) {
       if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {
         return fail("chat/bad-request", "channel.list \u4E0D\u63A5\u53D7\u53C2\u6570\u3002");
       }
-      return ok({ contractVersion: CONTRACT_VERSION, channels: registry.list() });
+      return ok({
+        contractVersion: CONTRACT_VERSION,
+        // 「版本与更新」面板要的三个层次：hub 版本、渠道契约版本、各渠道包版本。
+        hubVersion: HUB_VERSION,
+        hubPackage: "dsh-chat",
+        dataDir: hubDataDir(config.dataDir),
+        logDir: logsDir,
+        channels: registry.list()
+      });
     }
     if (method === "bot.settings.get") {
       if (!validBotPayload(payload)) return fail("chat/bad-request", "bot.settings.get \u9700\u8981 channelId \u4E0E botId\u3002");

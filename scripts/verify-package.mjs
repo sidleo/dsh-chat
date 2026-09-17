@@ -116,6 +116,21 @@ if (existsSync(contractFile)) {
   failures.push(`找不到 ${HUB}/shared/contract.mjs`);
 }
 
+// 渠道声明的 CHANNEL_VERSION 必须与自己的 package.json 一致。
+// 设置页的「版本与更新」面板直接显示这个常量，漂移了会给出错误的版本信息。
+for (const [name, { dir, manifest }] of manifests) {
+  if (name === HUB || name === 'dsh-chat-fixture') continue;
+  const indexFile = join(dir, 'host', 'index.mjs');
+  if (!existsSync(indexFile)) continue;
+  const text = await readFile(indexFile, 'utf8');
+  const declared = /const CHANNEL_VERSION = '([^']+)'/.exec(text)?.[1];
+  check(declared !== undefined, `${name}: host/index.mjs 需声明 CHANNEL_VERSION（版本与更新面板要用）`);
+  if (declared !== undefined) {
+    check(declared === manifest.version,
+      `${name}: CHANNEL_VERSION=${declared} 与 package.json 的 ${manifest.version} 不一致`);
+  }
+}
+
 // 可选：检查当前 profile 是否仍装着上游插件（双绑风险）。
 const profileManifest = process.env.DSH_CHAT_PROFILE_MANIFEST;
 if (profileManifest && existsSync(profileManifest)) {

@@ -41,6 +41,7 @@ export function apply(ctx) {
     id: CHANNEL_ID,
     label: '演示',
     order: 30,                                 // 左栏排序
+    version: CHANNEL_VERSION,                   // 本包版本（设置页「版本与更新」面板显示；check 会与 package.json 对账）
     legacy: { dir: 'dsh-demo' },               // 可选：沿用既有数据目录（零重绑）
     async createChannel(deps) {
       // 这里放协议实现：读配置、建长连接、收消息、调 deps.sessions 跑会话
@@ -224,7 +225,7 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 
 | method | 载荷 | 说明 |
 |---|---|---|
-| `channel.list` | `{}` | 契约版本 + 全部渠道状态 |
+| `channel.list` | `{}` | 契约版本 + hub 版本/包名 + 数据/日志目录 + 全部渠道状态与**渠道包版本**（设置页的「版本与更新」面板用它） |
 | `bot.settings.get` | `{ channelId, botId }` | 读每机器人共享设置 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
 | `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |

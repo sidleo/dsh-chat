@@ -9,6 +9,7 @@
 import * as React from 'react';
 
 import { CHANNEL_PAGE_SLOT } from '../shared/contract.mjs';
+import { VersionPanel } from './version-panel.js';
 
 const h = React.createElement;
 
@@ -33,7 +34,7 @@ function ChannelMark({ entry }) {
  * @returns React 元素。
  */
 export function ChatSettingsSection(props) {
-  const { channels, chatUi, translate, t: frameworkT, renderSlot } = props;
+  const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
   const t = typeof translate === 'function' ? translate
     : (typeof frameworkT === 'function' ? frameworkT : (key) => key);
 
@@ -91,5 +92,7 @@ export function ChatSettingsSection(props) {
       h('div', { className: 'dchat-brand' },
         h('strong', { className: 'dchat-brandName' }, 'DSH-Chat'),
         h('span', { className: 'dchat-brandHint' }, t('Chat机器人')))),
-    body);
+    body,
+    // 版本与更新固定在底部：现在跑的是哪个版本、渠道有没有启动失败、升级怎么做。
+    h(VersionPanel, { connection, chatUi, translate: t }));
 }
