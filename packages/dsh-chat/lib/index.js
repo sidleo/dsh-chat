@@ -2309,6 +2309,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     let currentTurn = null;
     const assistantText = /* @__PURE__ */ new Map();
     const tools = [];
+    const presented = [];
     let settled = false;
     let settle;
     const finished = new Promise((resolve4) => {
@@ -2328,6 +2329,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
         text: "",
         reason: { kind: "timeout", timeoutMs: effectiveTurnTimeoutMs },
         tools: [...tools],
+        files: [...presented],
         aborted: true
       });
     }, effectiveTurnTimeoutMs);
@@ -2379,6 +2381,20 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
             case "tool/result":
               handlers.onToolResult?.(event, tools.at(-1));
               break;
+            case "deliverables/presented": {
+              const files = Array.isArray(event.data?.files) ? event.data.files : [];
+              const accepted = [];
+              for (const file of files) {
+                if (typeof file?.path !== "string" || !file.path) continue;
+                accepted.push({
+                  path: file.path,
+                  ...typeof file.description === "string" && file.description ? { description: file.description } : {}
+                });
+              }
+              presented.push(...accepted);
+              if (accepted.length > 0) handlers.onDeliverables?.(accepted);
+              break;
+            }
             case "turn/end": {
               const turn = event.data?.turn ?? currentTurn;
               const texts = assistantText.get(turn) ?? [];
@@ -2391,6 +2407,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
+                  files: [...presented],
                   aborted: false
                 });
               } else {
@@ -2407,6 +2424,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
           text: "",
           reason: { kind: "stream-ended" },
           tools: [...tools],
+          files: [...presented],
           aborted: false
         });
       } catch (error) {
@@ -2416,6 +2434,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
           text: "",
           reason: { kind: "error", error: sessionError(error) },
           tools: [...tools],
+          files: [...presented],
           aborted: true
         });
         if (wasSettled && !closing) {

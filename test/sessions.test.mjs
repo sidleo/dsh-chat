@@ -133,6 +133,16 @@ function turnFrames({ turn = 1, text = '你好', deltas = [] } = {}) {
   ];
 }
 
+/** 在 turnFrames 里插一条 `deliverables/presented`（agent 用 present 声明交付文件）。 */
+function withDeliverables(frames, files) {
+  const presented = {
+    type: 'event',
+    event: { type: 'deliverables/presented', seq: 6.5, data: { turn: 1, callId: 'call-present', files } },
+  };
+  const at = frames.findIndex((frame) => frame.event?.type === 'turn/end');
+  return [...frames.slice(0, at), presented, ...frames.slice(at)];
+}
+
 async function makeBridge(options = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
   const store = createSessionStore({ dataDir, logger: silentLogger });
@@ -248,6 +258,33 @@ test('流式回合：增量、工具调用、最终文本都回调到位', async
     assert.equal(turnStarts, 1);
     assert.equal(result.text, '最终答案');
     assert.deepEqual(result.tools.map((tool) => tool.name), ['bash']);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('回合里 present 交付的文件要带回给渠道（渠道据此当附件发送）', async () => {
+  const files = [
+    { path: '/ws/永辉销售日报_20260916.md', description: '销售日报' },
+    { path: '/ws/报表.xlsx' },
+    { path: '' },
+  ];
+  const app = await makeBridge({
+    script: [withDeliverables(turnFrames({ text: '写好了' }), files)],
+  });
+  try {
+    const seen = [];
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1',
+      workspacePath: '/ws',
+      content: [{ type: 'text', text: '做份日报' }],
+      handlers: { onDeliverables: (list) => seen.push(...list.map((file) => file.path)) },
+    });
+    assert.deepEqual(seen, ['/ws/永辉销售日报_20260916.md', '/ws/报表.xlsx']);
+    assert.deepEqual(result.files, [
+      { path: '/ws/永辉销售日报_20260916.md', description: '销售日报' },
+      { path: '/ws/报表.xlsx' },
+    ], '空路径要丢掉，描述要有就带上');
   } finally {
     await app.cleanup();
   }

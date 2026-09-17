@@ -12,8 +12,12 @@
  *   项目分类与摘要口径直接照搬 Web 的工具行模型（见下方 `TOOL_VARIANTS` / `SUMMARY_KEYS`，
  *   来源：DSH 安装目录内 `@deepseek-ai/dsh-client-ui-tool` 的 `toolRowModel`）。
  * - 工具、思考、**已答的提问**全部收进**同一个**折叠面板：默认收起、展开看全部；
+ *   已答提问在面板里再嵌一层 `❓ N/M 已回答` 折叠面板（真机要求：提问也要能自己收起/展开；
+ *   Card 2.0 的容器最多嵌套 5 层）；
  * - 面板标题：本轮没结束时显示**最新的一项**（一眼看到在干什么），本轮结束后显示
  *   `工具与思考(N)`；
+ * - **任务清单**（`todo_write`）单独一个面板放在工具面板**下面**：本轮没结束时默认展开
+ *   （看得到完成进度），结束后收起；
  * - 还没回答的提问控件放在面板**外面**——Card 2.0 的折叠面板里不能放 form/输入框。
  *
  * @module dsh-chat-feishu/turn-presenter
@@ -180,6 +184,31 @@ export function thinkRow(text) {
 }
 
 /**
+ * 把 `todo_write` 的清单渲染成几行。
+ *
+ * 模型每次调用都带**全量**清单，因此外层只保留最后一次的结果（覆盖即可，不必累积）。
+ *
+ * @param args - `todo_write` 的原始参数。
+ * @returns { rows, done, total }：`⬜/🔄/✅ 内容` 行与完成计数（没有清单时为 null）。
+ */
+export function todoRows(args) {
+  const parsed = parseArgs(args);
+  const todos = Array.isArray(parsed?.todos) ? parsed.todos : null;
+  if (!todos || todos.length === 0) return null;
+  const rows = [];
+  for (const todo of todos.slice(0, 50)) {
+    const content = firstLine(todo?.content);
+    if (!content) continue;
+    const status = todo?.status;
+    const mark = status === 'completed' ? '✅' : status === 'in_progress' ? '🔄' : '⬜';
+    rows.push(`${mark} ${clamp(content, 60)}`);
+  }
+  if (rows.length === 0) return null;
+  const done = todos.filter((todo) => todo?.status === 'completed').length;
+  return { rows, done, total: todos.length };
+}
+
+/**
  * 把一条已回答的提问渲染成一行。
  *
  * @param options - { header, question, answer }。
@@ -210,6 +239,9 @@ export function renderStepCard({
   note = '',
   panelTitle = '',
   currentQuestion = [],
+  todos = null,
+  questionPanelTitle = '',
+  questionPanelExpanded = false,
   template = 'blue',
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -221,21 +253,63 @@ export function renderStepCard({
     return allowed < value.length ? `${value.slice(0, allowed)}…` : value;
   };
 
-  // 工具、思考、已答提问合成**一个**面板里的行（顺序就是发生顺序）。
-  const allRows = [...rows, ...questionRows];
   const elements = [];
   if (note) {
     elements.push({ tag: 'div', text: { tag: 'plain_text', content: clampBudget(note) } });
   }
-  if (allRows.length > 0) {
-    const body = clampBudget(allRows.map((row) => `· ${row}`).join('\n'));
-    if (body) {
+  // 工具与思考进一个面板；已答的提问在面板里**再嵌一层**（真机要求：提问也要能自己收起展开）。
+  if (rows.length > 0 || questionRows.length > 0) {
+    const inner = [];
+    const body = rows.length > 0 ? clampBudget(rows.map((row) => `· ${row}`).join('\n')) : '';
+    if (body) inner.push({ tag: 'markdown', content: body });
+    if (questionRows.length > 0) {
+      const asked = clampBudget(questionRows.map((row) => `· ${row.text}`).join('\n'));
+      if (asked) {
+        inner.push({
+          tag: 'collapsible_panel',
+          expanded: questionPanelExpanded === true,
+          border: { color: 'grey', corner_radius: '4px' },
+          header: {
+            title: {
+              tag: 'plain_text',
+              content: clampBudget(questionPanelTitle || `❓ ${questionRows.length} 已回答`),
+            },
+            width: 'fill',
+            icon_position: 'right',
+            icon_expanded_angle: -180,
+          },
+          elements: [{ tag: 'markdown', content: asked }],
+        });
+      }
+    }
+    if (inner.length > 0) {
       elements.push({
         tag: 'collapsible_panel',
         expanded: false,
         border: { color: 'grey', corner_radius: '4px' },
         header: {
           title: { tag: 'plain_text', content: clampBudget(panelTitle) },
+          width: 'fill',
+          icon_position: 'right',
+          icon_expanded_angle: -180,
+        },
+        elements: inner,
+      });
+    }
+  }
+  // 任务清单单独一个面板（在工具面板下面）：没结束时展开看进度，结束后收起。
+  if (todos && Array.isArray(todos.rows) && todos.rows.length > 0) {
+    const body = clampBudget(todos.rows.join('\n'));
+    if (body) {
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: todos.expanded === true,
+        border: { color: 'grey', corner_radius: '4px' },
+        header: {
+          title: {
+            tag: 'plain_text',
+            content: `任务清单 · ${todos.done}/${todos.total} 已完成`,
+          },
           width: 'fill',
           icon_position: 'right',
           icon_expanded_angle: -180,
@@ -299,6 +373,10 @@ export function createTurnPresenter({
   let currentQuestion = [];
   /** 提问进度：用于标题里的"第 N/M 题"。 */
   let questionProgress = null;
+  /** 这一轮问过的所有题目 id：嵌套面板标题的"M"（多批提问也能算对总数）。 */
+  let questionIds = new Set();
+  /** 最新的任务清单（`todo_write` 每次都是全量，覆盖即可）。 */
+  let todos = null;
   /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
   let lastAnswer = '';
   /** 呈现状态：running（默认）/ done / failed。 */
@@ -354,14 +432,23 @@ export function createTurnPresenter({
   }
 
   function cardPayload(answer) {
+    const questionRows = entries
+      .filter((entry) => entry.kind === 'ask')
+      .map((entry) => ({ id: entry.key, text: entry.text }));
     return renderStepCard({
       title: currentTitle(),
       rows: entries.filter((entry) => entry.kind !== 'ask').map((entry) => entry.text),
-      questionRows: entries.filter((entry) => entry.kind === 'ask').map((entry) => entry.text),
+      questionRows,
       answer,
       note,
       panelTitle: panelTitle(),
       currentQuestion,
+      todos: todos ? { ...todos, expanded: state === 'running' } : null,
+      questionPanelTitle: questionRows.length > 0
+        ? `❓ ${questionRows.length}/${questionIds.size} 已回答`
+        : '',
+      // 还有题要答时展开，方便对照；答完（或收尾）收起。
+      questionPanelExpanded: currentQuestion.length > 0,
       template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
     });
   }
@@ -483,6 +570,11 @@ export function createTurnPresenter({
     tool(call) {
       const row = toolRow(call);
       putEntry({ kind: 'tool', text: row });
+      // 任务清单每次都带全量，直接覆盖；渲染在工具面板下面的独立面板里。
+      if (call?.name === 'todo_write') {
+        const parsed = todoRows(call.arguments);
+        if (parsed) todos = parsed;
+      }
       return push(row);
     },
 
@@ -514,6 +606,9 @@ export function createTurnPresenter({
       return enqueue(async () => {
         const questions = payload?.questions ?? [];
         const answered = payload?.answered ?? {};
+        for (const question of questions) {
+          if (question?.id !== undefined) questionIds.add(String(question.id));
+        }
         const rendered = gateway.renderQuestionElements({
           questions,
           answered,

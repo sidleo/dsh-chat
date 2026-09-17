@@ -18,7 +18,7 @@ import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feis
 import { createFeishuController } from '../packages/dsh-chat-feishu/host/controller.mjs';
 import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
 import {
-  createTurnPresenter, renderStepCard, thinkRow, toolRow,
+  createTurnPresenter, renderStepCard, thinkRow, todoRows, toolRow,
 } from '../packages/dsh-chat-feishu/host/turn-presenter.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -462,6 +462,64 @@ test('过程展示按会话类型各取一份：私聊 post、群聊 off', async
     assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash')).length, 1);
   } finally {
     await app.cleanup();
+  }
+});
+
+test('交付文件：present 声明的文件按附件发出，图片走图片气泡，失败要说出来', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-deliver-'));
+  try {
+    const report = join(dir, '永辉销售日报_20260916.md');
+    const chart = join(dir, 'chart.png');
+    const empty = join(dir, 'empty.csv');
+    await writeFile(report, '# 日报\n', 'utf8');
+    await writeFile(chart, TINY_PNG);
+    await writeFile(empty, '');
+
+    const app = await makeBridge({
+      askResult: {
+        text: '做好了',
+        reason: { kind: 'completed' },
+        tools: [],
+        files: [
+          { path: report, description: '销售日报' },
+          { path: chart },
+          { path: empty },
+          { path: join(dir, '不存在.xlsx') },
+        ],
+      },
+    });
+    try {
+      await app.bridge.accept(messageEvent({ messageId: 'om_files' }));
+      assert.deepEqual(app.gateway.calls.files.map((file) => file.name), ['永辉销售日报_20260916.md']);
+      assert.deepEqual(app.gateway.calls.images.map((image) => image.path), [chart]);
+      const failures = app.gateway.calls.replies.filter((reply) => reply.text.includes('没能发出去'));
+      assert.equal(failures.length, 2, '空文件与不存在的文件都要回可读原因，绝不静默');
+      assert.match(failures[0].text, /内容为空|不是普通文件/);
+    } finally {
+      await app.cleanup();
+    }
+
+    // 发送接口失败：也要回一句可读原因，并写进状态
+    const failing = await makeBridge({
+      askResult: {
+        text: '做好了',
+        reason: { kind: 'completed' },
+        tools: [],
+        files: [{ path: report }],
+      },
+    });
+    try {
+      failing.gateway.setFailure('sendFile', new Error('im:resource:upload 权限不足'));
+      await failing.bridge.accept(messageEvent({ messageId: 'om_files_2' }));
+      assert.match(
+        failing.gateway.calls.replies.at(-1).text,
+        /交付文件「永辉销售日报_20260916\.md」没能发出去：im:resource:upload 权限不足/,
+      );
+    } finally {
+      await failing.cleanup();
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
@@ -1429,24 +1487,60 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.match(failed, /"template":"orange"/);
 });
 
-test('工具、思考、已答提问同处一个折叠面板：默认收起、展开看全部', () => {
+test('工具、思考进面板；已答提问在面板里再嵌一层可折叠控件', () => {
   const card = renderStepCard({
     title: '正在处理',
     rows: ['Bash · 检查 try 结构', '思考 · 先看有没有外层 try', '读取 · bridge.mjs'],
-    questionRows: ['提问 · 商行口径 → 全部 19 个小商行'],
+    questionRows: [{ id: 'q1', text: '提问 · 商行口径 → 全部 19 个小商行' }],
     panelTitle: '工具与思考(4)',
+    questionPanelTitle: '❓ 1/1 已回答',
+    questionPanelExpanded: false,
     note: '',
   });
   const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.ok(panel, '工具、思考、提问要在一个折叠面板里');
+  assert.ok(panel, '工具与思考要在一个折叠面板里');
   assert.equal(panel.expanded, false, '默认收起');
   assert.equal(panel.header.title.content, '工具与思考(4)', '标题只留名称与条数');
-  const bodyText = panel.elements.map((element) => element.content).join('\n');
-  assert.match(bodyText, /Bash · 检查 try 结构/, '展开能看到全部');
-  assert.match(bodyText, /思考 · 先看有没有外层 try/, '思考也在里面');
-  assert.match(bodyText, /提问 · 商行口径 → 全部 19 个小商行/, '已答提问也在里面');
-  // 过程行不再单独占卡片空间
-  assert.equal(card.body.elements.filter((element) => element.tag === 'markdown').length, 0);
+  const toolText = panel.elements.filter((element) => element.tag === 'markdown')
+    .map((element) => element.content).join('\n');
+  assert.match(toolText, /Bash · 检查 try 结构/, '展开能看到全部工具行');
+  assert.match(toolText, /思考 · 先看有没有外层 try/, '思考也在里面');
+  // 嵌一层提问面板（嵌套容器是 Card 2.0 允许的）
+  const nested = panel.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.ok(nested, '提问要在工具面板里再嵌一层可折叠控件');
+  assert.equal(nested.header.title.content, '❓ 1/1 已回答');
+  assert.equal(nested.expanded, false, '答完默认收起');
+  assert.match(nested.elements[0].content, /提问 · 商行口径 → 全部 19 个小商行/, '展开能回看答案');
+});
+
+test('任务清单单独一个面板：没结束时展开看进度，结束后收起', () => {
+  const todo = todoRows('{"todos":[{"content":"第一步","status":"completed"},{"content":"第二步","status":"in_progress"},{"content":"第三步","status":"pending"}]}');
+  assert.deepEqual(todo.rows, ['✅ 第一步', '🔄 第二步', '⬜ 第三步']);
+  assert.equal(todo.done, 1);
+  assert.equal(todo.total, 3);
+  assert.equal(todoRows('{"todos":[]}'), null, '空清单不显示');
+  assert.equal(todoRows('not-json'), null);
+
+  const running = renderStepCard({
+    title: '正在处理',
+    rows: ['Bash · ls'],
+    panelTitle: 'Bash · ls',
+    todos: { ...todo, expanded: true },
+  });
+  const panels = running.body.elements.filter((element) => element.tag === 'collapsible_panel');
+  assert.equal(panels.length, 2, '任务清单是工具面板下面的另一个面板');
+  assert.equal(panels[1].header.title.content, '任务清单 · 1/3 已完成');
+  assert.equal(panels[1].expanded, true, '没结束时展开，看得到完成进度');
+  assert.match(panels[1].elements[0].content, /🔄 第二步/);
+
+  const done = renderStepCard({
+    title: '✅ 已完成',
+    rows: ['Bash · ls'],
+    panelTitle: '工具与思考(1)',
+    todos: { ...todo, expanded: false },
+  });
+  const donePanels = done.body.elements.filter((element) => element.tag === 'collapsible_panel');
+  assert.equal(donePanels[1].expanded, false, '结束后收起');
 });
 
 test('工具行按 Web 的口径渲染：种类标题 + 摘要参数', () => {

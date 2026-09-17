@@ -920,7 +920,7 @@ function createIlinkClient({ fetchImpl = fetch } = {}) {
 }
 
 // packages/dsh-chat-weixin/host/runtime.mjs
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 function createWeixinRuntime({
   account,
@@ -1057,6 +1057,44 @@ function createWeixinRuntime({
       await reply(userId, String(text ?? ""), state.contextToken(userId));
     }
   });
+  const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+  async function sendDeliverables({ userId, files, contextToken, signal }) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    for (const file of files) {
+      const path = typeof file?.path === "string" ? file.path : "";
+      if (!path) continue;
+      const name2 = path.split("/").pop() || "\u4EA4\u4ED8\u6587\u4EF6";
+      try {
+        const info = await stat(path);
+        if (!info.isFile() || info.size === 0) throw new Error("\u4E0D\u662F\u666E\u901A\u6587\u4EF6\u6216\u5185\u5BB9\u4E3A\u7A7A");
+        if (info.size > MAX_FILE_BYTES) {
+          throw new Error(`\u8D85\u8FC7 ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB \u4E0A\u9650`);
+        }
+        const ext = name2.slice(name2.lastIndexOf(".")).toLowerCase();
+        const bytes = await readFile(path);
+        const sent = IMAGE_EXTENSIONS.has(ext) ? await client.sendImage({ baseUrl, token, toUserId: userId, bytes, contextToken, signal }) : await client.sendFile({
+          baseUrl,
+          token,
+          toUserId: userId,
+          fileName: name2,
+          bytes,
+          contextToken,
+          signal
+        });
+        logger.info?.(`[dsh-chat-weixin] \u5DF2\u53D1\u9001\u4EA4\u4ED8\u6587\u4EF6\uFF1A${name2}\uFF08${info.size} \u5B57\u8282\uFF0C${account.botId}\uFF09`);
+        void sent;
+      } catch (cause) {
+        const reason = cause?.message ?? String(cause);
+        error = `\u4EA4\u4ED8\u6587\u4EF6 ${name2} \u53D1\u9001\u5931\u8D25\uFF1A${reason}`;
+        logger.error?.(`[dsh-chat-weixin] ${error}`);
+        await state.recordFailure(error);
+        try {
+          await reply(userId, `\u4EA4\u4ED8\u6587\u4EF6\u300C${name2}\u300D\u6CA1\u80FD\u53D1\u51FA\u53BB\uFF1A${reason}`, contextToken, void 0, signal);
+        } catch {
+        }
+      }
+    }
+  }
   async function handleMessage(message, signal) {
     if (message?.message_type === 2) return;
     const id = messageId(message);
@@ -1198,6 +1236,12 @@ function createWeixinRuntime({
       });
       const answer = typeof result?.text === "string" && result.text.trim() ? result.text.trim() : result?.reason?.kind && result.reason.kind !== "completed" ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${result.reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09";
       await reply(sender, answer, contextToken, runId, signal);
+      await sendDeliverables({
+        userId: sender,
+        files: result?.files,
+        contextToken,
+        signal
+      });
       handled += 1;
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
     } catch (cause) {

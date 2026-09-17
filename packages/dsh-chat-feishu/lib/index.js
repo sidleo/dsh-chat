@@ -11250,12 +11250,12 @@ var require_form_data = __commonJS({
         if (value.end != void 0 && value.end != Infinity && value.start != void 0) {
           callback(null, value.end + 1 - (value.start ? value.start : 0));
         } else {
-          fs2.stat(value.path, function(err, stat2) {
+          fs2.stat(value.path, function(err, stat3) {
             if (err) {
               callback(err);
               return;
             }
-            var fileSize = stat2.size - (value.start ? value.start : 0);
+            var fileSize = stat3.size - (value.start ? value.start : 0);
             callback(null, fileSize);
           });
         }
@@ -126479,6 +126479,9 @@ ${lines.join("\n")}
 // packages/dsh-chat-feishu/host/controller.mjs
 import { join } from "node:path";
 
+// packages/dsh-chat-feishu/host/bridge.mjs
+import { stat } from "node:fs/promises";
+
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
 var MAX_ROWS = 24;
 var MAX_CARD_CONTENT = 12e3;
@@ -126590,6 +126593,22 @@ function thinkRow(text) {
   const line = clamp(firstLine(text), MAX_THINK_CHARS);
   return line ? `\u601D\u8003 \xB7 ${line}` : "";
 }
+function todoRows(args) {
+  const parsed = parseArgs(args);
+  const todos = Array.isArray(parsed?.todos) ? parsed.todos : null;
+  if (!todos || todos.length === 0) return null;
+  const rows = [];
+  for (const todo of todos.slice(0, 50)) {
+    const content = firstLine(todo?.content);
+    if (!content) continue;
+    const status = todo?.status;
+    const mark = status === "completed" ? "\u2705" : status === "in_progress" ? "\u{1F504}" : "\u2B1C";
+    rows.push(`${mark} ${clamp(content, 60)}`);
+  }
+  if (rows.length === 0) return null;
+  const done = todos.filter((todo) => todo?.status === "completed").length;
+  return { rows, done, total: todos.length };
+}
 function askRow({ header, question, answer } = {}) {
   const title = firstLine(header || question || "\u63D0\u95EE");
   const value = firstLine(answer) || "\uFF08\u7A7A\uFF09";
@@ -126603,6 +126622,9 @@ function renderStepCard({
   note = "",
   panelTitle = "",
   currentQuestion = [],
+  todos = null,
+  questionPanelTitle = "",
+  questionPanelExpanded = false,
   template = "blue"
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -126613,20 +126635,61 @@ function renderStepCard({
     budget.left -= allowed;
     return allowed < value.length ? `${value.slice(0, allowed)}\u2026` : value;
   };
-  const allRows = [...rows, ...questionRows];
   const elements = [];
   if (note) {
     elements.push({ tag: "div", text: { tag: "plain_text", content: clampBudget(note) } });
   }
-  if (allRows.length > 0) {
-    const body = clampBudget(allRows.map((row) => `\xB7 ${row}`).join("\n"));
-    if (body) {
+  if (rows.length > 0 || questionRows.length > 0) {
+    const inner = [];
+    const body = rows.length > 0 ? clampBudget(rows.map((row) => `\xB7 ${row}`).join("\n")) : "";
+    if (body) inner.push({ tag: "markdown", content: body });
+    if (questionRows.length > 0) {
+      const asked = clampBudget(questionRows.map((row) => `\xB7 ${row.text}`).join("\n"));
+      if (asked) {
+        inner.push({
+          tag: "collapsible_panel",
+          expanded: questionPanelExpanded === true,
+          border: { color: "grey", corner_radius: "4px" },
+          header: {
+            title: {
+              tag: "plain_text",
+              content: clampBudget(questionPanelTitle || `\u2753 ${questionRows.length} \u5DF2\u56DE\u7B54`)
+            },
+            width: "fill",
+            icon_position: "right",
+            icon_expanded_angle: -180
+          },
+          elements: [{ tag: "markdown", content: asked }]
+        });
+      }
+    }
+    if (inner.length > 0) {
       elements.push({
         tag: "collapsible_panel",
         expanded: false,
         border: { color: "grey", corner_radius: "4px" },
         header: {
           title: { tag: "plain_text", content: clampBudget(panelTitle) },
+          width: "fill",
+          icon_position: "right",
+          icon_expanded_angle: -180
+        },
+        elements: inner
+      });
+    }
+  }
+  if (todos && Array.isArray(todos.rows) && todos.rows.length > 0) {
+    const body = clampBudget(todos.rows.join("\n"));
+    if (body) {
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: todos.expanded === true,
+        border: { color: "grey", corner_radius: "4px" },
+        header: {
+          title: {
+            tag: "plain_text",
+            content: `\u4EFB\u52A1\u6E05\u5355 \xB7 ${todos.done}/${todos.total} \u5DF2\u5B8C\u6210`
+          },
           width: "fill",
           icon_position: "right",
           icon_expanded_angle: -180
@@ -126671,6 +126734,8 @@ function createTurnPresenter({
   let entries = [];
   let currentQuestion = [];
   let questionProgress = null;
+  let questionIds = /* @__PURE__ */ new Set();
+  let todos = null;
   let lastAnswer = "";
   let state = "running";
   let cardId = null;
@@ -126704,14 +126769,19 @@ function createTurnPresenter({
     return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
   }
   function cardPayload(answer) {
+    const questionRows = entries.filter((entry) => entry.kind === "ask").map((entry) => ({ id: entry.key, text: entry.text }));
     return renderStepCard({
       title: currentTitle(),
       rows: entries.filter((entry) => entry.kind !== "ask").map((entry) => entry.text),
-      questionRows: entries.filter((entry) => entry.kind === "ask").map((entry) => entry.text),
+      questionRows,
       answer,
       note,
       panelTitle: panelTitle(),
       currentQuestion,
+      todos: todos ? { ...todos, expanded: state === "running" } : null,
+      questionPanelTitle: questionRows.length > 0 ? `\u2753 ${questionRows.length}/${questionIds.size} \u5DF2\u56DE\u7B54` : "",
+      // 还有题要答时展开，方便对照；答完（或收尾）收起。
+      questionPanelExpanded: currentQuestion.length > 0,
       template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
     });
   }
@@ -126812,6 +126882,10 @@ function createTurnPresenter({
     tool(call) {
       const row = toolRow(call);
       putEntry({ kind: "tool", text: row });
+      if (call?.name === "todo_write") {
+        const parsed = todoRows(call.arguments);
+        if (parsed) todos = parsed;
+      }
       return push(row);
     },
     /**
@@ -126841,6 +126915,9 @@ function createTurnPresenter({
       return enqueue(async () => {
         const questions = payload?.questions ?? [];
         const answered = payload?.answered ?? {};
+        for (const question of questions) {
+          if (question?.id !== void 0) questionIds.add(String(question.id));
+        }
         const rendered = gateway.renderQuestionElements({
           questions,
           answered,
@@ -126898,6 +126975,7 @@ function createTurnPresenter({
 }
 
 // packages/dsh-chat-feishu/host/bridge.mjs
+var MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
 function messageText(message) {
   if (message?.message_type !== "text") return null;
   try {
@@ -127258,6 +127336,9 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       logger.info?.(`[dsh-chat-feishu] \u56DE\u5408\u7ED3\u675F\uFF0C\u51C6\u5907\u56DE\u590D\uFF1A${bot.id} ${conversationKey} reason=${result?.reason?.kind ?? "unknown"} \u6587\u672C=${(result?.text ?? "").length}\u5B57`);
       await presenter.finish(result?.text, result?.reason);
       logger.info?.(`[dsh-chat-feishu] \u6700\u7EC8\u7B54\u6848\u6295\u9012\u65B9\u5F0F\uFF1A${presenter.delivery?.() ?? "unknown"}\uFF08${bot.id} ${conversationKey}\uFF09`);
+      await sendDeliverables(result?.files, message, {
+        replyInThread: conversationType === "group" && bot.groupTopicReply === true
+      });
       handled += 1;
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
       lastError = presenter.lastError?.() ?? null;
@@ -127274,6 +127355,41 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       }
     } finally {
       await clearWorking(message, workingReaction);
+    }
+  }
+  const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+  async function sendDeliverables(files, message, { replyInThread = false } = {}) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    for (const file of files) {
+      const path2 = typeof file?.path === "string" ? file.path : "";
+      if (!path2) continue;
+      const name2 = path2.split("/").pop() || "\u4EA4\u4ED8\u6587\u4EF6";
+      try {
+        const info = await stat(path2);
+        if (!info.isFile() || info.size === 0) throw new Error("\u4E0D\u662F\u666E\u901A\u6587\u4EF6\u6216\u5185\u5BB9\u4E3A\u7A7A");
+        if (info.size > MAX_DELIVERABLE_BYTES) {
+          throw new Error(`\u8D85\u8FC7 ${Math.round(MAX_DELIVERABLE_BYTES / 1024 / 1024)}MB \u4E0A\u9650`);
+        }
+        const ext = name2.slice(name2.lastIndexOf(".")).toLowerCase();
+        if (IMAGE_EXTENSIONS.has(ext)) {
+          await gateway.sendImage({ chatId: message.chat_id, path: path2 });
+        } else {
+          await gateway.sendFile({ chatId: message.chat_id, path: path2, name: name2 });
+        }
+        logger.info?.(`[dsh-chat-feishu] \u5DF2\u53D1\u9001\u4EA4\u4ED8\u6587\u4EF6\uFF1A${name2}\uFF08${info.size} \u5B57\u8282\uFF0C${bot.id}\uFF09`);
+      } catch (error) {
+        const reason = error?.message ?? String(error);
+        lastError = `\u4EA4\u4ED8\u6587\u4EF6 ${name2} \u53D1\u9001\u5931\u8D25\uFF1A${reason}`;
+        logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+        try {
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `\u4EA4\u4ED8\u6587\u4EF6\u300C${name2}\u300D\u6CA1\u80FD\u53D1\u51FA\u53BB\uFF1A${reason}`,
+            replyInThread
+          });
+        } catch {
+        }
+      }
     }
   }
   async function markWorking(message) {
@@ -127558,7 +127674,7 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
 
 // packages/dsh-chat-feishu/host/lark-gateway.mjs
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat as stat2 } from "node:fs/promises";
 var DEFAULT_CONNECT_TIMEOUT_MS = 15e3;
 var FILE_TYPES = new Map(Object.entries({
   opus: "opus",
@@ -127935,7 +128051,7 @@ function createLarkGateway({
       if (!receiveId) throw new TypeError("sendFile \u9700\u8981 chatId \u6216 openId\u3002");
       if (!path2) throw new TypeError("sendFile \u9700\u8981 path\u3002");
       const fileName = name2 || path2.split("/").pop();
-      const info = await stat(path2);
+      const info = await stat2(path2);
       const uploaded = await client.im.v1.file.create({
         data: {
           file_type: fileTypeFor(fileName),

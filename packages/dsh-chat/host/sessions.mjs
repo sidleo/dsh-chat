@@ -274,6 +274,11 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     let currentTurn = null;
     const assistantText = new Map();
     const tools = [];
+    /**
+     * 本轮 agent 通过 `present` 交付的文件（DSH 会 append `deliverables/presented`）。
+     * 渠道拿它把成品当附件发出去——只写在回复文字里，用户拿不到文件。
+     */
+    const presented = [];
     let settled = false;
     let settle;
     const finished = new Promise((resolve) => {
@@ -302,6 +307,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
         text: '',
         reason: { kind: 'timeout', timeoutMs: effectiveTurnTimeoutMs },
         tools: [...tools],
+        files: [...presented],
         aborted: true,
       });
     }, effectiveTurnTimeoutMs);
@@ -354,6 +360,22 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
             case 'tool/result':
               handlers.onToolResult?.(event, tools.at(-1));
               break;
+            case 'deliverables/presented': {
+              const files = Array.isArray(event.data?.files) ? event.data.files : [];
+              const accepted = [];
+              for (const file of files) {
+                if (typeof file?.path !== 'string' || !file.path) continue;
+                accepted.push({
+                  path: file.path,
+                  ...(typeof file.description === 'string' && file.description
+                    ? { description: file.description }
+                    : {}),
+                });
+              }
+              presented.push(...accepted);
+              if (accepted.length > 0) handlers.onDeliverables?.(accepted);
+              break;
+            }
             case 'turn/end': {
               const turn = event.data?.turn ?? currentTurn;
               const texts = assistantText.get(turn) ?? [];
@@ -366,6 +388,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
+                  files: [...presented],
                   aborted: false,
                 });
               } else {
@@ -383,6 +406,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
           text: '',
           reason: { kind: 'stream-ended' },
           tools: [...tools],
+          files: [...presented],
           aborted: false,
         });
       } catch (error) {
@@ -392,6 +416,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
           text: '',
           reason: { kind: 'error', error: sessionError(error) },
           tools: [...tools],
+          files: [...presented],
           aborted: true,
         });
         if (wasSettled && !closing) {

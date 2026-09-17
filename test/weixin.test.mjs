@@ -1095,6 +1095,34 @@ test('协议客户端：发图片走 image_item，缺少接收人/文件名时�
   );
 });
 
+test('运行时：agent 交付的文件当附件发出去，图片走图片气泡，失败要说出来', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-deliver-'));
+  const report = join(dir, '永辉销售日报_20260916.md');
+  const chart = join(dir, 'chart.png');
+  const missing = join(dir, '不存在.xlsx');
+  await writeFile(report, '# 日报\n', 'utf8');
+  await writeFile(chart, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const app = await makeRuntime({
+    askResult: {
+      text: '做好了',
+      reason: { kind: 'completed' },
+      files: [{ path: report, description: '日报' }, { path: chart }, { path: missing }],
+    },
+  });
+  try {
+    await app.runtime.accept(inbound({ message_id: 'm_files' }), new AbortController().signal);
+    assert.equal(app.client.calls.texts[0].text, '做好了', '先回文本，再补附件');
+    assert.equal(app.client.calls.files.length, 1);
+    assert.equal(app.client.calls.files[0].fileName, '永辉销售日报_20260916.md');
+    assert.equal(app.client.calls.images.length, 1, '图片走图片气泡');
+    assert.match(app.client.calls.texts.at(-1).text, /交付文件「不存在\.xlsx」没能发出去/);
+    assert.ok(app.runtime.status().error, '失败要写进状态');
+  } finally {
+    await app.cleanup();
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('运行时：主动发文件/图片读字节后交给客户端，空文件明确报错', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-out-'));
   const app = await makeRuntime();

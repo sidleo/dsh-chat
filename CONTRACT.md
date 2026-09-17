@@ -323,6 +323,15 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
   与 DSH Web 的 `dsh-client-ui-tool` 一致）。
 - **未回答的提问控件必须在面板外**：Card 2.0 的 `collapsible_panel` 里放不了 `form`/输入框，
   所以"已答的行"进面板、"当前题的控件"留在面板下面。
+- **已答提问在工具面板里再嵌一层**可折叠控件（Card 2.0 允许嵌套，最多 5 层）：
+  标题 `❓ N/M 已回答`，还有题要答时展开、答完收起；内容仍是 `提问 · 题 → 答案` 行。
+- **任务清单单独一个面板，放在工具面板下面**：内容取 `todo_write` 的**最后一次全量**
+  清单（`✅/🔄/⬜ 内容`），标题 `任务清单 · N/M 已完成`；本轮没结束时**展开**（看得见进度），
+  结束后收起。
+- **交付文件要真发出去**：hub 会把会话里的 `deliverables/presented`（agent 用 `present`
+  声明的成品）放进 `ask()` 的返回 `files`，渠道必须在回复之后按附件发送——图片走图片气泡、
+  其余走文件消息；单个文件失败要回一句可读原因并落 `lastError`。
+  只把文件名写在回复文字里，用户是拿不到文件的。
 - 过程行数有上限（超出丢最旧的）。一轮可能有上百次工具调用，因此过程刷新按最小间隔合并（1.2s），
   收尾一定再刷一次——一次 patch 是整卡重写，不能每个事件都刷。
 - 多选提问（`multiSelect: true`）按钮表达不了，标准做法是**留在同一张卡片里**用 `form` + 原生勾选器，
@@ -371,7 +380,7 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `invoke(namespace, method, args, signal)` | 一元调用（返回原始业务值，失败抛带 `code` 的 Error） |
 | `stream(namespace, method, args, signal)` | 流式调用；`session/follow`、`session/control`、`workspace/follow` **必须**用它 |
 | `ensure({ channelId, botId, key, workspacePath, signal })` | 找到或创建该会话键对应的 DSH 会话（`{ sessionId, created }`）；绑定的会话被删会自动重建 |
-| `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools }` |
+| `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools, files }`（`files` = 本轮 `present` 的交付文件，渠道要当附件发出去） |
 | `uploadFile({ sessionId, name, bytes })` | 把一段字节入库成**该会话可引用**的文件，返回 `{ receiptId, file }`（入站文件必须走它） |
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
 | `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |

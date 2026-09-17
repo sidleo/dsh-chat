@@ -8,7 +8,7 @@
  * @module dsh-chat-weixin/runtime
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import {
@@ -192,6 +192,52 @@ export function createWeixinRuntime({
     },
   });
 
+  /** 图片扩展名（图片走图片气泡，预览更友好）。 */
+  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+
+  /**
+   * 把本轮 agent 交付的文件（`present` 声明的）当附件发出去。
+   *
+   * 失败必须可见：发不出去要回一句可读原因并落 `lastError`——"文件没收到"同样是最难
+   * 排查的故障形态，不能只留一行日志。
+   *
+   * @param options - { userId, files, contextToken, signal }。
+   */
+  async function sendDeliverables({ userId, files, contextToken, signal }) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    for (const file of files) {
+      const path = typeof file?.path === 'string' ? file.path : '';
+      if (!path) continue;
+      const name = path.split('/').pop() || '交付文件';
+      try {
+        const info = await stat(path);
+        if (!info.isFile() || info.size === 0) throw new Error('不是普通文件或内容为空');
+        if (info.size > MAX_FILE_BYTES) {
+          throw new Error(`超过 ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB 上限`);
+        }
+        const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+        const bytes = await readFile(path);
+        const sent = IMAGE_EXTENSIONS.has(ext)
+          ? await client.sendImage({ baseUrl, token, toUserId: userId, bytes, contextToken, signal })
+          : await client.sendFile({
+            baseUrl, token, toUserId: userId, fileName: name, bytes, contextToken, signal,
+          });
+        logger.info?.(`[dsh-chat-weixin] 已发送交付文件：${name}（${info.size} 字节，${account.botId}）`);
+        void sent;
+      } catch (cause) {
+        const reason = cause?.message ?? String(cause);
+        error = `交付文件 ${name} 发送失败：${reason}`;
+        logger.error?.(`[dsh-chat-weixin] ${error}`);
+        await state.recordFailure(error);
+        try {
+          await reply(userId, `交付文件「${name}」没能发出去：${reason}`, contextToken, undefined, signal);
+        } catch {
+          // 连失败说明都发不出去时，至少日志与 lastError 有记录。
+        }
+      }
+    }
+  }
+
   async function handleMessage(message, signal) {
     // message_type 2 是自己发出去的（服务端回显），必须忽略。
     if (message?.message_type === 2) return;
@@ -352,6 +398,10 @@ export function createWeixinRuntime({
           ? `任务未正常完成（${result.reason.kind}）。`
           : '（本轮没有文本输出）');
       await reply(sender, answer, contextToken, runId, signal);
+      // agent 声明交付的文件要当附件真发出去（只写在回复文字里，用户拿不到文件）。
+      await sendDeliverables({
+        userId: sender, files: result?.files, contextToken, signal,
+      });
       handled += 1;
       lastHandledAt = new Date().toISOString();
     } catch (cause) {

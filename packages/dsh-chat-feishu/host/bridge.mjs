@@ -7,7 +7,12 @@
  * @module dsh-chat-feishu/bridge
  */
 
+import { stat } from 'node:fs/promises';
+
 import { createTurnPresenter } from './turn-presenter.mjs';
+
+/** 交付文件的单文件上限（与主动投递一致：飞书上传超过这个量既慢又容易失败）。 */
+const MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
 
 /** 一条入站文本的来源字段工厂用的取值上限（与上下文增强引擎一致）。 */
 function messageText(message) {
@@ -467,6 +472,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       await presenter.finish(result?.text, result?.reason);
       logger.info?.(`[dsh-chat-feishu] 最终答案投递方式：${presenter.delivery?.() ?? 'unknown'}`
         + `（${bot.id} ${conversationKey}）`);
+      // agent 声明交付的文件要当附件真发出去（只写在回复文字里，用户拿不到文件）。
+      await sendDeliverables(result?.files, message, {
+        replyInThread: conversationType === 'group' && bot.groupTopicReply === true,
+      });
       handled += 1;
       lastHandledAt = new Date().toISOString();
       // 回合本身成功，但呈现层可能失败过（卡片建不出来等）。那也必须让设置页看得到，
@@ -494,6 +503,55 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 打「在做了」表情。失败不致命（可能缺 im:message.reaction:write 权限），
    * 但一定要留日志，别让人以为是没反应。
    */
+  /** 图片扩展名（图片走图片气泡，预览更友好）。 */
+  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+
+  /**
+   * 把本轮 agent 交付的文件（`present` 声明的）当附件发出去。
+   *
+   * 失败必须可见：发不出去要回一句可读原因并写 `lastError`——"文件没收到"同样是最难
+   * 排查的故障形态，不能只留一行日志。
+   *
+   * @param files - `[{ path, description? }]`（来自会话桥的 `deliverables/presented`）。
+   * @param message - 入站消息（用 chat_id 作为收件人）。
+   * @param options - { replyInThread }。
+   */
+  async function sendDeliverables(files, message, { replyInThread = false } = {}) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    for (const file of files) {
+      const path = typeof file?.path === 'string' ? file.path : '';
+      if (!path) continue;
+      const name = path.split('/').pop() || '交付文件';
+      try {
+        const info = await stat(path);
+        if (!info.isFile() || info.size === 0) throw new Error('不是普通文件或内容为空');
+        if (info.size > MAX_DELIVERABLE_BYTES) {
+          throw new Error(`超过 ${Math.round(MAX_DELIVERABLE_BYTES / 1024 / 1024)}MB 上限`);
+        }
+        const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+        if (IMAGE_EXTENSIONS.has(ext)) {
+          await gateway.sendImage({ chatId: message.chat_id, path });
+        } else {
+          await gateway.sendFile({ chatId: message.chat_id, path, name });
+        }
+        logger.info?.(`[dsh-chat-feishu] 已发送交付文件：${name}（${info.size} 字节，${bot.id}）`);
+      } catch (error) {
+        const reason = error?.message ?? String(error);
+        lastError = `交付文件 ${name} 发送失败：${reason}`;
+        logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+        try {
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `交付文件「${name}」没能发出去：${reason}`,
+            replyInThread,
+          });
+        } catch {
+          // 连失败说明都发不出去时，至少日志与 lastError 有记录。
+        }
+      }
+    }
+  }
+
   async function markWorking(message) {
     try {
       return await gateway.addReaction({ messageId: message.message_id, emojiType: 'OnIt' });
