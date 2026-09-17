@@ -1706,6 +1706,7 @@ function withFileSink({ logger, sink, scope = "" }) {
       }
     };
   }
+  if (typeof wrapped.trace !== "function") wrapped.trace = wrapped.debug;
   return Object.assign(Object.create(Object.getPrototypeOf(logger ?? {}) ?? Object.prototype), logger ?? {}, wrapped);
 }
 function channelLogPath(logsDir, name2) {

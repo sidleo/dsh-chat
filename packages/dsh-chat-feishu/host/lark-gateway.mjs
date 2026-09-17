@@ -75,7 +75,7 @@ export function createLarkGateway({
   sdk,
   logger = console,
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-  loggerLevel = 'info',
+  loggerLevel = process.env.DSH_CHAT_FEISHU_SDK_LOG || 'info',
   maxResourceBytes = DEFAULT_MAX_RESOURCE_BYTES,
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError('飞书网关需要 @larksuiteoapi/node-sdk。');
@@ -85,11 +85,14 @@ export function createLarkGateway({
     appId,
     appSecret,
     ...(domain === 'lark' ? { domain: sdk.Domain?.Lark } : {}),
+    // 让 SDK 自己的日志也进我们的渠道日志文件：排查"事件到底有没有到"
+    // （如卡片回调）时，SDK 的帧日志与 `no xxx handle` 警告是唯一线索。
+    logger,
+    loggerLevel: loggerLevelFor(sdk, loggerLevel),
   };
   const client = new sdk.Client(clientOptions);
   const wsOptions = {
     ...clientOptions,
-    loggerLevel: loggerLevelFor(sdk, loggerLevel),
     // 关键：关掉 SDK 自己的握手超时，改由我们计时与重连。
     handshakeTimeoutMs: 0,
   };
@@ -130,12 +133,16 @@ export function createLarkGateway({
         },
         // 注意：卡片回调的返回值就是飞书客户端的应答（toast / 替换卡片），
         // 必须把处理结果返回给 SDK，否则用户点了按钮只会看到一个失败提示。
-        'card.action.trigger': (event) => Promise.resolve()
+        'card.action.trigger': (event) => {
+          logger.info?.('[dsh-chat-feishu] 收到卡片回调'
+            + `（event=${event?.action?.tag ?? '?'} value=${JSON.stringify(event?.action?.value ?? {})}）`);
+          return Promise.resolve()
           .then(() => onCardAction?.(event))
           .catch((error) => {
             logger.error?.(`[dsh-chat-feishu] 处理卡片回调失败：${error?.message ?? error}`);
             return undefined;
-          }),
+          });
+        },
       });
 
       let settleReady;

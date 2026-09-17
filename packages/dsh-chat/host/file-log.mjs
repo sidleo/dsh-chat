@@ -92,6 +92,8 @@ export function withFileSink({ logger, sink, scope = '' }) {
       }
     };
   }
+  // 第三方 SDK（如飞书）会调 trace：给它一个落点，免得日志调用本身把流程打断。
+  if (typeof wrapped.trace !== 'function') wrapped.trace = wrapped.debug;
   // 自定义 logger 可能还带别的方法，原样保留。
   return Object.assign(Object.create(Object.getPrototypeOf(logger ?? {}) ?? Object.prototype), logger ?? {}, wrapped);
 }
