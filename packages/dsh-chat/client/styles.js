@@ -441,6 +441,33 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+.dchat-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-success-primary);
+}
+.dchat-deliveryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dchat-deliveryMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dchat-deliveryMeta small {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  word-break: break-all;
+}
+.dchat-deliverySend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 `;
 
 /** 已安装实例计数：多个实例共用一份 <style>，最后一个卸载才移除。 */

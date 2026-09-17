@@ -76,7 +76,11 @@ var zh = {
   "\u91CD\u8FDE\u4E2D": "\u91CD\u8FDE\u4E2D",
   "\u542F\u52A8\u5931\u8D25": "\u542F\u52A8\u5931\u8D25",
   "\u5DF2\u505C\u6B62": "\u5DF2\u505C\u6B62",
-  "\u4EC5\u79C1\u804A": "\u4EC5\u79C1\u804A"
+  "\u4EC5\u79C1\u804A": "\u4EC5\u79C1\u804A",
+  // hub 的共享组件（上下文增强编辑器）用本渠道的 t 取文案，因此这些键必须在渠道字典里。
+  "\u4FDD\u5B58": "\u4FDD\u5B58",
+  "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002"
 };
 var en = {
   "\u5FAE\u4FE1": "WeChat",
@@ -109,7 +113,10 @@ var en = {
   "\u91CD\u8FDE\u4E2D": "Reconnecting",
   "\u542F\u52A8\u5931\u8D25": "Failed",
   "\u5DF2\u505C\u6B62": "Stopped",
-  "\u4EC5\u79C1\u804A": "Direct messages only"
+  "\u4EC5\u79C1\u804A": "Direct messages only",
+  "\u4FDD\u5B58": "Save",
+  "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again."
 };
 var h = React.createElement;
 var STATE_TEXT = {
@@ -244,7 +251,7 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
 }
 function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const { Panel, StatusPill, ContextEnhancementEditor } = chatUi.components;
+  const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection,
     channelId: CHANNEL_ID,
@@ -334,6 +341,13 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
       disabled: settings.phase !== "ready",
       translate: t,
       onSave: settings.saveContextEnhancement
+    }),
+    // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
+    h(DeliveryTargetsEditor, {
+      chatUi,
+      connection,
+      channelId: CHANNEL_ID,
+      botId: account.botId
     })
   );
 }

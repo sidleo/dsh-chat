@@ -50,6 +50,10 @@ const zh = {
   '启动失败': '启动失败',
   '已停止': '已停止',
   '仅私聊': '仅私聊',
+  // hub 的共享组件（上下文增强编辑器）用本渠道的 t 取文案，因此这些键必须在渠道字典里。
+  '保存': '保存',
+  '保存中…': '保存中…',
+  '保存失败，请重试。': '保存失败，请重试。',
 };
 
 const en = {
@@ -88,6 +92,9 @@ const en = {
   '启动失败': 'Failed',
   '已停止': 'Stopped',
   '仅私聊': 'Direct messages only',
+  '保存': 'Save',
+  '保存中…': 'Saving…',
+  '保存失败，请重试。': 'Could not save. Try again.',
 };
 
 const h = React.createElement;
@@ -216,7 +223,7 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
 
 function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
-  const { Panel, StatusPill, ContextEnhancementEditor } = chatUi.components;
+  const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: account.botId,
   });
@@ -286,6 +293,14 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
     disabled: settings.phase !== 'ready',
     translate: t,
     onSave: settings.saveContextEnhancement,
+  }),
+
+  // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
+  h(DeliveryTargetsEditor, {
+    chatUi,
+    connection,
+    channelId: CHANNEL_ID,
+    botId: account.botId,
   }));
 }
 

@@ -142,7 +142,7 @@ function createChannelRail() {
 }
 
 // packages/dsh-chat/client/chat-ui.js
-var React4 = __toESM(require("react"), 1);
+var React5 = __toESM(require("react"), 1);
 
 // packages/dsh-chat/client/bot-settings.js
 var React = __toESM(require("react"), 1);
@@ -837,9 +837,203 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
   );
 }
 
-// packages/dsh-chat/client/scoped-mode-editor.js
+// packages/dsh-chat/client/delivery-targets.js
 var React3 = __toESM(require("react"), 1);
 var h2 = React3.createElement;
+function translatorOf(translate, chatUi) {
+  if (typeof translate === "function") return translate;
+  if (typeof chatUi?.translate === "function") return chatUi.translate;
+  return (key) => key;
+}
+function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, onCancel, onRemove }) {
+  const t = translate;
+  const route = Object.entries(target.route ?? {}).map(([key, value]) => `${key}=${value}`).join(" \xB7 ");
+  const actions = target.discovered ? [h2("button", {
+    key: "save",
+    type: "button",
+    className: "dchat-button dchat-buttonPrimary",
+    disabled: busy,
+    onClick: () => onSave(target)
+  }, t("\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807"))] : confirming ? [
+    h2("button", {
+      key: "confirm",
+      type: "button",
+      className: "dchat-button",
+      disabled: busy,
+      onClick: () => onRemove(target)
+    }, t("\u786E\u8BA4\u5220\u9664")),
+    h2("button", {
+      key: "cancel",
+      type: "button",
+      className: "dchat-button",
+      disabled: busy,
+      onClick: onCancel
+    }, t("\u53D6\u6D88"))
+  ] : [h2("button", {
+    key: "remove",
+    type: "button",
+    className: "dchat-button",
+    disabled: busy,
+    onClick: onAskRemove
+  }, t("\u5220\u9664"))];
+  return h2(
+    "div",
+    { className: "dchat-listItem dchat-deliveryRow" },
+    h2(
+      "div",
+      { className: "dchat-deliveryMeta" },
+      h2("strong", null, target.name || target.id),
+      h2("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`),
+      h2("code", { className: "dchat-code" }, target.id)
+    ),
+    h2(
+      "div",
+      { className: "dchat-actions" },
+      target.discovered ? h2("span", { className: "dchat-status" }, t("\u5019\u9009")) : null,
+      ...actions
+    )
+  );
+}
+function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate }) {
+  const t = translatorOf(translate, chatUi);
+  const { Panel: Panel2 } = chatUi.components;
+  const [state, setState] = React3.useState({ phase: "loading", targets: [], canSend: false });
+  const [error, setError] = React3.useState(null);
+  const [notice, setNotice] = React3.useState(null);
+  const [busyId, setBusyId] = React3.useState(null);
+  const [confirmingId, setConfirmingId] = React3.useState(null);
+  const [draft, setDraft] = React3.useState("");
+  const [sendTo, setSendTo] = React3.useState("");
+  const call = React3.useCallback(async (method, payload) => {
+    const result = await chatUi.callControlRpc(connection, method, payload);
+    return chatUi.unwrapRpc(result);
+  }, [chatUi, connection]);
+  const load = React3.useCallback(async () => {
+    try {
+      const value = await call("delivery.list", { channelId, botId });
+      const targets = value.targets ?? [];
+      setState({ phase: "ready", targets, canSend: value.canSend === true });
+      setSendTo((current) => {
+        const savedIds = targets.filter((target) => !target.discovered).map((target) => target.id);
+        return savedIds.includes(current) ? current : savedIds[0] ?? "";
+      });
+    } catch (cause) {
+      setState((current) => ({ ...current, phase: "error" }));
+      setError(cause.message);
+    }
+  }, [call, channelId, botId]);
+  React3.useEffect(() => {
+    void load();
+  }, [load]);
+  const run = React3.useCallback(async (key, method, payload, message) => {
+    setBusyId(key);
+    setError(null);
+    setNotice(null);
+    try {
+      const value = await call(method, payload);
+      await load();
+      setNotice(typeof message === "function" ? message(value) : message);
+      return value;
+    } catch (cause) {
+      setError(cause.message);
+      return null;
+    } finally {
+      setBusyId(null);
+    }
+  }, [call, load]);
+  const saved = state.targets.filter((target) => !target.discovered);
+  const candidates = state.targets.filter((target) => target.discovered);
+  return h2(
+    Panel2,
+    {
+      title: t("\u4E3B\u52A8\u6295\u9012"),
+      description: t("\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\uFF1B\u5019\u9009\u6765\u81EA\u4E0E\u8BE5\u673A\u5668\u4EBA\u7684\u5386\u53F2\u4F1A\u8BDD\u3002")
+    },
+    error ? h2("p", { className: "dchat-error", role: "alert" }, error) : null,
+    notice ? h2("p", { className: "dchat-notice", role: "status" }, notice) : null,
+    state.phase === "loading" ? h2("p", { className: "dchat-cardDescription" }, t("\u8BFB\u53D6\u4E2D\u2026")) : null,
+    state.phase === "ready" && state.canSend === false ? h2("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002")) : null,
+    state.phase === "ready" && state.canSend === true && state.targets.length === 0 ? h2(
+      "p",
+      { className: "dchat-cardDescription" },
+      t("\u8FD8\u6CA1\u6709\u53EF\u6295\u9012\u76EE\u6807\uFF1A\u5148\u4E0E\u673A\u5668\u4EBA\u5BF9\u8BDD\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u4F1A\u4F5C\u4E3A\u5019\u9009\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
+    ) : null,
+    state.targets.length > 0 ? h2("div", { className: "dchat-list" }, state.targets.map((target) => h2(TargetRow2, {
+      key: target.id,
+      target,
+      busy: busyId === target.id,
+      confirming: confirmingId === target.id,
+      translate: t,
+      onSave: (item) => {
+        void run(item.id, "delivery.save", {
+          channelId,
+          botId,
+          target: { id: item.id, name: item.name, kind: item.kind, route: item.route }
+        }, () => t("\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002"));
+      },
+      onAskRemove: () => setConfirmingId(target.id),
+      onCancel: () => setConfirmingId(null),
+      onRemove: (item) => {
+        setConfirmingId(null);
+        void run(
+          item.id,
+          "delivery.remove",
+          { channelId, botId, targetId: item.id },
+          () => t("\u5DF2\u5220\u9664\u3002")
+        );
+      }
+    }))) : null,
+    candidates.length > 0 ? h2(
+      "p",
+      { className: "dchat-cardDescription" },
+      t("\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002")
+    ) : null,
+    saved.length > 0 ? h2(
+      "div",
+      { className: "dchat-deliverySend" },
+      h2(
+        "label",
+        { className: "dchat-scopeLabel", htmlFor: `dchat-delivery-${botId}` },
+        t("\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F")
+      ),
+      h2(
+        "div",
+        { className: "dchat-actions" },
+        h2("select", {
+          className: "dchat-select",
+          value: sendTo,
+          "aria-label": t("\u9009\u62E9\u76EE\u6807"),
+          onChange: (event) => setSendTo(event.target.value)
+        }, saved.map((target) => h2("option", {
+          key: target.id,
+          value: target.id
+        }, `${target.name || target.id}\uFF08${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")}\uFF09`))),
+        h2("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonPrimary",
+          disabled: busyId === "send" || !draft.trim() || !sendTo,
+          onClick: () => {
+            void run("send", "delivery.send", { channelId, botId, targetId: sendTo, text: draft }).then((value) => {
+              if (value !== null) setDraft("");
+            });
+          }
+        }, busyId === "send" ? t("\u53D1\u9001\u4E2D\u2026") : t("\u53D1\u9001"))
+      ),
+      h2("textarea", {
+        id: `dchat-delivery-${botId}`,
+        className: "dchat-textarea",
+        rows: 2,
+        placeholder: t("\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9"),
+        value: draft,
+        onChange: (event) => setDraft(event.target.value)
+      })
+    ) : null
+  );
+}
+
+// packages/dsh-chat/client/scoped-mode-editor.js
+var React4 = __toESM(require("react"), 1);
+var h3 = React4.createElement;
 function ScopedModeEditor({
   title,
   description,
@@ -853,9 +1047,9 @@ function ScopedModeEditor({
   onSave
 }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const [draft, setDraft] = React3.useState(() => ({ ...value }));
-  const [busy, setBusy] = React3.useState(false);
-  React3.useEffect(() => {
+  const [draft, setDraft] = React4.useState(() => ({ ...value }));
+  const [busy, setBusy] = React4.useState(false);
+  React4.useEffect(() => {
     if (!busy) setDraft({ ...value });
   }, [value, busy]);
   const dirty = scopes.some((scope) => (draft[scope.key] ?? null) !== (value[scope.key] ?? null));
@@ -869,22 +1063,22 @@ function ScopedModeEditor({
       setBusy(false);
     }
   };
-  return h2(
+  return h3(
     "section",
     { className: "dchat-card" },
-    h2(
+    h3(
       "div",
       { className: "dchat-cardHeader" },
-      h2(
+      h3(
         "div",
         null,
-        h2("h3", { className: "dchat-cardTitle" }, title),
-        description ? h2("p", { className: "dchat-cardDescription" }, description) : null
+        h3("h3", { className: "dchat-cardTitle" }, title),
+        description ? h3("p", { className: "dchat-cardDescription" }, description) : null
       ),
-      h2(
+      h3(
         "div",
         { className: "dchat-actions" },
-        h2("button", {
+        h3("button", {
           type: "button",
           className: "dchat-button",
           disabled: locked || !dirty,
@@ -894,15 +1088,15 @@ function ScopedModeEditor({
         }, busy ? t("\u4FDD\u5B58\u4E2D\u2026") : t("\u4FDD\u5B58"))
       )
     ),
-    h2("div", { className: "dchat-scopeGrid" }, scopes.map((scope) => {
+    h3("div", { className: "dchat-scopeGrid" }, scopes.map((scope) => {
       const selected = draft[scope.key] ?? options[0]?.value;
       const help = options.find((option) => option.value === selected)?.help;
       const selectId = `dchat-mode-${scope.key}`;
-      return h2(
+      return h3(
         "div",
         { key: scope.key, className: "dchat-scopeRow" },
-        h2("label", { className: "dchat-scopeLabel", htmlFor: selectId }, scope.label),
-        h2("select", {
+        h3("label", { className: "dchat-scopeLabel", htmlFor: selectId }, scope.label),
+        h3("select", {
           id: selectId,
           className: "dchat-select",
           value: selected,
@@ -912,14 +1106,14 @@ function ScopedModeEditor({
             ...current,
             [scope.key]: event.target.value
           }))
-        }, options.map((option) => h2("option", {
+        }, options.map((option) => h3("option", {
           key: option.value,
           value: option.value
         }, option.label))),
-        help ? h2("p", { className: "dchat-cardDescription" }, help) : null
+        help ? h3("p", { className: "dchat-cardDescription" }, help) : null
       );
     })),
-    error ? h2("p", { className: "dchat-error", role: "alert" }, error) : null
+    error ? h3("p", { className: "dchat-error", role: "alert" }, error) : null
   );
 }
 
@@ -1359,6 +1553,33 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+.dchat-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-success-primary);
+}
+.dchat-deliveryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dchat-deliveryMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dchat-deliveryMeta small {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  word-break: break-all;
+}
+.dchat-deliverySend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 `;
 var installations = 0;
 var styleElement = null;
@@ -1387,31 +1608,31 @@ function installChatStyles(doc = globalThis.document) {
 }
 
 // packages/dsh-chat/client/chat-ui.js
-var h3 = React4.createElement;
+var h4 = React5.createElement;
 function Panel({ title, description, actions, children }) {
-  return h3(
+  return h4(
     "section",
     { className: "dchat-card" },
-    title || description || actions ? h3(
+    title || description || actions ? h4(
       "div",
       { className: "dchat-cardHeader" },
-      h3(
+      h4(
         "div",
         null,
-        title ? h3("h3", { className: "dchat-cardTitle" }, title) : null,
-        description ? h3("p", { className: "dchat-cardDescription" }, description) : null
+        title ? h4("h3", { className: "dchat-cardTitle" }, title) : null,
+        description ? h4("p", { className: "dchat-cardDescription" }, description) : null
       ),
-      actions ? h3("div", { className: "dchat-actions" }, actions) : null
+      actions ? h4("div", { className: "dchat-actions" }, actions) : null
     ) : null,
     children
   );
 }
 function EmptyState({ title, description, children }) {
-  return h3(
+  return h4(
     "div",
     { className: "dchat-empty" },
-    h3("span", { className: "dchat-emptyTitle" }, title),
-    description ? h3("span", null, description) : null,
+    h4("span", { className: "dchat-emptyTitle" }, title),
+    description ? h4("span", null, description) : null,
     children
   );
 }
@@ -1422,7 +1643,7 @@ var TONES = Object.freeze({
   stopped: ""
 });
 function StatusPill({ status, label }) {
-  return h3("span", {
+  return h4("span", {
     className: "dchat-status",
     "data-tone": TONES[status] ?? "",
     "data-status": status
@@ -1439,7 +1660,9 @@ function createChatUi({ ctx, translate } = {}) {
       /** 上下文增强（群聊/私聊全局 + 指定用户/指定群 + 是否叠加全局提示词）。 */
       ContextEnhancementEditor,
       /** 通用"两作用域 × 多选项"设置块（如飞书任务过程展示）。 */
-      ScopedModeEditor
+      ScopedModeEditor,
+      /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
+      DeliveryTargetsEditor
     }),
     hooks: Object.freeze({
       /** 读取/保存 hub 持有的每机器人共享设置。 */
@@ -1453,8 +1676,8 @@ function createChatUi({ ctx, translate } = {}) {
     unwrapRpc,
     translate: t,
     /** 供渠道页复用的 React 运行时（渠道包只 external react/react-dom，无需各写一份）。 */
-    react: React4,
-    createElement: h3,
+    react: React5,
+    createElement: h4,
     /** hub 当前提供的契约版本，渠道页可据此显示兼容信息。 */
     contractVersion: CONTRACT_VERSION,
     context: Object.freeze({ has: () => typeof ctx === "object" })
@@ -1481,7 +1704,26 @@ var zh = {
   "\u4FDD\u5B58": "\u4FDD\u5B58",
   "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
   "\u53D6\u6D88": "\u53D6\u6D88",
-  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002"
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002",
+  // 主动投递（共享组件 delivery-targets.js）
+  "\u4E3B\u52A8\u6295\u9012": "\u4E3B\u52A8\u6295\u9012",
+  "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\uFF1B\u5019\u9009\u6765\u81EA\u4E0E\u8BE5\u673A\u5668\u4EBA\u7684\u5386\u53F2\u4F1A\u8BDD\u3002": "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\uFF1B\u5019\u9009\u6765\u81EA\u4E0E\u8BE5\u673A\u5668\u4EBA\u7684\u5386\u53F2\u4F1A\u8BDD\u3002",
+  "\u79C1\u804A": "\u79C1\u804A",
+  "\u7FA4\u804A": "\u7FA4\u804A",
+  "\u5019\u9009": "\u5019\u9009",
+  "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807": "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807",
+  "\u5220\u9664": "\u5220\u9664",
+  "\u786E\u8BA4\u5220\u9664": "\u786E\u8BA4\u5220\u9664",
+  "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002": "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002",
+  "\u8FD8\u6CA1\u6709\u53EF\u6295\u9012\u76EE\u6807\uFF1A\u5148\u4E0E\u673A\u5668\u4EBA\u5BF9\u8BDD\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u4F1A\u4F5C\u4E3A\u5019\u9009\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u8FD8\u6CA1\u6709\u53EF\u6295\u9012\u76EE\u6807\uFF1A\u5148\u4E0E\u673A\u5668\u4EBA\u5BF9\u8BDD\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u4F1A\u4F5C\u4E3A\u5019\u9009\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
+  "\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002": "\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002",
+  "\u5DF2\u5220\u9664\u3002": "\u5DF2\u5220\u9664\u3002",
+  "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002",
+  "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F": "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F",
+  "\u9009\u62E9\u76EE\u6807": "\u9009\u62E9\u76EE\u6807",
+  "\u53D1\u9001": "\u53D1\u9001",
+  "\u53D1\u9001\u4E2D\u2026": "\u53D1\u9001\u4E2D\u2026",
+  "\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9": "\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9"
 };
 var en = {
   "Chat\u673A\u5668\u4EBA": "Chat bot",
@@ -1501,7 +1743,26 @@ var en = {
   "\u4FDD\u5B58": "Save",
   "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
   "\u53D6\u6D88": "Cancel",
-  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again."
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again.",
+  // 主动投递
+  "\u4E3B\u52A8\u6295\u9012": "Proactive delivery",
+  "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\uFF1B\u5019\u9009\u6765\u81EA\u4E0E\u8BE5\u673A\u5668\u4EBA\u7684\u5386\u53F2\u4F1A\u8BDD\u3002": "Let a scheduled job or an agent push results straight into a conversation. Candidates come from conversations this bot has already taken part in.",
+  "\u79C1\u804A": "Direct",
+  "\u7FA4\u804A": "Group",
+  "\u5019\u9009": "Candidate",
+  "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807": "Save as target",
+  "\u5220\u9664": "Delete",
+  "\u786E\u8BA4\u5220\u9664": "Confirm delete",
+  "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002": "This channel does not support proactive delivery.",
+  "\u8FD8\u6CA1\u6709\u53EF\u6295\u9012\u76EE\u6807\uFF1A\u5148\u4E0E\u673A\u5668\u4EBA\u5BF9\u8BDD\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u4F1A\u4F5C\u4E3A\u5019\u9009\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "No delivery target yet: talk to the bot once and the conversation shows up here as a candidate.",
+  "\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002": "Saved. You can now send proactively.",
+  "\u5DF2\u5220\u9664\u3002": "Deleted.",
+  "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "A candidate must be saved before it can receive proactive messages.",
+  "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F": "Send a test message",
+  "\u9009\u62E9\u76EE\u6807": "Choose a target",
+  "\u53D1\u9001": "Send",
+  "\u53D1\u9001\u4E2D\u2026": "Sending\u2026",
+  "\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9": "Test message"
 };
 function bindTranslator(locale) {
   const dictionary = { zh, en };
@@ -1513,48 +1774,48 @@ function bindTranslator(locale) {
 }
 
 // packages/dsh-chat/client/section.js
-var React5 = __toESM(require("react"), 1);
-var h4 = React5.createElement;
+var React6 = __toESM(require("react"), 1);
+var h5 = React6.createElement;
 var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-feishu",
   "dsh-chat-weixin"
 ]);
 function ChannelMark({ entry }) {
   if (typeof entry.logo === "function") {
-    return h4("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h4(entry.logo));
+    return h5("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h5(entry.logo));
   }
   const initial = entry.id.slice(0, 1).toUpperCase();
-  return h4("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
+  return h5("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const entries = React5.useSyncExternalStore(
+  const entries = React6.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
     () => channels.getSnapshot(),
     () => channels.getSnapshot()
   );
-  const [selected, setSelected] = React5.useState(null);
+  const [selected, setSelected] = React6.useState(null);
   const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
   const EmptyState2 = chatUi?.components?.EmptyState;
-  const body = entries.length === 0 ? EmptyState2 ? h4(EmptyState2, {
+  const body = entries.length === 0 ? EmptyState2 ? h5(EmptyState2, {
     title: t("\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6"),
     description: t("\u5B89\u88C5\u6E20\u9053\u63D2\u4EF6\u540E\uFF0C\u8FD9\u91CC\u4F1A\u51FA\u73B0\u5BF9\u5E94\u7684\u804A\u5929\u8F6F\u4EF6\u3002")
-  }, h4(
+  }, h5(
     "ul",
     { className: "dchat-list" },
-    h4("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
-    ...KNOWN_CHANNEL_PACKAGES.map((name2) => h4("li", {
+    h5("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
+    ...KNOWN_CHANNEL_PACKAGES.map((name2) => h5("li", {
       key: name2,
       className: "dchat-listItem"
-    }, h4("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
-  )) : null : h4(
+    }, h5("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
+  )) : null : h5(
     "div",
     { className: "dchat-layout" },
-    h4(
+    h5(
       "nav",
       { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
-      entries.map((entry) => h4(
+      entries.map((entry) => h5(
         "button",
         {
           key: entry.id,
@@ -1566,33 +1827,33 @@ function ChatSettingsSection(props) {
           "aria-controls": `dchat-panel-${entry.id}`,
           onClick: () => setSelected(entry.id)
         },
-        h4(ChannelMark, { entry }),
-        h4(
+        h5(ChannelMark, { entry }),
+        h5(
           "span",
           { className: "dchat-channelLabel" },
-          h4("strong", null, entry.label()),
-          entry.capabilities?.note ? h4("small", null, entry.capabilities.note) : null
+          h5("strong", null, entry.label()),
+          entry.capabilities?.note ? h5("small", null, entry.capabilities.note) : null
         )
       ))
     ),
-    h4("main", {
+    h5("main", {
       className: "dchat-panel",
       role: "tabpanel",
       id: `dchat-panel-${activeId}`,
       "aria-labelledby": `dchat-tab-${activeId}`
-    }, typeof renderSlot === "function" ? renderSlot(CHANNEL_PAGE_SLOT, { channelId: activeId }, { entryKey: activeId }) : h4("p", { className: "dchat-cardDescription" }, "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
+    }, typeof renderSlot === "function" ? renderSlot(CHANNEL_PAGE_SLOT, { channelId: activeId }, { entryKey: activeId }) : h5("p", { className: "dchat-cardDescription" }, "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
   );
-  return h4(
+  return h5(
     "section",
     { className: "dchat-page", "aria-label": t("Chat\u673A\u5668\u4EBA\u8BBE\u7F6E") },
-    h4(
+    h5(
       "header",
       { className: "dchat-header" },
-      h4(
+      h5(
         "div",
         { className: "dchat-brand" },
-        h4("strong", { className: "dchat-brandName" }, "DSH-Chat"),
-        h4("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
+        h5("strong", { className: "dchat-brandName" }, "DSH-Chat"),
+        h5("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
       )
     ),
     body

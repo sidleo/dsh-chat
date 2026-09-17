@@ -12,6 +12,7 @@ import * as React from 'react';
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 import { useBotSettings } from './bot-settings.js';
 import { ContextEnhancementEditor } from './context-enhancement.js';
+import { DeliveryTargetsEditor } from './delivery-targets.js';
 import { callChatRpc, callControlRpc, unwrapRpc } from './rpc.js';
 import { ScopedModeEditor } from './scoped-mode-editor.js';
 import { installChatStyles } from './styles.js';
@@ -88,6 +89,8 @@ export function createChatUi({ ctx, translate } = {}) {
       ContextEnhancementEditor,
       /** 通用"两作用域 × 多选项"设置块（如飞书任务过程展示）。 */
       ScopedModeEditor,
+      /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
+      DeliveryTargetsEditor,
     }),
     hooks: Object.freeze({
       /** 读取/保存 hub 持有的每机器人共享设置。 */

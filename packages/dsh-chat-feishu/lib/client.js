@@ -72,7 +72,11 @@ var zh = {
   "\u8FD0\u884C\u6B63\u5E38": "\u8FD0\u884C\u6B63\u5E38",
   "\u542F\u52A8\u5931\u8D25": "\u542F\u52A8\u5931\u8D25",
   "\u5DF2\u505C\u6B62": "\u5DF2\u505C\u6B62",
-  "\u6B63\u5728\u8FD0\u884C": "\u6B63\u5728\u8FD0\u884C"
+  "\u6B63\u5728\u8FD0\u884C": "\u6B63\u5728\u8FD0\u884C",
+  // hub 的共享组件（上下文增强编辑器）用本渠道的 t 取文案，因此这些键必须在渠道字典里。
+  "\u4FDD\u5B58": "\u4FDD\u5B58",
+  "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002"
 };
 var en = {
   "\u98DE\u4E66": "Feishu",
@@ -101,7 +105,10 @@ var en = {
   "\u8FD0\u884C\u6B63\u5E38": "Connected",
   "\u542F\u52A8\u5931\u8D25": "Failed",
   "\u5DF2\u505C\u6B62": "Stopped",
-  "\u6B63\u5728\u8FD0\u884C": "Running"
+  "\u6B63\u5728\u8FD0\u884C": "Running",
+  "\u4FDD\u5B58": "Save",
+  "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again."
 };
 var h = React.createElement;
 var STATE_TEXT = {
@@ -129,7 +136,13 @@ var STEP_PUSH_OPTIONS = [
 ];
 function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor } = chatUi.components;
+  const {
+    Panel,
+    StatusPill,
+    ScopedModeEditor,
+    ContextEnhancementEditor,
+    DeliveryTargetsEditor
+  } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection,
     channelId: CHANNEL_ID,
@@ -232,6 +245,13 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       disabled: settings.phase !== "ready",
       translate: t,
       onSave: settings.saveContextEnhancement
+    }),
+    // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
+    h(DeliveryTargetsEditor, {
+      chatUi,
+      connection,
+      channelId: CHANNEL_ID,
+      botId: bot.id
     })
   );
 }
