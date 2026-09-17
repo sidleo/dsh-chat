@@ -61,6 +61,16 @@ function textOfAssistantMessage(message) {
     .join('');
 }
 
+/** 把内容块数组里的文本拼起来（用于入站消息文本）。 */
+function contentText(content) {
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim();
+}
+
 function deltaTextOf(chunk) {
   if (typeof chunk?.text === 'string') return chunk.text;
   if (typeof chunk?.delta === 'string') return chunk.delta;
@@ -93,6 +103,35 @@ function filesOfPresentArgs(args) {
         ? { description: file.description }
         : {}),
     }));
+}
+
+/**
+ * 从 `session/page` 的记录里挑出对话消息（`/history` 用）。
+ *
+ * 只保留**用户真正说的**与**模型回复的文本**：注入的上下文（`user/message` 但
+ * `source.kind !== 'user'`）不算一轮对话，思考/工具调用也不进历史。
+ *
+ * @param records - `session/page` 的 `records`。
+ * @param limit - 最多保留多少条消息（从最新往回数）。
+ * @returns `[{ role: 'user'|'assistant', text }]`（按时间正序）。
+ */
+function historyMessagesOf(records, limit) {
+  const messages = [];
+  for (const record of Array.isArray(records) ? records : []) {
+    const event = record?.event ?? record;
+    const data = event?.data;
+    if (event?.type === 'user/message') {
+      if (data?.source?.kind !== 'user') continue;
+      const text = contentText(data?.content);
+      if (text) messages.push({ role: 'user', text });
+      continue;
+    }
+    if (event?.type === 'assistant/message') {
+      const text = textOfAssistantMessage(data?.message);
+      if (text) messages.push({ role: 'assistant', text });
+    }
+  }
+  return limit > 0 ? messages.slice(-limit) : messages;
 }
 
 /**
@@ -628,6 +667,83 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     }
   }
 
+  /**
+   * 读最近的对话历史（`/history` 用）。
+   *
+   * 走 `session/follow` 的**首个 snapshot**：它一次就把尾部 N 条记录和游标都给了我们
+   * （`session/page` 需要先知道会话的 seq，而 seq 只能从 follow 的 snapshot 里拿，
+   * 用 `throughSeq: -1` 只会拿到空页——那是"探测会话是否存在"的用法）。
+   * 读完立刻关流，且关流**必须有界**——否则一条命令就能把聊天卡住。
+   *
+   * @param options - { channelId, botId, key, maxMessages, signal }。
+   * @returns `{ sessionId, messages }`；没有绑定会话时 sessionId 为 null。
+   */
+  async function history({ channelId, botId, key, maxMessages = 12, signal } = {}) {
+    const bound = store?.get?.(channelId, botId, key);
+    if (!bound?.sessionId) return { sessionId: null, messages: [] };
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) throw abortError(signal);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    let frames = null;
+    try {
+      frames = await stream('session', 'follow', {
+        request: {
+          address: { kind: 'session', sessionId: bound.sessionId },
+          maxMessages: Math.max(1, Math.min(50, maxMessages)),
+          // 注意：wire 上 `assistantStream` 只接受 `true`（或省略），传 false 会被
+          // 边界校验直接拒掉。历史只需要 snapshot，所以这里不传。
+        },
+      }, controller.signal);
+      let records = [];
+      for await (const frame of frames) {
+        if (frame?.type === 'snapshot') {
+          records = Array.isArray(frame.records) ? frame.records : [];
+          break;
+        }
+      }
+      return { sessionId: bound.sessionId, messages: historyMessagesOf(records, maxMessages) };
+    } finally {
+      controller.abort();
+      signal?.removeEventListener?.('abort', onAbort);
+      if (frames && typeof frames.return === 'function') {
+        // 关流可以慢，但不能永远不回：拿到历史就先返回（与 ask 的收尾同一套有界策略）。
+        const closing = Promise.resolve(frames.return()).catch(() => {});
+        await Promise.race([
+          closing,
+          new Promise((resolve) => { setTimeout(resolve, STREAM_CLOSE_GRACE_MS); }),
+        ]);
+      }
+    }
+  }
+
+  /**
+   * 执行一条 DSH 斜杠命令（不经过模型，例如 `/compact`）。
+   *
+   * @param options - { channelId, botId, key, line, signal }。
+   * @returns `{ matched, kind, text }`；`matched=false` 表示当前部署没注册这条命令。
+   */
+  async function runCommand({ channelId, botId, key, line, signal } = {}) {
+    const bound = store?.get?.(channelId, botId, key);
+    if (!bound?.sessionId) {
+      const error = new Error('当前聊天还没有会话（先发一条消息即可创建）。');
+      error.code = 'chat/session-required';
+      throw error;
+    }
+    const result = await invoke('commands', 'execute', {
+      agentId: bound.sessionId,
+      line,
+      submittedAttachments: [],
+    }, signal);
+    if (result === undefined || result === null) return { matched: false };
+    return {
+      matched: true,
+      commandId: result.commandId,
+      kind: result.result?.kind ?? 'error',
+      text: result.result?.text ?? '',
+    };
+  }
+
   return Object.freeze({
     invoke,
     stream,
@@ -641,6 +757,8 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     isRunning,
     rename,
     reset,
+    history,
+    runCommand,
     /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
     bindings: store,
     installInteractionRelays,

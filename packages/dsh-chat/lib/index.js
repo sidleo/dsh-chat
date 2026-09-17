@@ -1074,6 +1074,11 @@ function line(text) {
   const value = String(text ?? "").replace(/\s+$/u, "");
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}\u2026` : value;
 }
+var MAX_HISTORY_CHARS = 160;
+function clip(text) {
+  const value = String(text ?? "").replace(/\s+/gu, " ").trim();
+  return value.length > MAX_HISTORY_CHARS ? `${value.slice(0, MAX_HISTORY_CHARS)}\u2026` : value;
+}
 function parseArgs(text) {
   const raw = text.slice(1);
   const match = /^(\S+)\s*(.*)$/su.exec(raw);
@@ -1243,6 +1248,56 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
         key: context.key
       });
       return result?.accepted ? "\u5DF2\u8BF7\u6C42\u505C\u6B62\u5F53\u524D\u4EFB\u52A1\u3002" : "\u5F53\u524D\u6CA1\u6709\u6B63\u5728\u8FD0\u884C\u7684\u4EFB\u52A1\u3002";
+    }
+  });
+  registry.register({
+    name: "compact",
+    summary: "\u538B\u7F29\u5F53\u524D\u4F1A\u8BDD\u7684\u4E0A\u4E0B\u6587\uFF08\u4F1A\u8BDD\u592A\u957F\u65F6\u7528\uFF09",
+    execute: async (context) => {
+      const sessionId = await boundSession(context);
+      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF08\u5148\u53D1\u4E00\u6761\u6D88\u606F\u5373\u53EF\u521B\u5EFA\uFF09\u3002";
+      const result = await context.services.sessions.runCommand({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key,
+        line: "/compact"
+      });
+      if (!result?.matched) {
+        return "\u5F53\u524D\u90E8\u7F72\u6CA1\u6709\u6CE8\u518C /compact \u547D\u4EE4\uFF08\u9700\u8981\u5728 profile \u91CC\u542F\u7528\u538B\u7F29\u63D2\u4EF6\uFF09\u3002";
+      }
+      if (result.kind === "success") {
+        return `\u2705 \u4E0A\u4E0B\u6587\u5DF2\u538B\u7F29\u3002${result.text ? `
+${result.text}` : ""}`;
+      }
+      return `\u26A0\uFE0F \u538B\u7F29\u672A\u5B8C\u6210\uFF1A${result.text || "\u672A\u77E5\u539F\u56E0"}`;
+    }
+  });
+  registry.register({
+    name: "history",
+    summary: "\u56DE\u770B\u6700\u8FD1\u51E0\u8F6E\u5BF9\u8BDD",
+    usage: "/history [\u8F6E\u6570]",
+    execute: async (context) => {
+      const requested = indexOf(context.args[0]);
+      const turns = requested === null ? 5 : Math.min(requested + 1, 20);
+      const { messages } = await context.services.sessions.history({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key,
+        // 一轮大致对应"用户 + 助手"两条消息，多取几条保证凑得齐。
+        maxMessages: turns * 2 + 2
+      });
+      if (messages.length === 0) return "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u5BF9\u8BDD\u5386\u53F2\u3002";
+      const lines = [];
+      let index = 0;
+      for (const message of messages) {
+        if (message.role === "user") {
+          index += 1;
+          lines.push(`${index}. \u4F60\uFF1A${line(clip(message.text))}`);
+        } else {
+          lines.push(`   bot\uFF1A${line(clip(message.text))}`);
+        }
+      }
+      return [`\u6700\u8FD1 ${index} \u8F6E\uFF08\u6700\u591A\u56DE\u770B 20 \u8F6E\uFF09\uFF1A`, ...lines].join("\n");
     }
   });
   registry.register({
@@ -2165,6 +2220,10 @@ function textOfAssistantMessage(message) {
   if (!Array.isArray(content)) return "";
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
 }
+function contentText(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
+}
 function deltaTextOf(chunk) {
   if (typeof chunk?.text === "string") return chunk.text;
   if (typeof chunk?.delta === "string") return chunk.delta;
@@ -2184,6 +2243,24 @@ function filesOfPresentArgs(args) {
     path: file.path,
     ...typeof file.description === "string" && file.description ? { description: file.description } : {}
   }));
+}
+function historyMessagesOf(records, limit) {
+  const messages = [];
+  for (const record of Array.isArray(records) ? records : []) {
+    const event = record?.event ?? record;
+    const data = event?.data;
+    if (event?.type === "user/message") {
+      if (data?.source?.kind !== "user") continue;
+      const text = contentText(data?.content);
+      if (text) messages.push({ role: "user", text });
+      continue;
+    }
+    if (event?.type === "assistant/message") {
+      const text = textOfAssistantMessage(data?.message);
+      if (text) messages.push({ role: "assistant", text });
+    }
+  }
+  return limit > 0 ? messages.slice(-limit) : messages;
 }
 function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
   const gateway = ctx?.typertGateway;
@@ -2593,6 +2670,66 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       throw fileUploadFailure(error);
     }
   }
+  async function history({ channelId, botId, key, maxMessages = 12, signal } = {}) {
+    const bound = store?.get?.(channelId, botId, key);
+    if (!bound?.sessionId) return { sessionId: null, messages: [] };
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) throw abortError(signal);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    let frames = null;
+    try {
+      frames = await stream("session", "follow", {
+        request: {
+          address: { kind: "session", sessionId: bound.sessionId },
+          maxMessages: Math.max(1, Math.min(50, maxMessages))
+          // 注意：wire 上 `assistantStream` 只接受 `true`（或省略），传 false 会被
+          // 边界校验直接拒掉。历史只需要 snapshot，所以这里不传。
+        }
+      }, controller.signal);
+      let records = [];
+      for await (const frame of frames) {
+        if (frame?.type === "snapshot") {
+          records = Array.isArray(frame.records) ? frame.records : [];
+          break;
+        }
+      }
+      return { sessionId: bound.sessionId, messages: historyMessagesOf(records, maxMessages) };
+    } finally {
+      controller.abort();
+      signal?.removeEventListener?.("abort", onAbort);
+      if (frames && typeof frames.return === "function") {
+        const closing = Promise.resolve(frames.return()).catch(() => {
+        });
+        await Promise.race([
+          closing,
+          new Promise((resolve4) => {
+            setTimeout(resolve4, STREAM_CLOSE_GRACE_MS);
+          })
+        ]);
+      }
+    }
+  }
+  async function runCommand({ channelId, botId, key, line: line2, signal } = {}) {
+    const bound = store?.get?.(channelId, botId, key);
+    if (!bound?.sessionId) {
+      const error = new Error("\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF08\u5148\u53D1\u4E00\u6761\u6D88\u606F\u5373\u53EF\u521B\u5EFA\uFF09\u3002");
+      error.code = "chat/session-required";
+      throw error;
+    }
+    const result = await invoke("commands", "execute", {
+      agentId: bound.sessionId,
+      line: line2,
+      submittedAttachments: []
+    }, signal);
+    if (result === void 0 || result === null) return { matched: false };
+    return {
+      matched: true,
+      commandId: result.commandId,
+      kind: result.result?.kind ?? "error",
+      text: result.result?.text ?? ""
+    };
+  }
   return Object.freeze({
     invoke,
     stream,
@@ -2606,6 +2743,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     isRunning,
     rename: rename3,
     reset,
+    history,
+    runCommand,
     /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
     bindings: store,
     installInteractionRelays

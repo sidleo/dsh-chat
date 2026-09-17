@@ -48,8 +48,15 @@ function createServices({
   bound = true,
   presets = PRESETS,
   record = { workspace: '/ws', agentPreset: 'ptc' },
+  runCommandResult = { matched: true, kind: 'success', text: 'Compaction finished.' },
+  historyMessages = [
+    { role: 'user', text: '帮我看看昨天的销售' },
+    { role: 'assistant', text: '昨天销售额 1234 万。' },
+  ],
 } = {}) {
-  const calls = { reset: [], cancel: [], selectModel: [], bind: [], writes: [] };
+  const calls = {
+    reset: [], cancel: [], selectModel: [], bind: [], writes: [], runCommand: [], history: [],
+  };
   const sessions = {
     async invoke(namespace, method, args) {
       if (method === 'modelCatalog') return MODEL_CATALOG;
@@ -82,6 +89,14 @@ function createServices({
     async cancel(options) {
       calls.cancel.push(options);
       return { accepted: true };
+    },
+    async runCommand(options) {
+      calls.runCommand.push(options);
+      return runCommandResult;
+    },
+    async history(options) {
+      calls.history.push(options);
+      return { sessionId: 'session-1', messages: historyMessages };
     },
     bindings: {
       get: (channelId, botId, key) => (bound && key === 'p2p:bound' ? { sessionId: 'session-1' } : undefined),
@@ -429,4 +444,68 @@ test('微信：命令不进会话，直接分段回复命令结果', async () =>
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
+});
+
+test('/compact：走 DSH 的 commands 服务，不经过模型；成功/失败/未注册分别给可读回复', async () => {
+  const okServices = createServices();
+  const ok = createRegistry(okServices.services);
+  assert.equal(
+    await ok.handle(context('/compact')).then((result) => result.reply),
+    '✅ 上下文已压缩。\nCompaction finished.',
+  );
+  assert.equal(okServices.calls.runCommand[0].line, '/compact');
+  assert.equal(okServices.calls.runCommand[0].key, 'p2p:bound');
+
+  const failed = createRegistry(createServices({
+    runCommandResult: { matched: true, kind: 'error', text: 'Compaction cancelled.' },
+  }).services);
+  assert.match(await failed.handle(context('/compact')).then((r) => r.reply), /⚠️ 压缩未完成：Compaction cancelled\./);
+
+  const missing = createRegistry(createServices({ runCommandResult: { matched: false } }).services);
+  assert.match(await missing.handle(context('/compact')).then((r) => r.reply), /没有注册 \/compact 命令/);
+
+  // 没有绑定会话时给出可读提示（不抛）
+  const unbound = createRegistry(createServices().services);
+  assert.match(await unbound.handle(context('/compact', { key: 'p2p:other' })).then((r) => r.reply), /还没有会话/);
+});
+
+test('/history：按轮数回看最近对话，条数与截断都有上限', async () => {
+  const { services, calls } = createServices({
+    historyMessages: [
+      { role: 'user', text: '第一轮问题' },
+      { role: 'assistant', text: '第一轮回答' },
+      { role: 'user', text: 'x'.repeat(400) },
+      { role: 'assistant', text: '最后一条回答' },
+    ],
+  });
+  const registry = createRegistry(services);
+
+  const reply = await registry.handle(context('/history')).then((result) => result.reply);
+  assert.match(reply, /最近 2 轮/);
+  assert.match(reply, /1\. 你：第一轮问题/);
+  assert.match(reply, / {3}bot：第一轮回答/);
+  assert.match(reply, /2\. 你：x+…/, '长消息要截断');
+  assert.match(reply, /最后一条回答/);
+  assert.ok(!reply.includes('x'.repeat(200)), '截断后不该出现整段长文');
+  assert.equal(calls.history[0].maxMessages, 12, '默认 5 轮 → 多取两条兜底');
+
+  // 轮数上限 20：/history 99 也只取 20 轮
+  const many = createServices();
+  await createRegistry(many.services).handle(context('/history 99'));
+  assert.equal(many.calls.history[0].maxMessages, 42, '20 轮 → 42 条上限');
+
+  // 指定轮数：/history 2 → 2 轮
+  const some = createServices();
+  await createRegistry(some.services).handle(context('/history 2'));
+  assert.equal(some.calls.history[0].maxMessages, 6);
+});
+
+test('/history：没有历史时说清楚；/help 里能看到新命令', async () => {
+  const { services } = createServices({ historyMessages: [] });
+  const registry = createRegistry(services);
+  assert.match(await registry.handle(context('/history')).then((r) => r.reply), /还没有对话历史/);
+
+  const help = await registry.handle(context('/help')).then((result) => result.reply);
+  assert.match(help, /\/compact — 压缩当前会话的上下文/);
+  assert.match(help, /\/history \[轮数\] — 回看最近几轮对话/);
 });

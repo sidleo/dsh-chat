@@ -21,6 +21,14 @@ function line(text) {
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}…` : value;
 }
 
+/** 历史回看里每条消息的字符上限（避免一条命令刷屏）。 */
+const MAX_HISTORY_CHARS = 160;
+
+function clip(text) {
+  const value = String(text ?? '').replace(/\s+/gu, ' ').trim();
+  return value.length > MAX_HISTORY_CHARS ? `${value.slice(0, MAX_HISTORY_CHARS)}…` : value;
+}
+
 /** 把 `provider/model` 之外的空格参数拆开，保留引号内的整体。 */
 function parseArgs(text) {
   const raw = text.slice(1);
@@ -226,6 +234,57 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1' } = {})
         channelId: context.channelId, botId: context.botId, key: context.key,
       });
       return result?.accepted ? '已请求停止当前任务。' : '当前没有正在运行的任务。';
+    },
+  });
+
+  registry.register({
+    name: 'compact',
+    summary: '压缩当前会话的上下文（会话太长时用）',
+    execute: async (context) => {
+      const sessionId = await boundSession(context);
+      if (!sessionId) return '当前聊天还没有会话（先发一条消息即可创建）。';
+      const result = await context.services.sessions.runCommand({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key,
+        line: '/compact',
+      });
+      if (!result?.matched) {
+        return '当前部署没有注册 /compact 命令（需要在 profile 里启用压缩插件）。';
+      }
+      if (result.kind === 'success') {
+        return `✅ 上下文已压缩。${result.text ? `\n${result.text}` : ''}`;
+      }
+      return `⚠️ 压缩未完成：${result.text || '未知原因'}`;
+    },
+  });
+
+  registry.register({
+    name: 'history',
+    summary: '回看最近几轮对话',
+    usage: '/history [轮数]',
+    execute: async (context) => {
+      const requested = indexOf(context.args[0]);
+      const turns = requested === null ? 5 : Math.min(requested + 1, 20);
+      const { messages } = await context.services.sessions.history({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key,
+        // 一轮大致对应"用户 + 助手"两条消息，多取几条保证凑得齐。
+        maxMessages: turns * 2 + 2,
+      });
+      if (messages.length === 0) return '这个会话还没有对话历史。';
+      const lines = [];
+      let index = 0;
+      for (const message of messages) {
+        if (message.role === 'user') {
+          index += 1;
+          lines.push(`${index}. 你：${line(clip(message.text))}`);
+        } else {
+          lines.push(`   bot：${line(clip(message.text))}`);
+        }
+      }
+      return [`最近 ${index} 轮（最多回看 20 轮）：`, ...lines].join('\n');
     },
   });
 

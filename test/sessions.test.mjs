@@ -27,6 +27,7 @@ function remoteError(code, message = code) {
 /** 一个可编排的假 DSH：记录调用，并按脚本逐个产出 follow 帧。 */
 function createFakeGateway({
   script = [], stuckReturn = false, stuckPrompt = false, failPrompt = false,
+  pageRecords = [], commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
 } = {}) {
   const calls = [];
   const sessions = new Set();
@@ -60,7 +61,10 @@ function createFakeGateway({
       if (namespace === 'session' && method === 'page') {
         const sessionId = args?.request?.address?.sessionId;
         if (!sessions.has(sessionId)) throw remoteError('session/not-found');
-        return { records: [], hasMore: false };
+        return { records: pageRecords, hasMore: false };
+      }
+      if (namespace === 'commands' && method === 'execute') {
+        return commandResult;
       }
       if (namespace === 'session' && method === 'prompt') {
         if (args?.request?.mode !== 'queue' && args?.request?.mode !== 'steer') {
@@ -323,6 +327,72 @@ test('事件流不带 deliverables 时，退回 present 的工具参数（交付
       '/ws/永辉销售日报_20260916.md',
       '/ws/报表.xlsx',
     ]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('history：只取真实对话（注入的上下文不算），并从最新往回截断', async () => {
+  const records = [
+    { type: 'event', event: { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第一问' }] } } },
+    // 注入的上下文（agent-instructions / plugin snapshot）不算一轮对话
+    { type: 'event', event: { type: 'user/message', seq: 2, data: { source: { kind: 'agent-instructions' }, content: [{ type: 'text', text: '  <system-reminder> 一大坨注入 ' }] } } },
+    { type: 'event', event: { type: 'assistant/message', seq: 3, data: { message: { content: [{ type: 'reasoning', text: '想想' }, { type: 'text', text: '第一答' }] } } } },
+    { type: 'event', event: { type: 'user/message', seq: 4, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第二问' }] } } },
+    { type: 'event', event: { type: 'assistant/message', seq: 5, data: { message: { content: [{ type: 'text', text: '第二答' }] } } } },
+  ];
+  // 历史走 follow 的首个 snapshot（`session/page` 需要先拿到 seq，用 -1 只会拿到空页）
+  const snapshot = [{ type: 'snapshot', cursor: 5, records, hasMore: true }];
+  const app = await makeBridge({ script: [snapshot, snapshot] });
+  try {
+    await app.bridge.ensure({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws' });
+    const all = await app.bridge.history({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1' });
+    assert.deepEqual(all.messages, [
+      { role: 'user', text: '第一问' },
+      { role: 'assistant', text: '第一答' },
+      { role: 'user', text: '第二问' },
+      { role: 'assistant', text: '第二答' },
+    ], '注入内容与思考都不进历史，助手只取文本');
+
+    const followCall = app.gateway.calls.findLast((call) => call.streaming === true);
+    assert.equal(followCall.method, 'follow');
+    assert.equal(followCall.args.request.maxMessages, 12, '按需要的条数开流');
+    assert.equal('assistantStream' in followCall.args.request, false, 'assistantStream 只接受 true，历史就不传');
+
+    const tail = await app.bridge.history({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', maxMessages: 2 });
+    assert.deepEqual(tail.messages.map((message) => message.text), ['第二问', '第二答'], '从最新往回截断');
+
+    // 没有绑定会话：不建会话，直接说没有
+    const none = await app.bridge.history({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:other' });
+    assert.equal(none.sessionId, null);
+    assert.deepEqual(none.messages, []);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('runCommand：走 commands/execute 打到绑定会话；没有会话时给可读错误', async () => {
+  const app = await makeBridge({
+    commandResult: { commandId: 'cmd_9', result: { kind: 'success', text: 'No compactable history yet.' } },
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.runCommand({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', line: '/compact' }),
+      (error) => error.code === 'chat/session-required',
+    );
+
+    await app.bridge.ensure({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws' });
+    const result = await app.bridge.runCommand({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', line: '/compact',
+    });
+    assert.deepEqual(result, {
+      matched: true, commandId: 'cmd_9', kind: 'success', text: 'No compactable history yet.',
+    });
+    const call = app.gateway.calls.findLast((entry) => entry.namespace === 'commands');
+    assert.equal(call.method, 'execute');
+    assert.equal(call.args.line, '/compact');
+    assert.deepEqual(call.args.submittedAttachments, []);
+    assert.equal(call.args.agentId, 'session-1', 'agentId 用绑定的会话 id');
   } finally {
     await app.cleanup();
   }

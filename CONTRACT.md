@@ -346,6 +346,18 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
 - 多选提问（`multiSelect: true`）按钮表达不了，标准做法是**留在同一张卡片里**用 `form` + 原生勾选器，
   不要另发一条消息——否则一批问题会把聊天记录撑满。
 
+### 命令：自己的命令 vs DSH 的命令（两个命名空间，别混）
+
+- **hub 的命令内核**（`/help`、`/new`、`/model`、`/history`、`/compact`…）在渠道入口拦截，
+  渠道把文本交给 `deps.commands.handle(...)`；命令**不进模型、也不做上下文增强**。
+- **DSH 自己的斜杠命令**（`/compact`、`/goal`、`/plan`…）注册在 Agent 上，只有 `ctx.commands`
+  认识。hub 的 `/compact` 是通过会话桥 `runCommand()` 调 `commands/execute`（wire 参数
+  `{ agentId, line, submittedAttachments }`，`agentId` 就是会话 id）转发的——**别自己实现压缩**。
+- 两个 wire 陷阱（真机探针踩出来的）：
+  1. `session/page` 的 `throughSeq: -1` 是**空页**（拿它探测会话存在性），取尾部要用
+     `session/follow` 的 **snapshot**（`records` + `cursor`）；`session/page` 得先有 seq 才能翻页。
+  2. `session/follow` 的 `assistantStream` 只接受 `true` 或省略，传 `false` 会被边界校验拒掉。
+
 ### 入站内容（文本与图片）
 
 hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，所以渠道只要把入站内容
@@ -393,6 +405,8 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `uploadFile({ sessionId, name, bytes })` | 把一段字节入库成**该会话可引用**的文件，返回 `{ receiptId, file }`（入站文件必须走它） |
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
 | `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |
+| `history({ channelId, botId, key, maxMessages })` | 回看最近几轮：取 `session/follow` 首个 snapshot 的尾部记录，只挑真实对话（注入的上下文与思考不算） |
+| `runCommand({ channelId, botId, key, line })` | 执行一条 DSH 斜杠命令（如 `/compact`），**不经过模型**；`matched:false` = 当前部署没注册这条命令 |
 | `bindings` | 会话绑定表：`get` / `entries` / `bind` / `unbind` / `adopt` / `locate` |
 | `registerInteractionHandler(channelId, handle)` | 注册本渠道的审批/提问回传处理器（返回注销函数） |
 
