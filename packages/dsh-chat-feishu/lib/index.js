@@ -126616,15 +126616,12 @@ function askRow({ header, question, answer } = {}) {
 }
 function renderStepCard({
   title,
-  rows = [],
-  questionRows = [],
+  panelItems = [],
   answer = "",
   note = "",
   panelTitle = "",
   currentQuestion = [],
   todos = null,
-  questionPanelTitle = "",
-  questionPanelExpanded = false,
   template = "blue"
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -126639,21 +126636,20 @@ function renderStepCard({
   if (note) {
     elements.push({ tag: "div", text: { tag: "plain_text", content: clampBudget(note) } });
   }
-  if (rows.length > 0 || questionRows.length > 0) {
+  if (panelItems.length > 0) {
     const inner = [];
-    const body = rows.length > 0 ? clampBudget(rows.map((row) => `\xB7 ${row}`).join("\n")) : "";
-    if (body) inner.push({ tag: "markdown", content: body });
-    if (questionRows.length > 0) {
-      const asked = clampBudget(questionRows.map((row) => `\xB7 ${row.text}`).join("\n"));
-      if (asked) {
+    for (const item of panelItems) {
+      if (item?.kind === "ask") {
+        const asked = clampBudget(item.rows.map((row) => `\xB7 ${row.text}`).join("\n"));
+        if (!asked) continue;
         inner.push({
           tag: "collapsible_panel",
-          expanded: questionPanelExpanded === true,
+          expanded: item.expanded === true,
           border: { color: "grey", corner_radius: "4px" },
           header: {
             title: {
               tag: "plain_text",
-              content: clampBudget(questionPanelTitle || `\u2753 ${questionRows.length} \u5DF2\u56DE\u7B54`)
+              content: clampBudget(item.title || `\u2753 ${item.rows.length} \u5DF2\u56DE\u7B54`)
             },
             width: "fill",
             icon_position: "right",
@@ -126661,7 +126657,10 @@ function renderStepCard({
           },
           elements: [{ tag: "markdown", content: asked }]
         });
+        continue;
       }
+      const body = clampBudget((item?.rows ?? []).map((row) => `\xB7 ${row}`).join("\n"));
+      if (body) inner.push({ tag: "markdown", content: body });
     }
     if (inner.length > 0) {
       elements.push({
@@ -126734,7 +126733,7 @@ function createTurnPresenter({
   let entries = [];
   let currentQuestion = [];
   let questionProgress = null;
-  let questionIds = /* @__PURE__ */ new Set();
+  const askBatches = /* @__PURE__ */ new Map();
   let todos = null;
   let lastAnswer = "";
   let state = "running";
@@ -126768,20 +126767,46 @@ function createTurnPresenter({
     if (state !== "running") return `\u5DE5\u5177\u4E0E\u601D\u8003(${count})`;
     return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
   }
+  function panelItems() {
+    const items = [];
+    let buffer = [];
+    let batch = null;
+    const flush = () => {
+      if (buffer.length > 0) items.push({ kind: "rows", rows: buffer });
+      buffer = [];
+    };
+    for (const entry of entries) {
+      if (entry.kind !== "ask") {
+        batch = null;
+        buffer.push(entry.text);
+        continue;
+      }
+      if (entry.batch !== batch) {
+        flush();
+        batch = entry.batch;
+        items.push({ kind: "ask", batch, rows: [], title: "", expanded: false });
+      }
+      items[items.length - 1].rows.push({ id: entry.key, text: entry.text });
+    }
+    flush();
+    for (const item of items) {
+      if (item.kind !== "ask") continue;
+      const info = askBatches.get(item.batch);
+      const total = info?.total ?? item.rows.length;
+      item.title = `\u2753 ${item.rows.length}/${total} \u5DF2\u56DE\u7B54`;
+      item.expanded = info?.expanded === true;
+    }
+    return items;
+  }
   function cardPayload(answer) {
-    const questionRows = entries.filter((entry) => entry.kind === "ask").map((entry) => ({ id: entry.key, text: entry.text }));
     return renderStepCard({
       title: currentTitle(),
-      rows: entries.filter((entry) => entry.kind !== "ask").map((entry) => entry.text),
-      questionRows,
+      panelItems: panelItems(),
       answer,
       note,
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === "running" } : null,
-      questionPanelTitle: questionRows.length > 0 ? `\u2753 ${questionRows.length}/${questionIds.size} \u5DF2\u56DE\u7B54` : "",
-      // 还有题要答时展开，方便对照；答完（或收尾）收起。
-      questionPanelExpanded: currentQuestion.length > 0,
       template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
     });
   }
@@ -126915,20 +126940,25 @@ function createTurnPresenter({
       return enqueue(async () => {
         const questions = payload?.questions ?? [];
         const answered = payload?.answered ?? {};
-        for (const question of questions) {
-          if (question?.id !== void 0) questionIds.add(String(question.id));
-        }
+        const batchKey = questions.map((question) => String(question?.id ?? "")).join("|");
         const rendered = gateway.renderQuestionElements({
           questions,
           answered,
           final: payload?.final === true
         });
         for (const row of rendered.rows ?? []) {
-          putEntry({ key: `ask:${row.id}`, kind: "ask", text: row.text });
+          putEntry({ key: `ask:${row.id}`, kind: "ask", batch: batchKey, text: row.text });
         }
         currentQuestion = Array.isArray(rendered.elements) ? rendered.elements : [];
         const current = rendered.current;
         questionProgress = current && questions.length > 0 ? { index: questions.indexOf(current) + 1, total: questions.length } : null;
+        if (batchKey) {
+          askBatches.set(batchKey, {
+            total: questions.length,
+            // 还有题要答时展开方便对照；这一批答完就收起。
+            expanded: Boolean(current)
+          });
+        }
         return patchNow();
       });
     },
@@ -126955,6 +126985,7 @@ function createTurnPresenter({
         state = failed ? "failed" : "done";
         currentQuestion = [];
         questionProgress = null;
+        for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
         if (patchTimer) {
           clearTimeout(patchTimer);
           patchTimer = null;
@@ -127357,9 +127388,10 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await clearWorking(message, workingReaction);
     }
   }
-  const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
   async function sendDeliverables(files, message, { replyInThread = false } = {}) {
     if (!Array.isArray(files) || files.length === 0) return;
+    const items = [];
+    const failed = [];
     for (const file of files) {
       const path2 = typeof file?.path === "string" ? file.path : "";
       if (!path2) continue;
@@ -127370,26 +127402,31 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         if (info.size > MAX_DELIVERABLE_BYTES) {
           throw new Error(`\u8D85\u8FC7 ${Math.round(MAX_DELIVERABLE_BYTES / 1024 / 1024)}MB \u4E0A\u9650`);
         }
-        const ext = name2.slice(name2.lastIndexOf(".")).toLowerCase();
-        if (IMAGE_EXTENSIONS.has(ext)) {
-          await gateway.sendImage({ chatId: message.chat_id, path: path2 });
-        } else {
-          await gateway.sendFile({ chatId: message.chat_id, path: path2, name: name2 });
-        }
-        logger.info?.(`[dsh-chat-feishu] \u5DF2\u53D1\u9001\u4EA4\u4ED8\u6587\u4EF6\uFF1A${name2}\uFF08${info.size} \u5B57\u8282\uFF0C${bot.id}\uFF09`);
+        items.push({ path: path2, name: name2, size: info.size, description: file.description });
+      } catch (error) {
+        failed.push({ name: name2, reason: error?.message ?? String(error) });
+      }
+    }
+    if (items.length > 0) {
+      try {
+        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items });
+        failed.push(...sent?.failed ?? []);
+        logger.info?.(`[dsh-chat-feishu] \u4EA4\u4ED8\u6587\u4EF6\u5DF2\u53D1\u51FA\uFF08${bot.id}\uFF09\uFF1A${(sent?.files ?? []).join("\u3001")}${sent?.images?.length ? ` + ${sent.images.length} \u5F20\u56FE` : ""}`);
       } catch (error) {
         const reason = error?.message ?? String(error);
-        lastError = `\u4EA4\u4ED8\u6587\u4EF6 ${name2} \u53D1\u9001\u5931\u8D25\uFF1A${reason}`;
-        logger.error?.(`[dsh-chat-feishu] ${lastError}`);
-        try {
-          await gateway.replyText({
-            messageId: message.message_id,
-            text: `\u4EA4\u4ED8\u6587\u4EF6\u300C${name2}\u300D\u6CA1\u80FD\u53D1\u51FA\u53BB\uFF1A${reason}`,
-            replyInThread
-          });
-        } catch {
-        }
+        for (const item of items) failed.push({ name: item.name, reason });
       }
+    }
+    if (failed.length === 0) return;
+    lastError = `\u4EA4\u4ED8\u6587\u4EF6\u53D1\u9001\u5931\u8D25\uFF1A${failed.map((entry) => `${entry.name}\uFF08${entry.reason}\uFF09`).join("\uFF1B")}`;
+    logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+    try {
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: failed.map((entry) => `\u4EA4\u4ED8\u6587\u4EF6\u300C${entry.name}\u300D\u6CA1\u80FD\u53D1\u51FA\u53BB\uFF1A${entry.reason}`).join("\n"),
+        replyInThread
+      });
+    } catch {
     }
   }
   async function markWorking(message) {
@@ -127676,6 +127713,12 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
 import { createReadStream } from "node:fs";
 import { stat as stat2 } from "node:fs/promises";
 var DEFAULT_CONNECT_TIMEOUT_MS = 15e3;
+var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+function isImagePath(path2) {
+  const name2 = String(path2).toLowerCase();
+  const dot = name2.lastIndexOf(".");
+  return dot >= 0 && IMAGE_EXTENSIONS.has(name2.slice(dot));
+}
 var FILE_TYPES = new Map(Object.entries({
   opus: "opus",
   mp4: "mp4",
@@ -127907,6 +127950,30 @@ function createLarkGateway({
     });
     return { rows, elements, current };
   }
+  async function uploadFileKey(path2, fileName) {
+    const uploaded = await client.im.v1.file.create({
+      data: { file_type: fileTypeFor(fileName), file_name: fileName, file: createReadStream(path2) }
+    });
+    const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+    if (!fileKey) {
+      const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE file_key\u3002");
+      error.code = "feishu/upload-failed";
+      throw error;
+    }
+    return fileKey;
+  }
+  async function uploadImageKey(path2) {
+    const uploaded = await client.im.v1.image.create({
+      data: { image_type: "message", image: createReadStream(path2) }
+    });
+    const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
+    if (!imageKey) {
+      const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u56FE\u7247\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE image_key\u3002");
+      error.code = "feishu/upload-failed";
+      throw error;
+    }
+    return imageKey;
+  }
   return Object.freeze({
     appId,
     /** @returns 长连接是否就绪。 */
@@ -128052,19 +128119,7 @@ function createLarkGateway({
       if (!path2) throw new TypeError("sendFile \u9700\u8981 path\u3002");
       const fileName = name2 || path2.split("/").pop();
       const info = await stat2(path2);
-      const uploaded = await client.im.v1.file.create({
-        data: {
-          file_type: fileTypeFor(fileName),
-          file_name: fileName,
-          file: createReadStream(path2)
-        }
-      });
-      const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
-      if (!fileKey) {
-        const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE file_key\u3002");
-        error.code = "feishu/upload-failed";
-        throw error;
-      }
+      const fileKey = await uploadFileKey(path2, fileName);
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? "chat_id" : "open_id" },
         data: { receive_id: receiveId, msg_type: "file", content: JSON.stringify({ file_key: fileKey }) }
@@ -128085,15 +128140,7 @@ function createLarkGateway({
     async sendImage({ chatId, openId, path: path2 }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError("sendImage \u9700\u8981 chatId \u6216 openId\u3002");
-      const uploaded = await client.im.v1.image.create({
-        data: { image_type: "message", image: createReadStream(path2) }
-      });
-      const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
-      if (!imageKey) {
-        const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u56FE\u7247\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE image_key\u3002");
-        error.code = "feishu/upload-failed";
-        throw error;
-      }
+      const imageKey = await uploadImageKey(path2);
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? "chat_id" : "open_id" },
         data: { receive_id: receiveId, msg_type: "image", content: JSON.stringify({ image_key: imageKey }) }
@@ -128162,6 +128209,64 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u63D0\u95EE\u5361\u7247", response);
       return { messageId: response?.data?.message_id };
+    },
+    /**
+     * 一条消息发多个交付文件。
+     *
+     * 飞书原生支持：`post`（富文本）消息有一个顶层 `files` 附件区，可以放**多个**
+     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）；
+     * 图片则用 `{"tag":"img","image_key":…}` 内嵌在正文里。因此多个成品只占**一条**消息，
+     * 不再一条一个文件地刷屏。
+     *
+     * @param options - { chatId, openId, items }，`items` = `[{ path, name?, description? }]`。
+     * @returns { messageId, files, images, failed }：成功清单与失败清单。
+     */
+    async sendDeliverables({ chatId, openId, items = [] }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendDeliverables \u9700\u8981 chatId \u6216 openId\u3002");
+      const paragraphs = [[{ tag: "text", text: "\u{1F4CE} \u4EA4\u4ED8\u6587\u4EF6" }]];
+      const attachments = [];
+      const sent = [];
+      const failed = [];
+      for (const item of items) {
+        const path2 = typeof item?.path === "string" ? item.path : "";
+        if (!path2) continue;
+        const name2 = item.name || path2.split("/").pop() || "\u6587\u4EF6";
+        try {
+          if (isImagePath(path2)) {
+            const imageKey = await uploadImageKey(path2);
+            paragraphs.push([{ tag: "img", image_key: imageKey }]);
+            if (item.description) paragraphs.push([{ tag: "text", text: String(item.description) }]);
+            sent.push({ name: name2, kind: "image" });
+            continue;
+          }
+          const fileKey = await uploadFileKey(path2, name2);
+          attachments.push({ key: fileKey });
+          paragraphs.push([{
+            tag: "text",
+            text: `\xB7 ${name2}${item.description ? ` \u2014\u2014 ${item.description}` : ""}`
+          }]);
+          sent.push({ name: name2, kind: "file" });
+        } catch (error) {
+          failed.push({ name: name2, reason: error?.message ?? String(error) });
+        }
+      }
+      if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
+      const content = {
+        zh_cn: { title: "\u4EA4\u4ED8\u6587\u4EF6", content: paragraphs },
+        ...attachments.length > 0 ? { files: attachments } : {}
+      };
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "post", content: JSON.stringify(content) }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u4EA4\u4ED8\u6587\u4EF6", response);
+      return {
+        messageId: response?.data?.message_id,
+        files: sent.filter((entry) => entry.kind === "file").map((entry) => entry.name),
+        images: sent.filter((entry) => entry.kind === "image").map((entry) => entry.name),
+        failed
+      };
     },
     /** 供进度卡内嵌提问区使用（纯渲染）。 */
     renderQuestionElements,

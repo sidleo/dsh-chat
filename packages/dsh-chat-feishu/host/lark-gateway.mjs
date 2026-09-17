@@ -18,6 +18,15 @@ import { askRow } from './turn-presenter.mjs';
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
+/** 按扩展名判断是不是图片（图片走图片气泡/正文内嵌，其余走附件区）。 */
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+
+function isImagePath(path) {
+  const name = String(path).toLowerCase();
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && IMAGE_EXTENSIONS.has(name.slice(dot));
+}
+
 /**
  * 按扩展名给出飞书要的 `file_type`（它决定文件在客户端的图标与打开方式；
  * 不在表里的一律 `stream`，飞书会当普通附件处理）。
@@ -324,6 +333,39 @@ export function createLarkGateway({
     return { rows, elements, current };
   }
 
+  /**
+   * 上传一个文件，返回 `file_key`。
+   *
+   * 注意：`im.v1.file.create` / `image.create` 直接返回 data（`{ file_key }`），
+   * 不像 `message.create` 那样包一层 `{ code, msg, data }`；两种都认，免得跟着 SDK 版本翻车。
+   */
+  async function uploadFileKey(path, fileName) {
+    const uploaded = await client.im.v1.file.create({
+      data: { file_type: fileTypeFor(fileName), file_name: fileName, file: createReadStream(path) },
+    });
+    const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+    if (!fileKey) {
+      const error = new Error('飞书上传文件失败：没有返回 file_key。');
+      error.code = 'feishu/upload-failed';
+      throw error;
+    }
+    return fileKey;
+  }
+
+  /** 上传一张图片，返回 `image_key`。 */
+  async function uploadImageKey(path) {
+    const uploaded = await client.im.v1.image.create({
+      data: { image_type: 'message', image: createReadStream(path) },
+    });
+    const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
+    if (!imageKey) {
+      const error = new Error('飞书上传图片失败：没有返回 image_key。');
+      error.code = 'feishu/upload-failed';
+      throw error;
+    }
+    return imageKey;
+  }
+
   return Object.freeze({
     appId,
 
@@ -491,21 +533,7 @@ export function createLarkGateway({
       if (!path) throw new TypeError('sendFile 需要 path。');
       const fileName = name || path.split('/').pop();
       const info = await stat(path);
-      const uploaded = await client.im.v1.file.create({
-        data: {
-          file_type: fileTypeFor(fileName),
-          file_name: fileName,
-          file: createReadStream(path),
-        },
-      });
-      // 注意：im.v1.file.create / image.create 直接返回 data（`{ file_key }`），
-      // 不像 message.create 那样包一层 `{ code, msg, data }`。两种都认，免得跟着 SDK 版本翻车。
-      const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
-      if (!fileKey) {
-        const error = new Error('飞书上传文件失败：没有返回 file_key。');
-        error.code = 'feishu/upload-failed';
-        throw error;
-      }
+      const fileKey = await uploadFileKey(path, fileName);
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
         data: { receive_id: receiveId, msg_type: 'file', content: JSON.stringify({ file_key: fileKey }) },
@@ -527,15 +555,7 @@ export function createLarkGateway({
     async sendImage({ chatId, openId, path }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError('sendImage 需要 chatId 或 openId。');
-      const uploaded = await client.im.v1.image.create({
-        data: { image_type: 'message', image: createReadStream(path) },
-      });
-      const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
-      if (!imageKey) {
-        const error = new Error('飞书上传图片失败：没有返回 image_key。');
-        error.code = 'feishu/upload-failed';
-        throw error;
-      }
+      const imageKey = await uploadImageKey(path);
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
         data: { receive_id: receiveId, msg_type: 'image', content: JSON.stringify({ image_key: imageKey }) },
@@ -609,6 +629,65 @@ export function createLarkGateway({
       });
       assertSuccess('飞书发送提问卡片', response);
       return { messageId: response?.data?.message_id };
+    },
+
+    /**
+     * 一条消息发多个交付文件。
+     *
+     * 飞书原生支持：`post`（富文本）消息有一个顶层 `files` 附件区，可以放**多个**
+     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）；
+     * 图片则用 `{"tag":"img","image_key":…}` 内嵌在正文里。因此多个成品只占**一条**消息，
+     * 不再一条一个文件地刷屏。
+     *
+     * @param options - { chatId, openId, items }，`items` = `[{ path, name?, description? }]`。
+     * @returns { messageId, files, images, failed }：成功清单与失败清单。
+     */
+    async sendDeliverables({ chatId, openId, items = [] }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendDeliverables 需要 chatId 或 openId。');
+      const paragraphs = [[{ tag: 'text', text: '📎 交付文件' }]];
+      const attachments = [];
+      const sent = [];
+      const failed = [];
+      for (const item of items) {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path) continue;
+        const name = item.name || path.split('/').pop() || '文件';
+        try {
+          if (isImagePath(path)) {
+            const imageKey = await uploadImageKey(path);
+            paragraphs.push([{ tag: 'img', image_key: imageKey }]);
+            if (item.description) paragraphs.push([{ tag: 'text', text: String(item.description) }]);
+            sent.push({ name, kind: 'image' });
+            continue;
+          }
+          const fileKey = await uploadFileKey(path, name);
+          attachments.push({ key: fileKey });
+          paragraphs.push([{
+            tag: 'text',
+            text: `· ${name}${item.description ? ` —— ${item.description}` : ''}`,
+          }]);
+          sent.push({ name, kind: 'file' });
+        } catch (error) {
+          failed.push({ name, reason: error?.message ?? String(error) });
+        }
+      }
+      if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
+      const content = {
+        zh_cn: { title: '交付文件', content: paragraphs },
+        ...(attachments.length > 0 ? { files: attachments } : {}),
+      };
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'post', content: JSON.stringify(content) },
+      });
+      assertSuccess('飞书发送交付文件', response);
+      return {
+        messageId: response?.data?.message_id,
+        files: sent.filter((entry) => entry.kind === 'file').map((entry) => entry.name),
+        images: sent.filter((entry) => entry.kind === 'image').map((entry) => entry.name),
+        failed,
+      };
     },
 
     /** 供进度卡内嵌提问区使用（纯渲染）。 */

@@ -503,9 +503,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 打「在做了」表情。失败不致命（可能缺 im:message.reaction:write 权限），
    * 但一定要留日志，别让人以为是没反应。
    */
-  /** 图片扩展名（图片走图片气泡，预览更友好）。 */
-  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
-
   /**
    * 把本轮 agent 交付的文件（`present` 声明的）当附件发出去。
    *
@@ -518,6 +515,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    */
   async function sendDeliverables(files, message, { replyInThread = false } = {}) {
     if (!Array.isArray(files) || files.length === 0) return;
+    // 先本地校验（存在、非空、不超限），再交给渠道一次发一条消息（飞书的 post 附件区能装多个）。
+    const items = [];
+    const failed = [];
     for (const file of files) {
       const path = typeof file?.path === 'string' ? file.path : '';
       if (!path) continue;
@@ -528,27 +528,33 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         if (info.size > MAX_DELIVERABLE_BYTES) {
           throw new Error(`超过 ${Math.round(MAX_DELIVERABLE_BYTES / 1024 / 1024)}MB 上限`);
         }
-        const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
-        if (IMAGE_EXTENSIONS.has(ext)) {
-          await gateway.sendImage({ chatId: message.chat_id, path });
-        } else {
-          await gateway.sendFile({ chatId: message.chat_id, path, name });
-        }
-        logger.info?.(`[dsh-chat-feishu] 已发送交付文件：${name}（${info.size} 字节，${bot.id}）`);
+        items.push({ path, name, size: info.size, description: file.description });
+      } catch (error) {
+        failed.push({ name, reason: error?.message ?? String(error) });
+      }
+    }
+    if (items.length > 0) {
+      try {
+        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items });
+        failed.push(...(sent?.failed ?? []));
+        logger.info?.(`[dsh-chat-feishu] 交付文件已发出（${bot.id}）：`
+          + `${(sent?.files ?? []).join('、')}${sent?.images?.length ? ` + ${sent.images.length} 张图` : ''}`);
       } catch (error) {
         const reason = error?.message ?? String(error);
-        lastError = `交付文件 ${name} 发送失败：${reason}`;
-        logger.error?.(`[dsh-chat-feishu] ${lastError}`);
-        try {
-          await gateway.replyText({
-            messageId: message.message_id,
-            text: `交付文件「${name}」没能发出去：${reason}`,
-            replyInThread,
-          });
-        } catch {
-          // 连失败说明都发不出去时，至少日志与 lastError 有记录。
-        }
+        for (const item of items) failed.push({ name: item.name, reason });
       }
+    }
+    if (failed.length === 0) return;
+    lastError = `交付文件发送失败：${failed.map((entry) => `${entry.name}（${entry.reason}）`).join('；')}`;
+    logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+    try {
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: failed.map((entry) => `交付文件「${entry.name}」没能发出去：${entry.reason}`).join('\n'),
+        replyInThread,
+      });
+    } catch {
+      // 连失败说明都发不出去时，至少日志与 lastError 有记录。
     }
   }
 

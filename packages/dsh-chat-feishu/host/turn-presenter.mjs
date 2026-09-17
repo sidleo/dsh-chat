@@ -13,7 +13,7 @@
  *   来源：DSH 安装目录内 `@deepseek-ai/dsh-client-ui-tool` 的 `toolRowModel`）。
  * - 工具、思考、**已答的提问**全部收进**同一个**折叠面板：默认收起、展开看全部；
  *   已答提问在面板里再嵌一层 `❓ N/M 已回答` 折叠面板（真机要求：提问也要能自己收起/展开；
- *   Card 2.0 的容器最多嵌套 5 层）；
+ *   Card 2.0 的容器最多嵌套 5 层），**位置就是它本来出现的顺序**（不能被推到面板底部）；
  * - 面板标题：本轮没结束时显示**最新的一项**（一眼看到在干什么），本轮结束后显示
  *   `工具与思考(N)`；
  * - **任务清单**（`todo_write`）单独一个面板放在工具面板**下面**：本轮没结束时默认展开
@@ -233,15 +233,12 @@ export function askRow({ header, question, answer } = {}) {
  */
 export function renderStepCard({
   title,
-  rows = [],
-  questionRows = [],
+  panelItems = [],
   answer = '',
   note = '',
   panelTitle = '',
   currentQuestion = [],
   todos = null,
-  questionPanelTitle = '',
-  questionPanelExpanded = false,
   template = 'blue',
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -257,22 +254,22 @@ export function renderStepCard({
   if (note) {
     elements.push({ tag: 'div', text: { tag: 'plain_text', content: clampBudget(note) } });
   }
-  // 工具与思考进一个面板；已答的提问在面板里**再嵌一层**（真机要求：提问也要能自己收起展开）。
-  if (rows.length > 0 || questionRows.length > 0) {
+  // 面板里的内容**按发生顺序**排：工具/思考若干行 → 该批提问的内层折叠控件 → 后面的行…
+  // （真机反馈：提问必须留在它本来出现的位置，不能被推到面板底部）。
+  if (panelItems.length > 0) {
     const inner = [];
-    const body = rows.length > 0 ? clampBudget(rows.map((row) => `· ${row}`).join('\n')) : '';
-    if (body) inner.push({ tag: 'markdown', content: body });
-    if (questionRows.length > 0) {
-      const asked = clampBudget(questionRows.map((row) => `· ${row.text}`).join('\n'));
-      if (asked) {
+    for (const item of panelItems) {
+      if (item?.kind === 'ask') {
+        const asked = clampBudget(item.rows.map((row) => `· ${row.text}`).join('\n'));
+        if (!asked) continue;
         inner.push({
           tag: 'collapsible_panel',
-          expanded: questionPanelExpanded === true,
+          expanded: item.expanded === true,
           border: { color: 'grey', corner_radius: '4px' },
           header: {
             title: {
               tag: 'plain_text',
-              content: clampBudget(questionPanelTitle || `❓ ${questionRows.length} 已回答`),
+              content: clampBudget(item.title || `❓ ${item.rows.length} 已回答`),
             },
             width: 'fill',
             icon_position: 'right',
@@ -280,7 +277,10 @@ export function renderStepCard({
           },
           elements: [{ tag: 'markdown', content: asked }],
         });
+        continue;
       }
+      const body = clampBudget((item?.rows ?? []).map((row) => `· ${row}`).join('\n'));
+      if (body) inner.push({ tag: 'markdown', content: body });
     }
     if (inner.length > 0) {
       elements.push({
@@ -373,8 +373,11 @@ export function createTurnPresenter({
   let currentQuestion = [];
   /** 提问进度：用于标题里的"第 N/M 题"。 */
   let questionProgress = null;
-  /** 这一轮问过的所有题目 id：嵌套面板标题的"M"（多批提问也能算对总数）。 */
-  let questionIds = new Set();
+  /**
+   * 每批提问的状态：batchKey → { total, expanded }。
+   * batchKey 由题目 id 拼成，因此同一批问题被反复渲染（每答一题刷一次）只会有一份记录。
+   */
+  const askBatches = new Map();
   /** 最新的任务清单（`todo_write` 每次都是全量，覆盖即可）。 */
   let todos = null;
   /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
@@ -431,24 +434,54 @@ export function createTurnPresenter({
     return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
   }
 
+  /**
+   * 把有序的 entries 折成面板内容：连续的工具/思考行合成一个 markdown 块，
+   * 每批提问在**它第一次出现的位置**放一个内层折叠面板。
+   *
+   * @returns `[{kind:'rows',rows} | {kind:'ask',title,rows,expanded}]`。
+   */
+  function panelItems() {
+    const items = [];
+    let buffer = [];
+    let batch = null;
+    const flush = () => {
+      if (buffer.length > 0) items.push({ kind: 'rows', rows: buffer });
+      buffer = [];
+    };
+    for (const entry of entries) {
+      if (entry.kind !== 'ask') {
+        // 一批提问结束（后面又出现了工具/思考），再来的提问算新的一批。
+        batch = null;
+        buffer.push(entry.text);
+        continue;
+      }
+      if (entry.batch !== batch) {
+        flush();
+        batch = entry.batch;
+        items.push({ kind: 'ask', batch, rows: [], title: '', expanded: false });
+      }
+      items[items.length - 1].rows.push({ id: entry.key, text: entry.text });
+    }
+    flush();
+    for (const item of items) {
+      if (item.kind !== 'ask') continue;
+      const info = askBatches.get(item.batch);
+      const total = info?.total ?? item.rows.length;
+      item.title = `❓ ${item.rows.length}/${total} 已回答`;
+      item.expanded = info?.expanded === true;
+    }
+    return items;
+  }
+
   function cardPayload(answer) {
-    const questionRows = entries
-      .filter((entry) => entry.kind === 'ask')
-      .map((entry) => ({ id: entry.key, text: entry.text }));
     return renderStepCard({
       title: currentTitle(),
-      rows: entries.filter((entry) => entry.kind !== 'ask').map((entry) => entry.text),
-      questionRows,
+      panelItems: panelItems(),
       answer,
       note,
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === 'running' } : null,
-      questionPanelTitle: questionRows.length > 0
-        ? `❓ ${questionRows.length}/${questionIds.size} 已回答`
-        : '',
-      // 还有题要答时展开，方便对照；答完（或收尾）收起。
-      questionPanelExpanded: currentQuestion.length > 0,
       template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
     });
   }
@@ -606,9 +639,7 @@ export function createTurnPresenter({
       return enqueue(async () => {
         const questions = payload?.questions ?? [];
         const answered = payload?.answered ?? {};
-        for (const question of questions) {
-          if (question?.id !== undefined) questionIds.add(String(question.id));
-        }
+        const batchKey = questions.map((question) => String(question?.id ?? '')).join('|');
         const rendered = gateway.renderQuestionElements({
           questions,
           answered,
@@ -616,13 +647,20 @@ export function createTurnPresenter({
         });
         // 已答的提问：按题号原地更新，位置就是它第一次出现的位置。
         for (const row of rendered.rows ?? []) {
-          putEntry({ key: `ask:${row.id}`, kind: 'ask', text: row.text });
+          putEntry({ key: `ask:${row.id}`, kind: 'ask', batch: batchKey, text: row.text });
         }
         currentQuestion = Array.isArray(rendered.elements) ? rendered.elements : [];
         const current = rendered.current;
         questionProgress = current && questions.length > 0
           ? { index: questions.indexOf(current) + 1, total: questions.length }
           : null;
+        if (batchKey) {
+          askBatches.set(batchKey, {
+            total: questions.length,
+            // 还有题要答时展开方便对照；这一批答完就收起。
+            expanded: Boolean(current),
+          });
+        }
         return patchNow();
       });
     },
@@ -655,6 +693,7 @@ export function createTurnPresenter({
         // 收尾时提问控件一律收起来（面板里那一行还在，可展开回看）。
         currentQuestion = [];
         questionProgress = null;
+        for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
         // 收尾一定刷新（把之前节流掉的过程一次性画上，并让标题变成 工具与思考(N)）
         if (patchTimer) {
           clearTimeout(patchTimer);

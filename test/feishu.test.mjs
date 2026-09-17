@@ -46,6 +46,7 @@ const TINY_PNG = Buffer.from(
 function createFakeGateway() {
   const calls = {
     replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
+    deliverables: [],
     questionCards: [], approvalCards: [], markedCards: [], reactions: [], removedReactions: [],
     connects: 0, disconnects: 0,
   };
@@ -149,6 +150,17 @@ function createFakeGateway() {
       if (gatewayState.failures.sendImage) throw gatewayState.failures.sendImage;
       calls.images.push({ chatId, openId, path });
       return { messageId: 'om_image', imageKey: 'image_key_1' };
+    },
+    /** 交付文件：一条消息带多个附件（真实网关用 post 的 files 附件区）。 */
+    async sendDeliverables({ chatId, openId, items }) {
+      if (gatewayState.failures.sendDeliverables) throw gatewayState.failures.sendDeliverables;
+      calls.deliverables.push({ chatId, openId, items });
+      return {
+        messageId: 'om_deliverables',
+        files: items.filter((item) => !item.path.endsWith('.png')).map((item) => item.name),
+        images: items.filter((item) => item.path.endsWith('.png')).map((item) => item.name),
+        failed: [],
+      };
     },
   };
 }
@@ -465,7 +477,7 @@ test('过程展示按会话类型各取一份：私聊 post、群聊 off', async
   }
 });
 
-test('交付文件：present 声明的文件按附件发出，图片走图片气泡，失败要说出来', async () => {
+test('交付文件：多个成品合成一条消息（post 附件区），本地校验失败要说出来', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-deliver-'));
   try {
     const report = join(dir, '永辉销售日报_20260916.md');
@@ -490,11 +502,17 @@ test('交付文件：present 声明的文件按附件发出，图片走图片气
     });
     try {
       await app.bridge.accept(messageEvent({ messageId: 'om_files' }));
-      assert.deepEqual(app.gateway.calls.files.map((file) => file.name), ['永辉销售日报_20260916.md']);
-      assert.deepEqual(app.gateway.calls.images.map((image) => image.path), [chart]);
+      assert.equal(app.gateway.calls.deliverables.length, 1, '多个成品只发一条消息');
+      assert.deepEqual(
+        app.gateway.calls.deliverables[0].items.map((item) => item.name),
+        ['永辉销售日报_20260916.md', 'chart.png'],
+        '校验通过的两个一起发',
+      );
+      assert.deepEqual(app.gateway.calls.files, [], '不再一条一个文件地刷屏');
       const failures = app.gateway.calls.replies.filter((reply) => reply.text.includes('没能发出去'));
-      assert.equal(failures.length, 2, '空文件与不存在的文件都要回可读原因，绝不静默');
-      assert.match(failures[0].text, /内容为空|不是普通文件/);
+      assert.equal(failures.length, 1, '本地校验失败的合并成一条说明');
+      assert.match(failures[0].text, /empty\.csv/);
+      assert.match(failures[0].text, /不存在\.xlsx/);
     } finally {
       await app.cleanup();
     }
@@ -509,7 +527,7 @@ test('交付文件：present 声明的文件按附件发出，图片走图片气
       },
     });
     try {
-      failing.gateway.setFailure('sendFile', new Error('im:resource:upload 权限不足'));
+      failing.gateway.setFailure('sendDeliverables', new Error('im:resource:upload 权限不足'));
       await failing.bridge.accept(messageEvent({ messageId: 'om_files_2' }));
       assert.match(
         failing.gateway.calls.replies.at(-1).text,
@@ -1487,30 +1505,79 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.match(failed, /"template":"orange"/);
 });
 
-test('工具、思考进面板；已答提问在面板里再嵌一层可折叠控件', () => {
+test('面板内容按发生顺序：提问嵌在它出现的位置，不在底部', () => {
   const card = renderStepCard({
     title: '正在处理',
-    rows: ['Bash · 检查 try 结构', '思考 · 先看有没有外层 try', '读取 · bridge.mjs'],
-    questionRows: [{ id: 'q1', text: '提问 · 商行口径 → 全部 19 个小商行' }],
+    panelItems: [
+      { kind: 'rows', rows: ['Bash · 检查 try 结构', '思考 · 先看有没有外层 try'] },
+      {
+        kind: 'ask',
+        title: '❓ 1/1 已回答',
+        expanded: false,
+        rows: [{ id: 'q1', text: '提问 · 商行口径 → 全部 19 个小商行' }],
+      },
+      { kind: 'rows', rows: ['读取 · bridge.mjs'] },
+    ],
     panelTitle: '工具与思考(4)',
-    questionPanelTitle: '❓ 1/1 已回答',
-    questionPanelExpanded: false,
-    note: '',
   });
   const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
   assert.ok(panel, '工具与思考要在一个折叠面板里');
   assert.equal(panel.expanded, false, '默认收起');
   assert.equal(panel.header.title.content, '工具与思考(4)', '标题只留名称与条数');
-  const toolText = panel.elements.filter((element) => element.tag === 'markdown')
-    .map((element) => element.content).join('\n');
-  assert.match(toolText, /Bash · 检查 try 结构/, '展开能看到全部工具行');
-  assert.match(toolText, /思考 · 先看有没有外层 try/, '思考也在里面');
-  // 嵌一层提问面板（嵌套容器是 Card 2.0 允许的）
-  const nested = panel.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.ok(nested, '提问要在工具面板里再嵌一层可折叠控件');
+
+  // 顺序：工具行 → 提问嵌层 → 后面的工具行
+  assert.deepEqual(panel.elements.map((element) => element.tag), ['markdown', 'collapsible_panel', 'markdown']);
+  assert.match(panel.elements[0].content, /Bash · 检查 try 结构/, '提问之前的行在前');
+  assert.match(panel.elements[2].content, /读取 · bridge.mjs/, '提问之后的行在提问后面');
+  const nested = panel.elements[1];
   assert.equal(nested.header.title.content, '❓ 1/1 已回答');
   assert.equal(nested.expanded, false, '答完默认收起');
   assert.match(nested.elements[0].content, /提问 · 商行口径 → 全部 19 个小商行/, '展开能回看答案');
+});
+
+test('一批提问结束后再来的提问算新的一批，各自留在自己的位置', async () => {
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_p' }; },
+    async patchCard({ card }) { cards.push(card); return { messageId: 'om_p' }; },
+    renderQuestionElements({ questions, answered, final }) {
+      const current = final ? null : questions.find((q) => answered[q.id] === undefined);
+      return {
+        rows: questions
+          .filter((q) => answered[q.id] !== undefined)
+          .map((q) => ({ id: q.id, text: `提问 · ${q.id} → ${answered[q.id].selected?.join('、')}` })),
+        elements: current ? [{ tag: 'markdown', content: `题目：${current.id}` }] : [],
+        current,
+      };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { groupTopicReply: false },
+    logger: silentLogger,
+  });
+
+  const first = [{ id: 'a1', question: '第一问题' }];
+  const second = [{ id: 'b1', question: '第二问题' }];
+  await presenter.tool({ name: 'bash', arguments: '{"command":"ls"}' });
+  await presenter.setQuestion({ questions: first, answered: { a1: { selected: ['A'] } }, final: false });
+  await presenter.tool({ name: 'read', arguments: '{"path":"/ws/x"}' });
+  await presenter.setQuestion({ questions: second, answered: { b1: { selected: ['B'] } }, final: false });
+  await presenter.finish('答案', { kind: 'completed' });
+
+  const panel = cards.at(-1).body.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.deepEqual(
+    panel.elements.map((element) => element.tag),
+    ['markdown', 'collapsible_panel', 'markdown', 'collapsible_panel'],
+    '两批提问各自嵌在自己出现的位置',
+  );
+  assert.equal(panel.elements[1].header.title.content, '❓ 1/1 已回答');
+  assert.equal(panel.elements[3].header.title.content, '❓ 1/1 已回答');
+  assert.match(panel.elements[1].elements[0].content, /提问 · a1 → A/);
+  assert.match(panel.elements[3].elements[0].content, /提问 · b1 → B/);
 });
 
 test('任务清单单独一个面板：没结束时展开看进度，结束后收起', () => {
@@ -1523,7 +1590,7 @@ test('任务清单单独一个面板：没结束时展开看进度，结束后�
 
   const running = renderStepCard({
     title: '正在处理',
-    rows: ['Bash · ls'],
+    panelItems: [{ kind: 'rows', rows: ['Bash · ls'] }],
     panelTitle: 'Bash · ls',
     todos: { ...todo, expanded: true },
   });
@@ -1535,7 +1602,7 @@ test('任务清单单独一个面板：没结束时展开看进度，结束后�
 
   const done = renderStepCard({
     title: '✅ 已完成',
-    rows: ['Bash · ls'],
+    panelItems: [{ kind: 'rows', rows: ['Bash · ls'] }],
     panelTitle: '工具与思考(1)',
     todos: { ...todo, expanded: false },
   });

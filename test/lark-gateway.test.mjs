@@ -180,3 +180,52 @@ test('独立提问卡：已答的行自己组成 `❓ N/M 已回答` 折叠面�
   assert.equal(panel.expanded, false, '答完默认收起');
   assert.match(JSON.stringify(panel), /提问 · 选一个 → A/, '收起也能展开回看');
 });
+
+test('交付文件：多个文件+图片合成一条 post 消息（附件区 + 正文内嵌图片）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-lark-deliver-'));
+  try {
+    const md = join(dir, 'report.md');
+    const csv = join(dir, 'data.csv');
+    const png = join(dir, 'chart.png');
+    await writeFile(md, '# report', 'utf8');
+    await writeFile(csv, 'a,b\n', 'utf8');
+    await writeFile(png, Buffer.from([0x89, 0x50]));
+
+    const sdk = createFakeSdk();
+    const gateway = makeGateway(sdk);
+    const result = await gateway.sendDeliverables({
+      chatId: 'oc_1',
+      items: [
+        { path: md, description: '测试笔记' },
+        { path: csv },
+        { path: png },
+      ],
+    });
+
+    assert.deepEqual(result.files, ['report.md', 'data.csv']);
+    assert.deepEqual(result.images, ['chart.png']);
+    assert.deepEqual(result.failed, []);
+
+    // 只发了一条消息，且是 post（附件区能装多个文件）
+    assert.equal(sdk.__calls.created.length, 1);
+    const created = sdk.__calls.created[0];
+    assert.equal(created.data.msg_type, 'post');
+    const content = JSON.parse(created.data.content);
+    assert.deepEqual(content.files, [{ key: 'file_v3_1' }, { key: 'file_v3_1' }], '两个文件都进附件区');
+    const flat = JSON.stringify(content);
+    assert.match(flat, /report\.md/, '正文列出文件名');
+    assert.match(flat, /测试笔记/, '描述带上');
+    assert.match(flat, /"tag":"img","image_key":"img_v3_1"/, '图片内嵌进正文（附件区只收 file_key）');
+
+    // 全部失败时不发空消息
+    const broken = createFakeSdk({ createReturns: { fileCreate: {} } });
+    const empty = await makeGateway(broken).sendDeliverables({
+      chatId: 'oc_1', items: [{ path: md }],
+    });
+    assert.equal(empty.messageId, null);
+    assert.equal(empty.failed.length, 1);
+    assert.equal(broken.__calls.created.length, 0, '什么都没发出去就不要发空消息');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
