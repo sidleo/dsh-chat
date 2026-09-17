@@ -390,6 +390,9 @@ export function createWeixinRuntime({
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 会话列表里一眼看出渠道（微信只有私聊，标题前缀统一「微信 · 」）。
+        channelLabel: '微信',
+        botLabel: account.botName ?? account.botId,
         signal,
       });
       const answer = typeof result?.text === 'string' && result.text.trim()

@@ -127340,6 +127340,9 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 会话列表里一眼看出渠道：工作区叫「飞书 · 张三-DSH」，会话标题加「飞书 · 」前缀。
+        channelLabel: "\u98DE\u4E66",
+        botLabel: bot.botName ?? bot.id,
         handlers: {
           onToolCall: (toolEvent) => {
             const name2 = toolEvent?.data?.name ?? "\u5DE5\u5177";

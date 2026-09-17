@@ -2270,6 +2270,24 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
   }
   const activeTurns = /* @__PURE__ */ new Map();
+  const namedWorkspaces = /* @__PURE__ */ new Set();
+  const namedSessions = /* @__PURE__ */ new Set();
+  async function markSessionChannel(sessionId, channelLabel2, signal) {
+    const label = typeof channelLabel2 === "string" ? channelLabel2.trim() : "";
+    if (!label || namedSessions.has(sessionId)) return;
+    namedSessions.add(sessionId);
+    try {
+      const listed = await invoke("session", "list", {}, signal);
+      const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+      const title = item?.projections?.values?.title;
+      if (typeof title !== "string" || !title.trim()) return;
+      if (title.startsWith(`${label} \xB7 `)) return;
+      await invoke("session", "rename", { request: { sessionId, title: `${label} \xB7 ${title}` } }, signal);
+      logger.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u5DF2\u6807\u6E20\u9053\uFF1A${sessionId} \u2192 ${label} \xB7 ${title}`);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u6807\u8BB0\u4F1A\u8BDD\u6E20\u9053\u5931\u8D25\uFF1A${sessionId} ${error?.message ?? error}`);
+    }
+  }
   async function invoke(namespace, method, args = {}, signal) {
     const request = { namespace, method, args };
     if (signal !== void 0) request.signal = signal;
@@ -2293,13 +2311,22 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       throw sessionError(error, "chat/gateway-stream-failed");
     }
   }
-  async function resolveWorkspaceId(path, signal) {
+  async function resolveWorkspaceId(path, signal, label = "") {
     const result = await invoke("workspace", "create", { request: { path } }, signal);
     const workspaceId = result?.workspace?.workspaceId;
     if (typeof workspaceId !== "string" || !workspaceId) {
       const error = new Error("DSH \u672A\u8FD4\u56DE\u5DE5\u4F5C\u533A\u6807\u8BC6\u3002");
       error.code = "chat/workspace-unresolved";
       throw error;
+    }
+    const title = typeof label === "string" ? label.trim() : "";
+    if (title && !namedWorkspaces.has(workspaceId)) {
+      namedWorkspaces.add(workspaceId);
+      try {
+        await invoke("workspace", "rename", { request: { workspaceId, title } }, signal);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u5DE5\u4F5C\u533A\u547D\u540D\u5931\u8D25\uFF1A${workspaceId} ${error?.message ?? error}`);
+      }
     }
     return workspaceId;
   }
@@ -2314,7 +2341,15 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       throw error;
     }
   }
-  async function ensure({ channelId, botId, key, workspacePath, signal }) {
+  async function ensure({
+    channelId,
+    botId,
+    key,
+    workspacePath,
+    signal,
+    channelLabel: channelLabel2 = "",
+    botLabel = ""
+  }) {
     if (!store) throw new TypeError("\u4F1A\u8BDD\u6865\u7F3A\u5C11\u4F1A\u8BDD\u7ED1\u5B9A\u8868\u3002");
     const existing = store.get(channelId, botId, key);
     if (existing) {
@@ -2328,7 +2363,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       error.code = "chat/workspace-required";
       throw error;
     }
-    const workspaceId = await resolveWorkspaceId(workspacePath, signal);
+    const workspaceTitle = [channelLabel2, botLabel].map((part) => String(part ?? "").trim()).filter(Boolean).join(" \xB7 ");
+    const workspaceId = await resolveWorkspaceId(workspacePath, signal, workspaceTitle);
     const created = await invoke("session", "create", { request: { workspaceId } }, signal);
     const sessionId = created?.sessionId;
     if (typeof sessionId !== "string" || !sessionId) {
@@ -2381,9 +2417,19 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     mode = "queue",
     signal,
     handlers = {},
-    turnTimeoutMs
+    turnTimeoutMs,
+    channelLabel: channelLabel2 = "",
+    botLabel = ""
   }) {
-    const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
+    const { sessionId } = await ensure({
+      channelId,
+      botId,
+      key,
+      workspacePath,
+      signal,
+      channelLabel: channelLabel2,
+      botLabel
+    });
     guidance?.publish?.(sessionId, sourceGuidance ?? "");
     const turnKey = `${channelId}:${botId}:${key}`;
     const controller = new AbortController();
@@ -2581,6 +2627,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     } finally {
       clearTimeout(totalTimer);
       if (idleTimer) clearTimeout(idleTimer);
+      void markSessionChannel(sessionId, channelLabel2);
       signal?.removeEventListener?.("abort", abort);
       activeTurns.delete(turnKey);
       closing = true;

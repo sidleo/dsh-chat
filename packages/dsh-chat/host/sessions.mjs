@@ -159,6 +159,38 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
   }
   /** @type {Map<string, AbortController>} 会话键 → 当前回合的中断控制器。 */
   const activeTurns = new Map();
+  /** 已经标过渠道的工作区 / 会话（进程内只标一次，避免每轮都发 rename）。 */
+  const namedWorkspaces = new Set();
+  const namedSessions = new Set();
+
+  /**
+   * 给会话标题加渠道前缀（`飞书 · <原标题>`）。
+   *
+   * 会话列表里一堆同名会话时，能一眼看出哪条来自哪个渠道——这是"会话渠道标识"的
+   * 主要用途。前缀是**幂等**的：已经有前缀就不再 rename；拿不到渠道标签就什么都不做。
+   *
+   * @param sessionId - 会话 id。
+   * @param channelLabel - 渠道中文名（如 `飞书`）。
+   */
+  async function markSessionChannel(sessionId, channelLabel, signal) {
+    const label = typeof channelLabel === 'string' ? channelLabel.trim() : '';
+    if (!label || namedSessions.has(sessionId)) return;
+    namedSessions.add(sessionId);
+    try {
+      // 标题只有 `session/list` 的投影里有（`session/page` 不带投影）。
+      // 每个会话只做一次，代价可接受。
+      const listed = await invoke('session', 'list', {}, signal);
+      const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+      const title = item?.projections?.values?.title;
+      if (typeof title !== 'string' || !title.trim()) return;
+      if (title.startsWith(`${label} · `)) return;
+      await invoke('session', 'rename', { request: { sessionId, title: `${label} · ${title}` } }, signal);
+      logger.info?.(`[dsh-chat] 会话标题已标渠道：${sessionId} → ${label} · ${title}`);
+    } catch (error) {
+      // 命名是锦上添花：失败只留日志，绝不影响消息处理。
+      logger.warn?.(`[dsh-chat] 标记会话渠道失败：${sessionId} ${error?.message ?? error}`);
+    }
+  }
 
   /**
    * 调用一个一元 DSH Remote 方法。
@@ -199,14 +231,32 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     }
   }
 
-  /** 按路径拿到（或创建）工作区 id。`workspace/create` 按路径幂等。 */
-  async function resolveWorkspaceId(path, signal) {
+  /**
+   * 按路径拿到（或创建）工作区 id。`workspace/create` 按路径幂等。
+   *
+   * 顺带把工作区命名成「渠道 · 机器人」（`飞书 · 张三-DSH`）——web 侧边栏就是按工作区
+   * 分组的，这样一眼能看出这个工作区属于哪个渠道的哪个机器人。命名同样是幂等的。
+   *
+   * @param path - 工作区路径。
+   * @param signal - 取消信号。
+   * @param label - 可选：`飞书 · 张三-DSH`（渠道与机器人中文名）。
+   */
+  async function resolveWorkspaceId(path, signal, label = '') {
     const result = await invoke('workspace', 'create', { request: { path } }, signal);
     const workspaceId = result?.workspace?.workspaceId;
     if (typeof workspaceId !== 'string' || !workspaceId) {
       const error = new Error('DSH 未返回工作区标识。');
       error.code = 'chat/workspace-unresolved';
       throw error;
+    }
+    const title = typeof label === 'string' ? label.trim() : '';
+    if (title && !namedWorkspaces.has(workspaceId)) {
+      namedWorkspaces.add(workspaceId);
+      try {
+        await invoke('workspace', 'rename', { request: { workspaceId, title } }, signal);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 工作区命名失败：${workspaceId} ${error?.message ?? error}`);
+      }
     }
     return workspaceId;
   }
@@ -230,7 +280,9 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
    * @param options - { channelId, botId, key, workspacePath, signal }。
    * @returns { sessionId, created }。
    */
-  async function ensure({ channelId, botId, key, workspacePath, signal }) {
+  async function ensure({
+    channelId, botId, key, workspacePath, signal, channelLabel = '', botLabel = '',
+  }) {
     if (!store) throw new TypeError('会话桥缺少会话绑定表。');
     const existing = store.get(channelId, botId, key);
     if (existing) {
@@ -245,7 +297,9 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       error.code = 'chat/workspace-required';
       throw error;
     }
-    const workspaceId = await resolveWorkspaceId(workspacePath, signal);
+    const workspaceTitle = [channelLabel, botLabel].map((part) => String(part ?? '').trim())
+      .filter(Boolean).join(' · ');
+    const workspaceId = await resolveWorkspaceId(workspacePath, signal, workspaceTitle);
     const created = await invoke('session', 'create', { request: { workspaceId } }, signal);
     const sessionId = created?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) {
@@ -307,7 +361,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
    *
    * @param options - {
    *   channelId, botId, key, workspacePath, content, sourceGuidance,
-   *   mode, signal, handlers: {
+   *   mode, signal, channelLabel?, botLabel?, handlers: {
    *     onTurnStart?, onAssistantMessage?, onToolCall?, onToolResult?,
    *     onDelta?, onEvent?, onTurnEnd?,
    *   },
@@ -326,8 +380,12 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     signal,
     handlers = {},
     turnTimeoutMs,
+    channelLabel = '',
+    botLabel = '',
   }) {
-    const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
+    const { sessionId } = await ensure({
+      channelId, botId, key, workspacePath, signal, channelLabel, botLabel,
+    });
     // 提示词按会话发布：host 会把它物化成该 Session 的动态提示词上下文。
     guidance?.publish?.(sessionId, sourceGuidance ?? '');
 
@@ -570,6 +628,8 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     } finally {
       clearTimeout(totalTimer);
       if (idleTimer) clearTimeout(idleTimer);
+      // 回合结束后标题已经生成，这时标渠道前缀最稳（幂等：每个会话只做一次）。
+      void markSessionChannel(sessionId, channelLabel);
       signal?.removeEventListener?.('abort', abort);
       activeTurns.delete(turnKey);
       closing = true;

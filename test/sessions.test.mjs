@@ -27,7 +27,7 @@ function remoteError(code, message = code) {
 /** 一个可编排的假 DSH：记录调用，并按脚本逐个产出 follow 帧。 */
 function createFakeGateway({
   script = [], stuckReturn = false, stuckPrompt = false, failPrompt = false,
-  pageRecords = [], frameDelayMs = 0, stuckStream = false,
+  pageRecords = [], frameDelayMs = 0, stuckStream = false, sessionTitles = {},
   commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
 } = {}) {
   const calls = [];
@@ -77,7 +77,15 @@ function createFakeGateway({
         return { accepted: true };
       }
       if (namespace === 'session' && method === 'list') {
-        return { items: [...sessions].map((sessionId, index) => ({ sessionId, running: index === 0 })) };
+        return {
+          items: [...sessions].map((sessionId, index) => ({
+            sessionId,
+            running: index === 0,
+            ...(sessionTitles[sessionId]
+              ? { projections: { asOfSeq: 1, values: { title: sessionTitles[sessionId] } } }
+              : {}),
+          })),
+        };
       }
       if (namespace === 'session' && method === 'cancel') {
         if (!sessions.has(args?.request?.sessionId)) throw remoteError('session/not-found');
@@ -443,6 +451,66 @@ test('回合兜底按"静默时长"判定：一直在产出就不打断，彻底
     assert.ok(Date.now() - startedAt < 5_000, '不该被绝对上限拖住');
   } finally {
     await stuck.cleanup();
+  }
+});
+
+test('渠道标识：工作区命名「渠道 · 机器人」，会话标题加渠道前缀（都只做一次）', async () => {
+  const app = await makeBridge({});
+  try {
+    await app.bridge.ensure({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      channelLabel: '飞书', botLabel: '张三-DSH',
+    });
+    const rename = app.gateway.calls.find((call) => call.namespace === 'workspace' && call.method === 'rename');
+    assert.ok(rename, '工作区要命名成「渠道 · 机器人」');
+    assert.equal(rename.args.request.title, '飞书 · 张三-DSH');
+
+    // 再 ensure 一次：同一个工作区不再重复 rename
+    await app.bridge.ensure({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      channelLabel: '飞书', botLabel: '张三-DSH',
+    });
+    assert.equal(
+      app.gateway.calls.filter((call) => call.method === 'rename' && call.namespace === 'workspace').length,
+      1,
+      '命名是幂等的',
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('渠道标识：会话标题加「渠道 · 」前缀，已有前缀或没有标题就跳过', async () => {
+  // ① 有标题且没前缀 → rename 一次
+  const app = await makeBridge({ sessionTitles: { 'session-1': '哈喽' } });
+  try {
+    await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '你好' }],
+      channelLabel: '飞书',
+    });
+    const renamed = app.gateway.calls.find((call) => call.namespace === 'session' && call.method === 'rename');
+    assert.ok(renamed, '会话标题要加上渠道前缀');
+    assert.equal(renamed.args.request.title, '飞书 · 哈喽');
+  } finally {
+    await app.cleanup();
+  }
+
+  // ② 已经有前缀 → 不动
+  const prefixed = await makeBridge({ sessionTitles: { 'session-1': '飞书 · 哈喽' } });
+  try {
+    await prefixed.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '你好' }],
+      channelLabel: '飞书',
+    });
+    assert.equal(
+      prefixed.gateway.calls.filter((call) => call.method === 'rename' && call.namespace === 'session').length,
+      0,
+      '已有前缀就不重复加',
+    );
+  } finally {
+    await prefixed.cleanup();
   }
 });
 
