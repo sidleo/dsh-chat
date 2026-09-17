@@ -52,6 +52,7 @@ const zh = {
   '保存': '保存',
   '保存中…': '保存中…',
   '保存失败，请重试。': '保存失败，请重试。',
+  '最近一次错误': '最近一次错误',
 };
 
 const en = {
@@ -90,6 +91,7 @@ const en = {
   '保存': 'Save',
   '保存中…': 'Saving…',
   '保存失败，请重试。': 'Could not save. Try again.',
+  '最近一次错误': 'Last error',
 };
 
 const h = React.createElement;
@@ -192,6 +194,11 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   },
   status.errorMessage
     ? h('p', { className: 'dchat-error', role: 'alert' }, status.errorMessage)
+    : null,
+  // 处理最近一条消息失败时留下的现场（与终端日志对应）。
+  status.lastError
+    ? h('p', { className: 'dchat-error', role: 'alert' },
+      `${t('最近一次错误')}：${status.lastError}`)
     : null,
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
   h('div', { className: 'dchat-list' },

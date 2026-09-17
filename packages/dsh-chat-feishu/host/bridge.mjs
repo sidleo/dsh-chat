@@ -20,6 +20,54 @@ function messageText(message) {
   }
 }
 
+/** DSH 只认这四种图片类型；其余一律按"不支持"处理。 */
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+/**
+ * 判定图片类型：优先看响应头，再用魔数兜底。
+ *
+ * 飞书对同一张图可能给 `application/octet-stream`，只看头部会把能识别的图当成不支持。
+ *
+ * @param bytes - 资源内容。
+ * @param contentType - 响应头里的 content-type。
+ * @returns 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | null。
+ */
+function sniffImageMediaType(bytes, contentType) {
+  const declared = String(contentType ?? '').split(';')[0].trim().toLowerCase();
+  if (SUPPORTED_IMAGE_TYPES.has(declared)) return declared;
+  const head = bytes.subarray(0, 12);
+  if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e) return 'image/png';
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (head.length >= 6 && head.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (head.length >= 12 && head.subarray(0, 4).toString('latin1') === 'RIFF'
+    && head.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/**
+ * 解析入站消息的内容部分。
+ *
+ * @param message - 飞书消息体。
+ * @returns `{ kind:'text', text }` | `{ kind:'image', fileKey }` | `{ kind:'unsupported', label }`。
+ */
+function parseInbound(message) {
+  const text = messageText(message);
+  if (text !== null) return { kind: 'text', text };
+  const type = String(message?.message_type ?? 'unknown');
+  if (type === 'image') {
+    try {
+      const parsed = JSON.parse(message.content ?? '{}');
+      if (typeof parsed?.image_key === 'string' && parsed.image_key) {
+        return { kind: 'image', fileKey: parsed.image_key };
+      }
+    } catch {
+      // 落到"内容无法解析"。
+    }
+    return { kind: 'unsupported', label: '图片（内容无法解析）' };
+  }
+  return { kind: 'unsupported', label: type };
+}
+
 /** 群聊里"是否 @ 了本机器人"。 */
 function mentionsBot(message, botOpenId) {
   if (!botOpenId || !Array.isArray(message?.mentions)) return false;
@@ -102,55 +150,96 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return;
     }
 
-    const raw = messageText(message);
-    if (raw === null) {
+    const inbound = parseInbound(message);
+    if (inbound.kind === 'unsupported') {
       await gateway.replyText({
         messageId: message.message_id,
-        text: '目前只支持文本消息，图片与文件将在后续版本支持。',
+        text: `暂时还不能处理「${inbound.label}」类型的消息（目前支持文本与图片）。`,
       });
       return;
     }
-    const text = stripMentions(raw, message.mentions);
-    if (!text) return;
 
-    // 命令优先：命令不进入模型、也不做上下文增强。
-    const conversationKeyForCommands = conversationType === 'direct'
-      ? `p2p:${senderId}`
-      : `group:${message.chat_id}`;
-    const commandAccess = deps.accessPolicy.evaluateAccess({
-      policy: accessPolicy,
-      conversationType,
-      senderIds: [senderId],
-      isCommand: true,
-      isOwner: isOwner(bot, senderId),
-    });
-    if (!commandAccess.allowed && text.startsWith('/')) {
-      logger.info?.(`[dsh-chat-feishu] 命令被拒绝：${bot.id} sender=${senderId}（${commandAccess.reason}）`);
-      await gateway.replyText({
-        messageId: message.message_id,
-        text: '你没有执行机器人命令的权限。',
-      });
-      return;
-    }
-    const command = await deps.commands?.handle?.({
-      text,
-      channelId: deps.channelId,
-      botId: bot.id,
-      key: conversationKeyForCommands,
-      conversationType,
-      senderId,
-      botLabel: bot.botName ?? bot.id,
-      channelLabel: '飞书',
-    }).catch((error) => {
-      logger.warn?.(`[dsh-chat-feishu] 命令处理失败：${error?.message ?? error}`);
-      return null;
-    });
-    if (command?.handled) {
-      if (command.reply) {
-        await gateway.replyText({ messageId: message.message_id, text: command.reply });
+    // 图片：先下载成 PromptContentPart，再和文本走同一条会话链路。
+    let attachmentParts = null;
+    let text = '';
+    if (inbound.kind === 'image') {
+      let downloaded;
+      try {
+        downloaded = await gateway.downloadResource({
+          messageId: message.message_id,
+          fileKey: inbound.fileKey,
+          type: 'image',
+        });
+      } catch (error) {
+        const reason = error?.message ?? String(error);
+        lastError = reason;
+        logger.error?.(`[dsh-chat-feishu] 下载图片失败：${reason}`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: `图片下载失败：${reason}`,
+        }).catch(() => {});
+        return;
       }
-      lastHandledAt = new Date().toISOString();
-      return;
+      const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
+      if (!mediaType) {
+        logger.info?.(`[dsh-chat-feishu] 忽略不支持的图片类型：${downloaded.contentType ?? '未知'}`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: `这张图片的格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`,
+        });
+        return;
+      }
+      attachmentParts = [{
+        type: 'image',
+        mediaType,
+        data: downloaded.bytes.toString('base64'),
+        name: 'feishu-image',
+      }];
+    } else {
+      text = stripMentions(inbound.text, message.mentions);
+      if (!text) return;
+    }
+
+    // 命令优先：命令不进入模型、也不做上下文增强（图片消息没有文本，直接跳过）。
+    if (text) {
+      const conversationKeyForCommands = conversationType === 'direct'
+        ? `p2p:${senderId}`
+        : `group:${message.chat_id}`;
+      const commandAccess = deps.accessPolicy.evaluateAccess({
+        policy: accessPolicy,
+        conversationType,
+        senderIds: [senderId],
+        isCommand: true,
+        isOwner: isOwner(bot, senderId),
+      });
+      if (!commandAccess.allowed && text.startsWith('/')) {
+        logger.info?.(`[dsh-chat-feishu] 命令被拒绝：${bot.id} sender=${senderId}（${commandAccess.reason}）`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: '你没有执行机器人命令的权限。',
+        });
+        return;
+      }
+      const command = await deps.commands?.handle?.({
+        text,
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: conversationKeyForCommands,
+        conversationType,
+        senderId,
+        botLabel: bot.botName ?? bot.id,
+        channelLabel: '飞书',
+      }).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 命令处理失败：${error?.message ?? error}`);
+        return null;
+      });
+      if (command?.handled) {
+        if (command.reply) {
+          await gateway.replyText({ messageId: message.message_id, text: command.reply });
+        }
+        lastHandledAt = new Date().toISOString();
+        return;
+      }
     }
 
     try {
@@ -168,12 +257,27 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         identity,
         () => ({ channel: 'feishu', ...identity }),
       );
-      const content = deps.contextEnhancement.enhanceContent(
-        text,
-        captured?.snapshot ?? null,
-        captured?.source,
-      );
-      const enhanced = content !== text;
+      // 文本保持"前缀拼进同一个文本块"的老形态；图片走内容数组，enhanceContent 会在
+      // 前面插一个上下文文本块，于是图片也带上来源信息。
+      let finalParts;
+      let enhanced;
+      if (attachmentParts) {
+        const enhancedContent = deps.contextEnhancement.enhanceContent(
+          attachmentParts,
+          captured?.snapshot ?? null,
+          captured?.source,
+        );
+        finalParts = Array.isArray(enhancedContent) ? enhancedContent : attachmentParts;
+        enhanced = finalParts.length !== attachmentParts.length;
+      } else {
+        const enhancedText = deps.contextEnhancement.enhanceContent(
+          text,
+          captured?.snapshot ?? null,
+          captured?.source,
+        );
+        finalParts = [{ type: 'text', text: enhancedText }];
+        enhanced = enhancedText !== text;
+      }
 
       const mode = conversationType === 'direct' ? bot.stepPushDirect : bot.stepPushGroup;
       const presenter = createTurnPresenter({
@@ -195,7 +299,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         botId: bot.id,
         key: conversationKey,
         workspacePath: record.workspace,
-        content: [{ type: 'text', text: content }],
+        content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         handlers: {
           onToolCall: (toolEvent) => presenter.step(

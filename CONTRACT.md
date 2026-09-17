@@ -249,6 +249,22 @@ hub 把投递能力暴露成三个模型工具，会话里的 agent 因此能自
 安全边界：agent 不能凭空捏造投递对象——候选来自渠道自己的 `discover()`（即该机器人真实对话过的
 会话），而"能发"必须由用户在设置页或 `chat_save_target` 显式确认一次。
 
+### 入站内容（文本与图片）
+
+hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，所以渠道只要把入站内容
+翻成这些块即可（图片字节由 Host 落盘为持久附件，渠道不必自己存）：
+
+```js
+[{ type: 'text', text: '<已做上下文增强的文本>' }]
+[{ type: 'text', text: '<来源块>' }, { type: 'image', mediaType: 'image/png', data: '<base64>', name? }]
+```
+
+- 图片 `mediaType` 只认 `image/png | image/jpeg | image/webp | image/gif`；平台给不出类型时用魔数兜底，
+  仍认不出就**明确拒绝并回复原因**，不要把非图片字节当图片交出去。
+- `contextEnhancement.enhanceContent(parts, snapshot, source)` 对内容数组会在前面插一个上下文文本块，
+  因此图片消息同样带得上来来源与提示词。
+- 下载失败、类型不支持、超过大小上限都要"日志 + 用户可见回复"，并让失败能出现在 `connection.status` 里。
+
 ### 入站消息的推荐顺序（两个官方渠道就是这么做的）
 
 1. 去重（平台消息 id）；

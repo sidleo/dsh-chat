@@ -35,8 +35,21 @@ const BOT = Object.freeze({
   stepPushGroup: 'off',
 });
 
+/** 1x1 透明 PNG，用来验证"字节 → base64 → PromptContentPart"这条链路。 */
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 function createFakeGateway() {
-  const calls = { replies: [], texts: [], cards: [], patches: [], connects: 0, disconnects: 0 };
+  const calls = {
+    replies: [], texts: [], cards: [], patches: [], resources: [], connects: 0, disconnects: 0,
+  };
+  const gatewayState = {
+    downloadBytes: TINY_PNG,
+    downloadContentType: 'image/png',
+    downloadError: null,
+  };
   return {
     calls,
     connected: false,
@@ -68,6 +81,18 @@ function createFakeGateway() {
       calls.patches.push({ messageId, card });
       return { messageId };
     },
+    /** 假资源下载：默认给一张 1x1 PNG，可由用例替换成失败/超限。 */
+    async downloadResource({ messageId, fileKey, type }) {
+      calls.resources.push({ messageId, fileKey, type });
+      if (gatewayState.downloadError) throw gatewayState.downloadError;
+      return {
+        bytes: Buffer.from(gatewayState.downloadBytes),
+        contentType: gatewayState.downloadContentType,
+      };
+    },
+    setDownload(next) {
+      Object.assign(gatewayState, next);
+    },
   };
 }
 
@@ -79,7 +104,11 @@ function messageEvent({
   senderId = 'ou_owner',
   mentions = undefined,
   messageType = 'text',
+  imageKey = 'img_v2_test',
 } = {}) {
+  const content = messageType === 'text'
+    ? JSON.stringify({ text })
+    : messageType === 'image' ? JSON.stringify({ image_key: imageKey }) : '{}';
   return {
     sender: { sender_id: { open_id: senderId } },
     message: {
@@ -87,7 +116,7 @@ function messageEvent({
       chat_id: chatId,
       chat_type: chatType,
       message_type: messageType,
-      content: messageType === 'text' ? JSON.stringify({ text }) : '{}',
+      content,
       ...(mentions ? { mentions } : {}),
     },
   };
@@ -357,11 +386,11 @@ test('门禁：非属主不响应、群聊未 @ 不响应、重复消息只处�
     await app.bridge.accept(messageEvent({ messageId: 'om_dup' }));
     assert.equal(app.gateway.calls.replies.length, 1, '同一条消息只处理一次');
 
-    // 非文本消息给出明确提示。
+    // 暂时不支持的富媒体类型给出明确提示（带类型名）。
     await app.bridge.accept(messageEvent({
-      messageId: 'om_img', messageType: 'image', text: undefined,
+      messageId: 'om_file', messageType: 'file', text: undefined,
     }));
-    assert.match(app.gateway.calls.replies.at(-1).text, /只支持文本消息/);
+    assert.match(app.gateway.calls.replies.at(-1).text, /暂时还不能处理「file」/);
     void asked;
   } finally {
     await app.cleanup();
@@ -546,5 +575,110 @@ test('过程展示模式非法取值在 UI 侧就被归一化（不会写坏配�
     void createTurnPresenter;
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('图片消息：下载后按 PromptContentPart 交给会话（bytes → base64 + mediaType）', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_1', messageType: 'image', imageKey: 'img_v2_abc', text: undefined,
+    }));
+
+    assert.deepEqual(app.gateway.calls.resources,
+      [{ messageId: 'om_img_1', fileKey: 'img_v2_abc', type: 'image' }]);
+    assert.ok(asked, '图片也要进入会话');
+    assert.equal(asked.content.length, 1);
+    assert.deepEqual(asked.content[0], {
+      type: 'image',
+      mediaType: 'image/png',
+      data: TINY_PNG.toString('base64'),
+      name: 'feishu-image',
+    });
+    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片消息：裸 octet-stream 用魔数识别；识别不了就明确拒绝而不是当图片交出去', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    app.gateway.setDownload({ downloadContentType: 'application/octet-stream' });
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_2', messageType: 'image', text: undefined,
+    }));
+    assert.equal(asked?.content?.[0]?.mediaType, 'image/png', '魔数应能认出 PNG');
+
+    asked = null;
+    app.gateway.setDownload({
+      downloadBytes: Buffer.from('not an image at all'),
+      downloadContentType: 'application/octet-stream',
+    });
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_3', messageType: 'image', text: undefined,
+    }));
+    assert.equal(asked, null, '认不出的格式不能进模型');
+    assert.match(app.gateway.calls.replies.at(-1).text, /格式暂不支持/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片下载失败：回复可读原因、lastError 进状态、不把失败当成功', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    const failure = new Error('下载飞书资源失败：resource not found（code 234043）');
+    failure.code = 'feishu/resource-failed';
+    app.gateway.setDownload({ downloadError: failure });
+
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_4', messageType: 'image', text: undefined,
+    }));
+
+    assert.equal(asked, null);
+    assert.match(app.gateway.calls.replies.at(-1).text, /图片下载失败：.*234043/);
+    assert.match(app.bridge.status().lastError, /234043/, 'lastError 要留下现场供设置页查看');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片消息：群聊仍受 @ 约束，未 @ 时既不下载也不进模型', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_g', chatType: 'group', messageType: 'image', text: undefined,
+    }));
+    assert.deepEqual(app.gateway.calls.resources, []);
+    assert.equal(app.gateway.calls.replies.length, 0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片消息：开着上下文增强时，来源文本块插在图片前面', async () => {
+  const contextEnhancement = {
+    group: { enabled: false, fields: ['senderId'], guidance: '' },
+    direct: { enabled: true, fields: ['senderId'], guidance: '私聊全局提示词' },
+    targets: [],
+  };
+  let asked = null;
+  const app = await makeBridge({ contextEnhancement, onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_img_5', messageType: 'image', text: undefined,
+    }));
+    assert.equal(asked.content.length, 2, '先上下文文本块，再图片');
+    assert.equal(asked.content[0].type, 'text');
+    assert.ok(asked.content[0].text.startsWith('<dsh_im_source>'));
+    assert.ok(asked.content[0].text.includes('"senderId":"ou_owner"'));
+    assert.equal(asked.content[1].type, 'image');
+    assert.equal(asked.sourceGuidance, '私聊全局提示词');
+  } finally {
+    await app.cleanup();
   }
 });

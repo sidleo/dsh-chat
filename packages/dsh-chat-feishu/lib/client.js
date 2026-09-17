@@ -76,7 +76,8 @@ var zh = {
   // hub 的共享组件（上下文增强编辑器）用本渠道的 t 取文案，因此这些键必须在渠道字典里。
   "\u4FDD\u5B58": "\u4FDD\u5B58",
   "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
-  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002"
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002",
+  "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF"
 };
 var en = {
   "\u98DE\u4E66": "Feishu",
@@ -108,7 +109,8 @@ var en = {
   "\u6B63\u5728\u8FD0\u884C": "Running",
   "\u4FDD\u5B58": "Save",
   "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
-  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again."
+  "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again.",
+  "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "Last error"
 };
 var h = React.createElement;
 var STATE_TEXT = {
@@ -217,6 +219,12 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       )
     },
     status.errorMessage ? h("p", { className: "dchat-error", role: "alert" }, status.errorMessage) : null,
+    // 处理最近一条消息失败时留下的现场（与终端日志对应）。
+    status.lastError ? h(
+      "p",
+      { className: "dchat-error", role: "alert" },
+      `${t("\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF")}\uFF1A${status.lastError}`
+    ) : null,
     error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
     h(
       "div",

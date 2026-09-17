@@ -154,6 +154,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
       handled: bridgeStatus.handled,
       lastHandledAt: bridgeStatus.lastHandledAt ?? null,
+      // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
+      lastError: bridgeStatus.lastError ?? null,
     });
   }
 

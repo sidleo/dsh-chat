@@ -13,6 +13,9 @@
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
+/** 入站资源（图片/文件）大小上限：超过就报错，不把内存撑爆。 */
+const DEFAULT_MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
+
 /** SDK 的 LoggerLevel 映射；缺省静默，避免刷屏。 */
 function loggerLevelFor(sdk, level) {
   const table = sdk?.LoggerLevel ?? {};
@@ -49,6 +52,7 @@ export function createLarkGateway({
   logger = console,
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
   loggerLevel = 'info',
+  maxResourceBytes = DEFAULT_MAX_RESOURCE_BYTES,
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError('飞书网关需要 @larksuiteoapi/node-sdk。');
   if (!appId || !appSecret) throw new TypeError('飞书网关需要 appId 与 appSecret。');
@@ -249,6 +253,57 @@ export function createLarkGateway({
       });
       assertSuccess('飞书更新卡片', response);
       return { messageId };
+    },
+
+    /**
+     * 下载消息里的资源（图片/文件）。
+     *
+     * 飞书这个接口用**二进制流**返回成功结果，业务失败则回一段 JSON；因此这里
+     * 同时看 content-type 与体积，两种失败都给出可读原因，绝不当成图片交出去。
+     *
+     * @param options - { messageId, fileKey, type = 'image' }。
+     * @returns { bytes: Buffer, contentType: string|null }。
+     */
+    async downloadResource({ messageId, fileKey, type = 'image' }) {
+      const response = await client.im.v1.messageResource.get({
+        path: { message_id: messageId, file_key: fileKey },
+        params: { type },
+      });
+      const contentType = String(response?.headers?.['content-type'] ?? '').toLowerCase();
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.getReadableStream()) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size > maxResourceBytes) {
+          const error = new Error(
+            `飞书资源超过 ${Math.round(maxResourceBytes / 1024 / 1024)}MB 上限，已忽略。`,
+          );
+          error.code = 'feishu/resource-too-large';
+          throw error;
+        }
+        chunks.push(buffer);
+      }
+      const bytes = Buffer.concat(chunks);
+      if (contentType.includes('application/json') || contentType.includes('text/')) {
+        // 业务失败被包在流里。
+        let detail = '';
+        try {
+          const parsed = JSON.parse(bytes.toString('utf8'));
+          detail = parsed?.msg ? `${parsed.msg}（code ${parsed.code}）` : bytes.toString('utf8').slice(0, 200);
+        } catch {
+          detail = bytes.toString('utf8').slice(0, 200);
+        }
+        const error = new Error(`下载飞书资源失败：${detail || contentType}`);
+        error.code = 'feishu/resource-failed';
+        throw error;
+      }
+      if (bytes.length === 0) {
+        const error = new Error('下载飞书资源失败：返回内容为空。');
+        error.code = 'feishu/resource-failed';
+        throw error;
+      }
+      return { bytes, contentType: contentType || null };
     },
   });
 }

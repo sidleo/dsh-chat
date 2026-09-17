@@ -126628,6 +126628,33 @@ function messageText(message) {
     return "";
   }
 }
+var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+function sniffImageMediaType(bytes, contentType) {
+  const declared = String(contentType ?? "").split(";")[0].trim().toLowerCase();
+  if (SUPPORTED_IMAGE_TYPES.has(declared)) return declared;
+  const head = bytes.subarray(0, 12);
+  if (head.length >= 8 && head[0] === 137 && head[1] === 80 && head[2] === 78) return "image/png";
+  if (head.length >= 3 && head[0] === 255 && head[1] === 216 && head[2] === 255) return "image/jpeg";
+  if (head.length >= 6 && head.subarray(0, 4).toString("latin1") === "GIF8") return "image/gif";
+  if (head.length >= 12 && head.subarray(0, 4).toString("latin1") === "RIFF" && head.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+function parseInbound(message) {
+  const text = messageText(message);
+  if (text !== null) return { kind: "text", text };
+  const type = String(message?.message_type ?? "unknown");
+  if (type === "image") {
+    try {
+      const parsed = JSON.parse(message.content ?? "{}");
+      if (typeof parsed?.image_key === "string" && parsed.image_key) {
+        return { kind: "image", fileKey: parsed.image_key };
+      }
+    } catch {
+    }
+    return { kind: "unsupported", label: "\u56FE\u7247\uFF08\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\uFF09" };
+  }
+  return { kind: "unsupported", label: type };
+}
 function mentionsBot(message, botOpenId) {
   if (!botOpenId || !Array.isArray(message?.mentions)) return false;
   return message.mentions.some((mention) => mention?.id?.open_id === botOpenId);
@@ -126677,51 +126704,91 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
       return;
     }
-    const raw = messageText(message);
-    if (raw === null) {
+    const inbound = parseInbound(message);
+    if (inbound.kind === "unsupported") {
       await gateway.replyText({
         messageId: message.message_id,
-        text: "\u76EE\u524D\u53EA\u652F\u6301\u6587\u672C\u6D88\u606F\uFF0C\u56FE\u7247\u4E0E\u6587\u4EF6\u5C06\u5728\u540E\u7EED\u7248\u672C\u652F\u6301\u3002"
+        text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u4E0E\u56FE\u7247\uFF09\u3002`
       });
       return;
     }
-    const text = stripMentions(raw, message.mentions);
-    if (!text) return;
-    const conversationKeyForCommands = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
-    const commandAccess = deps.accessPolicy.evaluateAccess({
-      policy: accessPolicy,
-      conversationType,
-      senderIds: [senderId],
-      isCommand: true,
-      isOwner: isOwner(bot, senderId)
-    });
-    if (!commandAccess.allowed && text.startsWith("/")) {
-      logger.info?.(`[dsh-chat-feishu] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${bot.id} sender=${senderId}\uFF08${commandAccess.reason}\uFF09`);
-      await gateway.replyText({
-        messageId: message.message_id,
-        text: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002"
-      });
-      return;
-    }
-    const command = await deps.commands?.handle?.({
-      text,
-      channelId: deps.channelId,
-      botId: bot.id,
-      key: conversationKeyForCommands,
-      conversationType,
-      senderId,
-      botLabel: bot.botName ?? bot.id,
-      channelLabel: "\u98DE\u4E66"
-    }).catch((error) => {
-      logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${error?.message ?? error}`);
-      return null;
-    });
-    if (command?.handled) {
-      if (command.reply) {
-        await gateway.replyText({ messageId: message.message_id, text: command.reply });
+    let attachmentParts = null;
+    let text = "";
+    if (inbound.kind === "image") {
+      let downloaded;
+      try {
+        downloaded = await gateway.downloadResource({
+          messageId: message.message_id,
+          fileKey: inbound.fileKey,
+          type: "image"
+        });
+      } catch (error) {
+        const reason = error?.message ?? String(error);
+        lastError = reason;
+        logger.error?.(`[dsh-chat-feishu] \u4E0B\u8F7D\u56FE\u7247\u5931\u8D25\uFF1A${reason}`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: `\u56FE\u7247\u4E0B\u8F7D\u5931\u8D25\uFF1A${reason}`
+        }).catch(() => {
+        });
+        return;
       }
-      lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
-      return;
+      const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
+      if (!mediaType) {
+        logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u4E0D\u652F\u6301\u7684\u56FE\u7247\u7C7B\u578B\uFF1A${downloaded.contentType ?? "\u672A\u77E5"}`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: `\u8FD9\u5F20\u56FE\u7247\u7684\u683C\u5F0F\u6682\u4E0D\u652F\u6301\uFF08${downloaded.contentType ?? "\u672A\u77E5\u7C7B\u578B"}\uFF09\uFF0C\u8BF7\u53D1 PNG/JPEG/WebP/GIF\u3002`
+        });
+        return;
+      }
+      attachmentParts = [{
+        type: "image",
+        mediaType,
+        data: downloaded.bytes.toString("base64"),
+        name: "feishu-image"
+      }];
+    } else {
+      text = stripMentions(inbound.text, message.mentions);
+      if (!text) return;
+    }
+    if (text) {
+      const conversationKeyForCommands = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
+      const commandAccess = deps.accessPolicy.evaluateAccess({
+        policy: accessPolicy,
+        conversationType,
+        senderIds: [senderId],
+        isCommand: true,
+        isOwner: isOwner(bot, senderId)
+      });
+      if (!commandAccess.allowed && text.startsWith("/")) {
+        logger.info?.(`[dsh-chat-feishu] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${bot.id} sender=${senderId}\uFF08${commandAccess.reason}\uFF09`);
+        await gateway.replyText({
+          messageId: message.message_id,
+          text: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002"
+        });
+        return;
+      }
+      const command = await deps.commands?.handle?.({
+        text,
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: conversationKeyForCommands,
+        conversationType,
+        senderId,
+        botLabel: bot.botName ?? bot.id,
+        channelLabel: "\u98DE\u4E66"
+      }).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        return null;
+      });
+      if (command?.handled) {
+        if (command.reply) {
+          await gateway.replyText({ messageId: message.message_id, text: command.reply });
+        }
+        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+        return;
+      }
     }
     try {
       await deps.ready?.();
@@ -126737,12 +126804,25 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         identity2,
         () => ({ channel: "feishu", ...identity2 })
       );
-      const content = deps.contextEnhancement.enhanceContent(
-        text,
-        captured?.snapshot ?? null,
-        captured?.source
-      );
-      const enhanced = content !== text;
+      let finalParts;
+      let enhanced;
+      if (attachmentParts) {
+        const enhancedContent = deps.contextEnhancement.enhanceContent(
+          attachmentParts,
+          captured?.snapshot ?? null,
+          captured?.source
+        );
+        finalParts = Array.isArray(enhancedContent) ? enhancedContent : attachmentParts;
+        enhanced = finalParts.length !== attachmentParts.length;
+      } else {
+        const enhancedText = deps.contextEnhancement.enhanceContent(
+          text,
+          captured?.snapshot ?? null,
+          captured?.source
+        );
+        finalParts = [{ type: "text", text: enhancedText }];
+        enhanced = enhancedText !== text;
+      }
       const mode = conversationType === "direct" ? bot.stepPushDirect : bot.stepPushGroup;
       const presenter = createTurnPresenter({
         mode,
@@ -126759,7 +126839,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         botId: bot.id,
         key: conversationKey,
         workspacePath: record.workspace,
-        content: [{ type: "text", text: content }],
+        content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         handlers: {
           onToolCall: (toolEvent) => presenter.step(
@@ -126945,6 +127025,7 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
 
 // packages/dsh-chat-feishu/host/lark-gateway.mjs
 var DEFAULT_CONNECT_TIMEOUT_MS = 15e3;
+var DEFAULT_MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
 function loggerLevelFor(sdk, level) {
   const table = sdk?.LoggerLevel ?? {};
   return table[level] ?? table.info;
@@ -126966,7 +127047,8 @@ function createLarkGateway({
   sdk,
   logger = console,
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-  loggerLevel = "info"
+  loggerLevel = "info",
+  maxResourceBytes = DEFAULT_MAX_RESOURCE_BYTES
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 @larksuiteoapi/node-sdk\u3002");
   if (!appId || !appSecret) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 appId \u4E0E appSecret\u3002");
@@ -127145,6 +127227,55 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u66F4\u65B0\u5361\u7247", response);
       return { messageId };
+    },
+    /**
+     * 下载消息里的资源（图片/文件）。
+     *
+     * 飞书这个接口用**二进制流**返回成功结果，业务失败则回一段 JSON；因此这里
+     * 同时看 content-type 与体积，两种失败都给出可读原因，绝不当成图片交出去。
+     *
+     * @param options - { messageId, fileKey, type = 'image' }。
+     * @returns { bytes: Buffer, contentType: string|null }。
+     */
+    async downloadResource({ messageId, fileKey, type = "image" }) {
+      const response = await client.im.v1.messageResource.get({
+        path: { message_id: messageId, file_key: fileKey },
+        params: { type }
+      });
+      const contentType = String(response?.headers?.["content-type"] ?? "").toLowerCase();
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.getReadableStream()) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size > maxResourceBytes) {
+          const error = new Error(
+            `\u98DE\u4E66\u8D44\u6E90\u8D85\u8FC7 ${Math.round(maxResourceBytes / 1024 / 1024)}MB \u4E0A\u9650\uFF0C\u5DF2\u5FFD\u7565\u3002`
+          );
+          error.code = "feishu/resource-too-large";
+          throw error;
+        }
+        chunks.push(buffer);
+      }
+      const bytes = Buffer.concat(chunks);
+      if (contentType.includes("application/json") || contentType.includes("text/")) {
+        let detail = "";
+        try {
+          const parsed = JSON.parse(bytes.toString("utf8"));
+          detail = parsed?.msg ? `${parsed.msg}\uFF08code ${parsed.code}\uFF09` : bytes.toString("utf8").slice(0, 200);
+        } catch {
+          detail = bytes.toString("utf8").slice(0, 200);
+        }
+        const error = new Error(`\u4E0B\u8F7D\u98DE\u4E66\u8D44\u6E90\u5931\u8D25\uFF1A${detail || contentType}`);
+        error.code = "feishu/resource-failed";
+        throw error;
+      }
+      if (bytes.length === 0) {
+        const error = new Error("\u4E0B\u8F7D\u98DE\u4E66\u8D44\u6E90\u5931\u8D25\uFF1A\u8FD4\u56DE\u5185\u5BB9\u4E3A\u7A7A\u3002");
+        error.code = "feishu/resource-failed";
+        throw error;
+      }
+      return { bytes, contentType: contentType || null };
     }
   });
 }
@@ -127366,7 +127497,9 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
       handled: bridgeStatus.handled,
-      lastHandledAt: bridgeStatus.lastHandledAt ?? null
+      lastHandledAt: bridgeStatus.lastHandledAt ?? null,
+      // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
+      lastError: bridgeStatus.lastError ?? null
     });
   }
   async function status() {
