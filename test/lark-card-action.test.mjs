@@ -117,7 +117,7 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.match(second, /"form_action_type":"submit"/);
   assert.match(second, /"tag":"collapsible_panel"/, '已答部分放折叠面板里（收起但不消失）');
   assert.match(second, /"expanded":true/, '还有题要答时面板展开，方便对照');
-  assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在面板里留一行答案');
+  assert.match(second, /提问 · 单选 → A/, '已答的题在面板里留一行答案（与工具/思考同一形态）');
   assert.doesNotMatch(second, /还有别的吗/);
 
   // 第三页：自由文本 → 表单 + 原生输入框 + 提交

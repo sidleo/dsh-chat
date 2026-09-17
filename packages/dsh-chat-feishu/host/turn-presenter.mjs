@@ -6,29 +6,214 @@
  * - `post`：每一步单独回一条消息（工具调用、注入上下文等）；
  * - `streaming_card`：全程一张交互卡片，过程与最终答案都在这张卡里原地刷新。
  *
+ * 呈现口径对齐 **DSH Web 会话**（真机反馈："每一项工具跟思考要跟 dsh web 的会话一样，
+ * 显示为 web 会话未展开的样子"）：
+ * - 一行一项，形如 `工具调用 · wiki_get · 永辉/组织架构/品类架构`、`思考 · …`、`提问 · …`；
+ *   项目分类与摘要口径直接照搬 Web 的工具行模型（见下方 `TOOL_VARIANTS` / `SUMMARY_KEYS`，
+ *   来源：DSH 安装目录内 `@deepseek-ai/dsh-client-ui-tool` 的 `toolRowModel`）。
+ * - 工具、思考、**已答的提问**全部收进**同一个**折叠面板：默认收起、展开看全部；
+ * - 面板标题：本轮没结束时显示**最新的一项**（一眼看到在干什么），本轮结束后显示
+ *   `工具与思考(N)`；
+ * - 还没回答的提问控件放在面板**外面**——Card 2.0 的折叠面板里不能放 form/输入框。
+ *
  * @module dsh-chat-feishu/turn-presenter
  */
 
-/** 过程卡最多保留的过程行数（超出丢弃最旧的）。 */
-const MAX_STEP_LINES = 24;
+/** 折叠面板最多保留的行数（超出丢弃最旧的）。 */
+const MAX_ROWS = 24;
 
 /** 卡片正文长度上限，避免超出飞书卡片限制。 */
 const MAX_CARD_CONTENT = 12_000;
 
+/** 未能收起的行（面板标题）长度上限——标题是一行，太长会被挤掉。 */
+const MAX_PANEL_TITLE = 46;
+
+/** 思考行的长度上限。 */
+const MAX_THINK_CHARS = 120;
+
+/** 工具行摘要的长度上限。 */
+const MAX_TOOL_SUMMARY = 60;
+
 /**
- * 渲染一张过程卡（经典卡片格式；`update_multi` 让 patch 生效）。
+ * 工具名 → 行的"种类"（决定用什么标题与摘要取哪些参数）。
  *
- * 卡片正文按"每条元素各自截断 + 总量预算"控制，绝不做字符串级截断——
+ * 照搬 Web：`dsh-client-ui-tool` 的 `TOOL_VARIANTS`。没列出的工具归 `others`。
+ */
+const TOOL_VARIANTS = Object.freeze({
+  bash: 'bash',
+  pwsh: 'bash',
+  read: 'read',
+  read_image: 'read',
+  web_fetch: 'read',
+  web_search: 'search',
+  grep: 'search',
+  glob: 'search',
+  write: 'write',
+  edit: 'edit',
+  run_code: 'code',
+  cordis_package_inspect: 'read',
+  cordis_runtime_inspect: 'read',
+  cordis_run: 'others',
+  cordis_stop: 'others',
+  cordis_undefine: 'others',
+});
+
+/** 种类 → 行标题（对齐 Web 的 `tool.title.*` 中文文案）。 */
+const VARIANT_TITLES = Object.freeze({
+  search: '搜索',
+  read: '读取',
+  bash: 'Bash',
+  write: '写入',
+  edit: '编辑',
+  code: '代码',
+  others: '工具调用',
+});
+
+/**
+ * 有专属卡片的工具：Web 里由插件注册了专门的卡片，标题不是"工具调用"。
+ * 这里只补真正会出现在会话里、且 Web 显示为专属标题的那几个。
+ */
+const TOOL_TITLES = Object.freeze({
+  skill: 'Skill',
+  todo_write: '更新任务清单',
+  ask_user_question: '提问',
+  present: '交付文件',
+  chat_send: '发送消息',
+  chat_send_file: '发送文件',
+  chat_targets: '查看投递目标',
+  chat_save_target: '保存投递目标',
+});
+
+/** 摘要优先取哪个参数（对齐 Web 的 `SUMMARY_KEYS`）。 */
+const SUMMARY_KEYS = Object.freeze({
+  bash: ['description', 'command'],
+  read: ['path', 'file_path', 'url'],
+  search: ['query', 'pattern', 'url'],
+  write: ['path', 'file_path'],
+  edit: ['path', 'file_path'],
+  code: ['description'],
+  others: [],
+});
+
+function firstLine(text) {
+  const value = typeof text === 'string' ? text : '';
+  const newline = value.indexOf('\n');
+  return (newline === -1 ? value : value.slice(0, newline)).replace(/\s+/g, ' ').trim();
+}
+
+function parseArgs(args) {
+  if (args === null || args === undefined) return null;
+  if (typeof args === 'object') return args;
+  if (typeof args !== 'string') return null;
+  try {
+    const parsed = JSON.parse(args);
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function pickString(args, keys) {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === 'string' && value !== '') return value;
+  }
+  return undefined;
+}
+
+/** 按 Web 的口径从参数里挑一句摘要；挑不到就退化到第一个非空字符串参数。 */
+function deriveSummary(variant, args, argsRaw) {
+  const parsed = args ?? parseArgs(argsRaw);
+  if (parsed === null) return firstLine(typeof argsRaw === 'string' ? argsRaw : '');
+  if (variant === 'search' && Array.isArray(parsed.queries)) {
+    const queries = parsed.queries.filter((query) => typeof query === 'string' && query !== '');
+    if (queries.length > 0) return queries.map(firstLine).join(', ');
+  }
+  const picked = pickString(parsed, SUMMARY_KEYS[variant] ?? []);
+  if (picked !== undefined) return firstLine(picked);
+  for (const value of Object.values(parsed)) {
+    if (typeof value === 'string' && value !== '') return firstLine(value);
+  }
+  // 和 Web 一样退化到原始参数（`wiki_list` 传 `{}` 时就显示 `{}`，一眼看出没带参数）。
+  return firstLine(typeof argsRaw === 'string' ? argsRaw : '');
+}
+
+function clamp(text, max) {
+  const value = typeof text === 'string' ? text : '';
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+/**
+ * 把一次工具调用渲染成 Web 那样的一行。
+ *
+ * 未知工具跟 Web 一样保留工具名：`工具调用 · wiki_get · 永辉/组织架构/品类架构`，
+ * 已知工具用自己的标题：`Bash · Show current date and time`、`Skill · yh-bigdata`。
+ *
+ * @param options - { name, arguments }（`arguments` 可以是对象或原始 JSON 串）。
+ * @returns 一行文本。
+ */
+export function toolRow({ name, arguments: argsRaw } = {}) {
+  const toolName = typeof name === 'string' && name ? name : '工具';
+  const variant = TOOL_VARIANTS[toolName] ?? 'others';
+  const summary = clamp(deriveSummary(variant, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
+  const own = TOOL_TITLES[toolName];
+  if (own) {
+    // 有专属标题的工具（Skill / 更新任务清单…）：Web 只用它的标题 + 关键参数。
+    return summary ? `${own} · ${summary}` : own;
+  }
+  if (variant === 'others') {
+    return summary ? `工具调用 · ${toolName} · ${summary}` : `工具调用 · ${toolName}`;
+  }
+  const title = VARIANT_TITLES[variant];
+  return summary ? `${title} · ${summary}` : title;
+}
+
+/**
+ * 把一段思考渲染成一行。
+ *
+ * @param text - 推理文本。
+ * @returns 一行文本。
+ */
+export function thinkRow(text) {
+  const line = clamp(firstLine(text), MAX_THINK_CHARS);
+  return line ? `思考 · ${line}` : '';
+}
+
+/**
+ * 把一条已回答的提问渲染成一行。
+ *
+ * @param options - { header, question, answer }。
+ * @returns 一行文本。
+ */
+export function askRow({ header, question, answer } = {}) {
+  const title = firstLine(header || question || '提问');
+  const value = firstLine(answer) || '（空）';
+  return `提问 · ${clamp(title, 40)} → ${clamp(value, 60)}`;
+}
+
+/**
+ * 渲染一张过程卡。
+ *
+ * 正文按"每条元素各自截断 + 总量预算"控制，绝不做字符串级截断——
  * 那会产出非法 JSON 让卡片整条发不出去。
  *
- * @param options - { title, lines, answer, note }。
+ * @param options - { title, rows, questionRows, answer, note, panelTitle, currentQuestion, template }。
+ *   `rows` 是工具/思考行，`questionRows` 是已答提问行，两者同处一个折叠面板；
+ *   `currentQuestion` 是**还没回答**的提问元素（控件必须留在面板外）。
  * @returns 飞书交互卡片对象。
  */
 export function renderStepCard({
-  title, lines = [], answer = '', note = '', question = null, template = 'blue',
+  title,
+  rows = [],
+  questionRows = [],
+  answer = '',
+  note = '',
+  panelTitle = '',
+  currentQuestion = [],
+  template = 'blue',
 }) {
   const budget = { left: MAX_CARD_CONTENT };
-  const clamp = (text) => {
+  const clampBudget = (text) => {
     const value = typeof text === 'string' ? text : '';
     if (budget.left <= 0) return '';
     const allowed = Math.min(value.length, budget.left);
@@ -36,23 +221,21 @@ export function renderStepCard({
     return allowed < value.length ? `${value.slice(0, allowed)}…` : value;
   };
 
+  // 工具、思考、已答提问合成**一个**面板里的行（顺序就是发生顺序）。
+  const allRows = [...rows, ...questionRows];
   const elements = [];
   if (note) {
-    elements.push({ tag: 'div', text: { tag: 'plain_text', content: clamp(note) } });
+    elements.push({ tag: 'div', text: { tag: 'plain_text', content: clampBudget(note) } });
   }
-  if (lines.length > 0) {
-    // 工具与思考合并进**一个折叠面板**：默认收起，标题上显示"最新一条"，
-    // 展开才看全部（真机反馈：不要一长串刷屏，也不要每步占一行卡片）。
-    const body = clamp(lines.map((line) => `· ${line}`).join('\n'));
+  if (allRows.length > 0) {
+    const body = clampBudget(allRows.map((row) => `· ${row}`).join('\n'));
     if (body) {
       elements.push({
         tag: 'collapsible_panel',
         expanded: false,
         border: { color: 'grey', corner_radius: '4px' },
         header: {
-          // 标题保持极简：只要"工具与思考(N)"。真机反馈：不要 🛠 前缀、也不要"最新：…"
-          // （最新那条常常是又长又碎的思考摘要，反而干扰阅读）。
-          title: { tag: 'plain_text', content: `工具与思考(${lines.length})` },
+          title: { tag: 'plain_text', content: clampBudget(panelTitle) },
           width: 'fill',
           icon_position: 'right',
           icon_expanded_angle: -180,
@@ -61,13 +244,13 @@ export function renderStepCard({
       });
     }
   }
-  // 提问区内嵌在同一张卡里（真机反馈：单独的提问卡读起来割裂；答完收起）。
-  if (Array.isArray(question?.elements) && question.elements.length > 0) {
-    elements.push(...question.elements);
+  // 还没回答的提问：控件留在面板外面（Card 2.0 的面板里放不了 form/输入框）。
+  if (Array.isArray(currentQuestion) && currentQuestion.length > 0) {
+    elements.push(...currentQuestion);
   }
   if (answer && budget.left > 0) {
     elements.push({ tag: 'hr' });
-    elements.push({ tag: 'markdown', content: clamp(answer) });
+    elements.push({ tag: 'markdown', content: clampBudget(answer) });
   }
   if (elements.length === 0) {
     elements.push({ tag: 'markdown', content: '正在处理…' });
@@ -89,7 +272,7 @@ export function renderStepCard({
  * @param options - {
  *   mode, gateway, message, chatType, bot, logger, note,
  * }。
- * @returns { step, finish }。
+ * @returns { tool, think, setQuestion, finish }。
  */
 export function createTurnPresenter({
   mode,
@@ -107,15 +290,21 @@ export function createTurnPresenter({
   // 标题不带机器人名前缀（真机反馈：卡片本身就在这个机器人的会话里，重复没意义）。
   const title = '正在处理';
 
-  let lines = [];
-  let cardId = null;
-  let cardBroken = false;
-  /** 内嵌的提问区（{ elements, current }）：答完清空即"收起"。 */
-  let question = null;
+  /**
+   * 面板里的行，按发生顺序：`{ key, text }`。
+   * key 用来原地更新（同一条提问被回答多次时不能重复占行）。
+   */
+  let entries = [];
+  /** 还没回答的提问元素（面板外）。 */
+  let currentQuestion = [];
+  /** 提问进度：用于标题里的"第 N/M 题"。 */
+  let questionProgress = null;
   /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
   let lastAnswer = '';
-  /** 呈现状态：running（默认）/ done / failed —— 只影响标题。 */
+  /** 呈现状态：running（默认）/ done / failed。 */
   let state = 'running';
+  let cardId = null;
+  let cardBroken = false;
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
   let lastFailure = null;
   /** 过程刷新的最小间隔：一次 patch 是整卡重写，工具多时不能每个事件都刷。 */
@@ -142,10 +331,39 @@ export function createTurnPresenter({
    * 真机反馈：一轮处理完了标题还写着"正在处理"，看不出结束没结束。
    */
   function currentTitle() {
-    if (question?.current) return `❓ 等你确认（第 ${question.index}/${question.total} 题）`;
+    if (currentQuestion.length > 0 && questionProgress) {
+      return `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`;
+    }
     if (state === 'done') return '✅ 已完成';
     if (state === 'failed') return '⚠️ 未正常完成';
     return title;
+  }
+
+  /**
+   * 折叠面板的标题。
+   *
+   * 真机反馈两条，一起满足：
+   * - 本轮**没结束**时显示最新的一项（一眼看到此刻在干什么），不写前缀；
+   * - 本轮**结束后**才显示 `工具与思考(N)`。
+   */
+  function panelTitle() {
+    const count = entries.length;
+    if (count === 0) return '';
+    if (state !== 'running') return `工具与思考(${count})`;
+    return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
+  }
+
+  function cardPayload(answer) {
+    return renderStepCard({
+      title: currentTitle(),
+      rows: entries.filter((entry) => entry.kind !== 'ask').map((entry) => entry.text),
+      questionRows: entries.filter((entry) => entry.kind === 'ask').map((entry) => entry.text),
+      answer,
+      note,
+      panelTitle: panelTitle(),
+      currentQuestion,
+      template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
+    });
   }
 
   async function ensureCard() {
@@ -153,13 +371,7 @@ export function createTurnPresenter({
     try {
       const created = await gateway.replyCard({
         messageId,
-        card: renderStepCard({
-          title: currentTitle(),
-          lines,
-          note,
-          question,
-          template: question?.current ? 'blue' : 'blue',
-        }),
+        card: cardPayload(''),
         replyInThread,
       });
       cardId = created?.messageId ?? null;
@@ -192,10 +404,21 @@ export function createTurnPresenter({
     }
   }
 
+  /** 追加/原地更新一行（超出上限丢最旧的）。 */
+  function putEntry({ key, kind, text }) {
+    if (!text) return;
+    const index = key ? entries.findIndex((entry) => entry.key === key) : -1;
+    if (index >= 0) {
+      entries = entries.map((entry, at) => (at === index ? { ...entry, text } : entry));
+      return;
+    }
+    entries = [...entries, { key, kind, text }].slice(-MAX_ROWS);
+  }
+
   /** 立刻刷新一次卡片（记下时间用于节流）。 */
   async function patchNow(answer = lastAnswer) {
     lastPatchAt = Date.now();
-    return patch(lines, answer);
+    return patch(answer);
   }
 
   /**
@@ -222,21 +445,11 @@ export function createTurnPresenter({
   }
 
   /** @returns 卡片是否可用（更新成功才算）。 */
-  async function patch(linesSnapshot, answer) {
+  async function patch(answer) {
     const id = await ensureCard();
     if (!id) return false;
     try {
-      await gateway.patchCard({
-        messageId: id,
-        card: renderStepCard({
-          title: currentTitle(),
-          lines: linesSnapshot,
-          answer,
-          note,
-          question,
-          template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
-        }),
-      });
+      await gateway.patchCard({ messageId: id, card: cardPayload(answer) });
       return true;
     } catch (error) {
       cardBroken = true;
@@ -245,9 +458,47 @@ export function createTurnPresenter({
     }
   }
 
+  /** 推一行：卡片模式进面板，`post` 模式单独回一条消息。 */
+  function push(text) {
+    if (mode === 'off' || !text) return Promise.resolve();
+    if (mode === 'post') {
+      return enqueue(async () => {
+        try {
+          await gateway.replyText({ messageId, text, replyInThread });
+        } catch (error) {
+          noteFailure('发送过程消息失败', error);
+        }
+      });
+    }
+    schedulePatch();
+    return Promise.resolve();
+  }
+
   return {
     /**
-     * 把一批问题内嵌到这张进度卡里（提问区就在步骤下方，答完收起）。
+     * 记录一次工具调用，渲染成 Web 那样的一行。
+     *
+     * @param call - { name, arguments }。
+     */
+    tool(call) {
+      const row = toolRow(call);
+      putEntry({ kind: 'tool', text: row });
+      return push(row);
+    },
+
+    /**
+     * 记录一段思考（模型的推理），与工具调用同处一个折叠面板。
+     *
+     * @param text - 推理文本。
+     */
+    think(text) {
+      const row = thinkRow(text);
+      putEntry({ kind: 'think', text: row });
+      return push(row);
+    },
+
+    /**
+     * 同步一批提问：已答的变成面板里的一行，没答的元素留在面板外做交互。
      *
      * @param payload - { questions, answered, final }。
      * @returns 是否成功内嵌（false 表示这张卡放不了提问，调用方应改用独立卡片）。
@@ -261,25 +512,23 @@ export function createTurnPresenter({
         patchTimer = null;
       }
       return enqueue(async () => {
+        const questions = payload?.questions ?? [];
+        const answered = payload?.answered ?? {};
         const rendered = gateway.renderQuestionElements({
-          questions: payload?.questions ?? [],
-          answered: payload?.answered ?? {},
+          questions,
+          answered,
           final: payload?.final === true,
         });
-        const questions = payload?.questions ?? [];
+        // 已答的提问：按题号原地更新，位置就是它第一次出现的位置。
+        for (const row of rendered.rows ?? []) {
+          putEntry({ key: `ask:${row.id}`, kind: 'ask', text: row.text });
+        }
+        currentQuestion = Array.isArray(rendered.elements) ? rendered.elements : [];
         const current = rendered.current;
-        // 全部答完时**不删掉提问区**：渲染器会把它折叠起来（collapsible_panel，
-        // 默认收起、点标题可展开回看）。真机反馈要的正是"收起"而不是"消失"。
-        question = rendered.elements.length > 0
-          ? {
-            elements: rendered.elements,
-            current,
-            index: current ? questions.indexOf(current) + 1 : 0,
-            total: questions.length,
-          }
+        questionProgress = current && questions.length > 0
+          ? { index: questions.indexOf(current) + 1, total: questions.length }
           : null;
-        const ok = await patchNow();
-        return ok;
+        return patchNow();
       });
     },
 
@@ -287,49 +536,6 @@ export function createTurnPresenter({
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
     delivery: () => lastDelivery,
-
-    /**
-     * 记录一步过程。
-     *
-     * @param text - 过程说明（如工具名）。
-     */
-    step(text) {
-      if (mode === 'off' || !text) return Promise.resolve();
-      lines = [...lines, text].slice(-MAX_STEP_LINES);
-      if (mode === 'post') {
-        return enqueue(async () => {
-          try {
-            await gateway.replyText({ messageId, text, replyInThread });
-          } catch (error) {
-            noteFailure('发送过程消息失败', error);
-          }
-        });
-      }
-      schedulePatch();
-      return Promise.resolve();
-    },
-
-    /**
-     * 记录一条"思考"（模型的推理摘要），与工具调用同处一个折叠面板。
-     *
-     * @param text - 一行摘要（调用方负责截断）。
-     */
-    think(text) {
-      if (mode === 'off' || !text) return Promise.resolve();
-      const line = `💭 ${text}`;
-      lines = [...lines, line].slice(-MAX_STEP_LINES);
-      if (mode === 'post') {
-        return enqueue(async () => {
-          try {
-            await gateway.replyText({ messageId, text: line, replyInThread });
-          } catch (error) {
-            noteFailure('发送思考消息失败', error);
-          }
-        });
-      }
-      schedulePatch();
-      return Promise.resolve();
-    },
 
     /**
      * 收尾：把最终答案交给用户（排在所有已排队的步骤之后）。
@@ -351,14 +557,17 @@ export function createTurnPresenter({
 
         lastAnswer = body;
         state = failed ? 'failed' : 'done';
-        // 收尾一定刷新（把之前节流掉的过程一次性画上）
+        // 收尾时提问控件一律收起来（面板里那一行还在，可展开回看）。
+        currentQuestion = [];
+        questionProgress = null;
+        // 收尾一定刷新（把之前节流掉的过程一次性画上，并让标题变成 工具与思考(N)）
         if (patchTimer) {
           clearTimeout(patchTimer);
           patchTimer = null;
         }
         if (mode === 'streaming_card') {
           // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
-          if (!cardBroken && await patch(lines, body)) {
+          if (!cardBroken && await patch(body)) {
             lastDelivery = 'card';
             return lastDelivery;
           }

@@ -13402,9 +13402,9 @@ var require_parse_proxy_response = __commonJS({
             read();
             return;
           }
-          const firstLine = buffered.toString("ascii", 0, buffered.indexOf("\r\n"));
-          const statusCode = +firstLine.split(" ")[1];
-          debug("got proxy server response: %o", firstLine);
+          const firstLine2 = buffered.toString("ascii", 0, buffered.indexOf("\r\n"));
+          const statusCode = +firstLine2.split(" ")[1];
+          debug("got proxy server response: %o", firstLine2);
           resolve({
             statusCode,
             buffered
@@ -126480,39 +126480,153 @@ ${lines.join("\n")}
 import { join } from "node:path";
 
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
-var MAX_STEP_LINES = 24;
+var MAX_ROWS = 24;
 var MAX_CARD_CONTENT = 12e3;
+var MAX_PANEL_TITLE = 46;
+var MAX_THINK_CHARS = 120;
+var MAX_TOOL_SUMMARY = 60;
+var TOOL_VARIANTS = Object.freeze({
+  bash: "bash",
+  pwsh: "bash",
+  read: "read",
+  read_image: "read",
+  web_fetch: "read",
+  web_search: "search",
+  grep: "search",
+  glob: "search",
+  write: "write",
+  edit: "edit",
+  run_code: "code",
+  cordis_package_inspect: "read",
+  cordis_runtime_inspect: "read",
+  cordis_run: "others",
+  cordis_stop: "others",
+  cordis_undefine: "others"
+});
+var VARIANT_TITLES = Object.freeze({
+  search: "\u641C\u7D22",
+  read: "\u8BFB\u53D6",
+  bash: "Bash",
+  write: "\u5199\u5165",
+  edit: "\u7F16\u8F91",
+  code: "\u4EE3\u7801",
+  others: "\u5DE5\u5177\u8C03\u7528"
+});
+var TOOL_TITLES = Object.freeze({
+  skill: "Skill",
+  todo_write: "\u66F4\u65B0\u4EFB\u52A1\u6E05\u5355",
+  ask_user_question: "\u63D0\u95EE",
+  present: "\u4EA4\u4ED8\u6587\u4EF6",
+  chat_send: "\u53D1\u9001\u6D88\u606F",
+  chat_send_file: "\u53D1\u9001\u6587\u4EF6",
+  chat_targets: "\u67E5\u770B\u6295\u9012\u76EE\u6807",
+  chat_save_target: "\u4FDD\u5B58\u6295\u9012\u76EE\u6807"
+});
+var SUMMARY_KEYS = Object.freeze({
+  bash: ["description", "command"],
+  read: ["path", "file_path", "url"],
+  search: ["query", "pattern", "url"],
+  write: ["path", "file_path"],
+  edit: ["path", "file_path"],
+  code: ["description"],
+  others: []
+});
+function firstLine(text) {
+  const value = typeof text === "string" ? text : "";
+  const newline = value.indexOf("\n");
+  return (newline === -1 ? value : value.slice(0, newline)).replace(/\s+/g, " ").trim();
+}
+function parseArgs(args) {
+  if (args === null || args === void 0) return null;
+  if (typeof args === "object") return args;
+  if (typeof args !== "string") return null;
+  try {
+    const parsed = JSON.parse(args);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function pickString(args, keys) {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return void 0;
+}
+function deriveSummary(variant, args, argsRaw) {
+  const parsed = args ?? parseArgs(argsRaw);
+  if (parsed === null) return firstLine(typeof argsRaw === "string" ? argsRaw : "");
+  if (variant === "search" && Array.isArray(parsed.queries)) {
+    const queries = parsed.queries.filter((query) => typeof query === "string" && query !== "");
+    if (queries.length > 0) return queries.map(firstLine).join(", ");
+  }
+  const picked = pickString(parsed, SUMMARY_KEYS[variant] ?? []);
+  if (picked !== void 0) return firstLine(picked);
+  for (const value of Object.values(parsed)) {
+    if (typeof value === "string" && value !== "") return firstLine(value);
+  }
+  return firstLine(typeof argsRaw === "string" ? argsRaw : "");
+}
+function clamp(text, max) {
+  const value = typeof text === "string" ? text : "";
+  return value.length > max ? `${value.slice(0, max - 1)}\u2026` : value;
+}
+function toolRow({ name: name2, arguments: argsRaw } = {}) {
+  const toolName = typeof name2 === "string" && name2 ? name2 : "\u5DE5\u5177";
+  const variant = TOOL_VARIANTS[toolName] ?? "others";
+  const summary = clamp(deriveSummary(variant, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
+  const own2 = TOOL_TITLES[toolName];
+  if (own2) {
+    return summary ? `${own2} \xB7 ${summary}` : own2;
+  }
+  if (variant === "others") {
+    return summary ? `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName} \xB7 ${summary}` : `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName}`;
+  }
+  const title = VARIANT_TITLES[variant];
+  return summary ? `${title} \xB7 ${summary}` : title;
+}
+function thinkRow(text) {
+  const line = clamp(firstLine(text), MAX_THINK_CHARS);
+  return line ? `\u601D\u8003 \xB7 ${line}` : "";
+}
+function askRow({ header, question, answer } = {}) {
+  const title = firstLine(header || question || "\u63D0\u95EE");
+  const value = firstLine(answer) || "\uFF08\u7A7A\uFF09";
+  return `\u63D0\u95EE \xB7 ${clamp(title, 40)} \u2192 ${clamp(value, 60)}`;
+}
 function renderStepCard({
   title,
-  lines = [],
+  rows = [],
+  questionRows = [],
   answer = "",
   note = "",
-  question = null,
+  panelTitle = "",
+  currentQuestion = [],
   template = "blue"
 }) {
   const budget = { left: MAX_CARD_CONTENT };
-  const clamp = (text) => {
+  const clampBudget = (text) => {
     const value = typeof text === "string" ? text : "";
     if (budget.left <= 0) return "";
     const allowed = Math.min(value.length, budget.left);
     budget.left -= allowed;
     return allowed < value.length ? `${value.slice(0, allowed)}\u2026` : value;
   };
+  const allRows = [...rows, ...questionRows];
   const elements = [];
   if (note) {
-    elements.push({ tag: "div", text: { tag: "plain_text", content: clamp(note) } });
+    elements.push({ tag: "div", text: { tag: "plain_text", content: clampBudget(note) } });
   }
-  if (lines.length > 0) {
-    const body = clamp(lines.map((line) => `\xB7 ${line}`).join("\n"));
+  if (allRows.length > 0) {
+    const body = clampBudget(allRows.map((row) => `\xB7 ${row}`).join("\n"));
     if (body) {
       elements.push({
         tag: "collapsible_panel",
         expanded: false,
         border: { color: "grey", corner_radius: "4px" },
         header: {
-          // 标题保持极简：只要"工具与思考(N)"。真机反馈：不要 🛠 前缀、也不要"最新：…"
-          // （最新那条常常是又长又碎的思考摘要，反而干扰阅读）。
-          title: { tag: "plain_text", content: `\u5DE5\u5177\u4E0E\u601D\u8003(${lines.length})` },
+          title: { tag: "plain_text", content: clampBudget(panelTitle) },
           width: "fill",
           icon_position: "right",
           icon_expanded_angle: -180
@@ -126521,12 +126635,12 @@ function renderStepCard({
       });
     }
   }
-  if (Array.isArray(question?.elements) && question.elements.length > 0) {
-    elements.push(...question.elements);
+  if (Array.isArray(currentQuestion) && currentQuestion.length > 0) {
+    elements.push(...currentQuestion);
   }
   if (answer && budget.left > 0) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: clamp(answer) });
+    elements.push({ tag: "markdown", content: clampBudget(answer) });
   }
   if (elements.length === 0) {
     elements.push({ tag: "markdown", content: "\u6B63\u5728\u5904\u7406\u2026" });
@@ -126554,12 +126668,13 @@ function createTurnPresenter({
   const chatId = message?.chat_id;
   const replyInThread = chatType === "group" && bot?.groupTopicReply === true;
   const title = "\u6B63\u5728\u5904\u7406";
-  let lines = [];
-  let cardId = null;
-  let cardBroken = false;
-  let question = null;
+  let entries = [];
+  let currentQuestion = [];
+  let questionProgress = null;
   let lastAnswer = "";
   let state = "running";
+  let cardId = null;
+  let cardBroken = false;
   let lastFailure = null;
   const PATCH_MIN_INTERVAL_MS = 1200;
   let lastPatchAt = 0;
@@ -126575,23 +126690,37 @@ function createTurnPresenter({
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
   function currentTitle() {
-    if (question?.current) return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${question.index}/${question.total} \u9898\uFF09`;
+    if (currentQuestion.length > 0 && questionProgress) {
+      return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${questionProgress.index}/${questionProgress.total} \u9898\uFF09`;
+    }
     if (state === "done") return "\u2705 \u5DF2\u5B8C\u6210";
     if (state === "failed") return "\u26A0\uFE0F \u672A\u6B63\u5E38\u5B8C\u6210";
     return title;
+  }
+  function panelTitle() {
+    const count = entries.length;
+    if (count === 0) return "";
+    if (state !== "running") return `\u5DE5\u5177\u4E0E\u601D\u8003(${count})`;
+    return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
+  }
+  function cardPayload(answer) {
+    return renderStepCard({
+      title: currentTitle(),
+      rows: entries.filter((entry) => entry.kind !== "ask").map((entry) => entry.text),
+      questionRows: entries.filter((entry) => entry.kind === "ask").map((entry) => entry.text),
+      answer,
+      note,
+      panelTitle: panelTitle(),
+      currentQuestion,
+      template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
+    });
   }
   async function ensureCard() {
     if (cardId || cardBroken) return cardId;
     try {
       const created = await gateway.replyCard({
         messageId,
-        card: renderStepCard({
-          title: currentTitle(),
-          lines,
-          note,
-          question,
-          template: question?.current ? "blue" : "blue"
-        }),
+        card: cardPayload(""),
         replyInThread
       });
       cardId = created?.messageId ?? null;
@@ -126618,9 +126747,18 @@ function createTurnPresenter({
       return false;
     }
   }
+  function putEntry({ key, kind, text }) {
+    if (!text) return;
+    const index = key ? entries.findIndex((entry) => entry.key === key) : -1;
+    if (index >= 0) {
+      entries = entries.map((entry, at) => at === index ? { ...entry, text } : entry);
+      return;
+    }
+    entries = [...entries, { key, kind, text }].slice(-MAX_ROWS);
+  }
   async function patchNow(answer = lastAnswer) {
     lastPatchAt = Date.now();
-    return patch(lines, answer);
+    return patch(answer);
   }
   function schedulePatch() {
     if (mode !== "streaming_card" || cardBroken) return;
@@ -126639,21 +126777,11 @@ function createTurnPresenter({
       void enqueue(() => patchNow());
     }, wait);
   }
-  async function patch(linesSnapshot, answer) {
+  async function patch(answer) {
     const id = await ensureCard();
     if (!id) return false;
     try {
-      await gateway.patchCard({
-        messageId: id,
-        card: renderStepCard({
-          title: currentTitle(),
-          lines: linesSnapshot,
-          answer,
-          note,
-          question,
-          template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
-        })
-      });
+      await gateway.patchCard({ messageId: id, card: cardPayload(answer) });
       return true;
     } catch (error) {
       cardBroken = true;
@@ -126661,9 +126789,43 @@ function createTurnPresenter({
       return false;
     }
   }
+  function push(text) {
+    if (mode === "off" || !text) return Promise.resolve();
+    if (mode === "post") {
+      return enqueue(async () => {
+        try {
+          await gateway.replyText({ messageId, text, replyInThread });
+        } catch (error) {
+          noteFailure("\u53D1\u9001\u8FC7\u7A0B\u6D88\u606F\u5931\u8D25", error);
+        }
+      });
+    }
+    schedulePatch();
+    return Promise.resolve();
+  }
   return {
     /**
-     * 把一批问题内嵌到这张进度卡里（提问区就在步骤下方，答完收起）。
+     * 记录一次工具调用，渲染成 Web 那样的一行。
+     *
+     * @param call - { name, arguments }。
+     */
+    tool(call) {
+      const row = toolRow(call);
+      putEntry({ kind: "tool", text: row });
+      return push(row);
+    },
+    /**
+     * 记录一段思考（模型的推理），与工具调用同处一个折叠面板。
+     *
+     * @param text - 推理文本。
+     */
+    think(text) {
+      const row = thinkRow(text);
+      putEntry({ kind: "think", text: row });
+      return push(row);
+    },
+    /**
+     * 同步一批提问：已答的变成面板里的一行，没答的元素留在面板外做交互。
      *
      * @param payload - { questions, answered, final }。
      * @returns 是否成功内嵌（false 表示这张卡放不了提问，调用方应改用独立卡片）。
@@ -126677,68 +126839,26 @@ function createTurnPresenter({
         patchTimer = null;
       }
       return enqueue(async () => {
+        const questions = payload?.questions ?? [];
+        const answered = payload?.answered ?? {};
         const rendered = gateway.renderQuestionElements({
-          questions: payload?.questions ?? [],
-          answered: payload?.answered ?? {},
+          questions,
+          answered,
           final: payload?.final === true
         });
-        const questions = payload?.questions ?? [];
+        for (const row of rendered.rows ?? []) {
+          putEntry({ key: `ask:${row.id}`, kind: "ask", text: row.text });
+        }
+        currentQuestion = Array.isArray(rendered.elements) ? rendered.elements : [];
         const current = rendered.current;
-        question = rendered.elements.length > 0 ? {
-          elements: rendered.elements,
-          current,
-          index: current ? questions.indexOf(current) + 1 : 0,
-          total: questions.length
-        } : null;
-        const ok = await patchNow();
-        return ok;
+        questionProgress = current && questions.length > 0 ? { index: questions.indexOf(current) + 1, total: questions.length } : null;
+        return patchNow();
       });
     },
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
     delivery: () => lastDelivery,
-    /**
-     * 记录一步过程。
-     *
-     * @param text - 过程说明（如工具名）。
-     */
-    step(text) {
-      if (mode === "off" || !text) return Promise.resolve();
-      lines = [...lines, text].slice(-MAX_STEP_LINES);
-      if (mode === "post") {
-        return enqueue(async () => {
-          try {
-            await gateway.replyText({ messageId, text, replyInThread });
-          } catch (error) {
-            noteFailure("\u53D1\u9001\u8FC7\u7A0B\u6D88\u606F\u5931\u8D25", error);
-          }
-        });
-      }
-      schedulePatch();
-      return Promise.resolve();
-    },
-    /**
-     * 记录一条"思考"（模型的推理摘要），与工具调用同处一个折叠面板。
-     *
-     * @param text - 一行摘要（调用方负责截断）。
-     */
-    think(text) {
-      if (mode === "off" || !text) return Promise.resolve();
-      const line = `\u{1F4AD} ${text}`;
-      lines = [...lines, line].slice(-MAX_STEP_LINES);
-      if (mode === "post") {
-        return enqueue(async () => {
-          try {
-            await gateway.replyText({ messageId, text: line, replyInThread });
-          } catch (error) {
-            noteFailure("\u53D1\u9001\u601D\u8003\u6D88\u606F\u5931\u8D25", error);
-          }
-        });
-      }
-      schedulePatch();
-      return Promise.resolve();
-    },
     /**
      * 收尾：把最终答案交给用户（排在所有已排队的步骤之后）。
      *
@@ -126756,12 +126876,14 @@ function createTurnPresenter({
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         lastAnswer = body;
         state = failed ? "failed" : "done";
+        currentQuestion = [];
+        questionProgress = null;
         if (patchTimer) {
           clearTimeout(patchTimer);
           patchTimer = null;
         }
         if (mode === "streaming_card") {
-          if (!cardBroken && await patch(lines, body)) {
+          if (!cardBroken && await patch(body)) {
             lastDelivery = "card";
             return lastDelivery;
           }
@@ -126849,32 +126971,6 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
   const activePresenters = /* @__PURE__ */ new Map();
-  function toolSummary(args) {
-    if (args === null || typeof args !== "object") return "";
-    const preferred = [
-      "description",
-      "command",
-      "query",
-      "pattern",
-      "url",
-      "path",
-      "file_path",
-      "objective",
-      "prompt",
-      "text",
-      "name",
-      "target_id",
-      "sql"
-    ];
-    for (const key of preferred) {
-      const value = args[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-    for (const value of Object.values(args)) {
-      if (typeof value === "string" && value.trim() && value.length <= 200) return value.trim();
-    }
-    return "";
-  }
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -127138,29 +127234,22 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         handlers: {
           onToolCall: (toolEvent) => {
             const name2 = toolEvent?.data?.name ?? "\u5DE5\u5177";
-            let summary = "";
-            try {
-              const args = typeof toolEvent?.data?.arguments === "string" ? JSON.parse(toolEvent.data.arguments) : toolEvent?.data?.arguments;
-              summary = toolSummary(args);
-            } catch {
-            }
-            const oneLine = summary.replace(/\s+/g, " ").trim().slice(0, 60);
-            presenter.step(`\u{1F6E0} ${name2}${oneLine ? ` \xB7 ${oneLine}` : ""}`);
+            if (name2 === "ask_user_question") return;
+            presenter.tool({ name: name2, arguments: toolEvent?.data?.arguments });
           },
-          // 思考（推理摘要）也进同一个折叠面板：一行一条，够看轮廓即可。
+          // 思考（推理摘要）进同一个折叠面板：一行一条，够看轮廓即可。
           onAssistantMessage: (messageEvent) => {
             const blocks = messageEvent?.data?.message?.content;
             if (!Array.isArray(blocks)) return;
             for (const block of blocks) {
               if (block?.type !== "reasoning" || typeof block.text !== "string") continue;
-              const line = block.text.replace(/\s+/g, " ").trim().slice(0, 80);
-              if (line) presenter.think(line);
+              presenter.think(block.text);
             }
           },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;
             if (reason?.kind && reason.kind !== "completed") {
-              void presenter.step(`\u26A0\uFE0F ${reason.kind}`);
+              void presenter.think(`\u26A0\uFE0F \u56DE\u5408\u672A\u6B63\u5E38\u7ED3\u675F\uFF1A${reason.kind}`);
             }
           }
         }
@@ -127602,26 +127691,14 @@ function createLarkGateway({
       if (answer.custom) chosen.push(answer.custom);
       return chosen.join("\u3001") || "\uFF08\u7A7A\uFF09";
     };
-    if (answeredList.length > 0) {
-      const summary = answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n");
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: Boolean(current),
-        border: { color: "grey", corner_radius: "4px" },
-        header: {
-          // 标题极简：`❓ 2/3 已回答`（真机反馈：不要长句，仍然是折叠面板，点标题可展开回看）
-          title: {
-            tag: "plain_text",
-            content: `\u2753 ${answeredList.length}/${questions.length} \u5DF2\u56DE\u7B54`
-          },
-          width: "fill",
-          icon_position: "right",
-          icon_expanded_angle: -180
-        },
-        elements: [{ tag: "markdown", content: summary }]
-      });
-    }
-    if (!current) return { elements, current: null };
+    const rows = answeredList.map((question) => ({
+      id: String(question?.id ?? questions.indexOf(question)),
+      text: askRow({
+        header: question?.header || question?.question || "\u95EE\u9898",
+        answer: answerText(question)
+      })
+    }));
+    if (!current) return { rows, elements, current: null };
     const index = questions.indexOf(current) + 1;
     const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, "", String(current?.question ?? "")];
     if (current?.detail) body.push("", String(current.detail));
@@ -127712,7 +127789,7 @@ function createLarkGateway({
         text_size: "notation"
       }
     });
-    return { elements, current };
+    return { rows, elements, current };
   }
   return Object.freeze({
     appId,
@@ -127919,7 +127996,27 @@ function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
-      const { elements, current } = renderQuestionElements({ questions, answered, final });
+      const { rows, elements, current } = renderQuestionElements({ questions, answered, final });
+      if (rows.length > 0) {
+        elements.unshift({
+          tag: "collapsible_panel",
+          expanded: Boolean(current),
+          border: { color: "grey", corner_radius: "4px" },
+          header: {
+            title: {
+              tag: "plain_text",
+              content: `\u2753 ${rows.length}/${questions.length} \u5DF2\u56DE\u7B54`
+            },
+            width: "fill",
+            icon_position: "right",
+            icon_expanded_angle: -180
+          },
+          elements: [{
+            tag: "markdown",
+            content: rows.map((row) => `\xB7 ${row.text}`).join("\n")
+          }]
+        });
+      }
       if (elements.length === 0) {
         elements.push({ tag: "markdown", content: "\u5168\u90E8\u95EE\u9898\u90FD\u5DF2\u56DE\u7B54\uFF0C\u6B63\u5728\u7EE7\u7EED\u5904\u7406\u2026" });
       }

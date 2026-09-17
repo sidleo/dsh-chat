@@ -14,6 +14,8 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
+import { askRow } from './turn-presenter.mjs';
+
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
 /**
@@ -188,17 +190,19 @@ export function createLarkGateway({
   }
 
   /**
-   * 渲染"当前这一题"的卡片元素（纯函数，不发请求）。
+   * 渲染提问：已答的给出"面板行"，未答的给出"交互元素"（纯函数，不发请求）。
    *
-   * 两种用法：① 独立提问卡片的正文；② 内嵌进"正在处理"的进度卡（真机反馈：
-   * 独立卡片读起来割裂，希望提问长在同一张卡里、答完收起）。
+   * 两种用法：
+   * ① 内嵌进"正在处理"的进度卡——已答的行并入那张卡的工具面板（真机反馈：提问回答
+   *    也要跟工具、思考放在一起），未答的控件留在面板外（Card 2.0 的面板里放不了 form）；
+   * ② 独立提问卡片——已答的行自己组成一个 `❓ N/M 已回答` 折叠面板，控件在下面。
    *
    * 组件依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0）：单选=按钮+输入框；
    * 多选=form 内每个选项一个 checker 平铺 + 提交；自由文本=form 内 input + 提交。
    * 表单值回调在 `action.form_value[组件name]`。
    *
    * @param options - { questions, answered, final }。
-   * @returns { elements, current }：元素数组与当前题目（全部答完为 null）。
+   * @returns { rows, elements, current }：已答的行、当前题的交互元素、当前题（答完为 null）。
    */
   function renderQuestionElements({ questions = [], answered = {}, final = false } = {}) {
     const elements = [];
@@ -214,31 +218,17 @@ export function createLarkGateway({
       return chosen.join('、') || '（空）';
     };
 
-    if (answeredList.length > 0) {
-      const summary = answeredList
-        .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
-        .join('\n');
-      // 已答部分放进**折叠面板**：还有题要答时默认展开（方便对照），全部答完后默认收起。
-      // 关键：**收起而不是消失**——面板仍在卡里，点标题还能展开回看（真机要求）。
-      // 面板内不能放 form，所以交互控件始终放在面板外面。
-      elements.push({
-        tag: 'collapsible_panel',
-        expanded: Boolean(current),
-        border: { color: 'grey', corner_radius: '4px' },
-        header: {
-          // 标题极简：`❓ 2/3 已回答`（真机反馈：不要长句，仍然是折叠面板，点标题可展开回看）
-          title: {
-            tag: 'plain_text',
-            content: `❓ ${answeredList.length}/${questions.length} 已回答`,
-          },
-          width: 'fill',
-          icon_position: 'right',
-          icon_expanded_angle: -180,
-        },
-        elements: [{ tag: 'markdown', content: summary }],
-      });
-    }
-    if (!current) return { elements, current: null };
+    // 已答的题：渲染成与工具/思考同样的一行（`提问 · 口径 → 答案`），由调用方决定
+    // 放进工具面板还是自己组一个面板。
+    const rows = answeredList.map((question) => ({
+      id: String(question?.id ?? questions.indexOf(question)),
+      text: askRow({
+        header: question?.header || question?.question || '问题',
+        answer: answerText(question),
+      }),
+    }));
+
+    if (!current) return { rows, elements, current: null };
 
     const index = questions.indexOf(current) + 1;
     const body = [`**${index}. ${current?.header || '需要确认'}**`, '', String(current?.question ?? '')];
@@ -331,7 +321,7 @@ export function createLarkGateway({
         text_size: 'notation',
       },
     });
-    return { elements, current };
+    return { rows, elements, current };
   }
 
   return Object.freeze({
@@ -565,7 +555,29 @@ export function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
-      const { elements, current } = renderQuestionElements({ questions, answered, final });
+      const { rows, elements, current } = renderQuestionElements({ questions, answered, final });
+      if (rows.length > 0) {
+        // 独立卡片没有"工具面板"，已答的行自己组成一个折叠面板：
+        // 收起而不是消失，点标题还能展开回看（真机要求）。
+        elements.unshift({
+          tag: 'collapsible_panel',
+          expanded: Boolean(current),
+          border: { color: 'grey', corner_radius: '4px' },
+          header: {
+            title: {
+              tag: 'plain_text',
+              content: `❓ ${rows.length}/${questions.length} 已回答`,
+            },
+            width: 'fill',
+            icon_position: 'right',
+            icon_expanded_angle: -180,
+          },
+          elements: [{
+            tag: 'markdown',
+            content: rows.map((row) => `· ${row.text}`).join('\n'),
+          }],
+        });
+      }
       if (elements.length === 0) {
         elements.push({ tag: 'markdown', content: '全部问题都已回答，正在继续处理…' });
       }

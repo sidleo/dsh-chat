@@ -138,29 +138,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   const activePresenters = new Map();
 
 
-  /**
-   * 从工具调用参数里挑一句"人看得懂"的摘要。
-   *
-   * 真机反馈：只显示工具名等于没信息；而各工具的"关键参数"名字五花八门
-   * （bash 用 description/command、search 用 query、read 用 path…），
-   * 因此按优先级挑常见键，最后退化到"第一个像人话的短字符串值"。
-   */
-  function toolSummary(args) {
-    if (args === null || typeof args !== 'object') return '';
-    const preferred = [
-      'description', 'command', 'query', 'pattern', 'url', 'path', 'file_path',
-      'objective', 'prompt', 'text', 'name', 'target_id', 'sql',
-    ];
-    for (const key of preferred) {
-      const value = args[key];
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    for (const value of Object.values(args)) {
-      if (typeof value === 'string' && value.trim() && value.length <= 200) return value.trim();
-    }
-    return '';
-  }
-
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
     const separator = key.indexOf(':');
@@ -462,32 +439,23 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         handlers: {
           onToolCall: (toolEvent) => {
             const name = toolEvent?.data?.name ?? '工具';
-            let summary = '';
-            try {
-              const args = typeof toolEvent?.data?.arguments === 'string'
-                ? JSON.parse(toolEvent.data.arguments)
-                : toolEvent?.data?.arguments;
-              summary = toolSummary(args);
-            } catch {
-              // 参数不是 JSON 就算了，只留工具名
-            }
-            const oneLine = summary.replace(/\s+/g, ' ').trim().slice(0, 60);
-            presenter.step(`🛠 ${name}${oneLine ? ` · ${oneLine}` : ''}`);
+            // 提问由交互服务渲染成"提问"行，这里不再重复占一行（与 Web 一致）。
+            if (name === 'ask_user_question') return;
+            presenter.tool({ name, arguments: toolEvent?.data?.arguments });
           },
-          // 思考（推理摘要）也进同一个折叠面板：一行一条，够看轮廓即可。
+          // 思考（推理摘要）进同一个折叠面板：一行一条，够看轮廓即可。
           onAssistantMessage: (messageEvent) => {
             const blocks = messageEvent?.data?.message?.content;
             if (!Array.isArray(blocks)) return;
             for (const block of blocks) {
               if (block?.type !== 'reasoning' || typeof block.text !== 'string') continue;
-              const line = block.text.replace(/\s+/g, ' ').trim().slice(0, 80);
-              if (line) presenter.think(line);
+              presenter.think(block.text);
             }
           },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;
             if (reason?.kind && reason.kind !== 'completed') {
-              void presenter.step(`⚠️ ${reason.kind}`);
+              void presenter.think(`⚠️ 回合未正常结束：${reason.kind}`);
             }
           },
         },

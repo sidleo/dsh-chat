@@ -136,30 +136,47 @@ test('上传没给 key：抛可读错误，绝不假装发送成功', async () =
   }
 });
 
-test('提问元素：已回答部分的容器标题极简 `❓ N/M 已回答`，答完收起但仍可展开', () => {
+test('提问元素：已答的给"提问 · 题 → 答案"行，未答的给面板外的控件', () => {
   const gateway = makeGateway(createFakeSdk());
   const questions = [
     { id: 'q1', header: '选一个', question: '选一个', options: [{ label: 'A' }] },
     { id: 'q2', header: '再选', question: '再选', options: [{ label: 'B' }] },
   ];
 
-  // 一题已答、还有一题要答 → 面板展开，控件在面板外
+  // 一题已答、还有一题要答 → 已答成行（给工具面板用），控件在面板外
   const partial = gateway.renderQuestionElements({
     questions, answered: { q1: { selected: ['A'] } }, final: false,
   });
-  const panel = partial.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.equal(panel.header.title.content, '❓ 1/2 已回答');
-  assert.equal(panel.header.title.tag, 'plain_text');
-  assert.equal(panel.expanded, true, '还有题要答时展开对照');
+  assert.deepEqual(partial.rows, [{ id: 'q1', text: '提问 · 选一个 → A' }]);
   assert.equal(partial.current.id, 'q2');
+  assert.ok(partial.elements.some((element) => element.tag === 'button'), '未答的题给控件');
 
-  // 全部答完 → 面板收起但仍在卡里（真机要求：收起而不是消失）
+  // 全部答完 → 只有行，没有控件
   const done = gateway.renderQuestionElements({
     questions, answered: { q1: { selected: ['A'] }, q2: { selected: ['B'] } }, final: true,
   });
   assert.equal(done.current, null);
-  const donePanel = done.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.equal(donePanel.header.title.content, '❓ 2/2 已回答');
-  assert.equal(donePanel.expanded, false);
-  assert.match(JSON.stringify(donePanel), /A/, '答过的内容还能展开回看');
+  assert.equal(done.elements.length, 0, '答完不再有控件');
+  assert.deepEqual(done.rows.map((row) => row.id), ['q1', 'q2']);
+  assert.match(done.rows[1].text, /再选 → B/);
+});
+
+test('独立提问卡：已答的行自己组成 `❓ N/M 已回答` 折叠面板，默认收起可展开', async () => {
+  const sdk = createFakeSdk();
+  const gateway = makeGateway(sdk);
+  const questions = [
+    { id: 'q1', header: '选一个', question: '选一个', options: [{ label: 'A' }] },
+    { id: 'q2', header: '再选', question: '再选', options: [{ label: 'B' }] },
+  ];
+
+  await gateway.sendQuestionsCard({
+    openId: 'ou_1', questions,
+    answered: { q1: { selected: ['A'] }, q2: { selected: ['B'] } }, final: true,
+  });
+  const card = JSON.parse(sdk.__calls.created.at(-1).data.content);
+  const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.equal(panel.header.title.content, '❓ 2/2 已回答');
+  assert.equal(panel.header.title.tag, 'plain_text');
+  assert.equal(panel.expanded, false, '答完默认收起');
+  assert.match(JSON.stringify(panel), /提问 · 选一个 → A/, '收起也能展开回看');
 });

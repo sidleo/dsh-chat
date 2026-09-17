@@ -17,7 +17,9 @@ import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs'
 import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feishu/host/config-store.mjs';
 import { createFeishuController } from '../packages/dsh-chat-feishu/host/controller.mjs';
 import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
-import { createTurnPresenter, renderStepCard } from '../packages/dsh-chat-feishu/host/turn-presenter.mjs';
+import {
+  createTurnPresenter, renderStepCard, thinkRow, toolRow,
+} from '../packages/dsh-chat-feishu/host/turn-presenter.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -417,9 +419,9 @@ test('过程展示 post：工具调用逐步回消息，最后单独回答案', 
   const app = await makeBridge({ bot: { ...BOT, stepPushDirect: 'post' } });
   try {
     await app.bridge.accept(messageEvent());
-    const stepReplies = app.gateway.calls.replies.filter((reply) => reply.text.startsWith('🛠'));
+    const stepReplies = app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash'));
     assert.equal(stepReplies.length, 1);
-    assert.equal(stepReplies[0].text, '🛠 bash');
+    assert.equal(stepReplies[0].text, 'Bash', '没有参数时只显示标题（与 Web 一致）');
     assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
     assert.equal(app.gateway.calls.cards.length, 0);
   } finally {
@@ -435,7 +437,7 @@ test('过程展示 streaming_card：一张卡原地刷新，最终答案进同�
     assert.ok(app.gateway.calls.patches.length >= 2, '过程与答案都应 patch 到同一张卡');
     const last = app.gateway.calls.patches.at(-1).card;
     const body = JSON.stringify(last);
-    assert.ok(body.includes('bash'));
+    assert.ok(body.includes('Bash'), '工具行用 Web 的标题（bash → Bash）');
     assert.ok(body.includes('最终答案'));
     assert.equal(app.gateway.calls.replies.length, 0, '卡片模式下不再另发文本');
   } finally {
@@ -453,11 +455,11 @@ test('过程展示按会话类型各取一份：私聊 post、群聊 off', async
       mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
       text: '@_user_1 帮我看下',
     }));
-    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('🛠')).length, 0);
+    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash')).length, 0);
 
     // 私聊走私聊设置 → 推过程。
     await app.bridge.accept(messageEvent({ messageId: 'om_direct' }));
-    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('🛠')).length, 1);
+    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash')).length, 1);
   } finally {
     await app.cleanup();
   }
@@ -1258,26 +1260,17 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
       return { messageId };
     },
     renderQuestionElements({ questions, answered, final }) {
+      // 与真实渲染器同一形状：已答的给行（进工具面板），未答的给交互元素（面板外）
       const elements = [];
-      const answeredList = questions.filter((q) => answered[q.id] !== undefined);
       const current = final ? null : questions.find((q) => answered[q.id] === undefined);
-      // 已答部分进折叠面板（真实现的行为），交互控件在面板外
-      if (answeredList.length > 0) {
-        elements.push({
-          tag: 'collapsible_panel',
-          expanded: Boolean(current),
-          header: { title: { tag: 'plain_text', content: `❓ ${answeredList.length}/${questions.length} 已回答` } },
-          elements: answeredList.map((q) => ({
-            tag: 'markdown',
-            content: `✅ ${q.question} → ${[...(answered[q.id].selected ?? [])].join('、')}`,
-          })),
-        });
-      }
+      const rows = questions
+        .filter((q) => answered[q.id] !== undefined)
+        .map((q) => ({ id: q.id, text: `提问 · ${q.question} → ${[...(answered[q.id].selected ?? [])].join('、')}` }));
       if (current) {
         elements.push({ tag: 'markdown', content: `题目：${current.question}` });
         elements.push({ tag: 'button', text: { tag: 'plain_text', content: 'A' } });
       }
-      return { elements, current };
+      return { rows, elements, current };
     },
   };
   const presenter = createTurnPresenter({
@@ -1298,22 +1291,23 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
   assert.match(firstBody, /题目：选一个/, '题目要画进进度卡');
   assert.match(firstBody, /等你确认/, '标题要提示在等确认');
 
-  // 答完一题 → 同一张卡翻到"已答摘要 + 下一题"（这里只有一题，收起到只剩摘要）
+  // 答完一题 → 同一张卡上交互控件消失，答案变成工具面板里的一行
   await presenter.setQuestion({
     questions, answered: { q1: { selected: ['A'] } }, final: false,
   });
   const second = JSON.stringify(patches.at(-1).card);
   assert.doesNotMatch(second, /题目：选一个/, '答过的题不再占位');
-  assert.match(second, /✅/);
+  assert.match(second, /提问 · 选一个 → A/, '答案变成工具面板里的一行（与 Web 一致）');
 
-  // 收尾：提问区**收起但不消失**——折叠面板仍在卡里，交互控件消失
+  // 收尾：提问行**收起但不消失**——面板仍在卡里，可展开回看，控件消失
   await presenter.finish('最终答案', { kind: 'completed' });
   const last = JSON.stringify(patches.at(-1).card);
   assert.doesNotMatch(last, /题目：选一个/, '答过的交互控件要收掉');
   assert.doesNotMatch(last, /等你确认/);
   assert.match(last, /collapsible_panel/, '收起要保留可展开的面板，而不是整块删掉');
   assert.match(last, /"expanded":false/, '默认收起');
-  assert.match(last, /❓ 1\/1 已回答/, '提问容器标题简化为 N/M 已回答');
+  assert.match(last, /提问 · 选一个 → A/, '提问行还在面板里，可展开回看');
+  assert.match(last, /工具与思考\(1\)/, '本轮结束后标题显示条数');
   assert.match(last, /最终答案/);
 });
 
@@ -1398,19 +1392,21 @@ test('处理完卡片标题不再是"正在处理"', async () => {
     bot: { botName: '张三-DSH', groupTopicReply: false },
     logger: silentLogger,
   });
-  await presenter.step('🛠 bash · 检查 try 结构');
+  await presenter.tool({ name: 'bash', arguments: JSON.stringify({ command: 'grep -n try bridge.mjs', description: '检查 try 结构' }) });
   await presenter.think('先看 bridge 的 try 块');
   const running = JSON.stringify(cards.at(-1));
   assert.match(running, /"content":"正在处理"/, '标题不带机器人名前缀');
   assert.doesNotMatch(running, /张三-DSH/, '标题里不要机器人名');
   assert.match(running, /collapsible_panel/, '工具与思考放进一个折叠面板');
   assert.match(running, /"expanded":false/, '默认收起');
-  assert.match(running, /"content":"工具与思考\(2\)"|"content":"工具与思考\(1\)"/, '标题极简：工具与思考(N)');
+  // 本轮没结束时，收起状态的面板标题是**最新一项**（真机要求：一眼看到在干什么）
+  assert.match(running, /"content":"Bash · 检查 try 结构"/, '未结束时标题显示最新一项');
+  assert.doesNotMatch(running, /工具与思考\(/, '没结束就不显示条数');
   // 第二条（思考）会被节流合并，收尾时一定会补上
   await presenter.finish('答案', { kind: 'completed' });
   const withThink = JSON.stringify(cards.at(-1));
-  assert.match(withThink, /💭 先看 bridge 的 try 块/, '思考也在同一个面板里');
-  assert.match(withThink, /工具与思考\(2\)/, '收尾把节流掉的过程补上');
+  assert.match(withThink, /思考 · 先看 bridge 的 try 块/, '思考也在同一个面板里（Web 的"思考 ·"行）');
+  assert.match(withThink, /工具与思考\(2\)/, '本轮结束后才显示 工具与思考(N)');
 
   const done = JSON.stringify(cards.at(-1));
   assert.match(done, /✅ 已完成/, '完成后标题要变成已完成');
@@ -1433,20 +1429,43 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.match(failed, /"template":"orange"/);
 });
 
-test('工具与思考合并进一个折叠面板：标题极简、默认收起、展开看全部', () => {
+test('工具、思考、已答提问同处一个折叠面板：默认收起、展开看全部', () => {
   const card = renderStepCard({
     title: '正在处理',
-    lines: ['🛠 Bash · 检查 try 结构', '💭 先看有没有外层 try', '🛠 read · 读 bridge'],
+    rows: ['Bash · 检查 try 结构', '思考 · 先看有没有外层 try', '读取 · bridge.mjs'],
+    questionRows: ['提问 · 商行口径 → 全部 19 个小商行'],
+    panelTitle: '工具与思考(4)',
     note: '',
   });
   const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.ok(panel, '工具与思考要在一个折叠面板里');
+  assert.ok(panel, '工具、思考、提问要在一个折叠面板里');
   assert.equal(panel.expanded, false, '默认收起');
-  assert.equal(panel.header.title.content, '工具与思考(3)', '标题只留名称与条数');
-  assert.doesNotMatch(panel.header.title.content, /最新|🛠/, '不要前缀也不要"最新："');
+  assert.equal(panel.header.title.content, '工具与思考(4)', '标题只留名称与条数');
   const bodyText = panel.elements.map((element) => element.content).join('\n');
-  assert.match(bodyText, /🛠 Bash · 检查 try 结构/, '展开能看到全部');
-  assert.match(bodyText, /💭 先看有没有外层 try/, '思考也在里面');
+  assert.match(bodyText, /Bash · 检查 try 结构/, '展开能看到全部');
+  assert.match(bodyText, /思考 · 先看有没有外层 try/, '思考也在里面');
+  assert.match(bodyText, /提问 · 商行口径 → 全部 19 个小商行/, '已答提问也在里面');
   // 过程行不再单独占卡片空间
   assert.equal(card.body.elements.filter((element) => element.tag === 'markdown').length, 0);
+});
+
+test('工具行按 Web 的口径渲染：种类标题 + 摘要参数', () => {
+  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls","description":"看看目录"}' }), 'Bash · 看看目录');
+  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls -la"}' }), 'Bash · ls -la', '没有 description 时用 command');
+  assert.equal(toolRow({ name: 'read', arguments: '{"file_path":"/ws/a.mjs"}' }), '读取 · /ws/a.mjs');
+  assert.equal(
+    toolRow({ name: 'wiki_search', arguments: '{"query":"商行 firm_s_id"}' }),
+    '工具调用 · wiki_search · 商行 firm_s_id',
+    '未知工具保留工具名（与 Web 一致）',
+  );
+  assert.equal(toolRow({ name: 'skill', arguments: '{"name":"yh-bigdata"}' }), 'Skill · yh-bigdata');
+  assert.equal(toolRow({ name: 'grep', arguments: '{"pattern":"try","path":"host"}' }), '搜索 · try');
+  assert.equal(toolRow({ name: 'web_search', arguments: '{"queries":["a","b"]}' }), '搜索 · a, b');
+  // 参数不是 JSON：不抛错，退化成第一行原文
+  assert.equal(toolRow({ name: 'wiki_list', arguments: 'not-json' }), '工具调用 · wiki_list · not-json');
+  assert.equal(toolRow({ name: 'wiki_list' }), '工具调用 · wiki_list', '连参数都没有时只留工具名');
+  assert.equal(toolRow({ name: 'wiki_list', arguments: '{}' }), '工具调用 · wiki_list · {}', '空参数照 Web 原样显示');
+  // 思考行：压成一行并截断
+  assert.equal(thinkRow('先看一眼\n再看第二眼'), '思考 · 先看一眼');
+  assert.ok(thinkRow('x'.repeat(500)).length <= 126);
 });
