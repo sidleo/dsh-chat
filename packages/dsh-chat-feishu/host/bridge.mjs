@@ -317,7 +317,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       await presenter.finish(result?.text, result?.reason);
       handled += 1;
       lastHandledAt = new Date().toISOString();
-      lastError = null;
+      // 回合本身成功，但呈现层可能失败过（卡片建不出来等）。那也必须让设置页看得到，
+      // 否则用户"没收到回复"时只能靠终端日志。
+      lastError = presenter.lastError?.() ?? null;
     } catch (error) {
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] 处理消息失败：${lastError}`);

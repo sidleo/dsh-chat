@@ -126531,10 +126531,15 @@ function createTurnPresenter({
   let lines = [];
   let cardId = null;
   let cardBroken = false;
+  let lastFailure = null;
   let chain = Promise.resolve();
   function enqueue(task) {
     chain = chain.then(task, task);
     return chain;
+  }
+  function noteFailure(what, error) {
+    lastFailure = `${what}\uFF1A${error?.message ?? error}`;
+    logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
   async function ensureCard() {
     if (cardId || cardBroken) return cardId;
@@ -126545,26 +126550,47 @@ function createTurnPresenter({
         replyInThread
       });
       cardId = created?.messageId ?? null;
+      if (!cardId) noteFailure("\u521B\u5EFA\u8FC7\u7A0B\u5361\u5931\u8D25", new Error("\u98DE\u4E66\u6CA1\u6709\u8FD4\u56DE\u5361\u7247\u6D88\u606F id"));
     } catch (error) {
       cardBroken = true;
-      logger.warn?.(`[dsh-chat-feishu] \u521B\u5EFA\u8FC7\u7A0B\u5361\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u9010\u6761\u6D88\u606F\uFF1A${error?.message ?? error}`);
+      noteFailure("\u521B\u5EFA\u8FC7\u7A0B\u5361\u5931\u8D25", error);
     }
     return cardId;
   }
+  async function sendText(body) {
+    try {
+      await gateway.replyText({ messageId, text: body, replyInThread });
+      return true;
+    } catch (error) {
+      noteFailure("\u56DE\u590D\u5931\u8D25", error);
+    }
+    if (!chatId) return false;
+    try {
+      await gateway.sendText({ chatId, text: body });
+      return true;
+    } catch (error) {
+      noteFailure("\u56DE\u9000\u53D1\u9001\u5931\u8D25", error);
+      return false;
+    }
+  }
   async function patch(linesSnapshot, answer) {
     const id = await ensureCard();
-    if (!id) return;
+    if (!id) return false;
     try {
       await gateway.patchCard({
         messageId: id,
         card: renderStepCard({ title, lines: linesSnapshot, answer, note })
       });
+      return true;
     } catch (error) {
       cardBroken = true;
-      logger.warn?.(`[dsh-chat-feishu] \u66F4\u65B0\u8FC7\u7A0B\u5361\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      noteFailure("\u66F4\u65B0\u8FC7\u7A0B\u5361\u5931\u8D25", error);
+      return false;
     }
   }
   return {
+    /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
+    lastError: () => lastFailure,
     /**
      * 记录一步过程。
      *
@@ -126578,7 +126604,7 @@ function createTurnPresenter({
           try {
             await gateway.replyText({ messageId, text, replyInThread });
           } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] \u53D1\u9001\u8FC7\u7A0B\u6D88\u606F\u5931\u8D25\uFF1A${error?.message ?? error}`);
+            noteFailure("\u53D1\u9001\u8FC7\u7A0B\u6D88\u606F\u5931\u8D25", error);
           }
           return;
         }
@@ -126588,6 +126614,10 @@ function createTurnPresenter({
     /**
      * 收尾：把最终答案交给用户（排在所有已排队的步骤之后）。
      *
+     * 这里有两条硬约束：
+     * 1. **绝不能静默**——用户等了一轮却什么都没收到，是最难排查的故障形态；
+     * 2. **回退要真做**——卡片建不出来/刷不动时必须改用普通消息，而不是只打一行日志。
+     *
      * @param answer - 最终文本。
      * @param reason - 回合结束原因（DSH 的 `turn/end` 数据）。
      */
@@ -126596,23 +126626,12 @@ function createTurnPresenter({
         const text = typeof answer === "string" ? answer.trim() : "";
         const failed = reason?.kind && reason.kind !== "completed";
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
-        if (mode === "streaming_card" && !cardBroken) {
-          await patch(lines, body);
+        if (mode === "streaming_card") {
+          if (!cardBroken && await patch(lines, body)) return;
+          await sendText(body);
           return;
         }
-        if (mode === "streaming_card" && cardBroken && chatId) {
-          try {
-            await gateway.sendText({ chatId, text: body });
-            return;
-          } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] \u56DE\u9000\u53D1\u9001\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          }
-        }
-        try {
-          await gateway.replyText({ messageId, text: body, replyInThread });
-        } catch (error) {
-          logger.warn?.(`[dsh-chat-feishu] \u56DE\u590D\u5931\u8D25\uFF1A${error?.message ?? error}`);
-        }
+        await sendText(body);
       });
     }
   };
@@ -126856,7 +126875,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await presenter.finish(result?.text, result?.reason);
       handled += 1;
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
-      lastError = null;
+      lastError = presenter.lastError?.() ?? null;
     } catch (error) {
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u6D88\u606F\u5931\u8D25\uFF1A${lastError}`);

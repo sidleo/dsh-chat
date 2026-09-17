@@ -85,12 +85,19 @@ export function createTurnPresenter({
   let lines = [];
   let cardId = null;
   let cardBroken = false;
+  /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
+  let lastFailure = null;
   // 所有呈现动作串行执行：过程事件是"发出去就不等"的，若不排队，
   // 收尾的最终答案可能先于某一步骤落到卡片/聊天里（顺序错乱）。
   let chain = Promise.resolve();
   function enqueue(task) {
     chain = chain.then(task, task);
     return chain;
+  }
+
+  function noteFailure(what, error) {
+    lastFailure = `${what}：${error?.message ?? error}`;
+    logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
 
   async function ensureCard() {
@@ -102,28 +109,56 @@ export function createTurnPresenter({
         replyInThread,
       });
       cardId = created?.messageId ?? null;
+      if (!cardId) noteFailure('创建过程卡失败', new Error('飞书没有返回卡片消息 id'));
     } catch (error) {
       cardBroken = true;
-      logger.warn?.(`[dsh-chat-feishu] 创建过程卡失败，回退为逐条消息：${error?.message ?? error}`);
+      noteFailure('创建过程卡失败', error);
     }
     return cardId;
   }
 
+  /**
+   * 发一条文本：优先回复原消息（保留上下文），失败再退到"发到这个会话"。
+   * 两条都失败才算真失败——那也必须留下可查的原因。
+   */
+  async function sendText(body) {
+    try {
+      await gateway.replyText({ messageId, text: body, replyInThread });
+      return true;
+    } catch (error) {
+      noteFailure('回复失败', error);
+    }
+    if (!chatId) return false;
+    try {
+      await gateway.sendText({ chatId, text: body });
+      return true;
+    } catch (error) {
+      noteFailure('回退发送失败', error);
+      return false;
+    }
+  }
+
+  /** @returns 卡片是否可用（更新成功才算）。 */
   async function patch(linesSnapshot, answer) {
     const id = await ensureCard();
-    if (!id) return;
+    if (!id) return false;
     try {
       await gateway.patchCard({
         messageId: id,
         card: renderStepCard({ title, lines: linesSnapshot, answer, note }),
       });
+      return true;
     } catch (error) {
       cardBroken = true;
-      logger.warn?.(`[dsh-chat-feishu] 更新过程卡失败：${error?.message ?? error}`);
+      noteFailure('更新过程卡失败', error);
+      return false;
     }
   }
 
   return {
+    /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
+    lastError: () => lastFailure,
+
     /**
      * 记录一步过程。
      *
@@ -137,7 +172,7 @@ export function createTurnPresenter({
           try {
             await gateway.replyText({ messageId, text, replyInThread });
           } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] 发送过程消息失败：${error?.message ?? error}`);
+            noteFailure('发送过程消息失败', error);
           }
           return;
         }
@@ -147,6 +182,10 @@ export function createTurnPresenter({
 
     /**
      * 收尾：把最终答案交给用户（排在所有已排队的步骤之后）。
+     *
+     * 这里有两条硬约束：
+     * 1. **绝不能静默**——用户等了一轮却什么都没收到，是最难排查的故障形态；
+     * 2. **回退要真做**——卡片建不出来/刷不动时必须改用普通消息，而不是只打一行日志。
      *
      * @param answer - 最终文本。
      * @param reason - 回合结束原因（DSH 的 `turn/end` 数据）。
@@ -159,24 +198,13 @@ export function createTurnPresenter({
           ? `任务未正常完成（${reason.kind}）。`
           : '（本轮没有文本输出）');
 
-        if (mode === 'streaming_card' && !cardBroken) {
-          await patch(lines, body);
+        if (mode === 'streaming_card') {
+          // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
+          if (!cardBroken && await patch(lines, body)) return;
+          await sendText(body);
           return;
         }
-        if (mode === 'streaming_card' && cardBroken && chatId) {
-          // 卡片不可用时退化成普通消息。
-          try {
-            await gateway.sendText({ chatId, text: body });
-            return;
-          } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] 回退发送失败：${error?.message ?? error}`);
-          }
-        }
-        try {
-          await gateway.replyText({ messageId, text: body, replyInThread });
-        } catch (error) {
-          logger.warn?.(`[dsh-chat-feishu] 回复失败：${error?.message ?? error}`);
-        }
+        await sendText(body);
       });
     },
   };

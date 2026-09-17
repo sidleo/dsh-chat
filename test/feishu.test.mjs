@@ -49,6 +49,8 @@ function createFakeGateway() {
     downloadBytes: TINY_PNG,
     downloadContentType: 'image/png',
     downloadError: null,
+    /** 按方法名注入失败，用于验证呈现层失败时的回退与可见性。 */
+    failures: {},
   };
   return {
     calls,
@@ -66,18 +68,22 @@ function createFakeGateway() {
       this.connected = false;
     },
     async replyText({ messageId, text }) {
+      if (gatewayState.failures.replyText) throw gatewayState.failures.replyText;
       calls.replies.push({ messageId, text });
       return { messageId: 'om_reply' };
     },
     async sendText({ chatId, text }) {
+      if (gatewayState.failures.sendText) throw gatewayState.failures.sendText;
       calls.texts.push({ chatId, text });
       return { messageId: 'om_sent' };
     },
     async replyCard({ messageId, card }) {
+      if (gatewayState.failures.replyCard) throw gatewayState.failures.replyCard;
       calls.cards.push({ messageId, card });
       return { messageId: 'om_card' };
     },
     async patchCard({ messageId, card }) {
+      if (gatewayState.failures.patchCard) throw gatewayState.failures.patchCard;
       calls.patches.push({ messageId, card });
       return { messageId };
     },
@@ -92,6 +98,10 @@ function createFakeGateway() {
     },
     setDownload(next) {
       Object.assign(gatewayState, next);
+    },
+    /** 注入某个方法的下一次失败（传 null 清除）。 */
+    setFailure(method, error) {
+      gatewayState.failures[method] = error;
     },
   };
 }
@@ -680,5 +690,70 @@ test('图片消息：开着上下文增强时，来源文本块插在图片前�
     assert.equal(asked.sourceGuidance, '私聊全局提示词');
   } finally {
     await app.cleanup();
+  }
+});
+
+test('呈现层失败绝不静默：建卡失败/刷卡失败都退化成文本回复，并把原因交给状态', async () => {
+  const contextEnhancement = null;
+  const cardMode = {
+    ...BOT,
+    stepPushDirect: 'streaming_card',
+    stepPushGroup: 'streaming_card',
+  };
+
+  // ① 建卡失败 → 必须改用普通消息，用户一定收得到答案
+  const noCard = await makeBridge({ bot: cardMode, contextEnhancement });
+  try {
+    noCard.gateway.setFailure('replyCard', new Error('飞书拒绝建卡'));
+    await noCard.bridge.accept(messageEvent({ messageId: 'om_cardfail' }));
+    assert.equal(noCard.gateway.calls.cards.length, 0);
+    assert.equal(noCard.gateway.calls.replies.at(-1).text, '最终答案', '建卡失败也要把答案发出去');
+    assert.match(noCard.bridge.status().lastError, /创建过程卡失败：飞书拒绝建卡/);
+  } finally {
+    await noCard.cleanup();
+  }
+
+  // ② 建卡成功但刷卡失败 → 也要退化成文本，而不是留一张"正在处理…"的卡片
+  const patchFail = await makeBridge({ bot: cardMode });
+  try {
+    patchFail.gateway.setFailure('patchCard', new Error('飞书拒绝更新卡片'));
+    await patchFail.bridge.accept(messageEvent({ messageId: 'om_patchfail' }));
+    assert.equal(patchFail.gateway.calls.cards.length, 1, '卡片先建出来了');
+    assert.equal(patchFail.gateway.calls.replies.at(-1).text, '最终答案', '刷卡失败后要补一条文本');
+    assert.match(patchFail.bridge.status().lastError, /更新过程卡失败/);
+  } finally {
+    await patchFail.cleanup();
+  }
+
+  // ③ 回复原消息失败 → 退到"发到这个会话"
+  const replyFail = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
+  try {
+    replyFail.gateway.setFailure('replyText', new Error('回复被拒'));
+    await replyFail.bridge.accept(messageEvent({ messageId: 'om_replyfail' }));
+    assert.equal(replyFail.gateway.calls.texts.at(-1).text, '最终答案');
+    assert.equal(replyFail.gateway.calls.texts.at(-1).chatId, 'oc_chat');
+  } finally {
+    await replyFail.cleanup();
+  }
+
+  // ④ 两条路都失败：状态里必须留下原因（用户没收到时才有得查）
+  const allFail = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
+  try {
+    allFail.gateway.setFailure('replyText', new Error('回复被拒'));
+    allFail.gateway.setFailure('sendText', new Error('发送也被拒'));
+    await allFail.bridge.accept(messageEvent({ messageId: 'om_allfail' }));
+    assert.match(allFail.bridge.status().lastError, /回退发送失败：发送也被拒/);
+  } finally {
+    await allFail.cleanup();
+  }
+
+  // ⑤ 一切正常时不留下"错误"噪音
+  const ok = await makeBridge({ bot: cardMode, contextEnhancement });
+  try {
+    await ok.bridge.accept(messageEvent({ messageId: 'om_ok' }));
+    assert.equal(ok.bridge.status().lastError, null);
+    assert.equal(ok.gateway.calls.cards.length, 1);
+  } finally {
+    await ok.cleanup();
   }
 });
