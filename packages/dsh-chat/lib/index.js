@@ -2160,6 +2160,172 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
   });
 }
 
+// packages/dsh-chat/host/tools.mjs
+var OUTPUT_TEXT = Object.freeze({
+  schema: { type: "string" },
+  render: (_args, value) => [{ type: "text", text: typeof value === "string" ? value : String(value) }]
+});
+var CHANNEL_FIELD = {
+  type: "string",
+  description: "\u6E20\u9053 id\uFF0C\u4F8B\u5982 feishu\uFF08\u98DE\u4E66\uFF09\u6216 weixin\uFF08\u5FAE\u4FE1\uFF09\u3002\u7701\u7565\u65F6\u5148\u5217\u51FA\u5DF2\u5B89\u88C5\u7684\u6E20\u9053\u3002"
+};
+var BOT_FIELD = {
+  type: "string",
+  description: "\u673A\u5668\u4EBA/\u8D26\u53F7 id\uFF08\u5728\u8BBE\u7F6E\u9875\u7684\u673A\u5668\u4EBA\u5361\u7247\u4E0A\u53EF\u89C1\uFF0C\u4F8B\u5982 bot_1f4c\u2026 / wx_0f2d\u2026\uFF09\u3002\u7701\u7565\u65F6\u5217\u51FA\u8BE5\u6E20\u9053\u4E0B\u7684\u673A\u5668\u4EBA\u53CA\u5176\u53EF\u6295\u9012\u76EE\u6807\u3002"
+};
+function targetLine(target) {
+  const route = Object.entries(target.route).map(([key, value]) => `${key}=${value}`).join(", ");
+  return `${target.id}	${target.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}	${target.name || "\uFF08\u672A\u547D\u540D\uFF09"}	${route}${target.discovered ? "	\u5019\u9009\uFF08\u9700\u5148\u4FDD\u5B58\u624D\u80FD\u53D1\uFF09" : ""}`;
+}
+function describeTargets(result) {
+  if (!result.canSend) return `\u8BE5\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\uFF0C\u65E0\u6CD5\u5411\u5B83\u53D1\u9001\u6D88\u606F\u3002`;
+  if (result.targets.length === 0) {
+    return "\u8BE5\u673A\u5668\u4EBA\u8FD8\u6CA1\u6709\u53EF\u6295\u9012\u7684\u76EE\u6807\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u91CC\u4FDD\u5B58\u4E00\u4E2A\uFF0C\u6216\u5148\u4E0E\u5B83\u5BF9\u8BDD\u8FC7\uFF08\u5BF9\u8BDD\u8FC7\u7684\u4F1A\u8BDD\u4F1A\u88AB\u53D1\u73B0\u4E3A\u5019\u9009\uFF09\u3002";
+  }
+  return [
+    `\u53EF\u6295\u9012\u76EE\u6807\uFF08\u5171 ${result.targets.length} \u4E2A\uFF09\uFF1A`,
+    "id	\u7C7B\u578B	\u540D\u79F0	\u8DEF\u7531	\u72B6\u6001",
+    ...result.targets.map(targetLine)
+  ].join("\n");
+}
+function describeChannels(entries, botsOf) {
+  if (entries.length === 0) return "\u5F53\u524D\u6CA1\u6709\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u6E20\u9053\u3002";
+  const lines = entries.map((entry) => {
+    const bots = botsOf(entry.id);
+    const status = entry.status === "running" ? "\u8FD0\u884C\u4E2D" : `${entry.status}${entry.error?.code ? `\uFF08${entry.error.code}\uFF09` : ""}`;
+    return `${entry.id}	${entry.label}	${status}	\u673A\u5668\u4EBA ${bots.length} \u4E2A`;
+  });
+  return [
+    `\u5DF2\u5B89\u88C5\u6E20\u9053\uFF08\u5171 ${entries.length} \u4E2A\uFF09\uFF1A`,
+    "id	\u540D\u79F0	\u72B6\u6001	\u673A\u5668\u4EBA",
+    ...lines,
+    "\u4E0B\u4E00\u6B65\uFF1A\u5E26\u4E0A channel_id \u518D\u8C03\u4E00\u6B21 chat_targets\uFF0C\u5373\u53EF\u770B\u5230\u8BE5\u6E20\u9053\u4E0B\u7684\u673A\u5668\u4EBA\u4E0E\u53EF\u6295\u9012\u76EE\u6807\u3002"
+  ].join("\n");
+}
+async function describeBots(channelId, records, delivery) {
+  if (records.length === 0) {
+    return `${channelId} \u4E0B\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA\uFF1A\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u91CC\u6DFB\u52A0\u6216\u767B\u5F55\u4E00\u4E2A\uFF0C\u518D\u6765\u67E5\u8BE2\u53EF\u6295\u9012\u76EE\u6807\u3002`;
+  }
+  const blocks = [`${channelId} \u4E0B\u7684\u673A\u5668\u4EBA\uFF08\u5171 ${records.length} \u4E2A\uFF09\uFF1A`];
+  for (const record of records) {
+    const listed = await delivery.list({ channelId, botId: record.botId });
+    blocks.push("", `[${record.botId}]`, describeTargets(listed));
+  }
+  return blocks.join("\n");
+}
+function registerChatTools(toolCtx, { delivery, channels, bots, logger = console } = {}) {
+  if (typeof toolCtx?.tools?.register !== "function") {
+    throw new TypeError("\u6CE8\u518C\u804A\u5929\u5DE5\u5177\u9700\u8981 Cordis \u7684 tools \u670D\u52A1\u3002");
+  }
+  if (!delivery?.send) throw new TypeError("\u6CE8\u518C\u804A\u5929\u5DE5\u5177\u9700\u8981\u6295\u9012\u670D\u52A1\u3002");
+  const listChannels = () => typeof channels?.list === "function" ? channels.list() : [];
+  const listBots = (channelId) => typeof bots?.list === "function" ? bots.list(channelId) : [];
+  const disposers = [];
+  disposers.push(toolCtx.tools.register({
+    name: "chat_targets",
+    description: "\u67E5\u8BE2\u67D0\u4E2A\u804A\u5929\u673A\u5668\u4EBA\u53EF\u4EE5\u4E3B\u52A8\u6295\u9012\u7684\u4F1A\u8BDD\uFF08\u5DF2\u4FDD\u5B58\u7684\u76EE\u6807 + \u4ECE\u5386\u53F2\u4F1A\u8BDD\u53D1\u73B0\u7684\u5019\u9009\uFF09\u3002\u7701\u7565 channel_id \u5148\u5217\u51FA\u5DF2\u5B89\u88C5\u6E20\u9053\uFF1B\u7701\u7565 bot_id \u5217\u51FA\u8BE5\u6E20\u9053\u7684\u673A\u5668\u4EBA\u4E0E\u76EE\u6807\u3002\u9700\u8981\u628A\u7ED3\u679C\u53D1\u5230\u98DE\u4E66/\u5FAE\u4FE1\u65F6\uFF0C\u5148\u7528\u5B83\u786E\u8BA4\u76EE\u6807 id\u3002",
+    parameters: {
+      type: "object",
+      properties: { channel_id: CHANNEL_FIELD, bot_id: BOT_FIELD },
+      additionalProperties: false
+    },
+    output: OUTPUT_TEXT,
+    async execute(args) {
+      const channelId = typeof args.channel_id === "string" && args.channel_id.trim() ? args.channel_id.trim() : null;
+      const botId = typeof args.bot_id === "string" && args.bot_id.trim() ? args.bot_id.trim() : null;
+      if (!channelId) return describeChannels(listChannels(), listBots);
+      if (!listChannels().some((entry) => entry.id === channelId)) {
+        return `\u6CA1\u6709\u5B89\u88C5\u540D\u4E3A ${channelId} \u7684\u6E20\u9053\u3002\u5DF2\u5B89\u88C5\uFF1A${listChannels().map((entry) => entry.id).join("\u3001") || "\uFF08\u65E0\uFF09"}\u3002`;
+      }
+      if (!botId) return describeBots(channelId, listBots(channelId), delivery);
+      return describeTargets(await delivery.list({ channelId, botId }));
+    }
+  }));
+  disposers.push(toolCtx.tools.register({
+    name: "chat_send",
+    description: "\u628A\u4E00\u6BB5\u6587\u672C\u4E3B\u52A8\u53D1\u9001\u5230\u6307\u5B9A\u804A\u5929\u673A\u5668\u4EBA\u7684\u6307\u5B9A\u4F1A\u8BDD\uFF08\u76EE\u6807\u5FC5\u987B\u5DF2\u5728\u8BBE\u7F6E\u91CC\u4FDD\u5B58\uFF09\u3002\u9002\u5408\u628A\u62A5\u8868\u3001\u4EFB\u52A1\u7ED3\u679C\u63A8\u7ED9\u7528\u6237\u3002\u8FD4\u56DE\u53D1\u9001\u7ED3\u679C\uFF1B\u5931\u8D25\u4F1A\u8BF4\u660E\u539F\u56E0\u3002",
+    parameters: {
+      type: "object",
+      properties: {
+        channel_id: CHANNEL_FIELD,
+        bot_id: BOT_FIELD,
+        target_id: {
+          type: "string",
+          description: "chat_targets \u5217\u51FA\u7684\u76EE\u6807 id\uFF08\u53EA\u80FD\u662F\u5DF2\u4FDD\u5B58\u7684\u76EE\u6807\uFF0C\u4E0D\u80FD\u662F\u5019\u9009\uFF09\u3002"
+        },
+        text: { type: "string", description: "\u8981\u53D1\u9001\u7684\u6B63\u6587\uFF08\u7EAF\u6587\u672C\uFF09\u3002" }
+      },
+      required: ["channel_id", "bot_id", "target_id", "text"],
+      additionalProperties: false
+    },
+    output: OUTPUT_TEXT,
+    async execute(args) {
+      try {
+        const result = await delivery.send({
+          channelId: args.channel_id,
+          botId: args.bot_id,
+          targetId: args.target_id,
+          text: args.text
+        });
+        const messageId = result?.messageId ?? result?.providerMessageIds?.[0] ?? null;
+        return `\u5DF2\u53D1\u9001\u5230 ${args.target_id}${messageId ? `\uFF08\u6D88\u606F id ${messageId}\uFF09` : ""}\u3002`;
+      } catch (error) {
+        if (error?.code === "chat/unknown-target") {
+          return `\u76EE\u6807 ${args.target_id} \u8FD8\u6CA1\u6709\u4FDD\u5B58\uFF0C\u65E0\u6CD5\u53D1\u9001\u3002\u5148\u7528 chat_targets \u67E5\u770B\u5019\u9009\uFF0C\u518D\u7528 chat_save_target \u4FDD\u5B58\uFF0C\u6216\u8BF7\u7528\u6237\u5230\u8BBE\u7F6E\u9875\u4FDD\u5B58\u3002`;
+        }
+        return `\u53D1\u9001\u5931\u8D25\uFF1A${error?.code ?? ""} ${error?.message ?? String(error)}`.trim();
+      }
+    }
+  }));
+  disposers.push(toolCtx.tools.register({
+    name: "chat_save_target",
+    description: '\u628A\u4E00\u4E2A"\u5019\u9009"\u4F1A\u8BDD\u4FDD\u5B58\u4E3A\u53EF\u6295\u9012\u76EE\u6807\uFF08\u53EA\u80FD\u4FDD\u5B58 chat_targets \u91CC\u6807\u8BB0\u4E3A\u5019\u9009\u7684\u76EE\u6807\uFF0C\u5373\u8BE5\u673A\u5668\u4EBA\u5386\u53F2\u4E0A\u771F\u5B9E\u5BF9\u8BDD\u8FC7\u7684\u4F1A\u8BDD\uFF09\u3002\u4FDD\u5B58\u540E\u5373\u53EF\u7528 chat_send \u53D1\u9001\u3002',
+    parameters: {
+      type: "object",
+      properties: {
+        channel_id: CHANNEL_FIELD,
+        bot_id: BOT_FIELD,
+        target_id: { type: "string", description: "chat_targets \u91CC\u6807\u8BB0\u4E3A\u5019\u9009\u7684\u76EE\u6807 id\u3002" },
+        name: { type: "string", description: "\u7ED9\u8FD9\u4E2A\u76EE\u6807\u8D77\u7684\u540D\u5B57\uFF08\u53EF\u9009\uFF09\u3002" }
+      },
+      required: ["channel_id", "bot_id", "target_id"],
+      additionalProperties: false
+    },
+    output: OUTPUT_TEXT,
+    async execute(args) {
+      const listed = await delivery.list({ channelId: args.channel_id, botId: args.bot_id });
+      const candidate = listed.targets.find((t) => t.id === args.target_id);
+      if (!candidate) {
+        return `\u6CA1\u6709\u627E\u5230\u5019\u9009 ${args.target_id}\uFF08\u5DF2\u4FDD\u5B58\u7684\u76EE\u6807\u65E0\u9700\u91CD\u590D\u4FDD\u5B58\uFF09\u3002`;
+      }
+      if (!candidate.discovered) {
+        return `\u76EE\u6807 ${args.target_id} \u5DF2\u7ECF\u4FDD\u5B58\u8FC7\u4E86\u3002`;
+      }
+      const saved = await delivery.save({
+        channelId: args.channel_id,
+        botId: args.bot_id,
+        target: {
+          id: candidate.id,
+          name: args.name ?? candidate.name,
+          kind: candidate.kind,
+          route: candidate.route
+        }
+      });
+      logger.info?.(`[dsh-chat] agent \u4FDD\u5B58\u4E86\u6295\u9012\u76EE\u6807 ${saved.id}\uFF08${args.channel_id}/${args.bot_id}\uFF09`);
+      return `\u5DF2\u4FDD\u5B58\u76EE\u6807 ${saved.id}\uFF08${saved.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"} \xB7 ${saved.name || "\u672A\u547D\u540D"}\uFF09\uFF0C\u73B0\u5728\u53EF\u4EE5\u7528 chat_send \u53D1\u9001\u3002`;
+    }
+  }));
+  return () => {
+    for (const dispose of disposers.reverse()) {
+      try {
+        dispose?.();
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u6CE8\u9500\u804A\u5929\u5DE5\u5177\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      }
+    }
+  };
+}
+
 // packages/dsh-chat/host/plugin.mjs
 var name = "dsh-chat-host";
 var inject = ["connection", "credentials", "typertGateway"];
@@ -2187,14 +2353,14 @@ function provideService(ctx, serviceName, value) {
 function isPlainRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function validBotPayload(payload, { withConfig = false } = {}) {
+function validBotPayload(payload, options = {}) {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
-  const allowed = withConfig ? ["channelId", "botId", "config"] : ["channelId", "botId"];
+  const allowed = options.withConfig ? ["channelId", "botId", "config"] : ["channelId", "botId", ...options.extra ?? []];
   if (Object.keys(payload).length !== allowed.length) return false;
   if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
   if (typeof payload.channelId !== "string" || !CHANNEL_ID.test(payload.channelId)) return false;
   if (typeof payload.botId !== "string" || !BOT_ID.test(payload.botId)) return false;
-  if (!withConfig) return true;
+  if (!options.withConfig) return true;
   return payload.config !== null && typeof payload.config === "object" && !Array.isArray(payload.config);
 }
 function apply(ctx, config = {}) {
@@ -2338,7 +2504,7 @@ function apply(ctx, config = {}) {
       }
     }
     if (method === "delivery.remove") {
-      if (!validBotPayload(payload) || typeof payload.targetId !== "string") {
+      if (!validBotPayload(payload, { extra: ["targetId"] }) || typeof payload.targetId !== "string") {
         return fail("chat/bad-request", "delivery.remove \u9700\u8981 { channelId, botId, targetId }\u3002");
       }
       return ok({ removed: await delivery.remove({
@@ -2348,7 +2514,7 @@ function apply(ctx, config = {}) {
       }) });
     }
     if (method === "delivery.send") {
-      if (!validBotPayload(payload) || typeof payload.targetId !== "string" || typeof payload.text !== "string") {
+      if (!validBotPayload(payload, { extra: ["targetId", "text"] }) || typeof payload.targetId !== "string" || typeof payload.text !== "string") {
         return fail("chat/bad-request", "delivery.send \u9700\u8981 { channelId, botId, targetId, text }\u3002");
       }
       try {
@@ -2428,6 +2594,22 @@ function apply(ctx, config = {}) {
     };
   }, "dsh-chat: host service");
   ctx.effect(() => rpc.register(CONTROL_CHANNEL_ID, controlHandler), "dsh-chat: control rpc");
+  if (typeof ctx.inject === "function") {
+    ctx.inject(["tools"], (toolCtx) => {
+      toolCtx.effect(
+        () => registerChatTools(toolCtx, {
+          delivery,
+          // agent 需要先"发现"渠道与机器人，才能拿到投递目标，因此把只读视图一并给它。
+          channels: { list: () => registry.list() },
+          bots: { list: (channelId) => settings.list(channelId) },
+          logger
+        }),
+        "dsh-chat: agent tools"
+      );
+    });
+  } else {
+    logger.warn?.("[dsh-chat] \u5F53\u524D\u4E0A\u4E0B\u6587\u4E0D\u652F\u6301 ctx.inject\uFF0Cchat_targets/chat_send/chat_save_target \u672A\u6CE8\u518C\uFF08agent \u65E0\u6CD5\u4E3B\u52A8\u53D1\u6D88\u606F\uFF09\u3002");
+  }
   ctx.effect(() => sessions.installInteractionRelays(), "dsh-chat: \u5BA1\u6279\u4E0E\u63D0\u95EE\u56DE\u4F20");
   logger.info?.(`[dsh-chat] hub \u5DF2\u5C31\u7EEA\uFF08\u5951\u7EA6 v${CONTRACT_VERSION}\uFF09\uFF0C\u7B49\u5F85\u6E20\u9053\u63D2\u4EF6\u6CE8\u518C\u3002`);
 }

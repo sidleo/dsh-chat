@@ -19,7 +19,7 @@
 ```
 packages/dsh-chat/             Hub：设置页入口 + 渠道注册表 + 共享内核（命令/策略/上下文增强/会话桥/设置）
   shared/                      浏览器安全：契约、上下文增强引擎、访问策略、渠道 rail
-  host/                        Node：plugin、registry、rpc、bot-settings、session-store、sessions、commands、json-store
+  host/                        Node：plugin、registry、rpc、bot-settings、session-store、sessions、commands、delivery、tools、json-store
   client/                      浏览器：设置页 section、共享 UI 组件与 hook
 packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，仅私聊）
@@ -53,7 +53,7 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P2 | 飞书渠道：长连接、私聊/群聊、任务过程展示分私聊/群聊、设置页 | ✅ 真实机器人验证通过 |
 | P3 | 微信渠道：iLink 协议、扫码登录、私聊收发 | ✅ 真实账号验证通过 |
 | P4 | 命令内核 + 访问策略 | ✅（菜单卡片、批量输入、压缩待做） |
-| P5 | 富媒体（图片/文件）与主动投递 | 主动投递内核+渠道已通（设置页 UI 待做）；图片/文件未做 |
+| P5 | 富媒体（图片/文件）与主动投递 | 主动投递内核+渠道+agent 工具已通（设置页 UI 待做）；图片/文件未做 |
 | P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 待开始 |
 
 ## 工作方式

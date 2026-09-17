@@ -45,6 +45,25 @@ function createFakeCtx() {
       effects.push(dispose);
       return dispose;
     },
+    /**
+     * 与真实 Cordis 同形：依赖名为数组时，依赖就绪后把（子）上下文交给回调。
+     * 假上下文里所有服务都已"就绪"，因此同步回调自身。
+     */
+    inject(_deps, callback) {
+      callback(ctx);
+      return () => {};
+    },
+    /** 假的工具注册表：记录定义、支持注销，用于验证 hub 注册了哪些模型工具。 */
+    tools: {
+      definitions: new Map(),
+      register(definition) {
+        if (this.definitions.has(definition.name)) {
+          throw new Error(`tool "${definition.name}" already registered`);
+        }
+        this.definitions.set(definition.name, definition);
+        return () => this.definitions.delete(definition.name);
+      },
+    },
     connection: {
       fetch: {
         register(route) {
@@ -73,6 +92,7 @@ function createFakeCtx() {
     services,
     routes,
     logs,
+    tools: ctx.tools,
     /** 逆序释放所有 effect，模拟插件卸载。 */
     disposeAll() {
       for (const dispose of effects.reverse()) {
@@ -133,6 +153,7 @@ async function bootstrap() {
     service,
     routes: harness.routes,
     logs: harness.logs,
+    tools: harness.tools,
     /** 只释放插件，保留数据目录（用于验证持久化）。 */
     dispose() {
       harness.disposeAll();
@@ -491,5 +512,230 @@ test('渠道 createChannel 抛错时状态为 failed 且 RPC 返回可读错误'
   } finally {
     harness.disposeAll();
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+/** 注册一个"具备主动投递能力"的假聊天渠道（delivery 经注册表挂到 hub）。 */
+async function registerDeliveryChannel(service, { id = 'fakechat', sent = [] } = {}) {
+  service.registerChannel({
+    id,
+    label: '假聊天',
+    order: 3,
+    async createChannel() {
+      return {
+        async start() {},
+        async stop() {},
+        endpoints: {},
+        delivery: {
+          async send({ botId, target, text }) {
+            sent.push({ channelId: id, botId, targetId: target.id, text });
+            return { messageId: 'msg-1' };
+          },
+          async discover() {
+            return [{ id: 'oc_team', kind: 'group', name: '项目群', route: { chatId: 'oc_team' } }];
+          },
+        },
+      };
+    },
+  });
+  await waitForStatus(service, id, 'running');
+  return sent;
+}
+
+/** 调一次模型工具，返回它给模型看的文本。 */
+async function callTool(app, toolName, args) {
+  const definition = app.tools.definitions.get(toolName);
+  assert.ok(definition, `hub 未注册工具 ${toolName}`);
+  const value = await definition.execute(args, { signal: new AbortController().signal });
+  const blocks = definition.output.render(args, value);
+  assert.ok(Array.isArray(blocks) && blocks.length > 0, `${toolName} 的 render 没有产出内容`);
+  return blocks.map((block) => block.text ?? '').join('');
+}
+
+test('hub 把聊天工具注册成模型可调用的工具（输出契约完整）', async () => {
+  const app = await bootstrap();
+  try {
+    assert.deepEqual([...app.tools.definitions.keys()].sort(),
+      ['chat_save_target', 'chat_send', 'chat_targets']);
+
+    for (const definition of app.tools.definitions.values()) {
+      // 参数必须是"对象根 + 支持的 JSON Schema 子集"，否则注册会在真实 Host 上抛错。
+      assert.equal(definition.parameters.type, 'object');
+      assert.equal(definition.parameters.additionalProperties, false);
+      for (const key of definition.parameters.required ?? []) {
+        assert.ok(definition.parameters.properties[key], `${definition.name} 缺少 ${key} 的定义`);
+      }
+      assert.equal(definition.output.schema.type, 'string');
+      const blocks = definition.output.render({}, 'x');
+      assert.deepEqual(blocks, [{ type: 'text', text: 'x' }]);
+    }
+
+    // 发送必须参数齐全：模型少传参数要被 schema 挡住，而不是发到错的会话。
+    assert.deepEqual(app.tools.definitions.get('chat_send').parameters.required,
+      ['channel_id', 'bot_id', 'target_id', 'text']);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('chat_targets 列出候选；chat_send 只能发已保存目标；chat_save_target 收编候选', async () => {
+  const app = await bootstrap();
+  try {
+    const sent = await registerDeliveryChannel(app.service);
+
+    const listed = await callTool(app, 'chat_targets', { channel_id: 'fakechat', bot_id: 'bot_1' });
+    assert.match(listed, /oc_team/);
+    assert.match(listed, /候选/);
+    assert.match(listed, /共 1 个/);
+
+    // 候选还没保存 → 拒绝发送，并给出可执行的下一步。
+    const refused = await callTool(app, 'chat_send', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', text: '不应该发出去',
+    });
+    assert.match(refused, /还没有保存/);
+    assert.match(refused, /chat_save_target/);
+    assert.deepEqual(sent, []);
+
+    const saved = await callTool(app, 'chat_save_target', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', name: '项目群',
+    });
+    assert.match(saved, /已保存目标 oc_team/);
+    assert.equal(app.service.bots.read('fakechat', 'bot_1').deliveryTargets.oc_team.kind, 'group');
+
+    // 保存后不再标记为候选，并且能真正发出去。
+    const again = await callTool(app, 'chat_targets', { channel_id: 'fakechat', bot_id: 'bot_1' });
+    assert.doesNotMatch(again, /候选/);
+    const onlySaved = await callTool(app, 'chat_save_target', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team',
+    });
+    assert.match(onlySaved, /已经保存过/);
+
+    const okText = await callTool(app, 'chat_send', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', text: '  日报已生成  ',
+    });
+    assert.match(okText, /已发送到 oc_team/);
+    assert.match(okText, /msg-1/);
+    assert.deepEqual(sent, [{
+      channelId: 'fakechat', botId: 'bot_1', targetId: 'oc_team', text: '日报已生成',
+    }]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('chat_targets 的发现链路：渠道 → 机器人 → 目标（agent 不需要提前知道 bot_id）', async () => {
+  const app = await bootstrap();
+  try {
+    await registerDeliveryChannel(app.service);
+
+    // 1) 不给参数：列出已安装渠道。
+    const channelsText = await callTool(app, 'chat_targets', {});
+    assert.match(channelsText, /已安装渠道（共 2 个）/);
+    assert.match(channelsText, /fakechat\t假聊天\t运行中\t机器人 0 个/);
+    assert.match(channelsText, /fixture/);
+
+    // 2) 只给 channel_id：列出该渠道的机器人与各自目标。
+    await callTool(app, 'chat_save_target', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', name: '项目群',
+    });
+    const botsText = await callTool(app, 'chat_targets', { channel_id: 'fakechat' });
+    assert.match(botsText, /fakechat 下的机器人（共 1 个）/);
+    assert.match(botsText, /\[bot_1\]/);
+    assert.match(botsText, /oc_team\t群聊\t项目群/);
+
+    // 3) 渠道名写错时给出已安装清单，而不是空结果。
+    const typo = await callTool(app, 'chat_targets', { channel_id: 'feishuu' });
+    assert.match(typo, /没有安装名为 feishuu 的渠道/);
+    assert.match(typo, /已安装：/);
+
+    // 4) 渠道存在但还没机器人：直接说清下一步。
+    const empty = await callTool(app, 'chat_targets', { channel_id: 'fixture' });
+    assert.match(empty, /还没有机器人/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('chat_targets 对"不支持主动投递"的渠道给出可读说明而不是抛错', async () => {
+  const app = await bootstrap();
+  try {
+    // fixture 渠道没有 delivery：这里走的是"渠道不支持"的路径。
+    const text = await callTool(app, 'chat_targets', { channel_id: 'fixture', bot_id: 'bot_1' });
+    assert.match(text, /不支持主动投递/);
+
+    const send = await callTool(app, 'chat_send', {
+      channel_id: 'fixture', bot_id: 'bot_1', target_id: 'oc_team', text: 'x',
+    });
+    assert.match(send, /发送失败/);
+    assert.match(send, /chat\/delivery-unavailable/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('插件卸载后聊天工具一并注销（可逆副作用）', async () => {
+  const app = await bootstrap();
+  const dataDir = app.dataDir;
+  try {
+    assert.equal(app.tools.definitions.size, 3);
+  } finally {
+    app.dispose();
+  }
+  try {
+    assert.equal(app.tools.definitions.size, 0);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('delivery 控制端点：存 / 列 / 发 / 删（含载荷校验）', async () => {
+  const app = await bootstrap();
+  try {
+    const sent = await registerDeliveryChannel(app.service);
+
+    // 少传参数必须被拒（而不是被默默忽略）。
+    const bad = await callRoute(app.routes, HUB_PATH, 'delivery.send', {
+      channelId: 'fakechat', botId: 'bot_1',
+    });
+    assert.equal(bad.result.ok, false);
+    assert.equal(bad.result.error.code, 'chat/bad-request');
+
+    const target = { id: 'ou_alice', kind: 'direct', name: '爱丽丝', route: { openId: 'ou_alice' } };
+    const saved = await callRoute(app.routes, HUB_PATH, 'delivery.save', {
+      channelId: 'fakechat', botId: 'bot_1', target,
+    });
+    assert.equal(saved.result.ok, true);
+    assert.equal(saved.result.value.target.id, 'ou_alice');
+
+    const listed = await callRoute(app.routes, HUB_PATH, 'delivery.list', {
+      channelId: 'fakechat', botId: 'bot_1',
+    });
+    assert.equal(listed.result.value.canSend, true);
+    assert.deepEqual(listed.result.value.targets.map((t) => t.id).sort(), ['oc_team', 'ou_alice']);
+
+    const send = await callRoute(app.routes, HUB_PATH, 'delivery.send', {
+      channelId: 'fakechat', botId: 'bot_1', targetId: 'ou_alice', text: '你好',
+    });
+    assert.equal(send.result.ok, true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].text, '你好');
+
+    const unknown = await callRoute(app.routes, HUB_PATH, 'delivery.send', {
+      channelId: 'fakechat', botId: 'bot_1', targetId: 'nope', text: '你好',
+    });
+    assert.equal(unknown.result.ok, false);
+    assert.equal(unknown.result.error.code, 'chat/unknown-target');
+
+    const removed = await callRoute(app.routes, HUB_PATH, 'delivery.remove', {
+      channelId: 'fakechat', botId: 'bot_1', targetId: 'ou_alice',
+    });
+    assert.equal(removed.result.ok, true);
+    assert.equal(removed.result.value.removed, true);
+    const afterRemove = await callRoute(app.routes, HUB_PATH, 'delivery.remove', {
+      channelId: 'fakechat', botId: 'bot_1', targetId: 'ou_alice',
+    });
+    assert.equal(afterRemove.result.value.removed, false);
+  } finally {
+    await app.cleanup();
   }
 });

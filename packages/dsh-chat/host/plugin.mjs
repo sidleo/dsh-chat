@@ -27,6 +27,7 @@ import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
 import { createRpcCarrier, fail, failFrom, ok } from './rpc.mjs';
 import { createSessionStore } from './session-store.mjs';
 import { createSessionBridge } from './sessions.mjs';
+import { registerChatTools } from './tools.mjs';
 
 export const name = 'dsh-chat-host';
 
@@ -70,13 +71,25 @@ function isPlainRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function validBotPayload(payload, { withConfig = false } = {}) {  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
-  const allowed = withConfig ? ['channelId', 'botId', 'config'] : ['channelId', 'botId'];
+/**
+ * 校验"某机器人"类载荷：必须**恰好**是 channelId、botId 加上 extra 列出的键。
+ *
+ * 用"恰好"而不是"至少"是为了让多传/少传的客户端立刻收到 bad-request，而不是被默默忽略。
+ *
+ * @param payload - 待校验载荷。
+ * @param options - { withConfig } 或 { extra: [...] }。
+ * @returns 是否合法。
+ */
+function validBotPayload(payload, options = {}) {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const allowed = options.withConfig
+    ? ['channelId', 'botId', 'config']
+    : ['channelId', 'botId', ...(options.extra ?? [])];
   if (Object.keys(payload).length !== allowed.length) return false;
   if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
   if (typeof payload.channelId !== 'string' || !CHANNEL_ID.test(payload.channelId)) return false;
   if (typeof payload.botId !== 'string' || !BOT_ID.test(payload.botId)) return false;
-  if (!withConfig) return true;
+  if (!options.withConfig) return true;
   return payload.config !== null && typeof payload.config === 'object' && !Array.isArray(payload.config);
 }
 
@@ -250,7 +263,7 @@ export function apply(ctx, config = {}) {
       }
     }
     if (method === 'delivery.remove') {
-      if (!validBotPayload(payload) || typeof payload.targetId !== 'string') {
+      if (!validBotPayload(payload, { extra: ['targetId'] }) || typeof payload.targetId !== 'string') {
         return fail('chat/bad-request', 'delivery.remove 需要 { channelId, botId, targetId }。');
       }
       return ok({ removed: await delivery.remove({
@@ -258,7 +271,8 @@ export function apply(ctx, config = {}) {
       }) });
     }
     if (method === 'delivery.send') {
-      if (!validBotPayload(payload) || typeof payload.targetId !== 'string'
+      if (!validBotPayload(payload, { extra: ['targetId', 'text'] })
+        || typeof payload.targetId !== 'string'
         || typeof payload.text !== 'string') {
         return fail('chat/bad-request', 'delivery.send 需要 { channelId, botId, targetId, text }。');
       }
@@ -347,6 +361,27 @@ export function apply(ctx, config = {}) {
   }, 'dsh-chat: host service');
 
   ctx.effect(() => rpc.register(CONTROL_CHANNEL_ID, controlHandler), 'dsh-chat: control rpc');
+
+  // 模型可调用工具：让 agent 会话自己把结果发到 IM。`tools` 是可选服务（没有 agent
+  // 的部署可能没有它），因此按"依赖出现即注册、消失即注销"的方式挂载；若上下文根本
+  // 不支持 inject，要留下可见的日志，不能让能力悄悄缺席。
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['tools'], (toolCtx) => {
+      toolCtx.effect(
+        () => registerChatTools(toolCtx, {
+          delivery,
+          // agent 需要先"发现"渠道与机器人，才能拿到投递目标，因此把只读视图一并给它。
+          channels: { list: () => registry.list() },
+          bots: { list: (channelId) => settings.list(channelId) },
+          logger,
+        }),
+        'dsh-chat: agent tools',
+      );
+    });
+  } else {
+    logger.warn?.('[dsh-chat] 当前上下文不支持 ctx.inject，'
+      + 'chat_targets/chat_send/chat_save_target 未注册（agent 无法主动发消息）。');
+  }
 
   // 审批与提问是 agent 作用域的 waterfall 事件，hub 在 root 上参与并把它们交给
   // 对应渠道（按会话绑定定位）；不属于本插件的会话一律 next() 让给浏览器 UI。

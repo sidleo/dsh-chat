@@ -233,6 +233,22 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
 
+### agent 可调用的聊天工具（hub 注册，渠道无需实现）
+
+hub 把投递能力暴露成三个模型工具，会话里的 agent 因此能自己把结果发到 IM：
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `chat_targets` | `{ channel_id?, bot_id? }` | 只读发现：不给参数列渠道，只给渠道列机器人与目标，给全了列目标（已保存 + 候选） |
+| `chat_send` | `{ channel_id, bot_id, target_id, text }` | **只能发已保存目标**，候选一律拒绝 |
+| `chat_save_target` | `{ channel_id, bot_id, target_id, name? }` | 只收编 `chat_targets` 里标记为候选的目标 |
+
+发现顺序（agent 不需要提前知道任何 id）：`chat_targets {}` → `{ channel_id }` → `{ channel_id, bot_id }`
+→ `chat_save_target`（若目标还是候选）→ `chat_send`。
+
+安全边界：agent 不能凭空捏造投递对象——候选来自渠道自己的 `discover()`（即该机器人真实对话过的
+会话），而"能发"必须由用户在设置页或 `chat_save_target` 显式确认一次。
+
 ### 入站消息的推荐顺序（两个官方渠道就是这么做的）
 
 1. 去重（平台消息 id）；
