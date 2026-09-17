@@ -2203,6 +2203,8 @@ function createSessionStore({ dataDir, logger = console } = {}) {
 import { randomUUID } from "node:crypto";
 var MAX_ASSISTANT_TEXT = 2e5;
 var STREAM_CLOSE_GRACE_MS = 1e3;
+var TURN_IDLE_TIMEOUT_MS = 15 * 6e4;
+var TURN_TOTAL_TIMEOUT_MS = 2 * 60 * 6e4;
 function sessionError(error, fallbackCode = "chat/session-failed") {
   const code = typeof error?.code === "string" ? error.code : fallbackCode;
   const wrapped = new Error(typeof error?.message === "string" && error.message ? error.message : "\u4F1A\u8BDD\u64CD\u4F5C\u5931\u8D25\u3002");
@@ -2416,20 +2418,46 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0} \u4EA4\u4ED8\u6587\u4EF6=${files.length}`);
       settle({ ...value, files: [...files] });
     };
-    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : 10 * 6e4;
-    const timeoutTimer = setTimeout(() => {
+    const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : TURN_IDLE_TIMEOUT_MS;
+    const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS) : TURN_TOTAL_TIMEOUT_MS;
+    let lastProgressAt = Date.now();
+    let idleTimer = null;
+    const markProgress = () => {
+      lastProgressAt = Date.now();
+    };
+    function armIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(function tick() {
+        const idleMs = Date.now() - lastProgressAt;
+        if (idleMs >= effectiveIdleTimeoutMs) {
+          finishTurn({
+            sessionId,
+            text: "",
+            reason: { kind: "timeout", idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+            tools: [...tools],
+            aborted: true
+          });
+          return;
+        }
+        idleTimer = setTimeout(tick, Math.max(1e3, effectiveIdleTimeoutMs - idleMs));
+      }, effectiveIdleTimeoutMs);
+      idleTimer.unref?.();
+    }
+    armIdleTimer();
+    const totalTimer = setTimeout(() => {
       finishTurn({
         sessionId,
         text: "",
-        reason: { kind: "timeout", timeoutMs: effectiveTurnTimeoutMs },
+        reason: { kind: "timeout", timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
         tools: [...tools],
         aborted: true
       });
-    }, effectiveTurnTimeoutMs);
-    timeoutTimer.unref?.();
+    }, effectiveTotalTimeoutMs);
+    totalTimer.unref?.();
     const pump = (async () => {
       try {
         for await (const frame of frames) {
+          markProgress();
           if (frame?.type === "snapshot") {
             cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
             continue;
@@ -2551,7 +2579,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       if (first.error) throw first.error;
       return first.value;
     } finally {
-      clearTimeout(timeoutTimer);
+      clearTimeout(totalTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       signal?.removeEventListener?.("abort", abort);
       activeTurns.delete(turnKey);
       closing = true;

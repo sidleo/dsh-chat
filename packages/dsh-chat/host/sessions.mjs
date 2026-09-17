@@ -26,6 +26,18 @@ const MAX_ASSISTANT_TEXT = 200_000;
  */
 const STREAM_CLOSE_GRACE_MS = 1_000;
 
+/**
+ * 回合"没有进展"多久算卡死（默认 15 分钟）。
+ *
+ * 注意判的是**静默时长**而不是总时长：一次合法的长任务（几十次工具调用、单个工具跑几分钟）
+ * 只要一直在产出事件就不该被打断。旧的"整轮 10 分钟"上限把真机上一次 10 分 20 秒的
+ * 帆软排障误判成超时并中断了。
+ */
+const TURN_IDLE_TIMEOUT_MS = 15 * 60_000;
+
+/** 绝对上限（默认 2 小时）：防死循环，正常任务碰不到。 */
+const TURN_TOTAL_TIMEOUT_MS = 2 * 60 * 60_000;
+
 /** 把 DSH 的 RemoteError 折成带 code 的普通错误，便于渠道判断。 */
 function sessionError(error, fallbackCode = 'chat/session-failed') {
   const code = typeof error?.code === 'string' ? error.code : fallbackCode;
@@ -371,24 +383,63 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       settle({ ...value, files: [...files] });
     };
 
-    // 回合超时：流断了/回合卡住时不能永远挂着——那样用户只会看到"发了没反应"。
-    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
+    /**
+     * 兜底超时：防的是"流断了/回合卡死"，**不是**长任务。
+     *
+     * 真机教训：原先按"整轮总时长 10 分钟"掐，把一次合法的帆软排障（10 分 20 秒、
+     * 231 个事件、几次 90 秒的工具调用）在第 620 秒直接中断，用户看到的却是
+     * 「任务未正常完成（timeout）」——这是把"卡住"和"干得久"混为一谈了。
+     *
+     * 现在按**静默时长**判定：只要还有事件进来（工具结果、模型增量都算），就一直等；
+     * 连续 IDLE 没有任何进展才判定卡死。另留一个很大的绝对上限兜住死循环。
+     */
+    const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
       ? turnTimeoutMs
-      : 10 * 60_000;
-    const timeoutTimer = setTimeout(() => {
+      : TURN_IDLE_TIMEOUT_MS;
+    const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
+      ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS)
+      : TURN_TOTAL_TIMEOUT_MS;
+    let lastProgressAt = Date.now();
+    let idleTimer = null;
+    const markProgress = () => {
+      lastProgressAt = Date.now();
+    };
+    /** 每次"有进展"都重置静默计时；到点说明这条路已经没人往前走了。 */
+    function armIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(function tick() {
+        const idleMs = Date.now() - lastProgressAt;
+        if (idleMs >= effectiveIdleTimeoutMs) {
+          finishTurn({
+            sessionId,
+            text: '',
+            reason: { kind: 'timeout', idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+            tools: [...tools],
+            aborted: true,
+          });
+          return;
+        }
+        idleTimer = setTimeout(tick, Math.max(1_000, effectiveIdleTimeoutMs - idleMs));
+      }, effectiveIdleTimeoutMs);
+      idleTimer.unref?.();
+    }
+    armIdleTimer();
+    const totalTimer = setTimeout(() => {
       finishTurn({
         sessionId,
         text: '',
-        reason: { kind: 'timeout', timeoutMs: effectiveTurnTimeoutMs },
+        reason: { kind: 'timeout', timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
         tools: [...tools],
         aborted: true,
       });
-    }, effectiveTurnTimeoutMs);
-    timeoutTimer.unref?.();
+    }, effectiveTotalTimeoutMs);
+    totalTimer.unref?.();
 
     const pump = (async () => {
       try {
         for await (const frame of frames) {
+          // 任何一帧（工具结果、模型增量、状态事件）都算"还在往前走"。
+          markProgress();
           if (frame?.type === 'snapshot') {
             cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
             continue;
@@ -517,7 +568,8 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       if (first.error) throw first.error;
       return first.value;
     } finally {
-      clearTimeout(timeoutTimer);
+      clearTimeout(totalTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       signal?.removeEventListener?.('abort', abort);
       activeTurns.delete(turnKey);
       closing = true;

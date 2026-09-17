@@ -27,7 +27,8 @@ function remoteError(code, message = code) {
 /** 一个可编排的假 DSH：记录调用，并按脚本逐个产出 follow 帧。 */
 function createFakeGateway({
   script = [], stuckReturn = false, stuckPrompt = false, failPrompt = false,
-  pageRecords = [], commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
+  pageRecords = [], frameDelayMs = 0, stuckStream = false,
+  commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
 } = {}) {
   const calls = [];
   const sessions = new Set();
@@ -92,7 +93,12 @@ function createFakeGateway({
       const frames = script[scriptIndex] ?? [];
       scriptIndex += 1;
       const iterator = (async function* iterate() {
-        for (const frame of frames) yield frame;
+        for (const frame of frames) {
+          if (frameDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, frameDelayMs); });
+          yield frame;
+        }
+        // 模拟"流既不结束也不再产出"：卡死判定必须兜住这种局面。
+        if (stuckStream) await new Promise(() => {});
       })();
       if (!stuckReturn) return iterator;
       // 模拟"订阅关闭请求永远不落地"
@@ -395,6 +401,48 @@ test('runCommand：走 commands/execute 打到绑定会话；没有会话时给�
     assert.equal(call.args.agentId, 'session-1', 'agentId 用绑定的会话 id');
   } finally {
     await app.cleanup();
+  }
+});
+
+test('回合兜底按"静默时长"判定：一直在产出就不打断，彻底没动静才超时', async () => {
+  // ① 有进展：事件每 120ms 来一条，阈值设成 300ms —— 一直重置，绝不能被打断。
+  const active = await makeBridge({
+    script: [turnFrames({ text: '干完了' })],
+    frameDelayMs: 120,
+  });
+  try {
+    const result = await active.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '跑个长任务' }],
+      turnTimeoutMs: 300,
+    });
+    assert.equal(result.text, '干完了');
+    assert.equal(result.reason.kind, 'completed', '一直在产出就不该判超时');
+  } finally {
+    await active.cleanup();
+  }
+
+  // ② 卡死：事件流不再产出、也不结束 —— 到点收尾，reason 带 idleMs。
+  const stuck = await makeBridge({
+    script: [[
+      { type: 'snapshot', cursor: 1, records: [], hasMore: false },
+      { type: 'event', event: { type: 'turn/start', seq: 2, data: { turn: 1 } } },
+    ]],
+    stuckStream: true,
+  });
+  try {
+    const startedAt = Date.now();
+    const result = await stuck.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '卡住吧' }],
+      turnTimeoutMs: 300,
+    });
+    assert.equal(result.reason.kind, 'timeout');
+    assert.equal(result.aborted, true);
+    assert.ok(result.reason.idleMs >= 300, `idleMs 应达到阈值，实际 ${result.reason.idleMs}`);
+    assert.ok(Date.now() - startedAt < 5_000, '不该被绝对上限拖住');
+  } finally {
+    await stuck.cleanup();
   }
 });
 
