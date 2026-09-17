@@ -60,6 +60,7 @@ export function apply(ctx) {
                 guidance: typeof deps.guidance?.publish === 'function',
                 sessionsAsk: typeof deps.sessions?.ask === 'function',
                 sessionsBindings: typeof deps.sessions?.bindings?.adopt === 'function',
+                interactions: typeof deps.interactions?.offer === 'function',
               },
             },
           }),

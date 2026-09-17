@@ -158,6 +158,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 | `contextEnhancement` | 上下文增强引擎（校验/解析/拼装） |
 | `guidance` | 每会话提示词登记 |
 | `sessions` | 会话桥 |
+| `interactions` | 人在环回传：`attach({ channelId, botId, send })` + 入站 `offer({ channelId, botId, key, text })` |
 | `reportStatus(status, error?)` | 上报 `starting/running/failed/stopped` 与错误 |
 
 ---
@@ -248,6 +249,32 @@ hub 把投递能力暴露成三个模型工具，会话里的 agent 因此能自
 
 安全边界：agent 不能凭空捏造投递对象——候选来自渠道自己的 `discover()`（即该机器人真实对话过的
 会话），而"能发"必须由用户在设置页或 `chat_save_target` 显式确认一次。
+
+### 人在环回传（agent 的提问与审批）
+
+agent 会在回合中途反问用户（`ask_user_question`）或请求授权（危险操作）。**这两件事默认只会出现在
+浏览器 UI 里**——对 IM 用户就是"发了没反应"。渠道必须把这一侧接上：
+
+```js
+// 1) 启动时接入"怎么发到某个会话"（key 就是渠道自己用的会话键）
+const detach = deps.interactions.attach({
+  channelId: deps.channelId,
+  botId: bot.id,
+  send: async ({ key, text }) => { /* 发到 key 对应的会话 */ },
+});
+
+// 2) 入站文本在"门禁之后、@ 检查之前"先让交互服务认领
+if (text && deps.interactions.offer({ channelId, botId, key, text })) return; // 这是回答，不要进模型
+
+// 3) 停机时 detach()
+```
+
+要点：
+- **位置**：门禁之后（陌生人不能替人回答）、群聊 @ 检查之前（回答提问不用再 @）。
+- 渲染、解析、超时兜底都在 hub（`host/interactions.mjs`），渠道不要各写一份；
+- 10 分钟没人回答就**交回其他应答方**（浏览器 UI），不会把这一轮卡死；
+- 审批回复认不出来时 fail closed（按拒绝）；
+- 渠道没 `attach` 时 hub 一律不认领——能力缺失只退化成旧行为，不会静默丢消息。
 
 ### 入站内容（文本与图片）
 

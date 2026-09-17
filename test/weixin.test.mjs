@@ -188,6 +188,20 @@ async function makeRuntime({
   await state.ready();
   const client = createFakeClient();
   const published = [];
+  /** 假的交互回传服务：claim 为 true 表示"这条消息是回答"。 */
+  const attached = [];
+  const offers = [];
+  const interactions = {
+    claimed: false,
+    attach(options) {
+      attached.push(options);
+      return () => { options.detached = true; };
+    },
+    offer(request) {
+      offers.push(request);
+      return interactions.claimed;
+    },
+  };
   const deps = {
     channelId: 'weixin',
     dataDir,
@@ -201,6 +215,7 @@ async function makeRuntime({
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
     accessPolicy,
+    interactions,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     sessions: {
       ask: async (options) => {
@@ -216,6 +231,7 @@ async function makeRuntime({
   });
   return {
     runtime, client, state, deps, published, dataDir, account,
+    interactions, attached, offers,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     },
@@ -578,5 +594,38 @@ test('控制器：凭据缺失时账号标记失败但不影响其他账号', as
     await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('交互回传：提问发给微信用户；用户回复被认领为答案且不再进模型', async () => {
+  const asked = [];
+  const app = await makeRuntime({ onAsk: (options) => asked.push(options) });
+  try {
+    assert.equal(app.attached.length, 1);
+    assert.equal(app.attached[0].channelId, 'weixin');
+
+    // 普通消息：交互服务没认领 → 照常跑一轮
+    await app.runtime.accept(inbound(), new AbortController().signal);
+    assert.equal(asked.length, 1);
+    assert.equal(app.offers[0].key, 'p2p:u@im.wechat');
+
+    // 认领：这条消息是答案，不能再跑一轮，也不能回"答案"出去
+    app.interactions.claimed = true;
+    const before = app.client.calls.texts.length;
+    await app.runtime.accept(inbound({ message_id: 'm_2', item_list: [{ type: 1, text_item: { text: '2' } }] }),
+      new AbortController().signal);
+    assert.equal(asked.length, 1, '回答不能再进模型');
+    assert.equal(app.offers.at(-1).text, '2');
+    assert.equal(app.client.calls.texts.length, before, '认领的消息不产生回复');
+
+    // 发送器：把提问发到这个用户（走 sendProactive，带最近一次的 context_token）
+    await app.attached[0].send({ key: 'p2p:u@im.wechat', text: '❓ 需要你确认' });
+    assert.equal(app.client.calls.texts.at(-1).text, '❓ 需要你确认');
+    assert.equal(app.client.calls.texts.at(-1).contextToken, 'ctx-1');
+
+    app.runtime.stop?.();
+    void app;
+  } finally {
+    await app.cleanup();
   }
 });

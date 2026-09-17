@@ -48,7 +48,8 @@ function apply(ctx) {
                 createJsonStore: typeof deps.createJsonStore === "function",
                 guidance: typeof deps.guidance?.publish === "function",
                 sessionsAsk: typeof deps.sessions?.ask === "function",
-                sessionsBindings: typeof deps.sessions?.bindings?.adopt === "function"
+                sessionsBindings: typeof deps.sessions?.bindings?.adopt === "function",
+                interactions: typeof deps.interactions?.offer === "function"
               }
             }
           }),

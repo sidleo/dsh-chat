@@ -52,13 +52,11 @@ function deltaTextOf(chunk) {
  *   `store` 为 `session-store`；`guidance` 为每会话来源提示词登记表。
  * @returns 契约规定的 sessions 面。
  */
-export function createSessionBridge({ ctx, logger = console, store, guidance }) {
+export function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== 'function') {
     throw new TypeError('会话桥需要 context 的 typertGateway.invoke（请在 inject 中声明）。');
   }
-  /** @type {Map<string, Function>} 渠道 → 人在环交互处理器。 */
-  const interactionHandlers = new Map();
   /** @type {Map<string, AbortController>} 会话键 → 当前回合的中断控制器。 */
   const activeTurns = new Map();
 
@@ -396,13 +394,6 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
    *   审批返回 'allowed-once'|'rejected'|'cancelled'；提问返回 `{ answers }`。
    * @returns 注销函数。
    */
-  function registerInteractionHandler(channelId, handle) {
-    if (typeof handle !== 'function') throw new TypeError('交互处理器必须是函数。');
-    interactionHandlers.set(channelId, handle);
-    return () => {
-      if (interactionHandlers.get(channelId) === handle) interactionHandlers.delete(channelId);
-    };
-  }
 
   /** 在 root 上参与审批/提问的 waterfall；只接管自己名下的会话，其余委派给浏览器 UI。 */
   function installInteractionRelays() {
@@ -410,25 +401,30 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
       logger.warn?.('[dsh-chat] 当前 Host 不支持事件订阅，审批/提问无法回传到 IM。');
       return () => {};
     }
+    /**
+     * 只有"这条会话属于某个已绑定的 IM 会话"且"该渠道接入了 IM 回传"时才认领，
+     * 否则一律让给浏览器 UI——绝不能把一个没人能回答的问题留在 IM 里卡住整轮。
+     */
     const locateFor = (request) => {
+      if (typeof interactions?.handle !== 'function') return null;
       const sessionId = request?.agent?.session?.id;
       const located = store?.locate?.(sessionId);
       if (!located) return null;
-      const handle = interactionHandlers.get(located.channelId);
-      return handle ? { ...located, handle } : null;
+      return interactions.has?.(located.channelId) ? located : null;
     };
 
     const offApproval = ctx.on('approval/request', async (request, next) => {
       const target = locateFor(request);
       if (!target) return next();
       try {
-        return await target.handle({
+        const outcome = await interactions.handle({
           kind: 'approval',
           channelId: target.channelId,
           botId: target.botId,
           key: target.key,
           request,
         });
+        return outcome ?? next();
       } catch (error) {
         logger.warn?.(`[dsh-chat] 审批回传失败，交由其他应答方：${error?.message ?? error}`);
         return next();
@@ -439,7 +435,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
       const target = locateFor(request);
       if (!target) return next();
       try {
-        const answers = await target.handle({
+        const answers = await interactions.handle({
           kind: 'question',
           channelId: target.channelId,
           botId: target.botId,
@@ -478,7 +474,6 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
     reset,
     /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
     bindings: store,
-    registerInteractionHandler,
     installInteractionRelays,
   });
 }

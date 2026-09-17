@@ -1626,6 +1626,163 @@ function createGuidanceRegistry() {
   };
 }
 
+// packages/dsh-chat/host/interactions.mjs
+var DEFAULT_TIMEOUT_MS = 10 * 6e4;
+var APPROVE_PATTERN = /^(允许|同意|可以|好|好的|是|执行|ok|okay|yes|y|allow|approve)$/i;
+var REJECT_PATTERN = /^(拒绝|不允许|不同意|不可以|不行|不要|不用|否|不|取消|no|n|deny|reject|cancel)$/i;
+function waiterKey(channelId, botId, key) {
+  return `${channelId}\0${botId}\0${key}`;
+}
+function renderQuestion(question, { position = 0, total = 1 } = {}) {
+  const header = question?.header || "\u9700\u8981\u4F60\u786E\u8BA4";
+  const lines = [total > 1 ? `\u2753 ${header}\uFF08${position}/${total}\uFF09` : `\u2753 ${header}`, ""];
+  lines.push(String(question?.question ?? ""));
+  if (question?.detail) {
+    lines.push("", String(question.detail));
+  }
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (options.length > 0) {
+    lines.push("");
+    options.forEach((option, index) => {
+      lines.push(`${index + 1}. ${option.label}${option.description ? ` \u2014\u2014 ${option.description}` : ""}`);
+    });
+    lines.push("");
+    lines.push(question?.multiSelect ? "\u53EF\u4EE5\u56DE\u590D\u591A\u4E2A\u7F16\u53F7\uFF08\u4F8B\u5982 1,3\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" : "\u56DE\u590D\u7F16\u53F7\u6216\u9009\u9879\u539F\u6587\u5373\u53EF\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002");
+  } else {
+    lines.push("", "\u76F4\u63A5\u56DE\u590D\u4F60\u7684\u7B54\u6848\u3002");
+  }
+  return lines.join("\n");
+}
+function renderApproval(request) {
+  const lines = ["\u26A0\uFE0F \u9700\u8981\u6388\u6743", ""];
+  lines.push(`\u5DE5\u5177\uFF1A${request?.toolName ?? "\u672A\u77E5"}`);
+  if (request?.reason) lines.push(`\u539F\u56E0\uFF1A${request.reason}`);
+  lines.push("", "\u56DE\u590D\u300C\u5141\u8BB8\u300D\u6267\u884C\u4E00\u6B21\uFF0C\u6216\u300C\u62D2\u7EDD\u300D\u53D6\u6D88\u3002");
+  return lines.join("\n");
+}
+function parseAnswer(question, reply) {
+  const raw = String(reply ?? "").trim();
+  const options = Array.isArray(question?.options) ? question.options : [];
+  const exact = options.find((option) => option.label === raw);
+  if (exact) return { id: String(question?.id ?? ""), selected: [exact.label] };
+  const tokens = question?.multiSelect ? raw.split(/[,，、;；]+/).map((token) => token.trim()).filter(Boolean) : [raw];
+  const selected = [];
+  const unmatched = [];
+  for (const token of tokens) {
+    const byIndex = /^\d+$/.test(token) ? options[Number(token) - 1] : void 0;
+    const byLabel = byIndex ?? options.find((option) => option.label === token);
+    if (byLabel) {
+      if (!selected.includes(byLabel.label)) selected.push(byLabel.label);
+      continue;
+    }
+    unmatched.push(token);
+  }
+  const answer = { id: String(question?.id ?? ""), selected };
+  if (unmatched.length > 0) {
+    answer.custom = unmatched.length === tokens.length ? raw : unmatched.join(" ");
+  }
+  return answer;
+}
+function parseApproval(reply) {
+  const raw = String(reply ?? "").trim();
+  if (APPROVE_PATTERN.test(raw)) return "allowed-once";
+  if (REJECT_PATTERN.test(raw)) return "rejected";
+  return null;
+}
+function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const senders = /* @__PURE__ */ new Map();
+  const waiters = /* @__PURE__ */ new Map();
+  function senderFor(channelId, botId) {
+    return senders.get(`${channelId}\0${botId}`) ?? null;
+  }
+  function wait({ channelId, botId, key, kind, signal }) {
+    return new Promise((resolve3) => {
+      const id = waiterKey(channelId, botId, key);
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener?.("abort", onAbort);
+        if (waiters.get(id)?.resolve === entry.resolve) waiters.delete(id);
+        if (value === null) {
+          logger.warn?.(`[dsh-chat] ${kind} \u5728 IM \u91CC\u6CA1\u6709\u5F97\u5230\u56DE\u7B54\uFF0C\u4EA4\u56DE\u5176\u4ED6\u5E94\u7B54\u65B9\uFF08${channelId}/${botId}/${key}\uFF09`);
+        }
+        resolve3(value);
+      };
+      const entry = { resolve: (text) => finish(text) };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      const onAbort = () => finish(null);
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      waiters.set(id, entry);
+    });
+  }
+  return Object.freeze({
+    /**
+     * 渠道接入 IM 回传：给出"怎么把文本发到这个机器人的某个会话"。
+     *
+     * @param options - { channelId, botId, send({ key, text }) }。
+     * @returns 注销函数。
+     */
+    attach({ channelId, botId, send }) {
+      if (typeof send !== "function") throw new TypeError("\u4EA4\u4E92\u56DE\u4F20\u9700\u8981\u6E20\u9053\u63D0\u4F9B send\u3002");
+      const id = `${channelId}\0${botId}`;
+      senders.set(id, send);
+      return () => {
+        if (senders.get(id) === send) senders.delete(id);
+      };
+    },
+    /** @returns 该渠道是否接入了 IM 回传（未接入则一律让给浏览器 UI）。 */
+    has: (channelId) => [...senders.keys()].some((id) => id.startsWith(`${channelId}\0`)),
+    /**
+     * 入站文本先过这里：属于某个待回答的问题/审批就认领，调用方**不要**再跑模型。
+     *
+     * @param options - { channelId, botId, key, text }。
+     * @returns 是否被认领。
+     */
+    offer({ channelId, botId, key, text }) {
+      const entry = waiters.get(waiterKey(channelId, botId, key));
+      if (!entry) return false;
+      entry.resolve(text);
+      return true;
+    },
+    /**
+     * 应答一次提问/审批。
+     *
+     * @param options - { kind: 'question'|'approval', channelId, botId, key, request }。
+     * @returns 提问返回 `{ answers }`，审批返回 outcome 字符串；无法应答时返回 null。
+     */
+    async handle({ kind, channelId, botId, key, request }) {
+      const send = senderFor(channelId, botId);
+      if (!send) return null;
+      if (kind === "approval") {
+        await send({ key, text: renderApproval(request) });
+        const reply = await wait({ channelId, botId, key, kind: "\u5BA1\u6279", signal: request?.signal });
+        if (reply === null) return null;
+        const outcome = parseApproval(reply);
+        if (outcome === null) {
+          logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u590D\u65E0\u6CD5\u8BC6\u522B\uFF08${JSON.stringify(reply)}\uFF09\uFF0C\u6309\u62D2\u7EDD\u5904\u7406`);
+          return "rejected";
+        }
+        return outcome;
+      }
+      const questions = Array.isArray(request?.questions) ? request.questions : [];
+      if (questions.length === 0) return null;
+      const answers = [];
+      for (const [index, question] of questions.entries()) {
+        await send({
+          key,
+          text: renderQuestion(question, { position: index + 1, total: questions.length })
+        });
+        const reply = await wait({ channelId, botId, key, kind: "\u63D0\u95EE", signal: request?.signal });
+        if (reply === null) return null;
+        answers.push(parseAnswer(question, reply));
+      }
+      return { answers };
+    }
+  });
+}
+
 // packages/dsh-chat/host/paths.mjs
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
@@ -1818,12 +1975,11 @@ function deltaTextOf(chunk) {
   if (typeof chunk?.delta === "string") return chunk.delta;
   return "";
 }
-function createSessionBridge({ ctx, logger = console, store, guidance }) {
+function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== "function") {
     throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
   }
-  const interactionHandlers = /* @__PURE__ */ new Map();
   const activeTurns = /* @__PURE__ */ new Map();
   async function invoke(namespace, method, args = {}, signal) {
     const request = { namespace, method, args };
@@ -2085,13 +2241,6 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
       void pump;
     }
   }
-  function registerInteractionHandler(channelId, handle) {
-    if (typeof handle !== "function") throw new TypeError("\u4EA4\u4E92\u5904\u7406\u5668\u5FC5\u987B\u662F\u51FD\u6570\u3002");
-    interactionHandlers.set(channelId, handle);
-    return () => {
-      if (interactionHandlers.get(channelId) === handle) interactionHandlers.delete(channelId);
-    };
-  }
   function installInteractionRelays() {
     if (typeof ctx?.on !== "function") {
       logger.warn?.("[dsh-chat] \u5F53\u524D Host \u4E0D\u652F\u6301\u4E8B\u4EF6\u8BA2\u9605\uFF0C\u5BA1\u6279/\u63D0\u95EE\u65E0\u6CD5\u56DE\u4F20\u5230 IM\u3002");
@@ -2099,23 +2248,24 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
       };
     }
     const locateFor = (request) => {
+      if (typeof interactions?.handle !== "function") return null;
       const sessionId = request?.agent?.session?.id;
       const located = store?.locate?.(sessionId);
       if (!located) return null;
-      const handle = interactionHandlers.get(located.channelId);
-      return handle ? { ...located, handle } : null;
+      return interactions.has?.(located.channelId) ? located : null;
     };
     const offApproval = ctx.on("approval/request", async (request, next) => {
       const target = locateFor(request);
       if (!target) return next();
       try {
-        return await target.handle({
+        const outcome = await interactions.handle({
           kind: "approval",
           channelId: target.channelId,
           botId: target.botId,
           key: target.key,
           request
         });
+        return outcome ?? next();
       } catch (error) {
         logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u4F20\u5931\u8D25\uFF0C\u4EA4\u7531\u5176\u4ED6\u5E94\u7B54\u65B9\uFF1A${error?.message ?? error}`);
         return next();
@@ -2125,7 +2275,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
       const target = locateFor(request);
       if (!target) return next();
       try {
-        const answers = await target.handle({
+        const answers = await interactions.handle({
           kind: "question",
           channelId: target.channelId,
           botId: target.botId,
@@ -2164,7 +2314,6 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
     reset,
     /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
     bindings: store,
-    registerInteractionHandler,
     installInteractionRelays
   });
 }
@@ -2379,7 +2528,14 @@ function apply(ctx, config = {}) {
   const legacyDirs = /* @__PURE__ */ new Map();
   const guidance = createGuidanceRegistry();
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
-  const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
+  const interactions = createInteractionService({ logger });
+  const sessions = createSessionBridge({
+    ctx,
+    logger,
+    store: sessionStore,
+    guidance,
+    interactions
+  });
   const rpc = createRpcCarrier(ctx, { logger });
   const delivery = createDeliveryService({ settings, logger });
   function storageFor(channelId) {
@@ -2437,7 +2593,13 @@ function apply(ctx, config = {}) {
         list: () => commands.list()
       }),
       guidance,
-      sessions
+      sessions,
+      /** 渠道接入 IM 回传（提问/审批）：attach({ channelId, botId, send })。 */
+      interactions: Object.freeze({
+        attach: (options) => interactions.attach(options),
+        offer: (options) => interactions.offer(options),
+        has: (channelId2) => interactions.has(channelId2)
+      })
     })
   });
   const optionalAgentPresets = typeof ctx.get === "function" ? ctx.get("agentPresets") : void 0;

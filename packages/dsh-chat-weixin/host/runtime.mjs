@@ -128,6 +128,18 @@ export function createWeixinRuntime({
     }
   }
 
+  // 接入 IM 回传：agent 的提问/审批发到这个用户，用户的下一条消息就是答案。
+  const detachInteractions = deps.interactions?.attach?.({
+    channelId: deps.channelId,
+    botId: account.botId,
+    send: async ({ key, text }) => {
+      const userId = (key.startsWith('p2p:') ? key.slice(4) : key).trim();
+      if (!userId) throw new TypeError('交互回传需要 userId。');
+      // 与 sendProactive 走同一条发送路径（带上该用户最近一次的 context_token）。
+      await reply(userId, String(text ?? ''), state.contextToken(userId));
+    },
+  });
+
   async function handleMessage(message, signal) {
     // message_type 2 是自己发出去的（服务端回显），必须忽略。
     if (message?.message_type === 2) return;
@@ -166,6 +178,17 @@ export function createWeixinRuntime({
     const contextToken = inboundToken ?? state.contextToken(sender);
 
     const key = `p2p:${sender}`;
+
+    // 正在等这个用户回答 agent 的提问/审批：这条消息就是答案，不再进模型。
+    if (deps.interactions?.offer?.({
+      channelId: deps.channelId,
+      botId: account.botId,
+      key,
+      text,
+    })) {
+      logger.info?.(`[dsh-chat-weixin] 认领为交互回答（${account.botId} ${key}）`);
+      return;
+    }
 
     // 命令权限单独判定（白名单用户可以被允许对话、但不允许执行命令）。
     if (text.startsWith('/')) {
@@ -315,6 +338,7 @@ export function createWeixinRuntime({
     /** 停止：中断长轮询并尽力通知服务端。 */
     async stop(signal) {
       setPhase('stopped');
+      detachInteractions?.();
       try {
         await client.notifyStop({ baseUrl, token, signal });
       } catch (cause) {

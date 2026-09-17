@@ -126698,6 +126698,18 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   let handled = 0;
   let lastError = null;
   let lastHandledAt = null;
+  async function sendToConversation({ key, text }) {
+    const separator = key.indexOf(":");
+    const kind = separator > 0 ? key.slice(0, separator) : "";
+    const id = separator > 0 ? key.slice(separator + 1) : key;
+    if (kind === "group") return gateway.sendText({ chatId: id, text });
+    return gateway.sendText({ openId: id, text });
+  }
+  const detachInteractions = deps.interactions?.attach?.({
+    channelId: deps.channelId,
+    botId: bot.id,
+    send: sendToConversation
+  });
   async function accept(event) {
     const message = event?.message;
     if (!message?.message_id) return;
@@ -126719,16 +126731,30 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       );
       return;
     }
-    if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId)) {
-      logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
-      return;
-    }
     const inbound = parseInbound(message);
     if (inbound.kind === "unsupported") {
       await gateway.replyText({
         messageId: message.message_id,
         text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u4E0E\u56FE\u7247\uFF09\u3002`
       });
+      return;
+    }
+    const conversationKey = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
+    if (inbound.kind === "text") {
+      const candidate = stripMentions(inbound.text, message.mentions);
+      if (candidate && deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: conversationKey,
+        text: candidate
+      })) {
+        logger.info?.(`[dsh-chat-feishu] \u8BA4\u9886\u4E3A\u4EA4\u4E92\u56DE\u7B54\uFF08${bot.id} ${conversationKey}\uFF09`);
+        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+        return;
+      }
+    }
+    if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId)) {
+      logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
       return;
     }
     let attachmentParts = null;
@@ -126772,7 +126798,6 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       if (!text) return;
     }
     if (text) {
-      const conversationKeyForCommands = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
       const commandAccess = deps.accessPolicy.evaluateAccess({
         policy: accessPolicy,
         conversationType,
@@ -126792,7 +126817,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         text,
         channelId: deps.channelId,
         botId: bot.id,
-        key: conversationKeyForCommands,
+        key: conversationKey,
         conversationType,
         senderId,
         botLabel: bot.botName ?? bot.id,
@@ -126852,7 +126877,6 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         logger,
         note: enhanced ? "\u{1F4CE} \u5DF2\u6CE8\u5165\u4F1A\u8BDD\u4E0A\u4E0B\u6587" : ""
       });
-      const conversationKey = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
       const result = await deps.sessions.ask({
         channelId: deps.channelId,
         botId: bot.id,
@@ -126890,7 +126914,9 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   }
   return {
     accept,
-    status: () => Object.freeze({ handled, lastError, lastHandledAt })
+    status: () => Object.freeze({ handled, lastError, lastHandledAt }),
+    /** 停止时把 IM 回传的发送器摘掉：不能让停掉的机器人继续"接单"。 */
+    dispose: () => detachInteractions?.()
   };
 }
 
@@ -127495,6 +127521,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] ${botId} \u72B6\u6001\u843D\u76D8\u5931\u8D25\uFF1A${error?.message ?? error}`);
     }
+    record.bridge?.dispose?.();
     record.gateway = null;
     record.bridge = null;
     if (record.phase !== "failed") record.phase = "stopped";

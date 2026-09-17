@@ -131,6 +131,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] ${botId} 状态落盘失败：${error?.message ?? error}`);
     }
+    record.bridge?.dispose?.();
     record.gateway = null;
     record.bridge = null;
     if (record.phase !== 'failed') record.phase = 'stopped';

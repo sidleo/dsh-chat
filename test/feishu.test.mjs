@@ -72,9 +72,9 @@ function createFakeGateway() {
       calls.replies.push({ messageId, text });
       return { messageId: 'om_reply' };
     },
-    async sendText({ chatId, text }) {
+    async sendText({ chatId, openId, text }) {
       if (gatewayState.failures.sendText) throw gatewayState.failures.sendText;
-      calls.texts.push({ chatId, text });
+      calls.texts.push({ chatId, openId, text });
       return { messageId: 'om_sent' };
     },
     async replyCard({ messageId, card }) {
@@ -141,6 +141,20 @@ async function makeBridge({
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
+  /** 假的交互回传服务：记录接入与认领调用，claim 为 true 表示"这条消息是回答"。 */
+  const attached = [];
+  const offers = [];
+  const interactions = {
+    claimed: false,
+    attach(options) {
+      attached.push(options);
+      return () => { options.detached = true; };
+    },
+    offer(request) {
+      offers.push(request);
+      return interactions.claimed;
+    },
+  };
   const state = createFeishuStateStore({ path: join(dataDir, 'state.json'), logger: silentLogger });
   await state.load();
   const published = [];
@@ -155,6 +169,7 @@ async function makeBridge({
       }),
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    interactions,
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     sessions: {
@@ -180,6 +195,9 @@ async function makeBridge({
     state,
     deps,
     published,
+    interactions,
+    attached,
+    offers,
     dataDir,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -755,5 +773,69 @@ test('呈现层失败绝不静默：建卡失败/刷卡失败都退化成文本�
     assert.equal(ok.gateway.calls.cards.length, 1);
   } finally {
     await ok.cleanup();
+  }
+});
+
+test('交互回传：agent 的提问发到飞书、飞书回复被认领为答案且不再进模型', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    // 构造时就把"怎么发到会话"交给了 hub
+    assert.equal(app.attached.length, 1);
+    assert.equal(app.attached[0].channelId, 'feishu');
+    assert.equal(app.attached[0].botId, BOT.id);
+
+    // 私聊发一条普通消息时，先问交互服务；没人认领才进模型
+    await app.bridge.accept(messageEvent({ messageId: 'om_plain', text: '普通问题' }));
+    assert.equal(app.offers.length, 1, '每条消息都要先让交互服务看一眼');
+    assert.equal(app.offers[0].key, 'p2p:ou_owner');
+    assert.ok(asked, '没被认领的消息照常进模型');
+
+    // 被认领：这条消息是回答，不该再跑一轮
+    asked = null;
+    app.interactions.claimed = true;
+    await app.bridge.accept(messageEvent({ messageId: 'om_answer', text: '2' }));
+    assert.equal(asked, null, '回答不能再进模型');
+    assert.equal(app.offers.at(-1).text, '2');
+    assert.equal(app.gateway.calls.replies.length, 1, '被认领的回答不产生任何回复');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回传：身份门禁依然优先，群聊里回答可以不 @ 机器人', async () => {
+  const app = await makeBridge();
+  try {
+    // 未被放行的人不能替别人回答问题
+    app.interactions.claimed = true;
+    await app.bridge.accept(messageEvent({ messageId: 'om_stranger', senderId: 'ou_stranger', text: '1' }));
+    assert.equal(app.offers.length, 0, '门禁在认领之前');
+
+    // 群聊里回答提问不需要 @（否则没法在群里回答）
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_group_answer', chatType: 'group', text: '生产', mentions: undefined,
+    }));
+    assert.equal(app.offers.length, 1);
+    assert.equal(app.offers[0].key, 'group:oc_chat');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回传：发送器按会话键路由，停机时摘掉（停掉的机器人不接单）', async () => {
+  const app = await makeBridge();
+  try {
+    const { send } = app.attached[0];
+    await send({ key: 'p2p:ou_a', text: '私聊提问' });
+    await send({ key: 'group:oc_g', text: '群聊提问' });
+    assert.deepEqual(app.gateway.calls.texts, [
+      { chatId: undefined, openId: 'ou_a', text: '私聊提问' },
+      { chatId: 'oc_g', openId: undefined, text: '群聊提问' },
+    ]);
+    assert.equal(app.attached[0].detached, undefined);
+    app.bridge.dispose();
+    assert.equal(app.attached[0].detached, true, 'dispose 要摘掉发送器');
+  } finally {
+    await app.cleanup();
   }
 });

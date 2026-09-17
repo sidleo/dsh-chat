@@ -114,6 +114,25 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   let lastHandledAt = null;
 
   /**
+   * 把一段文本发到某个会话（交互回传用）：会话键就是 `p2p:<openId>` / `group:<chatId>`，
+   * 因此这里不需要额外状态。
+   */
+  async function sendToConversation({ key, text }) {
+    const separator = key.indexOf(':');
+    const kind = separator > 0 ? key.slice(0, separator) : '';
+    const id = separator > 0 ? key.slice(separator + 1) : key;
+    if (kind === 'group') return gateway.sendText({ chatId: id, text });
+    return gateway.sendText({ openId: id, text });
+  }
+
+  // 接入 IM 回传：agent 的提问/审批会发到会话里问，用户回复即答案。
+  const detachInteractions = deps.interactions?.attach?.({
+    channelId: deps.channelId,
+    botId: bot.id,
+    send: sendToConversation,
+  });
+
+  /**
    * 处理一条入站事件。
    *
    * @param event - `im.message.receive_v1` 的事件体。
@@ -144,18 +163,39 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       );
       return;
     }
-    if (conversationType === 'group' && bot.groupResponseMode !== 'all'
-      && !mentionsBot(message, bot.botOpenId)) {
-      logger.info?.(`[dsh-chat-feishu] 群消息未 @ 本机器人，忽略（${bot.id} group=${message.chat_id}）`);
-      return;
-    }
-
     const inbound = parseInbound(message);
     if (inbound.kind === 'unsupported') {
       await gateway.replyText({
         messageId: message.message_id,
         text: `暂时还不能处理「${inbound.label}」类型的消息（目前支持文本与图片）。`,
       });
+      return;
+    }
+
+    const conversationKey = conversationType === 'direct'
+      ? `p2p:${senderId}`
+      : `group:${message.chat_id}`;
+
+    // 正在等这个会话回答 agent 的提问/审批：这条消息就是答案，不再进模型。
+    // 位置很关键——放在门禁**之后**（陌生人不能替人回答）、@ 检查**之前**
+    // （回答问题时不需要再 @ 机器人）。
+    if (inbound.kind === 'text') {
+      const candidate = stripMentions(inbound.text, message.mentions);
+      if (candidate && deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: conversationKey,
+        text: candidate,
+      })) {
+        logger.info?.(`[dsh-chat-feishu] 认领为交互回答（${bot.id} ${conversationKey}）`);
+        lastHandledAt = new Date().toISOString();
+        return;
+      }
+    }
+
+    if (conversationType === 'group' && bot.groupResponseMode !== 'all'
+      && !mentionsBot(message, bot.botOpenId)) {
+      logger.info?.(`[dsh-chat-feishu] 群消息未 @ 本机器人，忽略（${bot.id} group=${message.chat_id}）`);
       return;
     }
 
@@ -202,9 +242,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
 
     // 命令优先：命令不进入模型、也不做上下文增强（图片消息没有文本，直接跳过）。
     if (text) {
-      const conversationKeyForCommands = conversationType === 'direct'
-        ? `p2p:${senderId}`
-        : `group:${message.chat_id}`;
       const commandAccess = deps.accessPolicy.evaluateAccess({
         policy: accessPolicy,
         conversationType,
@@ -224,7 +261,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         text,
         channelId: deps.channelId,
         botId: bot.id,
-        key: conversationKeyForCommands,
+        key: conversationKey,
         conversationType,
         senderId,
         botLabel: bot.botName ?? bot.id,
@@ -290,10 +327,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         note: enhanced ? '📎 已注入会话上下文' : '',
       });
 
-      const conversationKey = conversationType === 'direct'
-        ? `p2p:${senderId}`
-        : `group:${message.chat_id}`;
-
       const result = await deps.sessions.ask({
         channelId: deps.channelId,
         botId: bot.id,
@@ -337,5 +370,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   return {
     accept,
     status: () => Object.freeze({ handled, lastError, lastHandledAt }),
+    /** 停止时把 IM 回传的发送器摘掉：不能让停掉的机器人继续"接单"。 */
+    dispose: () => detachInteractions?.(),
   };
 }

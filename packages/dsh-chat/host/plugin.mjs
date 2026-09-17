@@ -22,6 +22,7 @@ import { createChannelRegistry } from './channel-registry.mjs';
 import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createDeliveryService } from './delivery.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
+import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
 import { createRpcCarrier, fail, failFrom, ok } from './rpc.mjs';
@@ -107,7 +108,11 @@ export function apply(ctx, config = {}) {
   const legacyDirs = new Map();
   const guidance = createGuidanceRegistry();
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
-  const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
+  /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
+  const interactions = createInteractionService({ logger });
+  const sessions = createSessionBridge({
+    ctx, logger, store: sessionStore, guidance, interactions,
+  });
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
   const delivery = createDeliveryService({ settings, logger });
@@ -174,6 +179,12 @@ export function apply(ctx, config = {}) {
       }),
       guidance,
       sessions,
+      /** 渠道接入 IM 回传（提问/审批）：attach({ channelId, botId, send })。 */
+      interactions: Object.freeze({
+        attach: (options) => interactions.attach(options),
+        offer: (options) => interactions.offer(options),
+        has: (channelId) => interactions.has(channelId),
+      }),
     }),
   });
 

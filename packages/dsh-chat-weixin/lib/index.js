@@ -593,6 +593,15 @@ function createWeixinRuntime({
       }
     }
   }
+  const detachInteractions = deps.interactions?.attach?.({
+    channelId: deps.channelId,
+    botId: account.botId,
+    send: async ({ key, text }) => {
+      const userId = (key.startsWith("p2p:") ? key.slice(4) : key).trim();
+      if (!userId) throw new TypeError("\u4EA4\u4E92\u56DE\u4F20\u9700\u8981 userId\u3002");
+      await reply(userId, String(text ?? ""), state.contextToken(userId));
+    }
+  });
   async function handleMessage(message, signal) {
     if (message?.message_type === 2) return;
     const id = messageId(message);
@@ -628,6 +637,15 @@ function createWeixinRuntime({
     if (inboundToken) await state.rememberContextToken(sender, inboundToken);
     const contextToken = inboundToken ?? state.contextToken(sender);
     const key = `p2p:${sender}`;
+    if (deps.interactions?.offer?.({
+      channelId: deps.channelId,
+      botId: account.botId,
+      key,
+      text
+    })) {
+      logger.info?.(`[dsh-chat-weixin] \u8BA4\u9886\u4E3A\u4EA4\u4E92\u56DE\u7B54\uFF08${account.botId} ${key}\uFF09`);
+      return;
+    }
     if (text.startsWith("/")) {
       const commandAccess = deps.accessPolicy.evaluateAccess({
         policy: record.accessPolicy,
@@ -759,6 +777,7 @@ function createWeixinRuntime({
     /** 停止：中断长轮询并尽力通知服务端。 */
     async stop(signal) {
       setPhase("stopped");
+      detachInteractions?.();
       try {
         await client.notifyStop({ baseUrl, token, signal });
       } catch (cause) {

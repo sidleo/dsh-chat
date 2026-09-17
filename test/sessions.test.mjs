@@ -310,6 +310,17 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
   const app = await makeBridge();
   try {
     const listeners = new Map();
+    const seen = [];
+    /** 只有 feishu 接入了 IM 回传；weixin 没接入，一律让给浏览器。 */
+    const interactions = {
+      has: (channelId) => channelId === 'feishu',
+      handle: async ({ kind }) => {
+        seen.push(kind);
+        return kind === 'approval'
+          ? 'allowed-once'
+          : { answers: [{ id: 'q1', selected: ['是'] }] };
+      },
+    };
     const maybeBridge = createSessionBridge({
       ctx: {
         typertGateway: app.gateway,
@@ -321,14 +332,11 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
       logger: silentLogger,
       store: app.store,
       guidance: { publish() {} },
+      interactions,
     });
     await app.store.bind('feishu', 'bot_1', 'p2p:ou_a', { sessionId: 'session-bound' });
+    await app.store.bind('weixin', 'bot_1', 'p2p:ou_w', { sessionId: 'session-weixin' });
 
-    const seen = [];
-    maybeBridge.registerInteractionHandler('feishu', async (payload) => {
-      seen.push(payload.kind);
-      return payload.kind === 'approval' ? 'allowed-once' : { answers: [{ id: 'q1', selected: ['是'] }] };
-    });
     const dispose = maybeBridge.installInteractionRelays();
     assert.ok(listeners.has('approval/request'));
     assert.ok(listeners.has('user-questions/request'));
@@ -338,6 +346,12 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
     assert.equal(mine, 'allowed-once');
     const other = await approval({ agent: { session: { id: 'session-other' } }, toolName: 'bash' }, () => 'fallthrough');
     assert.equal(other, 'fallthrough');
+    // 该渠道没接入 IM 回传：同样让给浏览器，而不是把问题留在 IM 里干等
+    const notAttached = await approval(
+      { agent: { session: { id: 'session-weixin' } }, toolName: 'bash' },
+      () => 'fallthrough',
+    );
+    assert.equal(notAttached, 'fallthrough');
 
     const questions = listeners.get('user-questions/request');
     const answered = await questions(
