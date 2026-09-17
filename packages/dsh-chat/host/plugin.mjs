@@ -10,7 +10,7 @@
  * @module dsh-chat/host/plugin
  */
 
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import {
   CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE, HUB_VERSION,
@@ -21,6 +21,7 @@ import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
 import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createDeliveryService } from './delivery.mjs';
+import { channelLogPath, createLogFileSink, withFileSink } from './file-log.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
@@ -101,8 +102,12 @@ function validBotPayload(payload, options = {}) {
  * @param config - 插件配置：{ dataDir, integrationRoot }。
  */
 export function apply(ctx, config = {}) {
-  const logger = resolveLogger(ctx, 'dsh-chat');
+  const baseLogger = resolveLogger(ctx, 'dsh-chat');
   const integrations = integrationRoot(config.integrationRoot);
+  const logsDir = join(hubDataDir(config.dataDir), 'logs');
+  /** hub 与每个渠道各一份日志文件：出故障时不必再靠用户终端滚屏回忆。 */
+  const hubLog = createLogFileSink({ path: channelLogPath(logsDir, 'hub') });
+  const logger = withFileSink({ logger: baseLogger, sink: hubLog, scope: 'dsh-chat' });
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
   /** 已注册渠道的旧数据目录，供 `maintenance.import-legacy` 重跑导入。 */
   const legacyDirs = new Map();
@@ -150,7 +155,12 @@ export function apply(ctx, config = {}) {
     },
     createDeps: (channelId, definition) => Object.freeze({
       channelId,
-      logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
+      // 渠道的每一行日志同时进 <channelId>.log，排查时我能直接读文件。
+      logger: withFileSink({
+        logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
+        sink: createLogFileSink({ path: channelLogPath(logsDir, channelId) }),
+        scope: `dsh-chat-${channelId}`,
+      }),
       credentials: ctx.credentials,
       /**
        * 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）。

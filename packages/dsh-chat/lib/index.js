@@ -11,7 +11,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-chat/host/plugin.mjs
-import { resolve as resolve2 } from "node:path";
+import { join as join5, resolve as resolve2 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
@@ -563,8 +563,8 @@ function createJsonStore({
       try {
         const previous = await readFile(path, "utf8");
         if (previous.trim()) {
-          const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-          await writeFile(`${path}.bak-${stamp}`, previous, "utf8");
+          const stamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+          await writeFile(`${path}.bak-${stamp2}`, previous, "utf8");
           backedUp = true;
         }
       } catch {
@@ -1582,6 +1582,75 @@ function createDeliveryService({ settings, logger = console }) {
   });
 }
 
+// packages/dsh-chat/host/file-log.mjs
+import { appendFile, mkdir as mkdir2, rename as rename2, stat } from "node:fs/promises";
+import { dirname as dirname2, join as join2 } from "node:path";
+var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+var LEVELS = ["debug", "info", "warn", "error"];
+function stamp() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function createLogFileSink({ path, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+  if (typeof path !== "string" || !path) throw new TypeError("\u65E5\u5FD7\u6587\u4EF6\u9700\u8981 path\u3002");
+  let queue = Promise.resolve();
+  let size = null;
+  let warned = false;
+  async function rotateIfNeeded(nextLength) {
+    if (size === null) {
+      try {
+        size = (await stat(path)).size;
+      } catch {
+        size = 0;
+      }
+    }
+    if (size > 0 && size + nextLength > maxBytes) {
+      await rename2(path, `${path}.1`).catch(() => {
+      });
+      size = 0;
+    }
+  }
+  function write(line2) {
+    const text = `${line2}
+`;
+    queue = queue.then(async () => {
+      try {
+        await mkdir2(dirname2(path), { recursive: true });
+        await rotateIfNeeded(text.length);
+        await appendFile(path, text, "utf8");
+        size = (size ?? 0) + text.length;
+      } catch (error) {
+        if (!warned) {
+          warned = true;
+          process.stderr.write(`[dsh-chat] \u5199\u65E5\u5FD7\u6587\u4EF6\u5931\u8D25\uFF08${path}\uFF09\uFF1A${error?.message ?? error}
+`);
+        }
+      }
+    });
+    return queue;
+  }
+  return { write, path, flush: () => queue };
+}
+function withFileSink({ logger, sink, scope = "" }) {
+  if (!sink?.write) return logger;
+  const wrapped = {};
+  for (const level of LEVELS) {
+    const inner = typeof logger?.[level] === "function" ? logger[level].bind(logger) : null;
+    wrapped[level] = (message, ...rest) => {
+      try {
+        inner?.(message, ...rest);
+      } finally {
+        const text = String(message);
+        const prefix = scope && !text.startsWith("[") ? `[${scope}] ` : "";
+        sink.write(`${stamp()} ${level.toUpperCase().padEnd(5)} ${prefix}${text}`);
+      }
+    };
+  }
+  return Object.assign(Object.create(Object.getPrototypeOf(logger ?? {}) ?? Object.prototype), logger ?? {}, wrapped);
+}
+function channelLogPath(logsDir, name2) {
+  return join2(logsDir, `${name2}.log`);
+}
+
 // packages/dsh-chat/host/guidance.mjs
 var GUIDANCE_MAX_LENGTH2 = 8e3;
 var MAX_SESSIONS = 1024;
@@ -1785,23 +1854,23 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
 
 // packages/dsh-chat/host/paths.mjs
 import { homedir } from "node:os";
-import { join as join2, resolve } from "node:path";
+import { join as join3, resolve } from "node:path";
 function dshHome() {
   const configured = process.env.DSH_HOME;
-  return configured && configured.trim() ? resolve(configured.trim()) : join2(homedir(), ".dsh");
+  return configured && configured.trim() ? resolve(configured.trim()) : join3(homedir(), ".dsh");
 }
 function hubDataDir(configured) {
-  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join2(dshHome(), "integrations", "dsh-chat");
+  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join3(dshHome(), "integrations", "dsh-chat");
 }
 function channelDataDir(name2, integrationRoot2) {
-  return join2(integrationRoot2 ?? join2(dshHome(), "integrations"), name2);
+  return join3(integrationRoot2 ?? join3(dshHome(), "integrations"), name2);
 }
 function integrationRoot(configured) {
-  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join2(dshHome(), "integrations");
+  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join3(dshHome(), "integrations");
 }
 
 // packages/dsh-chat/host/session-store.mjs
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 var DOCUMENT_VERSION2 = 1;
 function isPlainObject6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1837,7 +1906,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
     throw new TypeError("session store \u9700\u8981 dataDir\u3002");
   }
   const store = createJsonStore({
-    path: join3(dataDir, "sessions.json"),
+    path: join4(dataDir, "sessions.json"),
     normalize: normalizeDocument2,
     empty: () => ({ version: DOCUMENT_VERSION2, channels: {} }),
     logger,
@@ -2076,7 +2145,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     const item = Array.isArray(result?.items) ? result.items.find((entry) => entry?.sessionId === sessionId) : void 0;
     return item?.running === true;
   }
-  async function rename2(sessionId, title, signal) {
+  async function rename3(sessionId, title, signal) {
     return invoke("session", "rename", { request: { sessionId, title } }, signal);
   }
   async function reset({ channelId, botId, key }) {
@@ -2310,7 +2379,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     ask,
     cancel,
     isRunning,
-    rename: rename2,
+    rename: rename3,
     reset,
     /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
     bindings: store,
@@ -2522,8 +2591,11 @@ function validBotPayload(payload, options = {}) {
   return payload.config !== null && typeof payload.config === "object" && !Array.isArray(payload.config);
 }
 function apply(ctx, config = {}) {
-  const logger = resolveLogger(ctx, "dsh-chat");
+  const baseLogger = resolveLogger(ctx, "dsh-chat");
   const integrations = integrationRoot(config.integrationRoot);
+  const logsDir = join5(hubDataDir(config.dataDir), "logs");
+  const hubLog = createLogFileSink({ path: channelLogPath(logsDir, "hub") });
+  const logger = withFileSink({ logger: baseLogger, sink: hubLog, scope: "dsh-chat" });
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
   const legacyDirs = /* @__PURE__ */ new Map();
   const guidance = createGuidanceRegistry();
@@ -2568,7 +2640,12 @@ function apply(ctx, config = {}) {
     },
     createDeps: (channelId, definition) => Object.freeze({
       channelId,
-      logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
+      // 渠道的每一行日志同时进 <channelId>.log，排查时我能直接读文件。
+      logger: withFileSink({
+        logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
+        sink: createLogFileSink({ path: channelLogPath(logsDir, channelId) }),
+        scope: `dsh-chat-${channelId}`
+      }),
       credentials: ctx.credentials,
       /**
        * 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）。
