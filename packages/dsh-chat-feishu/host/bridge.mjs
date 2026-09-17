@@ -491,16 +491,29 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 
-    // 表单提交（多选控件 / 文本输入框）：值在 action.form_value[组件name]，
-    // 组件名是 `multi_<问题id>` / `text_<问题id>`——问题 id 直接从名字里取，不依赖按钮的 value。
+    // 表单提交（勾选器 / 文本输入框）：值在 action.form_value[组件name]。
+    // 组件名约定：`chk_<序号>_<问题id>`（勾选器，值为布尔）、`text_<问题id>`（输入框）。
     const formValue = event?.action?.formValue ?? {};
     const formEntries = Object.entries(formValue)
-      .filter(([field]) => field.startsWith('multi_') || field.startsWith('text_'));
+      .filter(([field]) => field.startsWith('chk_') || field.startsWith('multi_') || field.startsWith('text_'));
+    const truthy = (raw) => raw === true || raw === 'true' || raw === 1 || raw === '1';
     let label = '';
     let questionId;
     if (formEntries.length > 0) {
       const picked = [];
       for (const [field, raw] of formEntries) {
+        if (field.startsWith('chk_')) {
+          // 勾选器：只认"被勾上"的；标签从桥记住的批次里按 序号 + 问题id 反查
+          const matched = /^chk_(\d+)_(.+)$/.exec(field);
+          if (!matched || !truthy(raw)) continue;
+          const [, indexText, id] = matched;
+          questionId = id;
+          const question = questionBatches.get(`p2p:${operatorId}`)?.questions?.find((item) => item?.id === id)
+            ?? questionBatches.get(`group:${chatId}`)?.questions?.find((item) => item?.id === id);
+          const optionLabel = question?.options?.[Number(indexText)]?.label;
+          if (typeof optionLabel === 'string' && optionLabel) picked.push(optionLabel);
+          continue;
+        }
         questionId = field.slice(field.indexOf('_') + 1);
         if (field.startsWith('multi_')) {
           for (const item of Array.isArray(raw) ? raw : [raw]) {
@@ -514,7 +527,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       label = picked.join('、');
       if (!label) {
         logger.info?.(`[dsh-chat-feishu] 卡片表单提交没有内容（${bot.id} ${operatorId}）`);
-        return { toast: { type: 'info', content: '还没有填内容。' } };
+        return { toast: { type: 'info', content: '还没有勾选或填写内容。' } };
       }
     } else if (value.dsh === 'answer') {
       label = typeof value.label === 'string' ? value.label : '';

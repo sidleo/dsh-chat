@@ -279,9 +279,10 @@ const detach = deps.interactions.attach({
   // 可选：能把**一批问题**渲染成平台原生交互（如飞书按钮卡片）就提供，用户点一下即可回答。
   // 关键约定：一批问题只用**一条**消息，回答后就地更新它（answered 是 {问题id: 答案}），
   // final=true 表示全部答完，可以收尾成"已完成"的样子。缺席或首发失败时 hub 自动退回纯文本。
-  // 怎么呈现由渠道决定：飞书是"一页一题"的 Card 2.0 卡片（单选=按钮；多选=表单里的原生多选控件
-  // multi_select_static + 提交；自由文本=表单里的原生输入框 + 提交），答完 patch 同一张卡翻页。
-  // 表单值回调在 action.form_value[组件name]，组件名带问题 id（multi_<id>/text_<id>）以便归属。
+  // 怎么呈现由渠道决定：飞书是"一页一题"的 Card 2.0 卡片（单选=按钮；多选=表单里**每个选项一个
+  // 勾选器 checker 平铺列出** + 提交；自由文本=表单里的原生输入框 + 提交），答完 patch 同一张卡翻页。
+  // 表单值回调在 action.form_value[组件name]：勾选器名 `chk_<序号>_<问题id>`（值为布尔，
+  // 选项原文由渠道按批次反查），输入框名 `text_<问题id>`。
   sendQuestions: async ({ key, questions, answered, final }) => {},
   // 可选：审批（允许/拒绝）
   sendApproval: async ({ key, request }) => {},

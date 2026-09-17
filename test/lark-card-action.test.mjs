@@ -106,9 +106,12 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.match(card.header.title.content, /第 2\/3 题/);
   const second = JSON.stringify(card);
   assert.match(second, /"tag":"form"/);
-  assert.match(second, /"tag":"multi_select_static"/);
+  assert.match(second, /"tag":"checker"/, '多选要平铺成勾选器，不是下拉控件');
+  assert.doesNotMatch(second, /multi_select_static/, '不要下拉多选（真机反馈：要能一眼看到所有选项）');
+  assert.match(second, /"name":"chk_0_multi"/, '组件名带序号与问题 id');
+  assert.match(second, /"name":"chk_1_multi"/);
+  assert.match(second, /"content":"X"/, '每个勾选器带自己的选项文案');
   assert.match(second, /"form_action_type":"submit"/);
-  assert.match(second, /"name":"multi_multi"/, '组件名要带问题 id：表单值靠它归属');
   assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在卡里留一行答案');
   assert.doesNotMatch(second, /还有别的吗/);
 

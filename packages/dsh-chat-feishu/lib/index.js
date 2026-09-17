@@ -127018,12 +127018,23 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
     const formValue = event?.action?.formValue ?? {};
-    const formEntries = Object.entries(formValue).filter(([field]) => field.startsWith("multi_") || field.startsWith("text_"));
+    const formEntries = Object.entries(formValue).filter(([field]) => field.startsWith("chk_") || field.startsWith("multi_") || field.startsWith("text_"));
+    const truthy = (raw) => raw === true || raw === "true" || raw === 1 || raw === "1";
     let label = "";
     let questionId;
     if (formEntries.length > 0) {
       const picked = [];
       for (const [field, raw] of formEntries) {
+        if (field.startsWith("chk_")) {
+          const matched = /^chk_(\d+)_(.+)$/.exec(field);
+          if (!matched || !truthy(raw)) continue;
+          const [, indexText, id] = matched;
+          questionId = id;
+          const question = questionBatches.get(`p2p:${operatorId}`)?.questions?.find((item) => item?.id === id) ?? questionBatches.get(`group:${chatId}`)?.questions?.find((item) => item?.id === id);
+          const optionLabel = question?.options?.[Number(indexText)]?.label;
+          if (typeof optionLabel === "string" && optionLabel) picked.push(optionLabel);
+          continue;
+        }
         questionId = field.slice(field.indexOf("_") + 1);
         if (field.startsWith("multi_")) {
           for (const item of Array.isArray(raw) ? raw : [raw]) {
@@ -127036,7 +127047,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       label = picked.join("\u3001");
       if (!label) {
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u8868\u5355\u63D0\u4EA4\u6CA1\u6709\u5185\u5BB9\uFF08${bot.id} ${operatorId}\uFF09`);
-        return { toast: { type: "info", content: "\u8FD8\u6CA1\u6709\u586B\u5185\u5BB9\u3002" } };
+        return { toast: { type: "info", content: "\u8FD8\u6CA1\u6709\u52FE\u9009\u6216\u586B\u5199\u5185\u5BB9\u3002" } };
       }
     } else if (value.dsh === "answer") {
       label = typeof value.label === "string" ? value.label : "";
@@ -127583,21 +127594,18 @@ function createLarkGateway({
             });
           });
         } else if (options.length > 0) {
-          body.push("", "\u53EF\u591A\u9009\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
+          body.push("", "\u53EF\u591A\u9009\uFF1A\u52FE\u9009\u540E\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
           elements.push({ tag: "markdown", content: body.join("\n") });
           elements.push({
             tag: "form",
             name: `dsh_form_${questionId}`,
             elements: [
-              {
-                tag: "multi_select_static",
-                name: `multi_${questionId}`,
-                placeholder: { tag: "plain_text", content: "\u8BF7\u9009\u62E9\uFF08\u53EF\u591A\u9009\uFF09" },
-                options: options.slice(0, 20).map((option) => ({
-                  text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
-                  value: String(option.label).slice(0, 60)
-                }))
-              },
+              ...options.slice(0, 20).map((option, optionIndex) => ({
+                tag: "checker",
+                name: `chk_${optionIndex}_${questionId}`,
+                checked: false,
+                text: { tag: "plain_text", content: String(option.label).slice(0, 80) }
+              })),
               {
                 tag: "button",
                 name: "submit",

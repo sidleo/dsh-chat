@@ -1179,18 +1179,25 @@ test('交互回传：多选/自由文本走表单值（action.form_value[组件�
   try {
     app.interactions.claimKey = 'p2p:ou_owner';
 
-    // 多选控件提交：form_value 里是数组，组件名 multi_<问题id>
+    // 多选：先发一页（桥要记住批次，才能把 chk_序号 反查成选项原文）
+    const questions = [{
+      id: 'q_multi', header: '多选', question: '选哪些？', multiSelect: true,
+      options: [{ label: '知识库检索' }, { label: '数据分析取数' }, { label: '运维确认' }],
+    }];
+    await app.attached[0].sendQuestions({ key: 'p2p:ou_owner', questions, answered: {}, final: false });
+
+    // 勾选器提交：勾上第 1、2 个（值为 true），第三个没勾
     const multi = await app.bridge.handleCardAction({
       messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
       action: {
         tag: 'button',
         value: {},
-        formValue: { multi_q_multi: ['知识库检索', '数据分析取数'] },
+        formValue: { 'chk_0_q_multi': true, 'chk_1_q_multi': true, 'chk_2_q_multi': false },
       },
     });
     assert.equal(multi.toast.type, 'success');
     assert.equal(app.offers.at(-1).text, '知识库检索、数据分析取数', '用「、」拼接，parseAnswer 会拆成多选');
-    assert.equal(app.offers.at(-1).questionId, 'q_multi', '问题 id 从组件名后缀取');
+    assert.equal(app.offers.at(-1).questionId, 'q_multi', '问题 id 从组件名里取');
 
     // 文本输入框提交：form_value 里是字符串，组件名 text_<问题id>
     const text = await app.bridge.handleCardAction({
@@ -1207,7 +1214,7 @@ test('交互回传：多选/自由文本走表单值（action.form_value[组件�
       messageId: 'om_card_empty', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: {}, formValue: { text_q_free: '   ' } },
     });
-    assert.match(empty.toast.content, /还没有填内容/);
+    assert.match(empty.toast.content, /还没有勾选或填写内容/);
     assert.equal(app.offers.length, before);
 
     // 表单提交同样受身份门禁约束

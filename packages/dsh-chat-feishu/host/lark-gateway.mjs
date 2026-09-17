@@ -429,22 +429,21 @@ export function createLarkGateway({
             });
           });
         } else if (options.length > 0) {
-          // 多选：原生多选控件 + 提交
-          body.push('', '可多选，选完点「提交」。');
+          // 多选：**每个选项一个勾选器（checker）平铺列出**，用户直接勾选，点「提交」一起回来。
+          // 不用 multi_select_static 是因为它是下拉控件（真机反馈：要能一眼看到所有选项）。
+          // checker 在 form 内不配 behaviors：勾选只在本地生效，提交时随 form_value 回来。
+          body.push('', '可多选：勾选后点「提交」。');
           elements.push({ tag: 'markdown', content: body.join('\n') });
           elements.push({
             tag: 'form',
             name: `dsh_form_${questionId}`,
             elements: [
-              {
-                tag: 'multi_select_static',
-                name: `multi_${questionId}`,
-                placeholder: { tag: 'plain_text', content: '请选择（可多选）' },
-                options: options.slice(0, 20).map((option) => ({
-                  text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
-                  value: String(option.label).slice(0, 60),
-                })),
-              },
+              ...options.slice(0, 20).map((option, optionIndex) => ({
+                tag: 'checker',
+                name: `chk_${optionIndex}_${questionId}`,
+                checked: false,
+                text: { tag: 'plain_text', content: String(option.label).slice(0, 80) },
+              })),
               {
                 tag: 'button',
                 name: 'submit',
