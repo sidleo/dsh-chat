@@ -43,6 +43,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
 - **隔离调试**：`config.channelDataDirs` 可把渠道数据目录指到临时目录，避免用真实凭据建长连接；覆盖时**不做**旧设置导入。
+- **"回合跑完但用户没收到"怎么查**：在日志里对齐四行——hub 的 `发送提示词` → hub 的 `回合结束` → 渠道的 `回合结束，准备回复` → 渠道的 `最终答案投递方式`。
+  第 2 行有、第 3 行没有 = 结果没交回渠道（`ask()` 的返回路径被卡住：关流或提示词收据永不落地，二者都必须有界，见 `sessions.mjs`）；
+  第 3 行有、第 4 行是 `failed` = 呈现层发不出去（会同时写进 `connection.status.lastError`）。
 
 ## 阶段与进度
 
