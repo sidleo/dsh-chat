@@ -239,7 +239,6 @@ export function renderStepCard({
   panelTitle = '',
   currentQuestion = [],
   todos = null,
-  images = [],
   template = 'blue',
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -327,19 +326,6 @@ export function renderStepCard({
     elements.push({ tag: 'hr' });
     elements.push({ tag: 'markdown', content: clampBudget(answer) });
   }
-  // 交付的图片直接进卡片（真机想法：能进卡片就别再单发一条消息）。
-  // 飞书卡片里没有"文件"组件，所以普通文件仍然只能走 post 的附件区。
-  for (const image of Array.isArray(images) ? images.slice(0, 8) : []) {
-    if (!image?.imageKey) continue;
-    elements.push({
-      tag: 'img',
-      img_key: image.imageKey,
-      alt: { tag: 'plain_text', content: image.name ?? '' },
-      ...(image.name ? { title: { tag: 'plain_text', content: String(image.name).slice(0, 60) } } : {}),
-      scale_type: 'fit_horizontal',
-      margin: '4px 0px 4px 0px',
-    });
-  }
   if (elements.length === 0) {
     elements.push({ tag: 'markdown', content: '正在处理…' });
   }
@@ -394,8 +380,6 @@ export function createTurnPresenter({
   const askBatches = new Map();
   /** 最新的任务清单（`todo_write` 每次都是全量，覆盖即可）。 */
   let todos = null;
-  /** 交付的图片（`{ name, imageKey }`）：直接内嵌进卡片，不再单发消息。 */
-  let delivered = [];
   /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
   let lastAnswer = '';
   /** 呈现状态：running（默认）/ done / failed。 */
@@ -498,7 +482,6 @@ export function createTurnPresenter({
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === 'running' } : null,
-      images: delivered,
       template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
     });
   }
@@ -680,29 +663,6 @@ export function createTurnPresenter({
         }
         return patchNow();
       });
-    },
-
-    /**
-     * @returns 这张卡现在能不能内嵌交付图片（调用方据此决定要不要白上传一次）。
-     */
-    canDeliverImages() {
-      return mode === 'streaming_card' && !cardBroken;
-    },
-
-    /**
-     * 把交付的图片内嵌进这张卡（排在最终答案后面）。
-     *
-     * 图片能进卡片，普通文件不能（飞书卡片没有文件组件）——所以文件仍然走单独一条消息。
-     * 卡片已经建不出来时返回 false，调用方据此退回"连图片也一起单发"。
-     *
-     * @param payload - { images }，`images` = `[{ name, imageKey }]`。
-     * @returns 是否成功画进卡片。
-     */
-    deliverImages(payload) {
-      const images = Array.isArray(payload?.images) ? payload.images : [];
-      if (mode !== 'streaming_card' || images.length === 0) return Promise.resolve(false);
-      delivered = [...delivered, ...images];
-      return enqueue(() => patch(lastAnswer));
     },
 
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */

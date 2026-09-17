@@ -476,7 +476,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       // 图片能内嵌进卡片（不再单发消息），普通文件只能走一条 post 消息的附件区。
       await sendDeliverables(result?.files, message, {
         replyInThread: conversationType === 'group' && bot.groupTopicReply === true,
-        presenter,
       });
       handled += 1;
       lastHandledAt = new Date().toISOString();
@@ -511,21 +510,14 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 失败必须可见：发不出去要回一句可读原因并写 `lastError`——"文件没收到"同样是最难
    * 排查的故障形态，不能只留一行日志。
    *
-   * 图片优先内嵌进过程卡（卡片只有 `img` 组件、没有文件组件），其余合成一条消息
-   * 放进 post 的附件区——真机要求：多个文件不要刷屏，而且**不要任何文字描述**。
+   * 全部合成**一条**消息放进 post 的附件区——真机要求：不要刷屏、不要任何文字描述，
+   * 图片也算附件（所以图片不再单独内嵌进卡片）。
    *
    * @param files - `[{ path, description? }]`（来自会话桥的 `deliverables/presented`）。
    * @param message - 入站消息（用 chat_id 作为收件人）。
-   * @param options - { replyInThread, presenter }。
+   * @param options - { replyInThread }。
    */
-  /** 按扩展名判断是不是图片（图片能进卡片，其余只能走附件区）。 */
-  function isImageName(name) {
-    const lower = String(name).toLowerCase();
-    const dot = lower.lastIndexOf('.');
-    return dot >= 0 && new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']).has(lower.slice(dot));
-  }
-
-  async function sendDeliverables(files, message, { replyInThread = false, presenter = null } = {}) {
+  async function sendDeliverables(files, message, { replyInThread = false } = {}) {
     if (!Array.isArray(files) || files.length === 0) return;
     // 先本地校验（存在、非空、不超限），再交给渠道一次发一条消息（飞书的 post 附件区能装多个）。
     const items = [];
@@ -545,34 +537,15 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         failed.push({ name, reason: error?.message ?? String(error) });
       }
     }
-    // ① 图片：能画进卡片就不单发消息（卡片没有文件组件，但图片有 img 组件）。
-    let rest = items;
-    if (presenter?.canDeliverImages?.() === true
-      && typeof gateway.uploadDeliverableImages === 'function') {
-      const images = items.filter((item) => isImageName(item.name));
-      if (images.length > 0) {
-        const uploaded = await gateway.uploadDeliverableImages(images);
-        failed.push(...(uploaded?.failed ?? []));
-        if (uploaded?.uploaded?.length > 0
-          && await presenter.deliverImages({ images: uploaded.uploaded })) {
-          const embedded = new Set(uploaded.uploaded.map((image) => image.name));
-          rest = items.filter((item) => !embedded.has(item.name));
-          logger.info?.(`[dsh-chat-feishu] 交付图片已内嵌进卡片（${bot.id}）：`
-            + uploaded.uploaded.map((image) => image.name).join('、'));
-        }
-      }
-    }
-
-    // ② 其余文件（含卡片不可用时的图片）：合成一条消息，只放文件、不带文字。
-    if (rest.length > 0) {
+    if (items.length > 0) {
       try {
-        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items: rest });
+        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items });
         failed.push(...(sent?.failed ?? []));
-        logger.info?.(`[dsh-chat-feishu] 交付文件已发出（${bot.id}）：`
-          + `${(sent?.files ?? []).join('、')}${sent?.images?.length ? ` + ${sent.images.length} 张图` : ''}`);
+        logger.info?.(`[dsh-chat-feishu] 交付物已发出（${bot.id}）：`
+          + `${(sent?.files ?? []).join('、')}`);
       } catch (error) {
         const reason = error?.message ?? String(error);
-        for (const item of rest) failed.push({ name: item.name, reason });
+        for (const item of items) failed.push({ name: item.name, reason });
       }
     }
     if (failed.length === 0) return;

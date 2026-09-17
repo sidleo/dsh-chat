@@ -635,19 +635,17 @@ export function createLarkGateway({
      * 一条消息发多个交付文件。
      *
      * 飞书原生支持：`post`（富文本）消息有一个顶层 `files` 附件区，可以放**多个**
-     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）；
-     * 图片则用 `{"tag":"img","image_key":…}` 内嵌在正文里。因此多个成品只占**一条**消息，
-     * 不再一条一个文件地刷屏。
+     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）。
+     * **图片也一起走附件区**（真机要求：交付物合成一条不带文字的附件消息，图片同样算附件），
+     * 因此正文始终为空数组——不留任何文字描述。
      *
-     * @param options - { chatId, openId, items }，`items` = `[{ path, name?, description? }]`。
-     * @returns { messageId, files, images, failed }：成功清单与失败清单。
+     * @param options - { chatId, openId, items }，`items` = `[{ path, name? }]`。
+     * @returns { messageId, files, failed }：成功清单与失败清单。
      */
     async sendDeliverables({ chatId, openId, items = [] }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError('sendDeliverables 需要 chatId 或 openId。');
-      // 真机反馈：交付文件不要任何文字描述，直接给文件。post 允许正文为空数组，
-      // 只靠顶层 `files` 附件区承载文件；图片作为正文里的 img 行。
-      const paragraphs = [];
+      // 正文恒为空：交付物不要任何文字描述，全部靠顶层 `files` 附件区承载。
       const attachments = [];
       const sent = [];
       const failed = [];
@@ -656,24 +654,14 @@ export function createLarkGateway({
         if (!path) continue;
         const name = item.name || path.split('/').pop() || '文件';
         try {
-          if (isImagePath(path)) {
-            const imageKey = await uploadImageKey(path);
-            paragraphs.push([{ tag: 'img', image_key: imageKey }]);
-            sent.push({ name, kind: 'image' });
-            continue;
-          }
-          const fileKey = await uploadFileKey(path, name);
-          attachments.push({ key: fileKey });
-          sent.push({ name, kind: 'file' });
+          attachments.push({ key: await uploadFileKey(path, name) });
+          sent.push({ name, kind: isImagePath(path) ? 'image' : 'file' });
         } catch (error) {
           failed.push({ name, reason: error?.message ?? String(error) });
         }
       }
       if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
-      const content = {
-        zh_cn: { content: paragraphs },
-        ...(attachments.length > 0 ? { files: attachments } : {}),
-      };
+      const content = { zh_cn: { content: [] }, files: attachments };
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
         data: { receive_id: receiveId, msg_type: 'post', content: JSON.stringify(content) },
@@ -685,31 +673,6 @@ export function createLarkGateway({
         images: sent.filter((entry) => entry.kind === 'image').map((entry) => entry.name),
         failed,
       };
-    },
-
-    /**
-     * 只上传交付物里的图片，返回 `[{ name, imageKey }]`（给进度卡内嵌用）。
-     *
-     * 飞书的卡片组件里**没有文件/附件组件**，只有 `img`（图片）——所以图片能直接进卡片、
-     * 普通文件只能走 post 消息的附件区。
-     *
-     * @param items - `[{ path, name? }]`。
-     * @returns { uploaded, failed }。
-     */
-    async uploadDeliverableImages(items = []) {
-      const uploaded = [];
-      const failed = [];
-      for (const item of items) {
-        const path = typeof item?.path === 'string' ? item.path : '';
-        if (!path || !isImagePath(path)) continue;
-        const name = item.name || path.split('/').pop() || '图片';
-        try {
-          uploaded.push({ name, imageKey: await uploadImageKey(path) });
-        } catch (error) {
-          failed.push({ name, reason: error?.message ?? String(error) });
-        }
-      }
-      return { uploaded, failed };
     },
 
     /** 供进度卡内嵌提问区使用（纯渲染）。 */

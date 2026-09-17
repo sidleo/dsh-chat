@@ -181,7 +181,7 @@ test('独立提问卡：已答的行自己组成 `❓ N/M 已回答` 折叠面�
   assert.match(JSON.stringify(panel), /提问 · 选一个 → A/, '收起也能展开回看');
 });
 
-test('交付文件：多个文件+图片合成一条 post 消息（附件区 + 正文内嵌图片）', async () => {
+test('交付文件：多个文件+图片合成一条不带文字的 post 消息（全在附件区）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-lark-deliver-'));
   try {
     const md = join(dir, 'report.md');
@@ -206,15 +206,20 @@ test('交付文件：多个文件+图片合成一条 post 消息（附件区 + �
     assert.deepEqual(result.images, ['chart.png']);
     assert.deepEqual(result.failed, []);
 
-    // 只发了一条消息，且是 post（附件区能装多个文件）
+    // 只发了一条消息，且是 post（附件区能装多个文件，图片也走附件区）
     assert.equal(sdk.__calls.created.length, 1);
     const created = sdk.__calls.created[0];
     assert.equal(created.data.msg_type, 'post');
     const content = JSON.parse(created.data.content);
-    assert.deepEqual(content.files, [{ key: 'file_v3_1' }, { key: 'file_v3_1' }], '两个文件都进附件区');
-    // 真机要求：交付文件不要文字描述，正文里只有图片
-    assert.deepEqual(content.zh_cn.content, [[{ tag: 'img', image_key: 'img_v3_1' }]]);
+    assert.deepEqual(
+      content.files,
+      [{ key: 'file_v3_1' }, { key: 'file_v3_1' }, { key: 'file_v3_1' }],
+      '三个成品（含图片）都进同一条消息的附件区',
+    );
+    // 真机要求：不要任何文字描述，正文留空
+    assert.deepEqual(content.zh_cn.content, []);
     assert.doesNotMatch(JSON.stringify(content), /report\.md|测试笔记/, '不要文件名/描述文字');
+    assert.equal(sdk.__calls.uploadImages.length, 0, '图片也按文件上传（附件区只收 file_key）');
 
     // 全部失败时不发空消息
     const broken = createFakeSdk({ createReturns: { fileCreate: {} } });
@@ -229,25 +234,3 @@ test('交付文件：多个文件+图片合成一条 post 消息（附件区 + �
   }
 });
 
-test('交付图片可以只上传给卡片内嵌（不产生消息）', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-lark-embed-'));
-  try {
-    const png = join(dir, 'chart.png');
-    const md = join(dir, 'report.md');
-    await writeFile(png, Buffer.from([0x89, 0x50]));
-    await writeFile(md, '# r', 'utf8');
-
-    const sdk = createFakeSdk();
-    const gateway = makeGateway(sdk);
-    const result = await gateway.uploadDeliverableImages([
-      { path: png, name: 'chart.png' },
-      { path: md, name: 'report.md' },
-    ]);
-    assert.deepEqual(result.uploaded, [{ name: 'chart.png', imageKey: 'img_v3_1' }]);
-    assert.deepEqual(result.failed, []);
-    assert.equal(sdk.__calls.created.length, 0, '只上传，不发消息');
-    assert.equal(sdk.__calls.uploadFiles.length, 0, '非图片不参与');
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
