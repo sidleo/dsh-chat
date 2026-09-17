@@ -126482,7 +126482,14 @@ import { join } from "node:path";
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
 var MAX_STEP_LINES = 24;
 var MAX_CARD_CONTENT = 12e3;
-function renderStepCard({ title, lines = [], answer = "", note = "", question = null, template = "blue" }) {
+function renderStepCard({
+  title,
+  lines = [],
+  answer = "",
+  note = "",
+  question = null,
+  template = "blue"
+}) {
   const budget = { left: MAX_CARD_CONTENT };
   const clamp = (text) => {
     const value = typeof text === "string" ? text : "";
@@ -126497,7 +126504,23 @@ function renderStepCard({ title, lines = [], answer = "", note = "", question = 
   }
   if (lines.length > 0) {
     const body = clamp(lines.map((line) => `\xB7 ${line}`).join("\n"));
-    if (body) elements.push({ tag: "markdown", content: body });
+    if (body) {
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        border: { color: "grey", corner_radius: "4px" },
+        header: {
+          title: {
+            tag: "markdown",
+            content: `\u{1F6E0} \u5DE5\u5177\u4E0E\u601D\u8003\uFF08${lines.length} \u6761\uFF09\xB7 \u6700\u65B0\uFF1A${clamp(lines.at(-1)).slice(0, 60)}`
+          },
+          width: "fill",
+          icon_position: "right",
+          icon_expanded_angle: -180
+        },
+        elements: [{ tag: "markdown", content: body }]
+      });
+    }
   }
   if (Array.isArray(question?.elements) && question.elements.length > 0) {
     elements.push(...question.elements);
@@ -126531,7 +126554,7 @@ function createTurnPresenter({
   const messageId = message?.message_id;
   const chatId = message?.chat_id;
   const replyInThread = chatType === "group" && bot?.groupTopicReply === true;
-  const title = bot?.botName ? `${bot.botName} \u6B63\u5728\u5904\u7406` : "\u6B63\u5728\u5904\u7406";
+  const title = "\u6B63\u5728\u5904\u7406";
   let lines = [];
   let cardId = null;
   let cardBroken = false;
@@ -126539,6 +126562,9 @@ function createTurnPresenter({
   let lastAnswer = "";
   let state = "running";
   let lastFailure = null;
+  const PATCH_MIN_INTERVAL_MS = 1200;
+  let lastPatchAt = 0;
+  let patchTimer = null;
   let lastDelivery = null;
   let chain = Promise.resolve();
   function enqueue(task) {
@@ -126551,8 +126577,8 @@ function createTurnPresenter({
   }
   function currentTitle() {
     if (question?.current) return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${question.index}/${question.total} \u9898\uFF09`;
-    if (state === "done") return `${bot?.botName ?? "DSH"} \u2705 \u5DF2\u5B8C\u6210`;
-    if (state === "failed") return `${bot?.botName ?? "DSH"} \u26A0\uFE0F \u672A\u6B63\u5E38\u5B8C\u6210`;
+    if (state === "done") return "\u2705 \u5DF2\u5B8C\u6210";
+    if (state === "failed") return "\u26A0\uFE0F \u672A\u6B63\u5E38\u5B8C\u6210";
     return title;
   }
   async function ensureCard() {
@@ -126593,6 +126619,27 @@ function createTurnPresenter({
       return false;
     }
   }
+  async function patchNow(answer = lastAnswer) {
+    lastPatchAt = Date.now();
+    return patch(lines, answer);
+  }
+  function schedulePatch() {
+    if (mode !== "streaming_card" || cardBroken) return;
+    if (!cardId) {
+      void enqueue(() => patchNow());
+      return;
+    }
+    const wait = PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt);
+    if (wait <= 0) {
+      void enqueue(() => patchNow());
+      return;
+    }
+    if (patchTimer) return;
+    patchTimer = setTimeout(() => {
+      patchTimer = null;
+      void enqueue(() => patchNow());
+    }, wait);
+  }
   async function patch(linesSnapshot, answer) {
     const id = await ensureCard();
     if (!id) return false;
@@ -126626,6 +126673,10 @@ function createTurnPresenter({
       if (mode !== "streaming_card" || typeof gateway.renderQuestionElements !== "function") {
         return Promise.resolve(false);
       }
+      if (patchTimer) {
+        clearTimeout(patchTimer);
+        patchTimer = null;
+      }
       return enqueue(async () => {
         const rendered = gateway.renderQuestionElements({
           questions: payload?.questions ?? [],
@@ -126640,7 +126691,7 @@ function createTurnPresenter({
           index: current ? questions.indexOf(current) + 1 : 0,
           total: questions.length
         } : null;
-        const ok = await patch(lines, lastAnswer);
+        const ok = await patchNow();
         return ok;
       });
     },
@@ -126655,18 +126706,39 @@ function createTurnPresenter({
      */
     step(text) {
       if (mode === "off" || !text) return Promise.resolve();
-      return enqueue(async () => {
-        lines = [...lines, text].slice(-MAX_STEP_LINES);
-        if (mode === "post") {
+      lines = [...lines, text].slice(-MAX_STEP_LINES);
+      if (mode === "post") {
+        return enqueue(async () => {
           try {
             await gateway.replyText({ messageId, text, replyInThread });
           } catch (error) {
             noteFailure("\u53D1\u9001\u8FC7\u7A0B\u6D88\u606F\u5931\u8D25", error);
           }
-          return;
-        }
-        await patch(lines, "");
-      });
+        });
+      }
+      schedulePatch();
+      return Promise.resolve();
+    },
+    /**
+     * 记录一条"思考"（模型的推理摘要），与工具调用同处一个折叠面板。
+     *
+     * @param text - 一行摘要（调用方负责截断）。
+     */
+    think(text) {
+      if (mode === "off" || !text) return Promise.resolve();
+      const line = `\u{1F4AD} ${text}`;
+      lines = [...lines, line].slice(-MAX_STEP_LINES);
+      if (mode === "post") {
+        return enqueue(async () => {
+          try {
+            await gateway.replyText({ messageId, text: line, replyInThread });
+          } catch (error) {
+            noteFailure("\u53D1\u9001\u601D\u8003\u6D88\u606F\u5931\u8D25", error);
+          }
+        });
+      }
+      schedulePatch();
+      return Promise.resolve();
     },
     /**
      * 收尾：把最终答案交给用户（排在所有已排队的步骤之后）。
@@ -126685,6 +126757,10 @@ function createTurnPresenter({
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         lastAnswer = body;
         state = failed ? "failed" : "done";
+        if (patchTimer) {
+          clearTimeout(patchTimer);
+          patchTimer = null;
+        }
         if (mode === "streaming_card") {
           if (!cardBroken && await patch(lines, body)) {
             lastDelivery = "card";
@@ -127035,9 +127111,27 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         handlers: {
-          onToolCall: (toolEvent) => presenter.step(
-            `\u{1F6E0} ${toolEvent?.data?.name ?? "\u5DE5\u5177"}`
-          ),
+          onToolCall: (toolEvent) => {
+            const name2 = toolEvent?.data?.name ?? "\u5DE5\u5177";
+            let summary = "";
+            try {
+              const args = typeof toolEvent?.data?.arguments === "string" ? JSON.parse(toolEvent.data.arguments) : toolEvent?.data?.arguments;
+              summary = typeof args?.description === "string" && args.description ? args.description : typeof args?.command === "string" ? args.command : "";
+            } catch {
+            }
+            const oneLine = summary.replace(/\s+/g, " ").trim().slice(0, 60);
+            presenter.step(`\u{1F6E0} ${name2}${oneLine ? ` \xB7 ${oneLine}` : ""}`);
+          },
+          // 思考（推理摘要）也进同一个折叠面板：一行一条，够看轮廓即可。
+          onAssistantMessage: (messageEvent) => {
+            const blocks = messageEvent?.data?.message?.content;
+            if (!Array.isArray(blocks)) return;
+            for (const block of blocks) {
+              if (block?.type !== "reasoning" || typeof block.text !== "string") continue;
+              const line = block.text.replace(/\s+/g, " ").trim().slice(0, 80);
+              if (line) presenter.think(line);
+            }
+          },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;
             if (reason?.kind && reason.kind !== "completed") {

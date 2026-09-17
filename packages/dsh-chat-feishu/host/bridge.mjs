@@ -437,9 +437,32 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         handlers: {
-          onToolCall: (toolEvent) => presenter.step(
-            `🛠 ${toolEvent?.data?.name ?? '工具'}`,
-          ),
+          onToolCall: (toolEvent) => {
+            const name = toolEvent?.data?.name ?? '工具';
+            let summary = '';
+            try {
+              const args = typeof toolEvent?.data?.arguments === 'string'
+                ? JSON.parse(toolEvent.data.arguments)
+                : toolEvent?.data?.arguments;
+              summary = typeof args?.description === 'string' && args.description
+                ? args.description
+                : (typeof args?.command === 'string' ? args.command : '');
+            } catch {
+              // 参数不是 JSON 就算了，只留工具名
+            }
+            const oneLine = summary.replace(/\s+/g, ' ').trim().slice(0, 60);
+            presenter.step(`🛠 ${name}${oneLine ? ` · ${oneLine}` : ''}`);
+          },
+          // 思考（推理摘要）也进同一个折叠面板：一行一条，够看轮廓即可。
+          onAssistantMessage: (messageEvent) => {
+            const blocks = messageEvent?.data?.message?.content;
+            if (!Array.isArray(blocks)) return;
+            for (const block of blocks) {
+              if (block?.type !== 'reasoning' || typeof block.text !== 'string') continue;
+              const line = block.text.replace(/\s+/g, ' ').trim().slice(0, 80);
+              if (line) presenter.think(line);
+            }
+          },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;
             if (reason?.kind && reason.kind !== 'completed') {

@@ -1398,13 +1398,24 @@ test('处理完卡片标题不再是"正在处理"', async () => {
     bot: { botName: '张三-DSH', groupTopicReply: false },
     logger: silentLogger,
   });
-  await presenter.step('🛠 bash');
-  assert.match(JSON.stringify(cards.at(-1)), /张三-DSH 正在处理/);
-
+  await presenter.step('🛠 bash · 检查 try 结构');
+  await presenter.think('先看 bridge 的 try 块');
+  const running = JSON.stringify(cards.at(-1));
+  assert.match(running, /"content":"正在处理"/, '标题不带机器人名前缀');
+  assert.doesNotMatch(running, /张三-DSH/, '标题里不要机器人名');
+  assert.match(running, /collapsible_panel/, '工具与思考放进一个折叠面板');
+  assert.match(running, /"expanded":false/, '默认收起');
+  assert.match(running, /最新：🛠 bash · 检查 try 结构/, '收起时标题显示最新一条');
+  // 第二条（思考）会被节流合并，收尾时一定会补上
   await presenter.finish('答案', { kind: 'completed' });
+  const withThink = JSON.stringify(cards.at(-1));
+  assert.match(withThink, /💭 先看 bridge 的 try 块/, '思考也在同一个面板里');
+  assert.match(withThink, /工具与思考（2 条）/, '收尾把节流掉的过程补上');
+
   const done = JSON.stringify(cards.at(-1));
   assert.match(done, /✅ 已完成/, '完成后标题要变成已完成');
   assert.doesNotMatch(done, /正在处理/);
+  assert.doesNotMatch(done, /张三-DSH/, '完成状态同样不带机器人名');
   assert.match(done, /"template":"green"/, '配色也变绿');
 
   // 非正常结束：标题提示未正常完成
@@ -1420,4 +1431,22 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   const failed = JSON.stringify(cards.at(-1));
   assert.match(failed, /未正常完成/);
   assert.match(failed, /"template":"orange"/);
+});
+
+test('工具与思考合并进一个折叠面板：默认收起、标题显示最新、展开看全部', () => {
+  const card = renderStepCard({
+    title: '正在处理',
+    lines: ['🛠 Bash · 检查 try 结构', '💭 先看有没有外层 try', '🛠 read · 读 bridge'],
+    note: '',
+  });
+  const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.ok(panel, '工具与思考要在一个折叠面板里');
+  assert.equal(panel.expanded, false, '默认收起');
+  assert.match(panel.header.title.content, /工具与思考（3 条）/);
+  assert.match(panel.header.title.content, /最新：🛠 read · 读 bridge/, '收起时标题显示最新一条');
+  const bodyText = panel.elements.map((element) => element.content).join('\n');
+  assert.match(bodyText, /🛠 Bash · 检查 try 结构/, '展开能看到全部');
+  assert.match(bodyText, /💭 先看有没有外层 try/, '思考也在里面');
+  // 过程行不再单独占卡片空间
+  assert.equal(card.body.elements.filter((element) => element.tag === 'markdown').length, 0);
 });

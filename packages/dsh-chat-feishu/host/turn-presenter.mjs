@@ -24,7 +24,9 @@ const MAX_CARD_CONTENT = 12_000;
  * @param options - { title, lines, answer, note }。
  * @returns 飞书交互卡片对象。
  */
-export function renderStepCard({ title, lines = [], answer = '', note = '', question = null, template = 'blue' }) {
+export function renderStepCard({
+  title, lines = [], answer = '', note = '', question = null, template = 'blue',
+}) {
   const budget = { left: MAX_CARD_CONTENT };
   const clamp = (text) => {
     const value = typeof text === 'string' ? text : '';
@@ -39,8 +41,26 @@ export function renderStepCard({ title, lines = [], answer = '', note = '', ques
     elements.push({ tag: 'div', text: { tag: 'plain_text', content: clamp(note) } });
   }
   if (lines.length > 0) {
+    // 工具与思考合并进**一个折叠面板**：默认收起，标题上显示"最新一条"，
+    // 展开才看全部（真机反馈：不要一长串刷屏，也不要每步占一行卡片）。
     const body = clamp(lines.map((line) => `· ${line}`).join('\n'));
-    if (body) elements.push({ tag: 'markdown', content: body });
+    if (body) {
+      elements.push({
+        tag: 'collapsible_panel',
+        expanded: false,
+        border: { color: 'grey', corner_radius: '4px' },
+        header: {
+          title: {
+            tag: 'markdown',
+            content: `🛠 工具与思考（${lines.length} 条）· 最新：${clamp(lines.at(-1)).slice(0, 60)}`,
+          },
+          width: 'fill',
+          icon_position: 'right',
+          icon_expanded_angle: -180,
+        },
+        elements: [{ tag: 'markdown', content: body }],
+      });
+    }
   }
   // 提问区内嵌在同一张卡里（真机反馈：单独的提问卡读起来割裂；答完收起）。
   if (Array.isArray(question?.elements) && question.elements.length > 0) {
@@ -85,7 +105,8 @@ export function createTurnPresenter({
   const chatId = message?.chat_id;
   // 群聊开启"话题回复"时，所有回复落在同一话题里。
   const replyInThread = chatType === 'group' && bot?.groupTopicReply === true;
-  const title = bot?.botName ? `${bot.botName} 正在处理` : '正在处理';
+  // 标题不带机器人名前缀（真机反馈：卡片本身就在这个机器人的会话里，重复没意义）。
+  const title = '正在处理';
 
   let lines = [];
   let cardId = null;
@@ -98,6 +119,10 @@ export function createTurnPresenter({
   let state = 'running';
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
   let lastFailure = null;
+  /** 过程刷新的最小间隔：一次 patch 是整卡重写，工具多时不能每个事件都刷。 */
+  const PATCH_MIN_INTERVAL_MS = 1_200;
+  let lastPatchAt = 0;
+  let patchTimer = null;
   /** 最终答案实际走了哪条路（card/text/failed），供桥记录"用户到底收到没有"。 */
   let lastDelivery = null;
   // 所有呈现动作串行执行：过程事件是"发出去就不等"的，若不排队，
@@ -119,8 +144,8 @@ export function createTurnPresenter({
    */
   function currentTitle() {
     if (question?.current) return `❓ 等你确认（第 ${question.index}/${question.total} 题）`;
-    if (state === 'done') return `${bot?.botName ?? 'DSH'} ✅ 已完成`;
-    if (state === 'failed') return `${bot?.botName ?? 'DSH'} ⚠️ 未正常完成`;
+    if (state === 'done') return '✅ 已完成';
+    if (state === 'failed') return '⚠️ 未正常完成';
     return title;
   }
 
@@ -168,6 +193,35 @@ export function createTurnPresenter({
     }
   }
 
+  /** 立刻刷新一次卡片（记下时间用于节流）。 */
+  async function patchNow(answer = lastAnswer) {
+    lastPatchAt = Date.now();
+    return patch(lines, answer);
+  }
+
+  /**
+   * 过程事件到达时按最小间隔合并刷新：一次 patch 是**整卡重写**，
+   * 一轮几十上百个工具调用如果每个都刷，既慢又浪费；收尾时一定会再刷一次。
+   */
+  function schedulePatch() {
+    if (mode !== 'streaming_card' || cardBroken) return;
+    // 还没建卡时立刻建，别让用户等
+    if (!cardId) {
+      void enqueue(() => patchNow());
+      return;
+    }
+    const wait = PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt);
+    if (wait <= 0) {
+      void enqueue(() => patchNow());
+      return;
+    }
+    if (patchTimer) return;
+    patchTimer = setTimeout(() => {
+      patchTimer = null;
+      void enqueue(() => patchNow());
+    }, wait);
+  }
+
   /** @returns 卡片是否可用（更新成功才算）。 */
   async function patch(linesSnapshot, answer) {
     const id = await ensureCard();
@@ -203,6 +257,10 @@ export function createTurnPresenter({
       if (mode !== 'streaming_card' || typeof gateway.renderQuestionElements !== 'function') {
         return Promise.resolve(false);
       }
+      if (patchTimer) {
+        clearTimeout(patchTimer);
+        patchTimer = null;
+      }
       return enqueue(async () => {
         const rendered = gateway.renderQuestionElements({
           questions: payload?.questions ?? [],
@@ -221,7 +279,7 @@ export function createTurnPresenter({
             total: questions.length,
           }
           : null;
-        const ok = await patch(lines, lastAnswer);
+        const ok = await patchNow();
         return ok;
       });
     },
@@ -238,18 +296,40 @@ export function createTurnPresenter({
      */
     step(text) {
       if (mode === 'off' || !text) return Promise.resolve();
-      return enqueue(async () => {
-        lines = [...lines, text].slice(-MAX_STEP_LINES);
-        if (mode === 'post') {
+      lines = [...lines, text].slice(-MAX_STEP_LINES);
+      if (mode === 'post') {
+        return enqueue(async () => {
           try {
             await gateway.replyText({ messageId, text, replyInThread });
           } catch (error) {
             noteFailure('发送过程消息失败', error);
           }
-          return;
-        }
-        await patch(lines, '');
-      });
+        });
+      }
+      schedulePatch();
+      return Promise.resolve();
+    },
+
+    /**
+     * 记录一条"思考"（模型的推理摘要），与工具调用同处一个折叠面板。
+     *
+     * @param text - 一行摘要（调用方负责截断）。
+     */
+    think(text) {
+      if (mode === 'off' || !text) return Promise.resolve();
+      const line = `💭 ${text}`;
+      lines = [...lines, line].slice(-MAX_STEP_LINES);
+      if (mode === 'post') {
+        return enqueue(async () => {
+          try {
+            await gateway.replyText({ messageId, text: line, replyInThread });
+          } catch (error) {
+            noteFailure('发送思考消息失败', error);
+          }
+        });
+      }
+      schedulePatch();
+      return Promise.resolve();
     },
 
     /**
@@ -272,6 +352,11 @@ export function createTurnPresenter({
 
         lastAnswer = body;
         state = failed ? 'failed' : 'done';
+        // 收尾一定刷新（把之前节流掉的过程一次性画上）
+        if (patchTimer) {
+          clearTimeout(patchTimer);
+          patchTimer = null;
+        }
         if (mode === 'streaming_card') {
           // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
           if (!cardBroken && await patch(lines, body)) {
