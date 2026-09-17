@@ -26,11 +26,18 @@ function describeError(error) {
 /**
  * 创建渠道注册表。
  *
- * @param options - { logger, rpc, createDeps }。
- *   `createDeps(channelId, definition)` 返回交给渠道 `createChannel(deps)` 的依赖包。
+ * @param options - { logger, rpc, createDeps, onRegistered }。
+ *   `createDeps(channelId, definition)` 返回交给渠道 `createChannel(deps)` 的依赖包；
+ *   `onRegistered(channelId, legacy)` 在定义通过校验后同步调用一次（用于旧设置导入），
+ *   其异常不会影响渠道注册。
  * @returns { register, list, get, subscribe, handleRpc, disposeAll }。
  */
-export function createChannelRegistry({ logger = console, rpc, createDeps }) {
+export function createChannelRegistry({
+  logger = console,
+  rpc,
+  createDeps,
+  onRegistered,
+}) {
   if (typeof rpc?.register !== 'function') throw new TypeError('渠道注册表需要 rpc 载体。');
   if (typeof createDeps !== 'function') throw new TypeError('渠道注册表需要 createDeps。');
 
@@ -136,6 +143,14 @@ export function createChannelRegistry({ logger = console, rpc, createDeps }) {
       },
     });
     channels.set(validated.id, record);
+    // 旧设置导入等"注册后动作"不能影响渠道本身。
+    if (typeof onRegistered === 'function') {
+      try {
+        onRegistered(validated.id, validated.legacy);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 渠道 ${validated.id} 注册后动作失败：${error?.message ?? error}`);
+      }
+    }
     // 路由先挂上：状态页在渠道启动完成前就能读到 starting / failed。
     record.releaseRoutes = rpc.register(validated.id, (method, payload, signal) => (
       handleRpc(validated.id, method, payload, signal)

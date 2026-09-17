@@ -1,89 +1,464 @@
 /**
  * 会话桥（host 侧）：把一次 IM 消息变成一次 DSH 会话回合。
  *
- * 提供的是**渠道无关**的能力——会话绑定、走 typertGateway 的
- * `session.*` / `workspace.*` 调用、增量事件流、审批与提问回传——渠道只负责
- * 平台协议与呈现（流式卡片、分段文本、正在输入等）。
- *
- * P0 只落接口与失败语义；P1 实现 `session.create/list/page/prompt/follow/cancel`
- * 的真实调用（见 CONTRACT.md 的 sessions 一节）。
+ * 契约依据（DSH 0.1.5-rc.2 实测源码，见 UPSTREAM.md）：
+ * - `gateway.invoke({ namespace, method, args, signal })` 走一元方法，返回原始业务值，
+ *   失败抛 `RemoteError`（读 `error.code`）；args 的键名必须与描述符 wire 完全一致，
+ *   因此绝大多数方法都要包一层 `request`，且 `session/list` 的 wire 是 `_request`；
+ * - `session/follow`、`session/control`、`workspace/follow` 是 **stream** 方法，
+ *   必须用 `gateway.stream()`；
+ * - 一轮结束 = `turn/end` 事件；最终答案是该轮最后一个 `assistant/message` 的 text 块；
+ * - 工具过程 = `tool/call` / `tool/result` 事件；
+ * - 审批与提问不是 Remote 方法，而是 agent 作用域的 Cordis waterfall 事件
+ *   （`approval/request`、`user-questions/request`），由 root 上的 listener 参与应答。
  *
  * @module dsh-chat/host/sessions
  */
 
-/**
- * 构造一个"尚未实现"错误，让渠道在 P0 阶段就能按契约写代码并得到清晰失败。
- *
- * @param method - 契约方法名。
- * @returns 带 code 的 Error。
- */
-function notImplemented(method) {
-  const error = new Error(`dsh-chat 会话桥的 ${method} 将在 P1 提供。`);
-  error.code = 'chat/not-implemented';
-  return error;
+import { randomUUID } from 'node:crypto';
+
+const MAX_ASSISTANT_TEXT = 200_000;
+
+/** 把 DSH 的 RemoteError 折成带 code 的普通错误，便于渠道判断。 */
+function sessionError(error, fallbackCode = 'chat/session-failed') {
+  const code = typeof error?.code === 'string' ? error.code : fallbackCode;
+  const wrapped = new Error(typeof error?.message === 'string' && error.message
+    ? error.message
+    : '会话操作失败。');
+  wrapped.code = code;
+  wrapped.details = error?.details ?? {};
+  return wrapped;
+}
+
+function textOfAssistantMessage(message) {
+  const content = message?.content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('');
+}
+
+function deltaTextOf(chunk) {
+  if (typeof chunk?.text === 'string') return chunk.text;
+  if (typeof chunk?.delta === 'string') return chunk.delta;
+  return '';
 }
 
 /**
- * 创建会话桥。`typertGateway` 必须由 hub 在 `inject` 里声明——
- * Cordis 对未声明的服务读取会直接抛错，即使写了可选链。
+ * 创建会话桥。
  *
- * @param options - { ctx, logger }。
+ * @param options - { ctx, logger, store, guidance }。
+ *   `store` 为 `session-store`；`guidance` 为每会话来源提示词登记表。
  * @returns 契约规定的 sessions 面。
  */
-export function createSessionBridge({ ctx, logger = console } = {}) {
+export function createSessionBridge({ ctx, logger = console, store, guidance }) {
   const gateway = ctx?.typertGateway;
-  const hasGateway = typeof gateway?.invoke === 'function';
-  if (!hasGateway) {
-    logger.warn?.('[dsh-chat] typertGateway 不可用，会话能力将不可用（P1 需要它）。');
+  if (typeof gateway?.invoke !== 'function') {
+    throw new TypeError('会话桥需要 context 的 typertGateway.invoke（请在 inject 中声明）。');
+  }
+  /** @type {Map<string, Function>} 渠道 → 人在环交互处理器。 */
+  const interactionHandlers = new Map();
+  /** @type {Map<string, AbortController>} 会话键 → 当前回合的中断控制器。 */
+  const activeTurns = new Map();
+
+  /**
+   * 调用一个一元 DSH Remote 方法。
+   *
+   * @param namespace - 'session' | 'workspace'。
+   * @param method - 方法名。
+   * @param args - wire 参数（键名必须与描述符一致）。
+   * @param signal - AbortSignal。
+   * @returns 原始业务值。
+   */
+  async function invoke(namespace, method, args = {}, signal) {
+    const request = { namespace, method, args };
+    if (signal !== undefined) request.signal = signal;
+    try {
+      return await gateway.invoke(request);
+    } catch (error) {
+      throw sessionError(error, 'chat/gateway-failed');
+    }
   }
 
   /**
-   * 调用一个 DSH Remote 命名空间方法。P1 起被 sessions.* 使用。
+   * 打开一个 stream 方法。
    *
-   * @param namespace - 'session' 或 'workspace'。
-   * @param method - 方法名。
-   * @param args - 参数对象。
-   * @param signal - AbortSignal。
-   * @returns 调用结果。
+   * @returns AsyncIterable。
    */
-  async function invoke(namespace, method, args, signal) {
-    if (!hasGateway) {
-      const error = new Error('当前 Host 未提供 typertGateway，无法访问 DSH 会话。');
-      error.code = 'chat/gateway-unavailable';
+  async function stream(namespace, method, args = {}, signal) {
+    if (typeof gateway.stream !== 'function') {
+      const error = new Error('当前 Host 不支持 stream 调用。');
+      error.code = 'chat/stream-unavailable';
       throw error;
     }
     const request = { namespace, method, args };
     if (signal !== undefined) request.signal = signal;
-    return gateway.invoke(request);
+    try {
+      return await gateway.stream(request);
+    } catch (error) {
+      throw sessionError(error, 'chat/gateway-stream-failed');
+    }
+  }
+
+  /** 按路径拿到（或创建）工作区 id。`workspace/create` 按路径幂等。 */
+  async function resolveWorkspaceId(path, signal) {
+    const result = await invoke('workspace', 'create', { request: { path } }, signal);
+    const workspaceId = result?.workspace?.workspaceId;
+    if (typeof workspaceId !== 'string' || !workspaceId) {
+      const error = new Error('DSH 未返回工作区标识。');
+      error.code = 'chat/workspace-unresolved';
+      throw error;
+    }
+    return workspaceId;
+  }
+
+  /** 判断一个 Session 是否仍然存在（不激活 Agent）。 */
+  async function sessionExists(sessionId, signal) {
+    try {
+      await invoke('session', 'page', {
+        request: { address: { kind: 'session', sessionId }, throughSeq: -1, maxMessages: 1 },
+      }, signal);
+      return true;
+    } catch (error) {
+      if (error.code === 'session/not-found') return false;
+      throw error;
+    }
+  }
+
+  /**
+   * 找到或创建该会话键对应的 DSH 会话。
+   *
+   * @param options - { channelId, botId, key, workspacePath, signal }。
+   * @returns { sessionId, created }。
+   */
+  async function ensure({ channelId, botId, key, workspacePath, signal }) {
+    if (!store) throw new TypeError('会话桥缺少会话绑定表。');
+    const existing = store.get(channelId, botId, key);
+    if (existing) {
+      if (await sessionExists(existing.sessionId, signal)) {
+        return { sessionId: existing.sessionId, created: false };
+      }
+      // 会话已被删除：解绑后重建。
+      await store.unbind(channelId, botId, key);
+    }
+    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+      const error = new Error('该机器人还没有设置工作区，无法创建会话。');
+      error.code = 'chat/workspace-required';
+      throw error;
+    }
+    const workspaceId = await resolveWorkspaceId(workspacePath, signal);
+    const created = await invoke('session', 'create', { request: { workspaceId } }, signal);
+    const sessionId = created?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) {
+      const error = new Error('DSH 未返回会话标识。');
+      error.code = 'chat/session-unresolved';
+      throw error;
+    }
+    await store.bind(channelId, botId, key, { sessionId, workspacePath });
+    return { sessionId, created: true };
+  }
+
+  /** 发送一条 prompt（一元方法，返回 accepted 不等于已回答）。 */
+  async function prompt({ sessionId, content, mode = 'queue', requestId = randomUUID(), signal }) {
+    if (!Array.isArray(content) || content.length === 0) {
+      const error = new Error('prompt 内容不能为空。');
+      error.code = 'chat/empty-prompt';
+      throw error;
+    }
+    return invoke('session', 'prompt', {
+      request: { requestId, sessionId, mode, content },
+    }, signal);
+  }
+
+  /** 停止当前回合。 */
+  async function cancel({ channelId, botId, key, signal }) {
+    const bound = store?.get(channelId, botId, key);
+    activeTurns.get(`${channelId}:${botId}:${key}`)?.abort?.();
+    if (!bound) return { accepted: false };
+    try {
+      return await invoke('session', 'cancel', { request: { sessionId: bound.sessionId } }, signal);
+    } catch (error) {
+      if (error.code === 'session/not-found') return { accepted: false };
+      throw error;
+    }
+  }
+
+  /** 该会话当前是否在运行。 */
+  async function isRunning(sessionId, signal) {
+    const result = await invoke('session', 'list', { _request: {} }, signal);
+    const item = Array.isArray(result?.items)
+      ? result.items.find((entry) => entry?.sessionId === sessionId)
+      : undefined;
+    return item?.running === true;
+  }
+
+  /** 重命名会话标题。 */
+  async function rename(sessionId, title, signal) {
+    return invoke('session', 'rename', { request: { sessionId, title } }, signal);
+  }
+
+  /** 解除绑定（`/new`）。 */
+  async function reset({ channelId, botId, key }) {
+    await store.unbind(channelId, botId, key);
+  }
+
+  /**
+   * 跑一次完整回合：先开 follow 拿基线，再发 prompt，边消费事件边回调，
+   * 直到本轮的 `turn/end`。
+   *
+   * @param options - {
+   *   channelId, botId, key, workspacePath, content, sourceGuidance,
+   *   mode, signal, handlers: {
+   *     onTurnStart?, onAssistantMessage?, onToolCall?, onToolResult?,
+   *     onDelta?, onEvent?, onTurnEnd?,
+   *   },
+   * }。
+   * @returns { sessionId, text, reason, aborted }。
+   */
+  async function ask({
+    channelId,
+    botId,
+    key,
+    workspacePath,
+    content,
+    sourceGuidance,
+    mode = 'queue',
+    signal,
+    handlers = {},
+  }) {
+    const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
+    // 提示词按会话发布：host 会把它物化成该 Session 的动态提示词上下文。
+    guidance?.publish?.(sessionId, sourceGuidance ?? '');
+
+    const turnKey = `${channelId}:${botId}:${key}`;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener?.('abort', abort, { once: true });
+    activeTurns.set(turnKey, controller);
+
+    const frames = await stream('session', 'follow', {
+      request: {
+        address: { kind: 'session', sessionId },
+        maxMessages: 50,
+        assistantStream: true,
+      },
+    }, controller.signal);
+
+    let cursor = -1;
+    let promptSent = false;
+    let currentTurn = null;
+    const assistantText = new Map();
+    const tools = [];
+    let settled = false;
+    let settle;
+    const finished = new Promise((resolve) => {
+      settle = resolve;
+    });
+
+    const pump = (async () => {
+      try {
+        for await (const frame of frames) {
+          if (frame?.type === 'snapshot') {
+            cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
+            continue;
+          }
+          if (frame?.type === 'assistant-stream') {
+            const inner = frame.frame;
+            if (inner?.type === 'chunk' && inner.chunk?.type === 'text-delta') {
+              const text = deltaTextOf(inner.chunk);
+              if (text) handlers.onDelta?.(text, inner);
+            }
+            handlers.onEvent?.(frame);
+            continue;
+          }
+          const event = frame?.event;
+          if (!event) continue;
+          if (Number.isInteger(event.seq)) {
+            if (event.seq <= cursor) continue; // 重开流时去重
+            cursor = event.seq;
+          }
+          handlers.onEvent?.(event);
+          switch (event.type) {
+            case 'turn/start':
+              currentTurn = event.data?.turn ?? null;
+              assistantText.set(currentTurn, []);
+              handlers.onTurnStart?.(event);
+              break;
+            case 'assistant/message': {
+              const turn = event.data?.turn ?? currentTurn;
+              const text = textOfAssistantMessage(event.data?.message);
+              if (text) {
+                const bucket = assistantText.get(turn) ?? [];
+                bucket.push(text);
+                assistantText.set(turn, bucket);
+              }
+              handlers.onAssistantMessage?.(event, text);
+              break;
+            }
+            case 'tool/call':
+              tools.push({ name: event.data?.name, arguments: event.data?.arguments });
+              handlers.onToolCall?.(event);
+              break;
+            case 'tool/result':
+              handlers.onToolResult?.(event, tools.at(-1));
+              break;
+            case 'turn/end': {
+              const turn = event.data?.turn ?? currentTurn;
+              const texts = assistantText.get(turn) ?? [];
+              const text = (texts.at(-1) ?? '').slice(0, MAX_ASSISTANT_TEXT);
+              handlers.onTurnEnd?.(event, text);
+              assistantText.delete(turn);
+              if (promptSent && !settled) {
+                settled = true;
+                settle({
+                  sessionId,
+                  text,
+                  reason: event.data?.reason ?? null,
+                  tools: [...tools],
+                  aborted: false,
+                });
+              }
+              break;
+            }
+            default:
+              break;
+          }
+        }
+        if (!settled) {
+          settled = true;
+          settle({
+            sessionId,
+            text: '',
+            reason: { kind: 'stream-ended' },
+            tools: [...tools],
+            aborted: false,
+          });
+        }
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          settle({
+            sessionId,
+            text: '',
+            reason: { kind: 'error', error: sessionError(error) },
+            tools: [...tools],
+            aborted: true,
+          });
+        } else {
+          logger.warn?.(`[dsh-chat] 会话 ${sessionId} 的事件流中断：${error?.message ?? error}`);
+        }
+      }
+    })();
+
+    try {
+      promptSent = true;
+      await prompt({ sessionId, content, mode, signal: controller.signal });
+      const result = await finished;
+      return result;
+    } finally {
+      signal?.removeEventListener?.('abort', abort);
+      activeTurns.delete(turnKey);
+      try {
+        await frames?.return?.();
+      } catch {
+        // 关流失败不影响返回值。
+      }
+      void pump;
+    }
+  }
+
+  /**
+   * 注册某渠道的"人在环"处理器：审批与提问经它回传到 IM。
+   *
+   * @param channelId - 渠道 id。
+   * @param handle - async ({ kind, channelId, botId, key, request }) =>
+   *   审批返回 'allowed-once'|'rejected'|'cancelled'；提问返回 `{ answers }`。
+   * @returns 注销函数。
+   */
+  function registerInteractionHandler(channelId, handle) {
+    if (typeof handle !== 'function') throw new TypeError('交互处理器必须是函数。');
+    interactionHandlers.set(channelId, handle);
+    return () => {
+      if (interactionHandlers.get(channelId) === handle) interactionHandlers.delete(channelId);
+    };
+  }
+
+  /** 在 root 上参与审批/提问的 waterfall；只接管自己名下的会话，其余委派给浏览器 UI。 */
+  function installInteractionRelays() {
+    if (typeof ctx?.on !== 'function') {
+      logger.warn?.('[dsh-chat] 当前 Host 不支持事件订阅，审批/提问无法回传到 IM。');
+      return () => {};
+    }
+    const locateFor = (request) => {
+      const sessionId = request?.agent?.session?.id;
+      const located = store?.locate?.(sessionId);
+      if (!located) return null;
+      const handle = interactionHandlers.get(located.channelId);
+      return handle ? { ...located, handle } : null;
+    };
+
+    const offApproval = ctx.on('approval/request', async (request, next) => {
+      const target = locateFor(request);
+      if (!target) return next();
+      try {
+        return await target.handle({
+          kind: 'approval',
+          channelId: target.channelId,
+          botId: target.botId,
+          key: target.key,
+          request,
+        });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 审批回传失败，交由其他应答方：${error?.message ?? error}`);
+        return next();
+      }
+    });
+
+    const offQuestions = ctx.on('user-questions/request', async (request, next) => {
+      const target = locateFor(request);
+      if (!target) return next();
+      try {
+        const answers = await target.handle({
+          kind: 'question',
+          channelId: target.channelId,
+          botId: target.botId,
+          key: target.key,
+          request,
+        });
+        if (!answers) return next();
+        return answers;
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 提问回传失败，交由其他应答方：${error?.message ?? error}`);
+        return next();
+      }
+    });
+
+    return () => {
+      try {
+        offApproval?.();
+      } catch { /* 已释放 */ }
+      try {
+        offQuestions?.();
+      } catch { /* 已释放 */ }
+    };
   }
 
   return Object.freeze({
-    /** 底层调用口，渠道在 P1 之前也能用它做探测。 */
     invoke,
-
-    /** @throws 未实现（P1）。 */
-    async ask() {
-      throw notImplemented('ask');
-    },
-
-    /** @throws 未实现（P1）。 */
-    stop() {
-      throw notImplemented('stop');
-    },
-
-    /** @throws 未实现（P1）。 */
-    steer() {
-      throw notImplemented('steer');
-    },
-
-    /** @throws 未实现（P1）。 */
-    isRunning() {
-      throw notImplemented('isRunning');
-    },
-
-    /** 解除某会话绑定，下一条消息开新会话。@throws 未实现（P1）。 */
-    reset() {
-      throw notImplemented('reset');
-    },
+    stream,
+    resolveWorkspaceId,
+    sessionExists,
+    ensure,
+    prompt,
+    ask,
+    cancel,
+    isRunning,
+    rename,
+    reset,
+    /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
+    bindings: store,
+    registerInteractionHandler,
+    installInteractionRelays,
   });
 }

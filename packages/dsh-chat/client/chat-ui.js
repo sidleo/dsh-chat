@@ -10,7 +10,10 @@
 import * as React from 'react';
 
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
+import { useBotSettings } from './bot-settings.js';
+import { ContextEnhancementEditor } from './context-enhancement.js';
 import { callChatRpc, callControlRpc, unwrapRpc } from './rpc.js';
+import { ScopedModeEditor } from './scoped-mode-editor.js';
 import { installChatStyles } from './styles.js';
 
 const h = React.createElement;
@@ -77,7 +80,19 @@ export function createChatUi({ ctx, translate } = {}) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   return Object.freeze({
     version: CONTRACT_VERSION,
-    components: Object.freeze({ Panel, EmptyState, StatusPill }),
+    components: Object.freeze({
+      Panel,
+      EmptyState,
+      StatusPill,
+      /** 上下文增强（群聊/私聊全局 + 指定用户/指定群 + 是否叠加全局提示词）。 */
+      ContextEnhancementEditor,
+      /** 通用"两作用域 × 多选项"设置块（如飞书任务过程展示）。 */
+      ScopedModeEditor,
+    }),
+    hooks: Object.freeze({
+      /** 读取/保存 hub 持有的每机器人共享设置。 */
+      useBotSettings,
+    }),
     installStyles: () => installChatStyles(),
     /** 调用本渠道自己的 RPC。 */
     callChannelRpc: (connection, channelId, method, payload, signal) => (

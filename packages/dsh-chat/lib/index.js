@@ -357,18 +357,135 @@ function contextStatusLabel(config) {
 }
 
 // packages/dsh-chat/host/bot-settings.mjs
+import { readFile as readFile2 } from "node:fs/promises";
+import { join } from "node:path";
+
+// packages/dsh-chat/host/json-store.mjs
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+function createJsonStore({
+  path,
+  normalize,
+  empty,
+  logger = console,
+  label = "JSON \u6587\u6863"
+}) {
+  if (typeof path !== "string" || !path.trim()) throw new TypeError("json store \u9700\u8981 path\u3002");
+  if (typeof normalize !== "function") throw new TypeError("json store \u9700\u8981 normalize\u3002");
+  if (typeof empty !== "function") throw new TypeError("json store \u9700\u8981 empty\u3002");
+  let document = normalize(empty());
+  let loaded = false;
+  let loading = null;
+  let queue = Promise.resolve();
+  let backedUp = false;
+  const listeners = /* @__PURE__ */ new Set();
+  function notify() {
+    for (const listener of [...listeners]) {
+      try {
+        listener(document);
+      } catch {
+      }
+    }
+  }
+  async function persist() {
+    const body = `${JSON.stringify(document, null, 2)}
+`;
+    await mkdir(dirname(path), { recursive: true });
+    if (!backedUp) {
+      try {
+        const previous = await readFile(path, "utf8");
+        if (previous.trim()) {
+          const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+          await writeFile(`${path}.bak-${stamp}`, previous, "utf8");
+          backedUp = true;
+        }
+      } catch {
+      }
+    }
+    const temporary = `${path}.tmp-${randomBytes(6).toString("hex")}`;
+    await writeFile(temporary, body, "utf8");
+    await rename(temporary, path);
+  }
+  function enqueue(task) {
+    const next = queue.then(task, task);
+    queue = next.then(() => void 0, () => void 0);
+    return next;
+  }
+  async function load() {
+    if (loaded) return document;
+    try {
+      document = normalize(JSON.parse(await readFile(path, "utf8")));
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        logger.warn?.(`[dsh-chat] \u8BFB\u53D6 ${path} \u5931\u8D25\uFF0C\u4F7F\u7528\u7A7A${label}\uFF1A${error?.message ?? error}`);
+      }
+      document = normalize(empty());
+    }
+    loaded = true;
+    return document;
+  }
+  return {
+    path,
+    /** 等磁盘文档就绪（并发多次调用只读一次盘）。 */
+    async ready() {
+      if (loaded) return document;
+      loading = loading ?? load();
+      return loading;
+    },
+    /** @returns 当前文档。 */
+    snapshot() {
+      return document;
+    },
+    /**
+     * 串行地读-改-写。
+     *
+     * @param updater - `(current) => next | null`；返回 null 表示不写盘。
+     * @returns 写入后的文档。
+     */
+    async update(updater) {
+      return enqueue(async () => {
+        await this.ready();
+        const next = updater(document);
+        if (next === null || next === void 0) return document;
+        document = normalize(next);
+        await persist();
+        notify();
+        return document;
+      });
+    },
+    /**
+     * 订阅文档变更（写入成功后触发）。
+     *
+     * @param listener - `(document) => void`。
+     * @returns 取消订阅函数。
+     */
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }
+  };
+}
+
+// packages/dsh-chat/host/bot-settings.mjs
 var DOCUMENT_VERSION = 1;
 var EMPTY_RECORD = Object.freeze({
   workspace: null,
   model: null,
   agentPreset: null,
   contextEnhancement: null,
-  accessPolicy: null
+  accessPolicy: null,
+  deliveryTargets: null
 });
 var RECORD_KEYS = Object.freeze(Object.keys(EMPTY_RECORD));
+var LEGACY_SOURCES = Object.freeze({
+  workspaces: "workspace",
+  models: "model",
+  agentPresets: "agentPreset",
+  contextEnhancement: "contextEnhancement",
+  accessPolicies: "accessPolicy",
+  deliveryTargets: "deliveryTargets"
+});
 function isPlainObject3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -379,12 +496,11 @@ function cloneRecord(record) {
   };
 }
 function normalizeDocument(value) {
-  if (!isPlainObject3(value) || value.version !== DOCUMENT_VERSION) {
-    return { version: DOCUMENT_VERSION, channels: {} };
-  }
+  const source = isPlainObject3(value) && value.version === DOCUMENT_VERSION ? value : {};
+  const imports = isPlainObject3(source.imports) ? { ...source.imports } : {};
   const channels = {};
-  if (isPlainObject3(value.channels)) {
-    for (const [channelId, bots] of Object.entries(value.channels)) {
+  if (isPlainObject3(source.channels)) {
+    for (const [channelId, bots] of Object.entries(source.channels)) {
       if (!isPlainObject3(bots)) continue;
       const entries = {};
       for (const [botId, record] of Object.entries(bots)) {
@@ -394,136 +510,139 @@ function normalizeDocument(value) {
       channels[channelId] = entries;
     }
   }
-  return { version: DOCUMENT_VERSION, channels };
+  return { version: DOCUMENT_VERSION, imports, channels };
 }
 function createBotSettingsStore({ dataDir, logger = console } = {}) {
   if (typeof dataDir !== "string" || !dataDir.trim()) {
     throw new TypeError("bot settings \u9700\u8981 dataDir\u3002");
   }
-  const file = join(dataDir, "bots.json");
-  let document = { version: DOCUMENT_VERSION, channels: {} };
-  let loaded = false;
-  let queue = Promise.resolve();
-  let backedUp = false;
-  const listeners = /* @__PURE__ */ new Set();
-  async function persist() {
-    const body = `${JSON.stringify(document, null, 2)}
-`;
-    await mkdir(dirname(file), { recursive: true });
-    if (!backedUp) {
-      backedUp = true;
-      try {
-        const previous = await readFile(file, "utf8");
-        if (previous.trim()) {
-          const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-          await writeFile(`${file}.bak-${stamp}`, previous, "utf8");
-        }
-      } catch {
-      }
-    }
-    const temporary = `${file}.tmp-${randomBytes(6).toString("hex")}`;
-    await writeFile(temporary, body, "utf8");
-    await rename(temporary, file);
-  }
-  function enqueue(task) {
-    const next = queue.then(task, task);
-    queue = next.then(() => void 0, () => void 0);
-    return next;
-  }
-  function notify() {
-    for (const listener of [...listeners]) {
-      try {
-        listener();
-      } catch {
-      }
-    }
+  const store = createJsonStore({
+    path: join(dataDir, "bots.json"),
+    normalize: normalizeDocument,
+    empty: () => ({ version: DOCUMENT_VERSION, imports: {}, channels: {} }),
+    logger,
+    label: "\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E"
+  });
+  function readRecord(channelId, botId) {
+    const stored = store.snapshot().channels?.[channelId]?.[botId];
+    const record = cloneRecord(stored);
+    record.contextEnhancement = stored?.contextEnhancement === void 0 || stored?.contextEnhancement === null ? null : normalizeContextConfig(stored.contextEnhancement);
+    return Object.freeze(record);
   }
   return {
-    path: file,
-    /**
-     * 等待磁盘文档就绪。渠道在读取设置前应 `await dshChat.ready()`。
-     *
-     * @returns 就绪后的存储自身。
-     */
-    async ready() {
-      await this.load();
-      return this;
-    },
-    /** 读取磁盘上的文档；文件不存在时保持空文档。 */
-    async load() {
-      if (loaded) return;
-      try {
-        document = normalizeDocument(JSON.parse(await readFile(file, "utf8")));
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          logger.warn?.(`[dsh-chat] \u8BFB\u53D6 ${file} \u5931\u8D25\uFF0C\u4F7F\u7528\u7A7A\u8BBE\u7F6E\uFF1A${error?.message ?? error}`);
-        }
-        document = { version: DOCUMENT_VERSION, channels: {} };
-      }
-      loaded = true;
-    },
-    /**
-     * 读取一个机器人的设置。
-     *
-     * @param channelId - 渠道 id。
-     * @param botId - 渠道内的机器人 id。
-     * @returns 冻结的记录（缺失时为默认值）。
-     */
-    read(channelId, botId) {
-      const stored = document.channels?.[channelId]?.[botId];
-      const record = cloneRecord(stored);
-      record.contextEnhancement = stored?.contextEnhancement === void 0 ? null : normalizeContextConfig(stored.contextEnhancement);
-      return Object.freeze(record);
-    },
-    /**
-     * 合并写入若干字段。
-     *
-     * @param channelId - 渠道 id。
-     * @param botId - 机器人 id。
-     * @param patch - 只包含需要改动的键。
-     * @returns 写入后的冻结记录。
-     */
+    path: store.path,
+    /** 等待磁盘文档就绪；渠道读取设置前应 await 它。 */
+    ready: () => store.ready(),
+    /** @returns 冻结的机器人记录（缺失时为默认值）。 */
+    read: readRecord,
+    /** 合并写入若干字段（未知键一律拒绝）。 */
     async write(channelId, botId, patch) {
       if (typeof channelId !== "string" || !channelId) throw new TypeError("channelId \u5FC5\u586B\u3002");
       if (typeof botId !== "string" || !botId) throw new TypeError("botId \u5FC5\u586B\u3002");
       if (!isPlainObject3(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       const unknown = Object.keys(patch).filter((key) => !RECORD_KEYS.includes(key));
       if (unknown.length > 0) throw new TypeError(`\u672A\u77E5\u7684\u8BBE\u7F6E\u5B57\u6BB5\uFF1A${unknown.join("\u3001")}`);
-      if (Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null) {
-        patch = { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) };
-      }
-      return enqueue(async () => {
-        await this.load();
-        const channels = { ...document.channels };
+      const normalized = Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) } : patch;
+      await store.update((current) => {
+        const channels = { ...current.channels };
         const bots = { ...channels[channelId] ?? {} };
-        bots[botId] = { ...cloneRecord(bots[botId]), ...patch };
+        bots[botId] = { ...cloneRecord(bots[botId]), ...normalized };
         channels[channelId] = bots;
-        document = { version: DOCUMENT_VERSION, channels };
-        await persist();
-        notify();
-        return this.read(channelId, botId);
+        return { ...current, channels };
       });
+      return readRecord(channelId, botId);
     },
-    /**
-     * @param channelId - 渠道 id。
-     * @returns 该渠道下的全部记录（含 botId）。
-     */
+    /** @returns 该渠道下的全部记录（含 botId）。 */
     list(channelId) {
-      const bots = document.channels?.[channelId] ?? {};
+      const bots = store.snapshot().channels?.[channelId] ?? {};
       return Object.freeze(Object.keys(bots).map((botId) => Object.freeze({
         botId,
-        ...this.read(channelId, botId)
+        ...readRecord(channelId, botId)
       })));
     },
+    /** 订阅变更。 */
+    subscribe: (listener) => store.subscribe(listener),
     /**
-     * 订阅变更（写入成功后触发）。
+     * 一次性把旧渠道的 `workspaces.json` 导入为每机器人设置。
      *
-     * @param listener - 无参回调。
-     * @returns 取消订阅函数。
+     * 只读旧文件，绝不改写；导入过后记 `imports[channelId]`，因此用户在 dsh-chat 里
+     * 清空某条设置后不会在下次启动被"复活"。`force: true` 时忽略标记并以旧文件为准刷新。
+     *
+     * @param channelId - 渠道 id。
+     * @param legacyDir - 旧数据目录（绝对路径）。
+     * @param options - { force }。
+     * @returns { imported, bots } 或 { skipped }。
      */
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    async importLegacy(channelId, legacyDir, { force = false } = {}) {
+      if (!force) {
+        await store.ready();
+        if (store.snapshot().imports[channelId]) {
+          return { skipped: "\u5DF2\u5BFC\u5165\u8FC7", imported: 0, bots: [] };
+        }
+      }
+      const source = join(legacyDir, "workspaces.json");
+      let legacy = null;
+      try {
+        legacy = JSON.parse(await readFile2(source, "utf8"));
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          await store.update((current) => ({
+            ...current,
+            imports: {
+              ...current.imports,
+              [channelId]: { path: source, importedAt: (/* @__PURE__ */ new Date()).toISOString(), bots: [] }
+            }
+          }));
+          return { imported: 0, bots: [] };
+        }
+        logger.warn?.(`[dsh-chat] \u65E7\u8BBE\u7F6E ${source} \u65E0\u6CD5\u89E3\u6790\uFF0C\u7A0D\u540E\u91CD\u8BD5\uFF1A${error?.message ?? error}`);
+        return { skipped: "\u65E7\u8BBE\u7F6E\u65E0\u6CD5\u89E3\u6790", imported: 0, bots: [] };
+      }
+      const perBot = /* @__PURE__ */ new Map();
+      for (const [legacyKey, recordKey] of Object.entries(LEGACY_SOURCES)) {
+        const table = legacy?.[legacyKey];
+        if (!isPlainObject3(table)) continue;
+        for (const [botId, value] of Object.entries(table)) {
+          if (value === null || value === void 0) continue;
+          const entry = perBot.get(botId) ?? {};
+          entry[recordKey] = recordKey === "contextEnhancement" ? normalizeContextConfig(value) : value;
+          perBot.set(botId, entry);
+        }
+      }
+      await store.update((current) => {
+        const channels = { ...current.channels };
+        if (perBot.size > 0) {
+          const bots = { ...channels[channelId] ?? {} };
+          for (const [botId, patch] of perBot) {
+            const merged = cloneRecord(bots[botId]);
+            for (const [key, value] of Object.entries(patch)) {
+              if (force || merged[key] === null) merged[key] = value;
+            }
+            bots[botId] = merged;
+          }
+          channels[channelId] = bots;
+        }
+        return {
+          ...current,
+          imports: {
+            ...current.imports,
+            [channelId]: {
+              path: source,
+              importedAt: (/* @__PURE__ */ new Date()).toISOString(),
+              bots: [...perBot.keys()]
+            }
+          },
+          channels
+        };
+      });
+      if (perBot.size > 0) {
+        logger.info?.(`[dsh-chat] \u5DF2\u4ECE ${source} \u5BFC\u5165 ${perBot.size} \u4E2A\u673A\u5668\u4EBA\u7684\u8BBE\u7F6E`);
+      }
+      return { imported: perBot.size, bots: [...perBot.keys()] };
+    },
+    /** @returns 已导入来源的快照（调试与测试用）。 */
+    imports() {
+      return Object.freeze({ ...store.snapshot().imports });
     }
   };
 }
@@ -621,7 +740,12 @@ function describeError(error) {
     message: typeof error.message === "string" && error.message ? error.message : String(error)
   });
 }
-function createChannelRegistry({ logger = console, rpc, createDeps }) {
+function createChannelRegistry({
+  logger = console,
+  rpc,
+  createDeps,
+  onRegistered
+}) {
   if (typeof rpc?.register !== "function") throw new TypeError("\u6E20\u9053\u6CE8\u518C\u8868\u9700\u8981 rpc \u8F7D\u4F53\u3002");
   if (typeof createDeps !== "function") throw new TypeError("\u6E20\u9053\u6CE8\u518C\u8868\u9700\u8981 createDeps\u3002");
   const channels = /* @__PURE__ */ new Map();
@@ -710,6 +834,13 @@ function createChannelRegistry({ logger = console, rpc, createDeps }) {
       }
     });
     channels.set(validated.id, record);
+    if (typeof onRegistered === "function") {
+      try {
+        onRegistered(validated.id, validated.legacy);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u6E20\u9053 ${validated.id} \u6CE8\u518C\u540E\u52A8\u4F5C\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      }
+    }
     record.releaseRoutes = rpc.register(validated.id, (method, payload, signal) => handleRpc(validated.id, method, payload, signal));
     publish();
     void start(record);
@@ -812,55 +943,521 @@ function dshHome() {
 function hubDataDir(configured) {
   return configured && String(configured).trim() ? resolve(String(configured).trim()) : join2(dshHome(), "integrations", "dsh-chat");
 }
-function channelDataDir(name2) {
-  return join2(dshHome(), "integrations", name2);
+function channelDataDir(name2, integrationRoot2) {
+  return join2(integrationRoot2 ?? join2(dshHome(), "integrations"), name2);
+}
+function integrationRoot(configured) {
+  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join2(dshHome(), "integrations");
+}
+
+// packages/dsh-chat/host/session-store.mjs
+import { join as join3 } from "node:path";
+var DOCUMENT_VERSION2 = 1;
+function isPlainObject4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeDocument2(value) {
+  const source = isPlainObject4(value) && value.version === DOCUMENT_VERSION2 ? value : {};
+  const channels = {};
+  if (isPlainObject4(source.channels)) {
+    for (const [channelId, bots] of Object.entries(source.channels)) {
+      if (!isPlainObject4(bots)) continue;
+      const accounts = {};
+      for (const [botId, keys] of Object.entries(bots)) {
+        if (!isPlainObject4(keys)) continue;
+        const entries = {};
+        for (const [key, entry] of Object.entries(keys)) {
+          const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
+          if (!sessionId) continue;
+          entries[key] = {
+            sessionId,
+            workspacePath: typeof entry.workspacePath === "string" ? entry.workspacePath : null,
+            boundAt: typeof entry.boundAt === "string" ? entry.boundAt : null
+          };
+        }
+        accounts[botId] = entries;
+      }
+      channels[channelId] = accounts;
+    }
+  }
+  return { version: DOCUMENT_VERSION2, channels };
+}
+function createSessionStore({ dataDir, logger = console } = {}) {
+  if (typeof dataDir !== "string" || !dataDir.trim()) {
+    throw new TypeError("session store \u9700\u8981 dataDir\u3002");
+  }
+  const store = createJsonStore({
+    path: join3(dataDir, "sessions.json"),
+    normalize: normalizeDocument2,
+    empty: () => ({ version: DOCUMENT_VERSION2, channels: {} }),
+    logger,
+    label: "\u4F1A\u8BDD\u7ED1\u5B9A"
+  });
+  function entriesOf(channelId, botId) {
+    return store.snapshot().channels?.[channelId]?.[botId] ?? {};
+  }
+  return {
+    path: store.path,
+    ready: () => store.ready(),
+    subscribe: (listener) => store.subscribe(listener),
+    /**
+     * @returns 绑定记录，未绑定时为 undefined。
+     */
+    get(channelId, botId, key) {
+      const entry = entriesOf(channelId, botId)[key];
+      return entry ? Object.freeze({ ...entry }) : void 0;
+    },
+    /** @returns 某个机器人的全部绑定（key → entry）。 */
+    entries(channelId, botId) {
+      return Object.freeze({ ...entriesOf(channelId, botId) });
+    },
+    /**
+     * 绑定（或更新）一个会话键。
+     *
+     * @param channelId - 渠道 id。
+     * @param botId - 机器人 id。
+     * @param key - 渠道侧会话键。
+     * @param entry - { sessionId, workspacePath? }。
+     */
+    async bind(channelId, botId, key, entry) {
+      if (typeof key !== "string" || !key) throw new TypeError("\u4F1A\u8BDD\u952E\u5FC5\u586B\u3002");
+      if (typeof entry?.sessionId !== "string" || !entry.sessionId) {
+        throw new TypeError("\u7ED1\u5B9A\u9700\u8981 sessionId\u3002");
+      }
+      await store.update((current) => ({
+        ...current,
+        channels: {
+          ...current.channels,
+          [channelId]: {
+            ...current.channels[channelId] ?? {},
+            [botId]: {
+              ...(current.channels[channelId] ?? {})[botId] ?? {},
+              [key]: {
+                sessionId: entry.sessionId,
+                workspacePath: typeof entry.workspacePath === "string" ? entry.workspacePath : null,
+                boundAt: (/* @__PURE__ */ new Date()).toISOString()
+              }
+            }
+          }
+        }
+      }));
+    },
+    /** 解除一个会话键的绑定（下一条消息开新会话）。 */
+    async unbind(channelId, botId, key) {
+      await store.update((current) => {
+        const accounts = current.channels[channelId];
+        const keys = accounts?.[botId];
+        if (!keys || !Object.hasOwn(keys, key)) return null;
+        const nextKeys = { ...keys };
+        delete nextKeys[key];
+        return {
+          ...current,
+          channels: { ...current.channels, [channelId]: { ...accounts, [botId]: nextKeys } }
+        };
+      });
+    },
+    /**
+     * 一次性接管旧实现的绑定（只补空缺，不覆盖已有绑定）。
+     *
+     * @param channelId - 渠道 id。
+     * @param botId - 机器人 id。
+     * @param entries - `{ [key]: sessionId | { sessionId, workspacePath? } }`。
+     * @returns 实际接管的条数。
+     */
+    async adopt(channelId, botId, entries) {
+      if (!isPlainObject4(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
+      let adopted = 0;
+      await store.update((current) => {
+        const accounts = current.channels[channelId] ?? {};
+        const keys = { ...accounts[botId] ?? {} };
+        for (const [key, value] of Object.entries(entries)) {
+          if (!key || keys[key]) continue;
+          const sessionId = typeof value === "string" ? value : value?.sessionId;
+          if (typeof sessionId !== "string" || !sessionId) continue;
+          keys[key] = {
+            sessionId,
+            workspacePath: isPlainObject4(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
+            boundAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          adopted += 1;
+        }
+        if (adopted === 0) return null;
+        return {
+          ...current,
+          channels: { ...current.channels, [channelId]: { ...accounts, [botId]: keys } }
+        };
+      });
+      return adopted;
+    },
+    /** 该 Session 属于哪个 (渠道, 机器人, 会话键)——审批/提问回传时用。 */
+    locate(sessionId) {
+      if (typeof sessionId !== "string" || !sessionId) return void 0;
+      const channels = store.snapshot().channels ?? {};
+      for (const [channelId, accounts] of Object.entries(channels)) {
+        for (const [botId, keys] of Object.entries(accounts)) {
+          for (const [key, entry] of Object.entries(keys)) {
+            if (entry.sessionId === sessionId) return Object.freeze({ channelId, botId, key });
+          }
+        }
+      }
+      return void 0;
+    }
+  };
 }
 
 // packages/dsh-chat/host/sessions.mjs
-function notImplemented(method) {
-  const error = new Error(`dsh-chat \u4F1A\u8BDD\u6865\u7684 ${method} \u5C06\u5728 P1 \u63D0\u4F9B\u3002`);
-  error.code = "chat/not-implemented";
-  return error;
+import { randomUUID } from "node:crypto";
+var MAX_ASSISTANT_TEXT = 2e5;
+function sessionError(error, fallbackCode = "chat/session-failed") {
+  const code = typeof error?.code === "string" ? error.code : fallbackCode;
+  const wrapped = new Error(typeof error?.message === "string" && error.message ? error.message : "\u4F1A\u8BDD\u64CD\u4F5C\u5931\u8D25\u3002");
+  wrapped.code = code;
+  wrapped.details = error?.details ?? {};
+  return wrapped;
 }
-function createSessionBridge({ ctx, logger = console } = {}) {
+function textOfAssistantMessage(message) {
+  const content = message?.content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
+}
+function deltaTextOf(chunk) {
+  if (typeof chunk?.text === "string") return chunk.text;
+  if (typeof chunk?.delta === "string") return chunk.delta;
+  return "";
+}
+function createSessionBridge({ ctx, logger = console, store, guidance }) {
   const gateway = ctx?.typertGateway;
-  const hasGateway = typeof gateway?.invoke === "function";
-  if (!hasGateway) {
-    logger.warn?.("[dsh-chat] typertGateway \u4E0D\u53EF\u7528\uFF0C\u4F1A\u8BDD\u80FD\u529B\u5C06\u4E0D\u53EF\u7528\uFF08P1 \u9700\u8981\u5B83\uFF09\u3002");
+  if (typeof gateway?.invoke !== "function") {
+    throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
   }
-  async function invoke(namespace, method, args, signal) {
-    if (!hasGateway) {
-      const error = new Error("\u5F53\u524D Host \u672A\u63D0\u4F9B typertGateway\uFF0C\u65E0\u6CD5\u8BBF\u95EE DSH \u4F1A\u8BDD\u3002");
-      error.code = "chat/gateway-unavailable";
+  const interactionHandlers = /* @__PURE__ */ new Map();
+  const activeTurns = /* @__PURE__ */ new Map();
+  async function invoke(namespace, method, args = {}, signal) {
+    const request = { namespace, method, args };
+    if (signal !== void 0) request.signal = signal;
+    try {
+      return await gateway.invoke(request);
+    } catch (error) {
+      throw sessionError(error, "chat/gateway-failed");
+    }
+  }
+  async function stream(namespace, method, args = {}, signal) {
+    if (typeof gateway.stream !== "function") {
+      const error = new Error("\u5F53\u524D Host \u4E0D\u652F\u6301 stream \u8C03\u7528\u3002");
+      error.code = "chat/stream-unavailable";
       throw error;
     }
     const request = { namespace, method, args };
     if (signal !== void 0) request.signal = signal;
-    return gateway.invoke(request);
+    try {
+      return await gateway.stream(request);
+    } catch (error) {
+      throw sessionError(error, "chat/gateway-stream-failed");
+    }
+  }
+  async function resolveWorkspaceId(path, signal) {
+    const result = await invoke("workspace", "create", { request: { path } }, signal);
+    const workspaceId = result?.workspace?.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      const error = new Error("DSH \u672A\u8FD4\u56DE\u5DE5\u4F5C\u533A\u6807\u8BC6\u3002");
+      error.code = "chat/workspace-unresolved";
+      throw error;
+    }
+    return workspaceId;
+  }
+  async function sessionExists(sessionId, signal) {
+    try {
+      await invoke("session", "page", {
+        request: { address: { kind: "session", sessionId }, throughSeq: -1, maxMessages: 1 }
+      }, signal);
+      return true;
+    } catch (error) {
+      if (error.code === "session/not-found") return false;
+      throw error;
+    }
+  }
+  async function ensure({ channelId, botId, key, workspacePath, signal }) {
+    if (!store) throw new TypeError("\u4F1A\u8BDD\u6865\u7F3A\u5C11\u4F1A\u8BDD\u7ED1\u5B9A\u8868\u3002");
+    const existing = store.get(channelId, botId, key);
+    if (existing) {
+      if (await sessionExists(existing.sessionId, signal)) {
+        return { sessionId: existing.sessionId, created: false };
+      }
+      await store.unbind(channelId, botId, key);
+    }
+    if (typeof workspacePath !== "string" || !workspacePath.trim()) {
+      const error = new Error("\u8BE5\u673A\u5668\u4EBA\u8FD8\u6CA1\u6709\u8BBE\u7F6E\u5DE5\u4F5C\u533A\uFF0C\u65E0\u6CD5\u521B\u5EFA\u4F1A\u8BDD\u3002");
+      error.code = "chat/workspace-required";
+      throw error;
+    }
+    const workspaceId = await resolveWorkspaceId(workspacePath, signal);
+    const created = await invoke("session", "create", { request: { workspaceId } }, signal);
+    const sessionId = created?.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      const error = new Error("DSH \u672A\u8FD4\u56DE\u4F1A\u8BDD\u6807\u8BC6\u3002");
+      error.code = "chat/session-unresolved";
+      throw error;
+    }
+    await store.bind(channelId, botId, key, { sessionId, workspacePath });
+    return { sessionId, created: true };
+  }
+  async function prompt({ sessionId, content, mode = "queue", requestId = randomUUID(), signal }) {
+    if (!Array.isArray(content) || content.length === 0) {
+      const error = new Error("prompt \u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+      error.code = "chat/empty-prompt";
+      throw error;
+    }
+    return invoke("session", "prompt", {
+      request: { requestId, sessionId, mode, content }
+    }, signal);
+  }
+  async function cancel({ channelId, botId, key, signal }) {
+    const bound = store?.get(channelId, botId, key);
+    activeTurns.get(`${channelId}:${botId}:${key}`)?.abort?.();
+    if (!bound) return { accepted: false };
+    try {
+      return await invoke("session", "cancel", { request: { sessionId: bound.sessionId } }, signal);
+    } catch (error) {
+      if (error.code === "session/not-found") return { accepted: false };
+      throw error;
+    }
+  }
+  async function isRunning(sessionId, signal) {
+    const result = await invoke("session", "list", { _request: {} }, signal);
+    const item = Array.isArray(result?.items) ? result.items.find((entry) => entry?.sessionId === sessionId) : void 0;
+    return item?.running === true;
+  }
+  async function rename2(sessionId, title, signal) {
+    return invoke("session", "rename", { request: { sessionId, title } }, signal);
+  }
+  async function reset({ channelId, botId, key }) {
+    await store.unbind(channelId, botId, key);
+  }
+  async function ask({
+    channelId,
+    botId,
+    key,
+    workspacePath,
+    content,
+    sourceGuidance,
+    mode = "queue",
+    signal,
+    handlers = {}
+  }) {
+    const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
+    guidance?.publish?.(sessionId, sourceGuidance ?? "");
+    const turnKey = `${channelId}:${botId}:${key}`;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener?.("abort", abort, { once: true });
+    activeTurns.set(turnKey, controller);
+    const frames = await stream("session", "follow", {
+      request: {
+        address: { kind: "session", sessionId },
+        maxMessages: 50,
+        assistantStream: true
+      }
+    }, controller.signal);
+    let cursor = -1;
+    let promptSent = false;
+    let currentTurn = null;
+    const assistantText = /* @__PURE__ */ new Map();
+    const tools = [];
+    let settled = false;
+    let settle;
+    const finished = new Promise((resolve2) => {
+      settle = resolve2;
+    });
+    const pump = (async () => {
+      try {
+        for await (const frame of frames) {
+          if (frame?.type === "snapshot") {
+            cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
+            continue;
+          }
+          if (frame?.type === "assistant-stream") {
+            const inner = frame.frame;
+            if (inner?.type === "chunk" && inner.chunk?.type === "text-delta") {
+              const text = deltaTextOf(inner.chunk);
+              if (text) handlers.onDelta?.(text, inner);
+            }
+            handlers.onEvent?.(frame);
+            continue;
+          }
+          const event = frame?.event;
+          if (!event) continue;
+          if (Number.isInteger(event.seq)) {
+            if (event.seq <= cursor) continue;
+            cursor = event.seq;
+          }
+          handlers.onEvent?.(event);
+          switch (event.type) {
+            case "turn/start":
+              currentTurn = event.data?.turn ?? null;
+              assistantText.set(currentTurn, []);
+              handlers.onTurnStart?.(event);
+              break;
+            case "assistant/message": {
+              const turn = event.data?.turn ?? currentTurn;
+              const text = textOfAssistantMessage(event.data?.message);
+              if (text) {
+                const bucket = assistantText.get(turn) ?? [];
+                bucket.push(text);
+                assistantText.set(turn, bucket);
+              }
+              handlers.onAssistantMessage?.(event, text);
+              break;
+            }
+            case "tool/call":
+              tools.push({ name: event.data?.name, arguments: event.data?.arguments });
+              handlers.onToolCall?.(event);
+              break;
+            case "tool/result":
+              handlers.onToolResult?.(event, tools.at(-1));
+              break;
+            case "turn/end": {
+              const turn = event.data?.turn ?? currentTurn;
+              const texts = assistantText.get(turn) ?? [];
+              const text = (texts.at(-1) ?? "").slice(0, MAX_ASSISTANT_TEXT);
+              handlers.onTurnEnd?.(event, text);
+              assistantText.delete(turn);
+              if (promptSent && !settled) {
+                settled = true;
+                settle({
+                  sessionId,
+                  text,
+                  reason: event.data?.reason ?? null,
+                  tools: [...tools],
+                  aborted: false
+                });
+              }
+              break;
+            }
+            default:
+              break;
+          }
+        }
+        if (!settled) {
+          settled = true;
+          settle({
+            sessionId,
+            text: "",
+            reason: { kind: "stream-ended" },
+            tools: [...tools],
+            aborted: false
+          });
+        }
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          settle({
+            sessionId,
+            text: "",
+            reason: { kind: "error", error: sessionError(error) },
+            tools: [...tools],
+            aborted: true
+          });
+        } else {
+          logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u4E8B\u4EF6\u6D41\u4E2D\u65AD\uFF1A${error?.message ?? error}`);
+        }
+      }
+    })();
+    try {
+      promptSent = true;
+      await prompt({ sessionId, content, mode, signal: controller.signal });
+      const result = await finished;
+      return result;
+    } finally {
+      signal?.removeEventListener?.("abort", abort);
+      activeTurns.delete(turnKey);
+      try {
+        await frames?.return?.();
+      } catch {
+      }
+      void pump;
+    }
+  }
+  function registerInteractionHandler(channelId, handle) {
+    if (typeof handle !== "function") throw new TypeError("\u4EA4\u4E92\u5904\u7406\u5668\u5FC5\u987B\u662F\u51FD\u6570\u3002");
+    interactionHandlers.set(channelId, handle);
+    return () => {
+      if (interactionHandlers.get(channelId) === handle) interactionHandlers.delete(channelId);
+    };
+  }
+  function installInteractionRelays() {
+    if (typeof ctx?.on !== "function") {
+      logger.warn?.("[dsh-chat] \u5F53\u524D Host \u4E0D\u652F\u6301\u4E8B\u4EF6\u8BA2\u9605\uFF0C\u5BA1\u6279/\u63D0\u95EE\u65E0\u6CD5\u56DE\u4F20\u5230 IM\u3002");
+      return () => {
+      };
+    }
+    const locateFor = (request) => {
+      const sessionId = request?.agent?.session?.id;
+      const located = store?.locate?.(sessionId);
+      if (!located) return null;
+      const handle = interactionHandlers.get(located.channelId);
+      return handle ? { ...located, handle } : null;
+    };
+    const offApproval = ctx.on("approval/request", async (request, next) => {
+      const target = locateFor(request);
+      if (!target) return next();
+      try {
+        return await target.handle({
+          kind: "approval",
+          channelId: target.channelId,
+          botId: target.botId,
+          key: target.key,
+          request
+        });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u4F20\u5931\u8D25\uFF0C\u4EA4\u7531\u5176\u4ED6\u5E94\u7B54\u65B9\uFF1A${error?.message ?? error}`);
+        return next();
+      }
+    });
+    const offQuestions = ctx.on("user-questions/request", async (request, next) => {
+      const target = locateFor(request);
+      if (!target) return next();
+      try {
+        const answers = await target.handle({
+          kind: "question",
+          channelId: target.channelId,
+          botId: target.botId,
+          key: target.key,
+          request
+        });
+        if (!answers) return next();
+        return answers;
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u63D0\u95EE\u56DE\u4F20\u5931\u8D25\uFF0C\u4EA4\u7531\u5176\u4ED6\u5E94\u7B54\u65B9\uFF1A${error?.message ?? error}`);
+        return next();
+      }
+    });
+    return () => {
+      try {
+        offApproval?.();
+      } catch {
+      }
+      try {
+        offQuestions?.();
+      } catch {
+      }
+    };
   }
   return Object.freeze({
-    /** 底层调用口，渠道在 P1 之前也能用它做探测。 */
     invoke,
-    /** @throws 未实现（P1）。 */
-    async ask() {
-      throw notImplemented("ask");
-    },
-    /** @throws 未实现（P1）。 */
-    stop() {
-      throw notImplemented("stop");
-    },
-    /** @throws 未实现（P1）。 */
-    steer() {
-      throw notImplemented("steer");
-    },
-    /** @throws 未实现（P1）。 */
-    isRunning() {
-      throw notImplemented("isRunning");
-    },
-    /** 解除某会话绑定，下一条消息开新会话。@throws 未实现（P1）。 */
-    reset() {
-      throw notImplemented("reset");
-    }
+    stream,
+    resolveWorkspaceId,
+    sessionExists,
+    ensure,
+    prompt,
+    ask,
+    cancel,
+    isRunning,
+    rename: rename2,
+    reset,
+    /** 会话绑定表：渠道可用它接管旧实现的绑定（`adopt`）。 */
+    bindings: store,
+    registerInteractionHandler,
+    installInteractionRelays
   });
 }
 
@@ -896,9 +1493,12 @@ function validBotPayload(payload, { withConfig = false } = {}) {
 }
 function apply(ctx, config = {}) {
   const logger = resolveLogger(ctx, "dsh-chat");
+  const integrations = integrationRoot(config.integrationRoot);
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
+  const legacyDirs = /* @__PURE__ */ new Map();
   const guidance = createGuidanceRegistry();
-  const sessions = createSessionBridge({ ctx, logger });
+  const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
+  const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
   const rpc = createRpcCarrier(ctx, { logger });
   function storageFor(channelId) {
     return Object.freeze({
@@ -910,13 +1510,25 @@ function apply(ctx, config = {}) {
   const registry = createChannelRegistry({
     logger,
     rpc,
+    /**
+     * 渠道注册后按 `legacy.dir` 做一次性旧设置导入（只读旧文件，绝不改写）。
+     * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
+     */
+    onRegistered: (channelId, legacy) => {
+      if (!legacy?.dir) return;
+      const dir = channelDataDir(legacy.dir, integrations);
+      legacyDirs.set(channelId, dir);
+      void settings.importLegacy(channelId, dir).catch((error) => {
+        logger.warn?.(`[dsh-chat] \u6E20\u9053 ${channelId} \u65E7\u8BBE\u7F6E\u5BFC\u5165\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      });
+    },
     createDeps: (channelId, definition) => Object.freeze({
       channelId,
       logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
       credentials: ctx.credentials,
       /** 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）；未声明时返回 hub 数据目录。 */
-      dataDir: definition.legacy?.dir ? channelDataDir(definition.legacy.dir) : hubDataDir(config.dataDir),
-      resolveDataDir: (name2) => channelDataDir(name2),
+      dataDir: definition.legacy?.dir ? channelDataDir(definition.legacy.dir, integrations) : hubDataDir(config.dataDir),
+      resolveDataDir: (name2) => channelDataDir(name2, integrations),
       storage: storageFor(channelId),
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
@@ -951,10 +1563,26 @@ function apply(ctx, config = {}) {
         return failFrom(error, "chat/context-enhancement-failed");
       }
     }
+    if (method === "maintenance.import-legacy") {
+      const valid = payload !== null && typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 2 && typeof payload.channelId === "string" && CHANNEL_ID.test(payload.channelId) && typeof payload.force === "boolean";
+      if (!valid) {
+        return fail("chat/bad-request", "maintenance.import-legacy \u9700\u8981 { channelId, force }\u3002");
+      }
+      const dir = legacyDirs.get(payload.channelId);
+      if (!dir) return fail("chat/no-legacy", `\u6E20\u9053 ${payload.channelId} \u6CA1\u6709\u58F0\u660E\u65E7\u6570\u636E\u76EE\u5F55\u3002`);
+      try {
+        return ok(await settings.importLegacy(payload.channelId, dir, { force: payload.force }));
+      } catch (error) {
+        return failFrom(error, "chat/import-failed");
+      }
+    }
     return fail("chat/unknown-method", `\u63A7\u5236\u7AEF\u70B9\u4E0D\u652F\u6301 ${method}\u3002`);
   }
-  void settings.load().catch((error) => {
+  void settings.ready().catch((error) => {
     logger.warn?.(`[dsh-chat] \u521D\u59CB\u5316\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E\u5931\u8D25\uFF1A${error?.message ?? error}`);
+  });
+  void sessionStore.ready().catch((error) => {
+    logger.warn?.(`[dsh-chat] \u521D\u59CB\u5316\u4F1A\u8BDD\u7ED1\u5B9A\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
   });
   const service = Object.freeze({
     contractVersion: CONTRACT_VERSION,
@@ -995,6 +1623,7 @@ function apply(ctx, config = {}) {
     };
   }, "dsh-chat: host service");
   ctx.effect(() => rpc.register(CONTROL_CHANNEL_ID, controlHandler), "dsh-chat: control rpc");
+  ctx.effect(() => sessions.installInteractionRelays(), "dsh-chat: \u5BA1\u6279\u4E0E\u63D0\u95EE\u56DE\u4F20");
   logger.info?.(`[dsh-chat] hub \u5DF2\u5C31\u7EEA\uFF08\u5951\u7EA6 v${CONTRACT_VERSION}\uFF09\uFF0C\u7B49\u5F85\u6E20\u9053\u63D2\u4EF6\u6CE8\u518C\u3002`);
 }
 export {

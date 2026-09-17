@@ -213,6 +213,234 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-state-error-primary);
 }
+.dchat-buttonPrimary {
+  background: var(--dsw-alias-brand-primary);
+  border-color: transparent;
+  color: #fff;
+}
+.dchat-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dchat-entry:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dchat-entry:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.dchat-entryLabel {
+  font-size: 13px;
+  font-weight: 500;
+}
+.dchat-entryStatus {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  margin-left: auto;
+}
+.dchat-entryStatus[data-active='true'] {
+  color: var(--dsw-alias-state-success-primary);
+}
+.dchat-entryArrow {
+  color: var(--dsw-alias-label-tertiary);
+}
+.dchat-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow: auto;
+  /* 设置弹层自身是 fixed + z-index:1000，渠道弹窗必须压在其上。 */
+  z-index: 1100;
+}
+.dchat-dialog {
+  width: min(640px, 100%);
+  /* 自己滚，而不是让外层滚动：否则内容变高时底部按钮会掉出视口。 */
+  max-height: calc(100vh - 80px);
+  box-sizing: border-box;
+  overflow: auto;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dchat-dialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dchat-dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  /* 内容很长时按钮始终粘在弹窗底部。 */
+  position: sticky;
+  bottom: -16px;
+  margin: 0 -18px -16px;
+  padding: 10px 18px 14px;
+  background: var(--dsw-alias-bg-base);
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+.dchat-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+.dchat-tab {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.dchat-tab[aria-selected='true'] {
+  color: var(--dsw-alias-label-primary);
+  border-bottom-color: var(--dsw-alias-brand-primary);
+}
+.dchat-tabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dchat-contextGlobal,
+.dchat-contextTargets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dchat-contextSwitchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dchat-contextSwitchLabel {
+  font-size: 13px;
+}
+.dchat-contextLegendRow,
+.dchat-contextLegend {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dchat-contextFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 4px 12px;
+}
+.dchat-contextField {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.dchat-contextField code {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dchat-contextGuidance {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dchat-contextGuidanceHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dchat-textarea,
+.dchat-targetField input,
+.dchat-select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.dchat-textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+.dchat-targetList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dchat-targetRow {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dchat-targetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dchat-targetEnable,
+.dchat-targetMerge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dchat-targetGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.dchat-targetField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.dchat-scopeGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dchat-scopeRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dchat-scopeLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
 `;
 
 /** 已安装实例计数：多个实例共用一份 <style>，最后一个卸载才移除。 */

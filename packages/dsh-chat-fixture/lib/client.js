@@ -45,11 +45,14 @@ var inject = ["slots", "locale", "connection", "chatChannels", "chatUi"];
 var CHANNEL_ID = "fixture";
 var PAGE_SLOT = "chat.channel.page";
 var LOCALE_NAMESPACE = "dsh-chat-fixture";
+var DEMO_BOT_ID = "fixture-bot";
 var zh = {
   "\u8BD5\u7528\u6E20\u9053": "\u8BD5\u7528\u6E20\u9053",
   "\u5951\u7EA6\u9A8C\u8BC1\u7528\u5047\u6E20\u9053\uFF1A\u4E0D\u8FDE\u63A5\u4EFB\u4F55\u5E73\u53F0\u3002": "\u5951\u7EA6\u9A8C\u8BC1\u7528\u5047\u6E20\u9053\uFF1A\u4E0D\u8FDE\u63A5\u4EFB\u4F55\u5E73\u53F0\u3002",
   "\u56DE\u663E": "\u56DE\u663E",
   "\u89E3\u6790\u4E0A\u4E0B\u6587\u589E\u5F3A": "\u89E3\u6790\u4E0A\u4E0B\u6587\u589E\u5F3A",
+  "\u673A\u5668\u4EBA\u8BBE\u7F6E": "\u673A\u5668\u4EBA\u8BBE\u7F6E",
+  "\u8FC7\u7A0B\u5C55\u793A\uFF08\u7EC4\u4EF6\u6F14\u793A\uFF09": "\u8FC7\u7A0B\u5C55\u793A\uFF08\u7EC4\u4EF6\u6F14\u793A\uFF09",
   "\u7ED3\u679C": "\u7ED3\u679C"
 };
 var en = {
@@ -57,6 +60,8 @@ var en = {
   "\u5951\u7EA6\u9A8C\u8BC1\u7528\u5047\u6E20\u9053\uFF1A\u4E0D\u8FDE\u63A5\u4EFB\u4F55\u5E73\u53F0\u3002": "Contract fixture channel: connects to nothing.",
   "\u56DE\u663E": "Echo",
   "\u89E3\u6790\u4E0A\u4E0B\u6587\u589E\u5F3A": "Resolve context enhancement",
+  "\u673A\u5668\u4EBA\u8BBE\u7F6E": "Bot settings",
+  "\u8FC7\u7A0B\u5C55\u793A\uFF08\u7EC4\u4EF6\u6F14\u793A\uFF09": "Progress display (component demo)",
   "\u7ED3\u679C": "Result"
 };
 var h = React.createElement;
@@ -75,12 +80,23 @@ var SAMPLE_CONFIG = {
     }
   ]
 };
+var MODE_OPTIONS = [
+  { value: "off", label: "\u4E0D\u663E\u793A\u8FC7\u7A0B", help: "\u53EA\u56DE\u590D\u6700\u7EC8\u7B54\u6848\u3002" },
+  { value: "card", label: "\u5B9E\u65F6\u8FC7\u7A0B\u5361", help: "\u8FC7\u7A0B\u4E0E\u7B54\u6848\u5728\u540C\u4E00\u5F20\u5361\u7247\u91CC\u539F\u5730\u5237\u65B0\u3002" },
+  { value: "steps", label: "\u9010\u6B65\u76F4\u64AD", help: "\u6BCF\u4E00\u6B65\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\u3002" }
+];
 function FixturePage(props) {
   const { chatUi, connection, translate } = props;
   const t = typeof translate === "function" ? translate : (key) => key;
   const [output, setOutput] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [mode, setMode] = React.useState({ direct: "off", group: "off" });
+  const bot = chatUi.hooks.useBotSettings({
+    connection,
+    channelId: CHANNEL_ID,
+    botId: DEMO_BOT_ID
+  });
   const run = React.useCallback(async (method, payload) => {
     setBusy(true);
     setError(null);
@@ -96,42 +112,65 @@ function FixturePage(props) {
   }, [chatUi, connection]);
   const { Panel } = chatUi.components;
   return h(
-    Panel,
-    {
-      title: t("\u8BD5\u7528\u6E20\u9053"),
-      description: t("\u5951\u7EA6\u9A8C\u8BC1\u7528\u5047\u6E20\u9053\uFF1A\u4E0D\u8FDE\u63A5\u4EFB\u4F55\u5E73\u53F0\u3002"),
-      actions: h(
+    React.Fragment,
+    null,
+    h(
+      Panel,
+      {
+        title: t("\u8BD5\u7528\u6E20\u9053"),
+        description: t("\u5951\u7EA6\u9A8C\u8BC1\u7528\u5047\u6E20\u9053\uFF1A\u4E0D\u8FDE\u63A5\u4EFB\u4F55\u5E73\u53F0\u3002"),
+        actions: h(
+          "div",
+          { className: "dchat-actions" },
+          h("button", {
+            type: "button",
+            className: "dchat-button",
+            disabled: busy,
+            onClick: () => run("echo", { hello: "world" })
+          }, t("\u56DE\u663E")),
+          h("button", {
+            type: "button",
+            className: "dchat-button",
+            disabled: busy,
+            onClick: () => run("context.resolve", {
+              config: SAMPLE_CONFIG,
+              conversationType: "direct",
+              identity: { senderId: "ou_demo_user" }
+            })
+          }, t("\u89E3\u6790\u4E0A\u4E0B\u6587\u589E\u5F3A"))
+        )
+      },
+      error ? h("p", { className: "dchat-error", role: "alert" }, error.message) : null,
+      output ? h(
         "div",
-        { className: "dchat-actions" },
-        h("button", {
-          type: "button",
-          className: "dchat-button",
-          disabled: busy,
-          onClick: () => run("echo", { hello: "world" })
-        }, t("\u56DE\u663E")),
-        h("button", {
-          type: "button",
-          className: "dchat-button",
-          disabled: busy,
-          onClick: () => run("context.resolve", {
-            config: SAMPLE_CONFIG,
-            conversationType: "direct",
-            identity: { senderId: "ou_demo_user" }
-          })
-        }, t("\u89E3\u6790\u4E0A\u4E0B\u6587\u589E\u5F3A"))
-      )
-    },
-    error ? h("p", { className: "dchat-error", role: "alert" }, error.message) : null,
-    output ? h(
-      "div",
-      { className: "dchat-list" },
-      h(
-        "div",
-        { className: "dchat-listItem" },
-        h("span", null, t("\u7ED3\u679C")),
-        h("code", { className: "dchat-code" }, JSON.stringify(output))
-      )
-    ) : null
+        { className: "dchat-list" },
+        h(
+          "div",
+          { className: "dchat-listItem" },
+          h("span", null, t("\u7ED3\u679C")),
+          h("code", { className: "dchat-code" }, JSON.stringify(output))
+        )
+      ) : null
+    ),
+    h(
+      Panel,
+      { title: t("\u673A\u5668\u4EBA\u8BBE\u7F6E"), description: `botId\uFF1A${DEMO_BOT_ID}` },
+      h(chatUi.components.ContextEnhancementEditor, {
+        config: bot.record?.contextEnhancement ?? null,
+        disabled: bot.phase !== "ready",
+        translate: t,
+        onSave: bot.saveContextEnhancement
+      })
+    ),
+    h(chatUi.components.ScopedModeEditor, {
+      title: t("\u8FC7\u7A0B\u5C55\u793A\uFF08\u7EC4\u4EF6\u6F14\u793A\uFF09"),
+      description: '\u901A\u7528"\u4E24\u4F5C\u7528\u57DF \xD7 \u591A\u9009\u9879"\u7EC4\u4EF6\uFF0C\u98DE\u4E66\u6E20\u9053\u4F1A\u7528\u5B83\u627F\u8F7D\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u3002',
+      scopes: [{ key: "direct", label: "\u79C1\u804A" }, { key: "group", label: "\u7FA4\u804A" }],
+      options: MODE_OPTIONS,
+      value: mode,
+      translate: t,
+      onSave: async (next) => setMode(next)
+    })
   );
 }
 function apply(ctx) {

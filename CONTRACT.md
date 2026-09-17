@@ -208,6 +208,7 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `channel.list` | `{}` | 契约版本 + 全部渠道状态 |
 | `bot.settings.get` | `{ channelId, botId }` | 读每机器人共享设置 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
+| `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
 
@@ -215,17 +216,42 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 
 ## 5. 会话桥 `sessions`
 
+hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息交进来、把回调接出去。
+
 | 方法 | 语义 |
 |---|---|
-| `invoke(namespace, method, args, signal)` | 直通 `typertGateway`（`session.*` / `workspace.*`） |
+| `invoke(namespace, method, args, signal)` | 一元调用（返回原始业务值，失败抛带 `code` 的 Error） |
+| `stream(namespace, method, args, signal)` | 流式调用；`session/follow`、`session/control`、`workspace/follow` **必须**用它 |
+| `ensure({ channelId, botId, key, workspacePath, signal })` | 找到或创建该会话键对应的 DSH 会话（`{ sessionId, created }`）；绑定的会话被删会自动重建 |
+| `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools }` |
+| `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
+| `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |
+| `bindings` | 会话绑定表：`get` / `entries` / `bind` / `unbind` / `adopt` / `locate` |
+| `registerInteractionHandler(channelId, handle)` | 注册本渠道的审批/提问回传处理器（返回注销函数） |
 
-> hub 已在自身 `inject` 中声明 `typertGateway`，会话能力随 DSH modern 路径提供；
-> 渠道不需要（也不应该）自己 inject 它。
-| `ask({ channelId, botId, key, text, content, sourceGuidance, signal, onDelta, onStep, onDone, onApproval, onQuestion })` | 跑一次会话回合；呈现方式由渠道决定 |
-| `stop(key)` / `steer(key, text)` / `isRunning(key)` | 停止 / 补充指令 / 是否在跑 |
-| `reset(key)` | 解除会话绑定，下一条消息开新会话 |
+`ask` 的 `handlers`：`onTurnStart` / `onAssistantMessage` / `onToolCall` / `onToolResult` /
+`onDelta`（token 级增量）/ `onEvent`（原始事件）/ `onTurnEnd`。
+`content` 是 DSH 内容块数组，如 `[{ type: 'text', text }]`。
 
-P0 只有 `invoke` 可用，其余方法抛 `chat/not-implemented`；P1 补齐。渠道可以照此先写调用点。
+> hub 已在自身 `inject` 中声明 `typertGateway`，渠道不需要（也不应该）自己 inject 它。
+> 调用参数必须与 DSH 的 wire 契约一致，这部分已由 hub 封好，渠道不要绕过 `sessions` 直接调。
+
+**审批与提问**：hub 已在 root 上参与 `approval/request` 与 `user-questions/request`
+两个 waterfall，并按会话绑定定位到渠道；渠道只需注册处理器：
+
+```js
+const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payload) => {
+  // payload.kind === 'approval' → 返回 'allowed-once' | 'rejected' | 'cancelled'
+  // payload.kind === 'question' → 返回 { answers: [{ id, selected, custom? }] }
+  return askUserInIm(payload)
+})
+```
+
+处理器抛错即由 hub 交还 `next()`，浏览器 UI 仍能接管；不属于本插件的会话从不拦截。
+
+**旧绑定接管**：渠道读自己的旧 `state.json` 后调用
+`deps.sessions.bindings.adopt(channelId, botId, { 'p2p:ou_xxx': 'session-…' })`，
+已有绑定不会被覆盖。
 
 ---
 
@@ -254,7 +280,18 @@ P0 只有 `invoke` 可用，其余方法抛 `chat/not-implemented`；P1 补齐�
 | 服务 | 提供方 | 用途 |
 |---|---|---|
 | `chatChannels` | hub | `register({ id, order, label, logo, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()` |
-| `chatUi` | hub | `components`（`Panel` / `EmptyState` / `StatusPill`）、`installStyles()`、`callChannelRpc`、`callControlRpc`、`unwrapRpc`、`translate`、`react`、`createElement` |
+| `chatUi` | hub | `components` / `hooks` / `installStyles()` / `callChannelRpc` / `callControlRpc` / `unwrapRpc` / `translate` / `react` |
+
+`chatUi.components`：
+- `Panel`、`EmptyState`、`StatusPill` —— 基础块；
+- `ContextEnhancementEditor({ config, disabled, translate, onSave })` —— **上下文增强**
+  （群聊/私聊全局 + 指定用户/指定群 + 是否叠加全局提示词），渠道页直接放一个即可；
+- `ScopedModeEditor({ title, scopes, options, value, onSave })` —— 通用"两作用域 × 多选项"
+  设置块（飞书的任务过程展示就用它）。
+
+`chatUi.hooks.useBotSettings({ connection, channelId, botId })` →
+`{ record, phase, error, reload, saveContextEnhancement }`：把 hub 持有的每机器人设置
+（工作区/模型/预设/上下文增强）一次接好，渠道不必自己写 RPC 与加载态。
 
 页面挂载：hub 在 `settings.section` 上声明了子槽 `chat.channel.page`（`kind: 'keyed'`），
 渠道注册页时用 `key: <channelId>`：

@@ -1,0 +1,367 @@
+/**
+ * 会话桥：绑定、创建、prompt、follow 流式回合、取消、审批回传。
+ *
+ * 假 gateway 严格按 DSH 0.1.5-rc.2 的 wire 契约实现（`request` 包装、
+ * `session/list` 用 `_request`、follow 用 stream），因此这些测试同时固定住了
+ * "我们调用得对不对"这件事。
+ */
+
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import { createSessionStore } from '../packages/dsh-chat/host/session-store.mjs';
+import { createSessionBridge } from '../packages/dsh-chat/host/sessions.mjs';
+
+const silentLogger = { info() {}, warn() {}, error() {} };
+
+function remoteError(code, message = code) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = {};
+  return error;
+}
+
+/** 一个可编排的假 DSH：记录调用，并按脚本逐个产出 follow 帧。 */
+function createFakeGateway({ script = [] } = {}) {
+  const calls = [];
+  const sessions = new Set();
+  const knownWorkspaces = new Map();
+  let sessionSeq = 0;
+  let scriptIndex = 0;
+
+  const gateway = {
+    calls,
+    sessions,
+    /** 预先让某个会话"已被删除"。 */
+    forget(sessionId) {
+      sessions.delete(sessionId);
+    },
+    async invoke({ namespace, method, args }) {
+      calls.push({ namespace, method, args });
+      if (namespace === 'workspace' && method === 'create') {
+        const path = args?.request?.path;
+        if (!knownWorkspaces.has(path)) knownWorkspaces.set(path, `ws_${knownWorkspaces.size + 1}`);
+        return {
+          workspace: { workspaceId: knownWorkspaces.get(path), path, title: path, sessionIds: [] },
+          created: false,
+        };
+      }
+      if (namespace === 'session' && method === 'create') {
+        sessionSeq += 1;
+        const sessionId = `session-${sessionSeq}`;
+        sessions.add(sessionId);
+        return { sessionId };
+      }
+      if (namespace === 'session' && method === 'page') {
+        const sessionId = args?.request?.address?.sessionId;
+        if (!sessions.has(sessionId)) throw remoteError('session/not-found');
+        return { records: [], hasMore: false };
+      }
+      if (namespace === 'session' && method === 'prompt') {
+        if (args?.request?.mode !== 'queue' && args?.request?.mode !== 'steer') {
+          throw remoteError('gateway/arguments-invalid');
+        }
+        return { accepted: true };
+      }
+      if (namespace === 'session' && method === 'list') {
+        return { items: [...sessions].map((sessionId, index) => ({ sessionId, running: index === 0 })) };
+      }
+      if (namespace === 'session' && method === 'cancel') {
+        if (!sessions.has(args?.request?.sessionId)) throw remoteError('session/not-found');
+        return { accepted: true };
+      }
+      throw remoteError('gateway/method-unavailable', `未实现的假方法 ${namespace}/${method}`);
+    },
+    async stream({ namespace, method, args }) {
+      calls.push({ namespace, method, args, streaming: true });
+      if (namespace !== 'session' || method !== 'follow') {
+        throw remoteError('gateway/method-unavailable');
+      }
+      const frames = script[scriptIndex] ?? [];
+      scriptIndex += 1;
+      return (async function* iterate() {
+        for (const frame of frames) yield frame;
+      })();
+    },
+  };
+  return gateway;
+}
+
+function turnFrames({ turn = 1, text = '你好', deltas = [] } = {}) {
+  return [
+    { type: 'snapshot', cursor: 3, records: [], hasMore: false },
+    { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn } } },
+    ...deltas.map((delta, index) => ({
+      type: 'assistant-stream',
+      frame: { type: 'chunk', chunk: { type: 'text-delta', text: delta }, index },
+    })),
+    {
+      type: 'event',
+      event: {
+        type: 'tool/call',
+        seq: 5,
+        data: { turn, step: 1, callId: 'call-1', name: 'bash', arguments: '{"cmd":"ls"}' },
+      },
+    },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 6,
+        data: { turn, message: { content: [{ type: 'text', text }] } },
+      },
+    },
+    {
+      type: 'event',
+      event: { type: 'turn/end', seq: 7, data: { turn, reason: { kind: 'completed' } } },
+    },
+  ];
+}
+
+async function makeBridge(options = {}) {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
+  const store = createSessionStore({ dataDir, logger: silentLogger });
+  const gateway = createFakeGateway(options);
+  const published = [];
+  const bridge = createSessionBridge({
+    ctx: { typertGateway: gateway },
+    logger: silentLogger,
+    store,
+    guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
+  });
+  return {
+    bridge,
+    store,
+    gateway,
+    published,
+    dataDir,
+    async cleanup() {
+      await rm(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('首次发消息：按路径建工作区 → 建会话 → 绑定；第二次复用同一会话', async () => {
+  const app = await makeBridge({ script: [turnFrames(), turnFrames({ text: '第二次' })] });
+  try {
+    const first = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/Users/me/ws',
+      content: [{ type: 'text', text: '你好' }],
+      sourceGuidance: '礼貌一点',
+    });
+    assert.equal(first.text, '你好');
+    assert.equal(first.reason.kind, 'completed');
+
+    const bound = app.store.get('feishu', 'bot_1', 'p2p:ou_a');
+    assert.equal(bound.sessionId, 'session-1');
+    assert.equal(bound.workspacePath, '/Users/me/ws');
+    assert.deepEqual(app.published, [{ sessionId: 'session-1', text: '礼貌一点' }]);
+
+    const second = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/Users/me/ws',
+      content: [{ type: 'text', text: '再来一次' }],
+    });
+    assert.equal(second.text, '第二次');
+    // 复用会话：只创建过一次 session。
+    assert.equal(app.gateway.calls.filter((call) => call.method === 'create' && call.namespace === 'session').length, 1);
+    // workspace/create 按路径幂等，但仍会调用（DSH 自身去重）。
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, 'session-1');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('调用参数符合 DSH wire 契约（request 包装与 _request 例外）', async () => {
+  const app = await makeBridge({ script: [turnFrames()] });
+  try {
+    await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws',
+      content: [{ type: 'text', text: '你好' }],
+    });
+    const byMethod = (namespace, method) => app.gateway.calls.find(
+      (call) => call.namespace === namespace && call.method === method,
+    );
+    assert.deepEqual(Object.keys(byMethod('workspace', 'create').args), ['request']);
+    assert.equal(byMethod('workspace', 'create').args.request.path, '/ws');
+    assert.deepEqual(Object.keys(byMethod('session', 'create').args), ['request']);
+    assert.deepEqual(byMethod('session', 'create').args.request.workspaceId, 'ws_1');
+    // 首次使用不探测存在性，直接创建；探测发生在复用路径上。
+    assert.equal(byMethod('session', 'page'), undefined);
+    await app.bridge.sessionExists('session-1');
+    assert.deepEqual(Object.keys(byMethod('session', 'page').args), ['request']);
+    assert.equal(byMethod('session', 'page').args.request.throughSeq, -1);
+    const promptCall = byMethod('session', 'prompt');
+    assert.deepEqual(Object.keys(promptCall.args), ['request']);
+    assert.equal(promptCall.args.request.mode, 'queue');
+    assert.deepEqual(promptCall.args.request.content, [{ type: 'text', text: '你好' }]);
+    assert.ok(typeof promptCall.args.request.requestId === 'string' && promptCall.args.request.requestId);
+    const follow = byMethod('session', 'follow');
+    assert.equal(follow.streaming, true, 'follow 必须走 stream');
+    assert.equal(follow.args.request.assistantStream, true);
+
+    // session/list 的 wire 是 _request。
+    await app.bridge.isRunning('session-1');
+    const list = byMethod('session', 'list');
+    assert.deepEqual(Object.keys(list.args), ['_request']);
+    assert.equal(await app.bridge.isRunning('session-1'), true);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('流式回合：增量、工具调用、最终文本都回调到位', async () => {
+  const app = await makeBridge({ script: [turnFrames({ text: '最终答案', deltas: ['最', '终'] })] });
+  try {
+    const deltas = [];
+    const tools = [];
+    let turnStarts = 0;
+    const result = await app.bridge.ask({
+      channelId: 'weixin', botId: 'wx_1', key: 'p2p:user@im.wechat',
+      workspacePath: '/ws',
+      content: [{ type: 'text', text: '在吗' }],
+      handlers: {
+        onDelta: (text) => deltas.push(text),
+        onToolCall: (event) => tools.push(event.data.name),
+        onTurnStart: () => { turnStarts += 1; },
+      },
+    });
+    assert.deepEqual(deltas, ['最', '终']);
+    assert.deepEqual(tools, ['bash']);
+    assert.equal(turnStarts, 1);
+    assert.equal(result.text, '最终答案');
+    assert.deepEqual(result.tools.map((tool) => tool.name), ['bash']);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('绑定的会话已被删除时自动重建并重新绑定', async () => {
+  const app = await makeBridge({ script: [turnFrames(), turnFrames({ text: '重建后' })] });
+  try {
+    await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws', content: [{ type: 'text', text: '第一次' }],
+    });
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, 'session-1');
+
+    app.gateway.forget('session-1');
+    const second = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws', content: [{ type: 'text', text: '第二次' }],
+    });
+    assert.equal(second.text, '重建后');
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, 'session-2');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('没有工作区时给出可读错误；取消会中断回合并调用 session/cancel', async () => {
+  const app = await makeBridge({ script: [turnFrames()] });
+  try {
+    await assert.rejects(() => app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      content: [{ type: 'text', text: '你好' }],
+    }), (error) => error.code === 'chat/workspace-required');
+
+    await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws', content: [{ type: 'text', text: '你好' }],
+    });
+    const cancelled = await app.bridge.cancel({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+    assert.equal(cancelled.accepted, true);
+    assert.ok(app.gateway.calls.some((call) => call.method === 'cancel'));
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('会话绑定表：locate 能反查、adopt 只补空缺、unbind 生效', async () => {
+  const app = await makeBridge();
+  try {
+    const adopted = await app.store.adopt('feishu', 'bot_1', {
+      'p2p:ou_a': 'session-old-1',
+      'group:oc_1': { sessionId: 'session-old-2', workspacePath: '/ws' },
+    });
+    assert.equal(adopted, 2);
+    // 已有绑定不被覆盖。
+    assert.equal(await app.store.adopt('feishu', 'bot_1', { 'p2p:ou_a': 'session-new' }), 0);
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, 'session-old-1');
+
+    assert.deepEqual(app.store.locate('session-old-2'), {
+      channelId: 'feishu', botId: 'bot_1', key: 'group:oc_1',
+    });
+    assert.equal(app.store.locate('session-unknown'), undefined);
+
+    await app.store.unbind('feishu', 'bot_1', 'p2p:ou_a');
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a'), undefined);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('审批与提问只接管自己名下的会话，其余 next() 让给浏览器 UI', async () => {
+  const app = await makeBridge();
+  try {
+    const listeners = new Map();
+    const maybeBridge = createSessionBridge({
+      ctx: {
+        typertGateway: app.gateway,
+        on: (name, handler) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+      logger: silentLogger,
+      store: app.store,
+      guidance: { publish() {} },
+    });
+    await app.store.bind('feishu', 'bot_1', 'p2p:ou_a', { sessionId: 'session-bound' });
+
+    const seen = [];
+    maybeBridge.registerInteractionHandler('feishu', async (payload) => {
+      seen.push(payload.kind);
+      return payload.kind === 'approval' ? 'allowed-once' : { answers: [{ id: 'q1', selected: ['是'] }] };
+    });
+    const dispose = maybeBridge.installInteractionRelays();
+    assert.ok(listeners.has('approval/request'));
+    assert.ok(listeners.has('user-questions/request'));
+
+    const approval = listeners.get('approval/request');
+    const mine = await approval({ agent: { session: { id: 'session-bound' } }, toolName: 'bash' }, () => 'fallthrough');
+    assert.equal(mine, 'allowed-once');
+    const other = await approval({ agent: { session: { id: 'session-other' } }, toolName: 'bash' }, () => 'fallthrough');
+    assert.equal(other, 'fallthrough');
+
+    const questions = listeners.get('user-questions/request');
+    const answered = await questions(
+      { agent: { session: { id: 'session-bound' } }, questions: [{ id: 'q1', question: '?' }] },
+      () => 'fallthrough',
+    );
+    assert.deepEqual(answered, { answers: [{ id: 'q1', selected: ['是'] }] });
+    assert.deepEqual(seen, ['approval', 'question']);
+
+    dispose();
+    assert.equal(listeners.size, 0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('网关错误按 code 透出，不吞掉也不伪造', async () => {
+  const app = await makeBridge();
+  try {
+    await assert.rejects(() => app.bridge.invoke('session', 'nope', { request: {} }),
+      (error) => error.code === 'gateway/method-unavailable');
+    await assert.rejects(() => app.bridge.stream('session', 'nope', { request: {} }),
+      (error) => error.code === 'gateway/method-unavailable');
+  } finally {
+    await app.cleanup();
+  }
+});

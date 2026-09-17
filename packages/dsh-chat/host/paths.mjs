@@ -30,8 +30,21 @@ export function hubDataDir(configured) {
  * 某个渠道的历史数据目录（沿用 dsh-im 的目录名）。
  *
  * @param name - 目录名，如 'dsh-feishu'。
+ * @param integrationRoot - integrations 根目录（默认 DSH_HOME/integrations）。
  * @returns 绝对路径。
  */
-export function channelDataDir(name) {
-  return join(dshHome(), 'integrations', name);
+export function channelDataDir(name, integrationRoot) {
+  return join(integrationRoot ?? join(dshHome(), 'integrations'), name);
+}
+
+/**
+ * integrations 根目录；测试可用配置覆盖，避免碰到真实用户数据。
+ *
+ * @param configured - 插件配置里的 integrationRoot。
+ * @returns 绝对路径。
+ */
+export function integrationRoot(configured) {
+  return configured && String(configured).trim()
+    ? resolve(String(configured).trim())
+    : join(dshHome(), 'integrations');
 }

@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -325,6 +325,61 @@ test('数据目录不存在时首次写入会自行创建（含嵌套路径）',
     await service.bots.write('fixture', 'bot_1', { workspace: '/tmp/ws' });
     const onDisk = JSON.parse(await readFile(join(dataDir, 'bots.json'), 'utf8'));
     assert.equal(onDisk.channels.fixture.bot_1.workspace, '/tmp/ws');
+  } finally {
+    harness.disposeAll();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('渠道 legacy.dir 触发一次性旧设置导入（只读旧文件）', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dsh-chat-legacy-'));
+  const integrationRoot = join(base, 'integrations');
+  const legacyDir = join(integrationRoot, 'dsh-legacy');
+  await mkdir(legacyDir, { recursive: true });
+  const legacyBody = JSON.stringify({
+    version: 2,
+    workspaces: { bot_old: '/Users/me/ws' },
+    accessPolicies: { bot_old: { direct: { mode: 'allowlist' } } },
+    contextEnhancement: {
+      bot_old: {
+        group: { enabled: true, fields: ['senderId'], guidance: '群' },
+        direct: { enabled: false, fields: ['senderId'], guidance: '' },
+      },
+    },
+  });
+  await writeFile(join(legacyDir, 'workspaces.json'), legacyBody, 'utf8');
+
+  const harness = createFakeCtx();
+  try {
+    applyHub(harness.ctx, { dataDir: join(base, 'hub'), integrationRoot });
+    const service = harness.services.get('dshChat');
+    service.registerChannel({
+      id: 'legacy',
+      label: '旧渠道',
+      order: 7,
+      legacy: { dir: 'dsh-legacy' },
+      async createChannel() {
+        return { async start() {}, async stop() {}, endpoints: {} };
+      },
+    });
+
+    const deadline = Date.now() + 2_000;
+    while (service.bots.read('legacy', 'bot_old').workspace === null) {
+      if (Date.now() > deadline) throw new Error('旧设置导入未在 2s 内完成');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const record = service.bots.read('legacy', 'bot_old');
+    assert.equal(record.workspace, '/Users/me/ws');
+    assert.equal(record.contextEnhancement.group.enabled, true);
+    assert.equal(record.contextEnhancement.direct.enabled, false);
+    assert.deepEqual(record.accessPolicy, { direct: { mode: 'allowlist' } });
+
+    // 旧文件只读不改。
+    assert.equal(await readFile(join(legacyDir, 'workspaces.json'), 'utf8'), legacyBody);
+    // 渠道拿到的数据目录就是旧目录（零重绑）。
+    const status = await callRoute(harness.routes, '/api/dsh-chat/legacy', 'connection.status', {});
+    assert.equal(status.result.ok, false, '空 endpoints 的渠道没有该方法');
   } finally {
     harness.disposeAll();
     await rm(base, { recursive: true, force: true });

@@ -15,8 +15,9 @@ import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
-import { channelDataDir, hubDataDir } from './paths.mjs';
+import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
 import { createRpcCarrier, fail, failFrom, ok } from './rpc.mjs';
+import { createSessionStore } from './session-store.mjs';
 import { createSessionBridge } from './sessions.mjs';
 
 export const name = 'dsh-chat-host';
@@ -60,13 +61,17 @@ function validBotPayload(payload, { withConfig = false } = {}) {
  * Cordis host 插件入口。
  *
  * @param ctx - host 上下文。
- * @param config - 插件配置：{ dataDir }。
+ * @param config - 插件配置：{ dataDir, integrationRoot }。
  */
 export function apply(ctx, config = {}) {
   const logger = resolveLogger(ctx, 'dsh-chat');
+  const integrations = integrationRoot(config.integrationRoot);
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
+  /** 已注册渠道的旧数据目录，供 `maintenance.import-legacy` 重跑导入。 */
+  const legacyDirs = new Map();
   const guidance = createGuidanceRegistry();
-  const sessions = createSessionBridge({ ctx, logger });
+  const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
+  const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
   const rpc = createRpcCarrier(ctx, { logger });
 
   function storageFor(channelId) {
@@ -80,15 +85,27 @@ export function apply(ctx, config = {}) {
   const registry = createChannelRegistry({
     logger,
     rpc,
+    /**
+     * 渠道注册后按 `legacy.dir` 做一次性旧设置导入（只读旧文件，绝不改写）。
+     * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
+     */
+    onRegistered: (channelId, legacy) => {
+      if (!legacy?.dir) return;
+      const dir = channelDataDir(legacy.dir, integrations);
+      legacyDirs.set(channelId, dir);
+      void settings.importLegacy(channelId, dir).catch((error) => {
+        logger.warn?.(`[dsh-chat] 渠道 ${channelId} 旧设置导入失败：${error?.message ?? error}`);
+      });
+    },
     createDeps: (channelId, definition) => Object.freeze({
       channelId,
       logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
       credentials: ctx.credentials,
       /** 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）；未声明时返回 hub 数据目录。 */
       dataDir: definition.legacy?.dir
-        ? channelDataDir(definition.legacy.dir)
+        ? channelDataDir(definition.legacy.dir, integrations)
         : hubDataDir(config.dataDir),
-      resolveDataDir: (name) => channelDataDir(name),
+      resolveDataDir: (name) => channelDataDir(name, integrations),
       storage: storageFor(channelId),
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
@@ -132,11 +149,30 @@ export function apply(ctx, config = {}) {
         return failFrom(error, 'chat/context-enhancement-failed');
       }
     }
+    if (method === 'maintenance.import-legacy') {
+      const valid = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+        && Object.keys(payload).length === 2
+        && typeof payload.channelId === 'string' && CHANNEL_ID.test(payload.channelId)
+        && typeof payload.force === 'boolean';
+      if (!valid) {
+        return fail('chat/bad-request', 'maintenance.import-legacy 需要 { channelId, force }。');
+      }
+      const dir = legacyDirs.get(payload.channelId);
+      if (!dir) return fail('chat/no-legacy', `渠道 ${payload.channelId} 没有声明旧数据目录。`);
+      try {
+        return ok(await settings.importLegacy(payload.channelId, dir, { force: payload.force }));
+      } catch (error) {
+        return failFrom(error, 'chat/import-failed');
+      }
+    }
     return fail('chat/unknown-method', `控制端点不支持 ${method}。`);
   }
 
-  void settings.load().catch((error) => {
+  void settings.ready().catch((error) => {
     logger.warn?.(`[dsh-chat] 初始化每机器人设置失败：${error?.message ?? error}`);
+  });
+  void sessionStore.ready().catch((error) => {
+    logger.warn?.(`[dsh-chat] 初始化会话绑定表失败：${error?.message ?? error}`);
   });
 
   const service = Object.freeze({
@@ -185,6 +221,10 @@ export function apply(ctx, config = {}) {
   }, 'dsh-chat: host service');
 
   ctx.effect(() => rpc.register(CONTROL_CHANNEL_ID, controlHandler), 'dsh-chat: control rpc');
+
+  // 审批与提问是 agent 作用域的 waterfall 事件，hub 在 root 上参与并把它们交给
+  // 对应渠道（按会话绑定定位）；不属于本插件的会话一律 next() 让给浏览器 UI。
+  ctx.effect(() => sessions.installInteractionRelays(), 'dsh-chat: 审批与提问回传');
 
   logger.info?.(`[dsh-chat] hub 已就绪（契约 v${CONTRACT_VERSION}），等待渠道插件注册。`);
 }
