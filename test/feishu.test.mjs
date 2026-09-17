@@ -44,7 +44,8 @@ const TINY_PNG = Buffer.from(
 function createFakeGateway() {
   const calls = {
     replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
-    questionCards: [], approvalCards: [], markedCards: [], connects: 0, disconnects: 0,
+    questionCards: [], approvalCards: [], markedCards: [], reactions: [], removedReactions: [],
+    connects: 0, disconnects: 0,
   };
   const gatewayState = {
     downloadBytes: TINY_PNG,
@@ -109,6 +110,17 @@ function createFakeGateway() {
       if (gatewayState.failures.sendQuestionsCard) throw gatewayState.failures.sendQuestionsCard;
       calls.questionCards.push({ chatId, openId, ids: questions?.map((q) => q.id), answered, final, messageId });
       return { messageId: messageId ?? 'om_question_card' };
+    },
+    /** 表情回复（"收到，在做了"）。 */
+    async addReaction({ messageId, emojiType }) {
+      if (gatewayState.failures.addReaction) throw gatewayState.failures.addReaction;
+      calls.reactions.push({ messageId, emojiType });
+      return { reactionId: 'reaction_1' };
+    },
+    async removeReaction({ messageId, reactionId }) {
+      if (gatewayState.failures.removeReaction) throw gatewayState.failures.removeReaction;
+      calls.removedReactions.push({ messageId, reactionId });
+      return { removed: true };
     },
     /** 提问/审批卡片（交互回传用）。 */
     async sendQuestionCard({ chatId, openId, question, position, total }) {
@@ -1315,4 +1327,97 @@ test('过程展示为 off 时，setQuestion 明确说不支持（桥据此退回
     logger: silentLogger,
   });
   assert.equal(await presenter.setQuestion({ questions: [], answered: {}, final: false }), false);
+});
+
+test('收到即打「在做了」表情，处理完撤掉；表情失败不影响处理', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({ messageId: 'om_react_1' }));
+    assert.deepEqual(app.gateway.calls.reactions,
+      [{ messageId: 'om_react_1', emojiType: 'OnIt' }], '收到就打表情');
+    assert.deepEqual(app.gateway.calls.removedReactions,
+      [{ messageId: 'om_react_1', reactionId: 'reaction_1' }], '处理完要撤掉');
+    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await app.cleanup();
+  }
+
+  // 下载失败这条早退路径也要撤表情
+  const failing = await makeBridge();
+  try {
+    const failure = new Error('下载飞书资源失败：resource not found（code 234043）');
+    failure.code = 'feishu/resource-failed';
+    failing.gateway.setDownload({ downloadError: failure });
+    await failing.bridge.accept(messageEvent({
+      messageId: 'om_react_2', messageType: 'image', text: undefined,
+    }));
+    assert.equal(failing.gateway.calls.reactions.length, 1);
+    assert.equal(failing.gateway.calls.removedReactions.length, 1, '早退路径不能把表情留在那儿');
+  } finally {
+    await failing.cleanup();
+  }
+
+  // 表情接口本身失败（如缺权限）：只记日志，处理照常
+  const noPermission = await makeBridge();
+  try {
+    noPermission.gateway.setFailure('addReaction', new Error('permission denied: im:message.reaction:write'));
+    await noPermission.bridge.accept(messageEvent({ messageId: 'om_react_3' }));
+    assert.equal(noPermission.gateway.calls.replies.at(-1).text, '最终答案', '没权限也要正常回复');
+    assert.equal(noPermission.gateway.calls.removedReactions.length, 0, '没加上就不用撤');
+  } finally {
+    await noPermission.cleanup();
+  }
+
+  // 门禁挡下的消息不该被打表情（陌生人不给任何反馈）
+  const gated = await makeBridge();
+  try {
+    await gated.bridge.accept(messageEvent({ messageId: 'om_react_4', senderId: 'ou_stranger' }));
+    assert.deepEqual(gated.gateway.calls.reactions, []);
+  } finally {
+    await gated.cleanup();
+  }
+});
+
+test('处理完卡片标题不再是"正在处理"', async () => {
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) {
+      cards.push(card);
+      return { messageId: 'om_progress' };
+    },
+    async patchCard({ card }) {
+      cards.push(card);
+      return { messageId: 'om_progress' };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await presenter.step('🛠 bash');
+  assert.match(JSON.stringify(cards.at(-1)), /张三-DSH 正在处理/);
+
+  await presenter.finish('答案', { kind: 'completed' });
+  const done = JSON.stringify(cards.at(-1));
+  assert.match(done, /✅ 已完成/, '完成后标题要变成已完成');
+  assert.doesNotMatch(done, /正在处理/);
+  assert.match(done, /"template":"green"/, '配色也变绿');
+
+  // 非正常结束：标题提示未正常完成
+  const broken = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_2', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await broken.finish('', { kind: 'timeout' });
+  const failed = JSON.stringify(cards.at(-1));
+  assert.match(failed, /未正常完成/);
+  assert.match(failed, /"template":"orange"/);
 });

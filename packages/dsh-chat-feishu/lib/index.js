@@ -126537,6 +126537,7 @@ function createTurnPresenter({
   let cardBroken = false;
   let question = null;
   let lastAnswer = "";
+  let state = "running";
   let lastFailure = null;
   let lastDelivery = null;
   let chain = Promise.resolve();
@@ -126549,8 +126550,10 @@ function createTurnPresenter({
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
   function currentTitle() {
-    if (!question?.current) return title;
-    return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${question.index}/${question.total} \u9898\uFF09`;
+    if (question?.current) return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${question.index}/${question.total} \u9898\uFF09`;
+    if (state === "done") return `${bot?.botName ?? "DSH"} \u2705 \u5DF2\u5B8C\u6210`;
+    if (state === "failed") return `${bot?.botName ?? "DSH"} \u26A0\uFE0F \u672A\u6B63\u5E38\u5B8C\u6210`;
+    return title;
   }
   async function ensureCard() {
     if (cardId || cardBroken) return cardId;
@@ -126601,7 +126604,8 @@ function createTurnPresenter({
           lines: linesSnapshot,
           answer,
           note,
-          question
+          question,
+          template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
         })
       });
       return true;
@@ -126680,6 +126684,7 @@ function createTurnPresenter({
         const failed = reason?.kind && reason.kind !== "completed";
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         lastAnswer = body;
+        state = failed ? "failed" : "done";
         if (mode === "streaming_card") {
           if (!cardBroken && await patch(lines, body)) {
             lastDelivery = "card";
@@ -126864,6 +126869,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
       return;
     }
+    const workingReaction = await markWorking(message);
     let attachmentParts = null;
     let text = "";
     if (inbound.kind === "image" || inbound.kind === "file") {
@@ -126884,6 +126890,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
           text: `${isImage ? "\u56FE\u7247" : "\u6587\u4EF6"}\u4E0B\u8F7D\u5931\u8D25\uFF1A${reason}`
         }).catch(() => {
         });
+        await clearWorking(message, workingReaction);
         return;
       }
       if (isImage) {
@@ -126894,6 +126901,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
             messageId: message.message_id,
             text: `\u8FD9\u5F20\u56FE\u7247\u7684\u683C\u5F0F\u6682\u4E0D\u652F\u6301\uFF08${downloaded.contentType ?? "\u672A\u77E5\u7C7B\u578B"}\uFF09\uFF0C\u8BF7\u53D1 PNG/JPEG/WebP/GIF\u3002`
           });
+          await clearWorking(message, workingReaction);
           return;
         }
         attachmentParts = [{
@@ -126929,6 +126937,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
             text: `\u8FD9\u4E2A\u6587\u4EF6\u6682\u65F6\u6CA1\u80FD\u6536\u4E0B\uFF1A${reason}`
           }).catch(() => {
           });
+          await clearWorking(message, workingReaction);
           return;
         }
       }
@@ -126970,6 +126979,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
           await gateway.replyText({ messageId: message.message_id, text: command.reply });
         }
         lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+        await clearWorking(message, workingReaction);
         return;
       }
     }
@@ -127054,6 +127064,27 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         });
       } catch {
       }
+    } finally {
+      await clearWorking(message, workingReaction);
+    }
+  }
+  async function markWorking(message) {
+    try {
+      return await gateway.addReaction({ messageId: message.message_id, emojiType: "OnIt" });
+    } catch (error) {
+      logger.info?.(`[dsh-chat-feishu] \u6DFB\u52A0\u8868\u60C5\u56DE\u590D\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5904\u7406\uFF09\uFF1A${error?.message ?? error}`);
+      return null;
+    }
+  }
+  async function clearWorking(message, reaction) {
+    if (!reaction?.reactionId) return;
+    try {
+      await gateway.removeReaction({
+        messageId: message.message_id,
+        reactionId: reaction.reactionId
+      });
+    } catch (error) {
+      logger.info?.(`[dsh-chat-feishu] \u64A4\u9500\u8868\u60C5\u56DE\u590D\u5931\u8D25\uFF1A${error?.message ?? error}`);
     }
   }
   async function handleCardAction(event) {
@@ -127903,6 +127934,37 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u5BA1\u6279\u5361\u7247", response);
       return { messageId: response?.data?.message_id };
+    },
+    /**
+     * 给一条消息加表情回复（默认「在做了」），返回可撤销的 reaction_id。
+     *
+     * 用途：用户发来消息时立刻打个表情表示"收到了、正在处理"，处理完再撤掉——
+     * 比等着卡片刷新更即时，也不会污染聊天记录。
+     *
+     * @param options - { messageId, emojiType = 'OnIt' }。
+     * @returns { reactionId }。
+     */
+    async addReaction({ messageId, emojiType = "OnIt" }) {
+      if (!messageId) throw new TypeError("addReaction \u9700\u8981 messageId\u3002");
+      const response = await client.im.v1.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emojiType } }
+      });
+      assertSuccess("\u98DE\u4E66\u6DFB\u52A0\u8868\u60C5\u56DE\u590D", response);
+      return { reactionId: response?.data?.reaction_id ?? null };
+    },
+    /**
+     * 撤销一条表情回复。
+     *
+     * @param options - { messageId, reactionId }。
+     */
+    async removeReaction({ messageId, reactionId }) {
+      if (!messageId || !reactionId) return { removed: false };
+      const response = await client.im.v1.messageReaction.delete({
+        path: { message_id: messageId, reaction_id: reactionId }
+      });
+      assertSuccess("\u98DE\u4E66\u64A4\u9500\u8868\u60C5\u56DE\u590D", response);
+      return { removed: true };
     },
     /** 把卡片替换成"已处理"的静态卡片（点击后再也点不动，避免重复回答）。 */
     async markCardAnswered({ messageId, title, content }) {

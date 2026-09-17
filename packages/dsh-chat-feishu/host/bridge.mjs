@@ -260,6 +260,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return;
     }
 
+    // 收到即反馈：打一个「在做了」表情，处理完再撤掉（比等卡片刷新更即时，也不刷屏）。
+    const workingReaction = await markWorking(message);
+
     // 图片/文件：先下载，再变成 PromptContentPart，和文本走同一条会话链路。
     let attachmentParts = null;
     let text = '';
@@ -280,6 +283,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           messageId: message.message_id,
           text: `${isImage ? '图片' : '文件'}下载失败：${reason}`,
         }).catch(() => {});
+        await clearWorking(message, workingReaction);
         return;
       }
       if (isImage) {
@@ -290,6 +294,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
             messageId: message.message_id,
             text: `这张图片的格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`,
           });
+          await clearWorking(message, workingReaction);
           return;
         }
         attachmentParts = [{
@@ -326,6 +331,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
             messageId: message.message_id,
             text: `这个文件暂时没能收下：${reason}`,
           }).catch(() => {});
+          await clearWorking(message, workingReaction);
           return;
         }
       }
@@ -369,6 +375,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           await gateway.replyText({ messageId: message.message_id, text: command.reply });
         }
         lastHandledAt = new Date().toISOString();
+        await clearWorking(message, workingReaction);
         return;
       }
     }
@@ -465,6 +472,35 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       } catch {
         // 连失败回复都发不出去时，只留日志。
       }
+    } finally {
+      // 无论走哪条路径（命令/下载失败/模型失败/正常结束），表情都要撤掉。
+      await clearWorking(message, workingReaction);
+    }
+  }
+
+  /**
+   * 打「在做了」表情。失败不致命（可能缺 im:message.reaction:write 权限），
+   * 但一定要留日志，别让人以为是没反应。
+   */
+  async function markWorking(message) {
+    try {
+      return await gateway.addReaction({ messageId: message.message_id, emojiType: 'OnIt' });
+    } catch (error) {
+      logger.info?.(`[dsh-chat-feishu] 添加表情回复失败（不影响处理）：${error?.message ?? error}`);
+      return null;
+    }
+  }
+
+  /** 处理完撤掉表情。 */
+  async function clearWorking(message, reaction) {
+    if (!reaction?.reactionId) return;
+    try {
+      await gateway.removeReaction({
+        messageId: message.message_id,
+        reactionId: reaction.reactionId,
+      });
+    } catch (error) {
+      logger.info?.(`[dsh-chat-feishu] 撤销表情回复失败：${error?.message ?? error}`);
     }
   }
 

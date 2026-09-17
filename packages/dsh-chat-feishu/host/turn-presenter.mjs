@@ -94,6 +94,8 @@ export function createTurnPresenter({
   let question = null;
   /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
   let lastAnswer = '';
+  /** 呈现状态：running（默认）/ done / failed —— 只影响标题。 */
+  let state = 'running';
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
   let lastFailure = null;
   /** 最终答案实际走了哪条路（card/text/failed），供桥记录"用户到底收到没有"。 */
@@ -111,10 +113,15 @@ export function createTurnPresenter({
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
 
-  /** 当前卡片的标题：有提问时显示"等你确认"，否则显示"正在处理"。 */
+  /**
+   * 当前卡片的标题：随状态变化。
+   * 真机反馈：一轮处理完了标题还写着"正在处理"，看不出结束没结束。
+   */
   function currentTitle() {
-    if (!question?.current) return title;
-    return `❓ 等你确认（第 ${question.index}/${question.total} 题）`;
+    if (question?.current) return `❓ 等你确认（第 ${question.index}/${question.total} 题）`;
+    if (state === 'done') return `${bot?.botName ?? 'DSH'} ✅ 已完成`;
+    if (state === 'failed') return `${bot?.botName ?? 'DSH'} ⚠️ 未正常完成`;
+    return title;
   }
 
   async function ensureCard() {
@@ -174,6 +181,7 @@ export function createTurnPresenter({
           answer,
           note,
           question,
+          template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
         }),
       });
       return true;
@@ -263,6 +271,7 @@ export function createTurnPresenter({
           : '（本轮没有文本输出）');
 
         lastAnswer = body;
+        state = failed ? 'failed' : 'done';
         if (mode === 'streaming_card') {
           // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
           if (!cardBroken && await patch(lines, body)) {

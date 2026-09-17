@@ -708,6 +708,39 @@ export function createLarkGateway({
       return { messageId: response?.data?.message_id };
     },
 
+    /**
+     * 给一条消息加表情回复（默认「在做了」），返回可撤销的 reaction_id。
+     *
+     * 用途：用户发来消息时立刻打个表情表示"收到了、正在处理"，处理完再撤掉——
+     * 比等着卡片刷新更即时，也不会污染聊天记录。
+     *
+     * @param options - { messageId, emojiType = 'OnIt' }。
+     * @returns { reactionId }。
+     */
+    async addReaction({ messageId, emojiType = 'OnIt' }) {
+      if (!messageId) throw new TypeError('addReaction 需要 messageId。');
+      const response = await client.im.v1.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emojiType } },
+      });
+      assertSuccess('飞书添加表情回复', response);
+      return { reactionId: response?.data?.reaction_id ?? null };
+    },
+
+    /**
+     * 撤销一条表情回复。
+     *
+     * @param options - { messageId, reactionId }。
+     */
+    async removeReaction({ messageId, reactionId }) {
+      if (!messageId || !reactionId) return { removed: false };
+      const response = await client.im.v1.messageReaction.delete({
+        path: { message_id: messageId, reaction_id: reactionId },
+      });
+      assertSuccess('飞书撤销表情回复', response);
+      return { removed: true };
+    },
+
     /** 把卡片替换成"已处理"的静态卡片（点击后再也点不动，避免重复回答）。 */
     async markCardAnswered({ messageId, title, content }) {
       const response = await client.im.v1.message.patch({
