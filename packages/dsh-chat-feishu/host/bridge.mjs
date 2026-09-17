@@ -347,7 +347,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         },
       });
 
+      logger.info?.(`[dsh-chat-feishu] 回合结束，准备回复：${bot.id} ${conversationKey}`
+        + ` reason=${result?.reason?.kind ?? 'unknown'} 文本=${(result?.text ?? '').length}字`);
       await presenter.finish(result?.text, result?.reason);
+      logger.info?.(`[dsh-chat-feishu] 最终答案投递方式：${presenter.delivery?.() ?? 'unknown'}`
+        + `（${bot.id} ${conversationKey}）`);
       handled += 1;
       lastHandledAt = new Date().toISOString();
       // 回合本身成功，但呈现层可能失败过（卡片建不出来等）。那也必须让设置页看得到，

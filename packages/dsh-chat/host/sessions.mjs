@@ -255,15 +255,25 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     const finished = new Promise((resolve) => {
       settle = resolve;
     });
+    /**
+     * 唯一的收尾入口：任何结束路径都要留下可检索的一行。
+     * "回合跑完了但用户没收到"这类问题，就靠这行 + 渠道侧的呈现日志对上。
+     */
+    const finishTurn = (value) => {
+      if (settled) return;
+      settled = true;
+      const reason = value?.reason?.kind ?? 'unknown';
+      logger.info?.(`[dsh-chat] 回合结束：${turnKey} turn=${currentTurn} reason=${reason}`
+        + ` 文本=${(value?.text ?? '').length}字 工具=${value?.tools?.length ?? 0}`);
+      settle(value);
+    };
 
     // 回合超时：流断了/回合卡住时不能永远挂着——那样用户只会看到"发了没反应"。
     const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
       ? turnTimeoutMs
       : 10 * 60_000;
     const timeoutTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      settle({
+      finishTurn({
         sessionId,
         text: '',
         reason: { kind: 'timeout', timeoutMs: effectiveTurnTimeoutMs },
@@ -326,15 +336,17 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
               const text = (texts.at(-1) ?? '').slice(0, MAX_ASSISTANT_TEXT);
               handlers.onTurnEnd?.(event, text);
               assistantText.delete(turn);
-              if (promptSent && !settled) {
-                settled = true;
-                settle({
+              if (promptSent) {
+                finishTurn({
                   sessionId,
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
                   aborted: false,
                 });
+              } else {
+                // 提示词还没发出去就收到了 turn/end：属于上一轮（可能是重启前中断的那轮）的尾巴。
+                logger.info?.(`[dsh-chat] 忽略提示词之前的 turn/end：${turnKey} turn=${turn}`);
               }
               break;
             }
@@ -342,27 +354,23 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
               break;
           }
         }
-        if (!settled) {
-          settled = true;
-          settle({
-            sessionId,
-            text: '',
-            reason: { kind: 'stream-ended' },
-            tools: [...tools],
-            aborted: false,
-          });
-        }
+        finishTurn({
+          sessionId,
+          text: '',
+          reason: { kind: 'stream-ended' },
+          tools: [...tools],
+          aborted: false,
+        });
       } catch (error) {
-        if (!settled) {
-          settled = true;
-          settle({
-            sessionId,
-            text: '',
-            reason: { kind: 'error', error: sessionError(error) },
-            tools: [...tools],
-            aborted: true,
-          });
-        } else {
+        const wasSettled = settled;
+        finishTurn({
+          sessionId,
+          text: '',
+          reason: { kind: 'error', error: sessionError(error) },
+          tools: [...tools],
+          aborted: true,
+        });
+        if (wasSettled) {
           logger.warn?.(`[dsh-chat] 会话 ${sessionId} 的事件流中断：${error?.message ?? error}`);
         }
       }
@@ -370,6 +378,8 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
 
     try {
       promptSent = true;
+      logger.info?.(`[dsh-chat] 发送提示词：${turnKey} 会话=${sessionId}`
+        + ` 内容=${content.map((part) => part?.type ?? '?').join('+')} mode=${mode}`);
       await prompt({ sessionId, content, mode, signal: controller.signal });
       const result = await finished;
       return result;

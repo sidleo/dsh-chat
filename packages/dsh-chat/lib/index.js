@@ -2187,11 +2187,16 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     const finished = new Promise((resolve3) => {
       settle = resolve3;
     });
-    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : 10 * 6e4;
-    const timeoutTimer = setTimeout(() => {
+    const finishTurn = (value) => {
       if (settled) return;
       settled = true;
-      settle({
+      const reason = value?.reason?.kind ?? "unknown";
+      logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0}`);
+      settle(value);
+    };
+    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : 10 * 6e4;
+    const timeoutTimer = setTimeout(() => {
+      finishTurn({
         sessionId,
         text: "",
         reason: { kind: "timeout", timeoutMs: effectiveTurnTimeoutMs },
@@ -2253,15 +2258,16 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
               const text = (texts.at(-1) ?? "").slice(0, MAX_ASSISTANT_TEXT);
               handlers.onTurnEnd?.(event, text);
               assistantText.delete(turn);
-              if (promptSent && !settled) {
-                settled = true;
-                settle({
+              if (promptSent) {
+                finishTurn({
                   sessionId,
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
                   aborted: false
                 });
+              } else {
+                logger.info?.(`[dsh-chat] \u5FFD\u7565\u63D0\u793A\u8BCD\u4E4B\u524D\u7684 turn/end\uFF1A${turnKey} turn=${turn}`);
               }
               break;
             }
@@ -2269,33 +2275,30 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
               break;
           }
         }
-        if (!settled) {
-          settled = true;
-          settle({
-            sessionId,
-            text: "",
-            reason: { kind: "stream-ended" },
-            tools: [...tools],
-            aborted: false
-          });
-        }
+        finishTurn({
+          sessionId,
+          text: "",
+          reason: { kind: "stream-ended" },
+          tools: [...tools],
+          aborted: false
+        });
       } catch (error) {
-        if (!settled) {
-          settled = true;
-          settle({
-            sessionId,
-            text: "",
-            reason: { kind: "error", error: sessionError(error) },
-            tools: [...tools],
-            aborted: true
-          });
-        } else {
+        const wasSettled = settled;
+        finishTurn({
+          sessionId,
+          text: "",
+          reason: { kind: "error", error: sessionError(error) },
+          tools: [...tools],
+          aborted: true
+        });
+        if (wasSettled) {
           logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u4E8B\u4EF6\u6D41\u4E2D\u65AD\uFF1A${error?.message ?? error}`);
         }
       }
     })();
     try {
       promptSent = true;
+      logger.info?.(`[dsh-chat] \u53D1\u9001\u63D0\u793A\u8BCD\uFF1A${turnKey} \u4F1A\u8BDD=${sessionId} \u5185\u5BB9=${content.map((part) => part?.type ?? "?").join("+")} mode=${mode}`);
       await prompt({ sessionId, content, mode, signal: controller.signal });
       const result = await finished;
       return result;

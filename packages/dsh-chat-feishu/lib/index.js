@@ -126532,6 +126532,7 @@ function createTurnPresenter({
   let cardId = null;
   let cardBroken = false;
   let lastFailure = null;
+  let lastDelivery = null;
   let chain = Promise.resolve();
   function enqueue(task) {
     chain = chain.then(task, task);
@@ -126591,6 +126592,8 @@ function createTurnPresenter({
   return {
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
+    /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
+    delivery: () => lastDelivery,
     /**
      * 记录一步过程。
      *
@@ -126627,11 +126630,15 @@ function createTurnPresenter({
         const failed = reason?.kind && reason.kind !== "completed";
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         if (mode === "streaming_card") {
-          if (!cardBroken && await patch(lines, body)) return;
-          await sendText(body);
-          return;
+          if (!cardBroken && await patch(lines, body)) {
+            lastDelivery = "card";
+            return lastDelivery;
+          }
+          lastDelivery = await sendText(body) ? "text" : "failed";
+          return lastDelivery;
         }
-        await sendText(body);
+        lastDelivery = await sendText(body) ? "text" : "failed";
+        return lastDelivery;
       });
     }
   };
@@ -126896,7 +126903,9 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
           }
         }
       });
+      logger.info?.(`[dsh-chat-feishu] \u56DE\u5408\u7ED3\u675F\uFF0C\u51C6\u5907\u56DE\u590D\uFF1A${bot.id} ${conversationKey} reason=${result?.reason?.kind ?? "unknown"} \u6587\u672C=${(result?.text ?? "").length}\u5B57`);
       await presenter.finish(result?.text, result?.reason);
+      logger.info?.(`[dsh-chat-feishu] \u6700\u7EC8\u7B54\u6848\u6295\u9012\u65B9\u5F0F\uFF1A${presenter.delivery?.() ?? "unknown"}\uFF08${bot.id} ${conversationKey}\uFF09`);
       handled += 1;
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
       lastError = presenter.lastError?.() ?? null;

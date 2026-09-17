@@ -839,3 +839,33 @@ test('交互回传：发送器按会话键路由，停机时摘掉（停掉的�
     await app.cleanup();
   }
 });
+
+test('收尾报告投递方式：卡片 / 文本 / 失败三种都要说清楚', async () => {
+  const cardMode = { ...BOT, stepPushDirect: 'streaming_card', stepPushGroup: 'streaming_card' };
+  const card = await makeBridge({ bot: cardMode });
+  try {
+    await card.bridge.accept(messageEvent({ messageId: 'om_d1' }));
+    assert.equal(card.gateway.calls.cards.length, 1);
+  } finally {
+    await card.cleanup();
+  }
+
+  const textMode = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off', stepPushGroup: 'off' } });
+  try {
+    await textMode.bridge.accept(messageEvent({ messageId: 'om_d2' }));
+    assert.equal(textMode.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await textMode.cleanup();
+  }
+
+  // 全失败：状态里必须留下原因（用户没收到时才有得查）
+  const broken = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
+  try {
+    broken.gateway.setFailure('replyText', new Error('回复被拒'));
+    broken.gateway.setFailure('sendText', new Error('也发不出去'));
+    await broken.bridge.accept(messageEvent({ messageId: 'om_d3' }));
+    assert.match(broken.bridge.status().lastError, /回退发送失败/);
+  } finally {
+    await broken.cleanup();
+  }
+});

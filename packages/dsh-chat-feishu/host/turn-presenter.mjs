@@ -87,6 +87,8 @@ export function createTurnPresenter({
   let cardBroken = false;
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
   let lastFailure = null;
+  /** 最终答案实际走了哪条路（card/text/failed），供桥记录"用户到底收到没有"。 */
+  let lastDelivery = null;
   // 所有呈现动作串行执行：过程事件是"发出去就不等"的，若不排队，
   // 收尾的最终答案可能先于某一步骤落到卡片/聊天里（顺序错乱）。
   let chain = Promise.resolve();
@@ -158,6 +160,8 @@ export function createTurnPresenter({
   return {
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
+    /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
+    delivery: () => lastDelivery,
 
     /**
      * 记录一步过程。
@@ -200,11 +204,15 @@ export function createTurnPresenter({
 
         if (mode === 'streaming_card') {
           // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
-          if (!cardBroken && await patch(lines, body)) return;
-          await sendText(body);
-          return;
+          if (!cardBroken && await patch(lines, body)) {
+            lastDelivery = 'card';
+            return lastDelivery;
+          }
+          lastDelivery = await sendText(body) ? 'text' : 'failed';
+          return lastDelivery;
         }
-        await sendText(body);
+        lastDelivery = await sendText(body) ? 'text' : 'failed';
+        return lastDelivery;
       });
     },
   };
