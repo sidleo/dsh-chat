@@ -634,34 +634,55 @@ export function createLarkGateway({
     /**
      * 一条消息发多个交付文件。
      *
-     * 飞书原生支持：`post`（富文本）消息有一个顶层 `files` 附件区，可以放**多个**
-     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）。
-     * **图片也一起走附件区**（真机要求：交付物合成一条不带文字的附件消息，图片同样算附件），
-     * 因此正文始终为空数组——不留任何文字描述。
+     * 飞书原生支持：`post`（富文本）消息正文可以内嵌图片（`img`），顶层 `files` 附件区可以放
+     * **多个** `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效），
+     * 附件区永远渲染在正文下面。因此**一条消息**就能做到真机要求的排版：
+     *
+     * ```
+     * 图片
+     * 图片
+     * 文件 文件        ← 附件区
+     * ```
+     *
+     * 正文里**不写任何文字**（交付物不需要描述），只有图片行。
      *
      * @param options - { chatId, openId, items }，`items` = `[{ path, name? }]`。
-     * @returns { messageId, files, failed }：成功清单与失败清单。
+     * @returns { messageId, files, images, failed }。
      */
     async sendDeliverables({ chatId, openId, items = [] }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError('sendDeliverables 需要 chatId 或 openId。');
-      // 正文恒为空：交付物不要任何文字描述，全部靠顶层 `files` 附件区承载。
+      const list = items.filter((item) => typeof item?.path === 'string' && item.path);
+      // 图片在前、文件在后（附件区固定在最下面，所以只上传一次就能得到目标顺序）。
+      const ordered = [
+        ...list.filter((item) => isImagePath(item.path)),
+        ...list.filter((item) => !isImagePath(item.path)),
+      ];
+      const paragraphs = [];
       const attachments = [];
       const sent = [];
       const failed = [];
-      for (const item of items) {
-        const path = typeof item?.path === 'string' ? item.path : '';
-        if (!path) continue;
+      for (const item of ordered) {
+        const path = item.path;
         const name = item.name || path.split('/').pop() || '文件';
         try {
+          if (isImagePath(path)) {
+            // 图片按图片发：正文里的 img 行会直接显示成图片，而不是可下载的附件卡片。
+            paragraphs.push([{ tag: 'img', image_key: await uploadImageKey(path) }]);
+            sent.push({ name, kind: 'image' });
+            continue;
+          }
           attachments.push({ key: await uploadFileKey(path, name) });
-          sent.push({ name, kind: isImagePath(path) ? 'image' : 'file' });
+          sent.push({ name, kind: 'file' });
         } catch (error) {
           failed.push({ name, reason: error?.message ?? String(error) });
         }
       }
       if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
-      const content = { zh_cn: { content: [] }, files: attachments };
+      const content = {
+        zh_cn: { content: paragraphs },
+        ...(attachments.length > 0 ? { files: attachments } : {}),
+      };
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
         data: { receive_id: receiveId, msg_type: 'post', content: JSON.stringify(content) },

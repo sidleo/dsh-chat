@@ -181,7 +181,7 @@ test('独立提问卡：已答的行自己组成 `❓ N/M 已回答` 折叠面�
   assert.match(JSON.stringify(panel), /提问 · 选一个 → A/, '收起也能展开回看');
 });
 
-test('交付文件：多个文件+图片合成一条不带文字的 post 消息（全在附件区）', async () => {
+test('交付物：一条消息，图片在上、文件在附件区，正文不含任何文字', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-lark-deliver-'));
   try {
     const md = join(dir, 'report.md');
@@ -196,9 +196,10 @@ test('交付文件：多个文件+图片合成一条不带文字的 post 消息�
     const result = await gateway.sendDeliverables({
       chatId: 'oc_1',
       items: [
+        // 故意把文件放在图片前面：渲染顺序必须被重排成"图片在前、文件在后"
         { path: md, description: '测试笔记' },
         { path: csv },
-        { path: png },
+        { path: png, name: 'chart.png' },
       ],
     });
 
@@ -206,20 +207,17 @@ test('交付文件：多个文件+图片合成一条不带文字的 post 消息�
     assert.deepEqual(result.images, ['chart.png']);
     assert.deepEqual(result.failed, []);
 
-    // 只发了一条消息，且是 post（附件区能装多个文件，图片也走附件区）
+    // 只发了一条消息
     assert.equal(sdk.__calls.created.length, 1);
     const created = sdk.__calls.created[0];
     assert.equal(created.data.msg_type, 'post');
     const content = JSON.parse(created.data.content);
-    assert.deepEqual(
-      content.files,
-      [{ key: 'file_v3_1' }, { key: 'file_v3_1' }, { key: 'file_v3_1' }],
-      '三个成品（含图片）都进同一条消息的附件区',
-    );
-    // 真机要求：不要任何文字描述，正文留空
-    assert.deepEqual(content.zh_cn.content, []);
+    // 图片按图片发（正文里的 img），并且排在前面
+    assert.deepEqual(content.zh_cn.content, [[{ tag: 'img', image_key: 'img_v3_1' }]]);
+    assert.equal(sdk.__calls.uploadImages.length, 1, '图片走图片上传，不走文件上传');
+    // 文件在附件区（附件区渲染在正文下面 → 图片在上、文件在下）
+    assert.deepEqual(content.files, [{ key: 'file_v3_1' }, { key: 'file_v3_1' }]);
     assert.doesNotMatch(JSON.stringify(content), /report\.md|测试笔记/, '不要文件名/描述文字');
-    assert.equal(sdk.__calls.uploadImages.length, 0, '图片也按文件上传（附件区只收 file_key）');
 
     // 全部失败时不发空消息
     const broken = createFakeSdk({ createReturns: { fileCreate: {} } });
@@ -233,4 +231,3 @@ test('交付文件：多个文件+图片合成一条不带文字的 post 消息�
     await rm(dir, { recursive: true, force: true });
   }
 });
-

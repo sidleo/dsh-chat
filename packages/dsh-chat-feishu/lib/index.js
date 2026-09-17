@@ -128213,33 +128213,53 @@ function createLarkGateway({
     /**
      * 一条消息发多个交付文件。
      *
-     * 飞书原生支持：`post`（富文本）消息有一个顶层 `files` 附件区，可以放**多个**
-     * `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效）。
-     * **图片也一起走附件区**（真机要求：交付物合成一条不带文字的附件消息，图片同样算附件），
-     * 因此正文始终为空数组——不留任何文字描述。
+     * 飞书原生支持：`post`（富文本）消息正文可以内嵌图片（`img`），顶层 `files` 附件区可以放
+     * **多个** `file_key`（文件名/大小由服务端按文件元数据回填，客户端传 name 无效），
+     * 附件区永远渲染在正文下面。因此**一条消息**就能做到真机要求的排版：
+     *
+     * ```
+     * 图片
+     * 图片
+     * 文件 文件        ← 附件区
+     * ```
+     *
+     * 正文里**不写任何文字**（交付物不需要描述），只有图片行。
      *
      * @param options - { chatId, openId, items }，`items` = `[{ path, name? }]`。
-     * @returns { messageId, files, failed }：成功清单与失败清单。
+     * @returns { messageId, files, images, failed }。
      */
     async sendDeliverables({ chatId, openId, items = [] }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError("sendDeliverables \u9700\u8981 chatId \u6216 openId\u3002");
+      const list = items.filter((item) => typeof item?.path === "string" && item.path);
+      const ordered = [
+        ...list.filter((item) => isImagePath(item.path)),
+        ...list.filter((item) => !isImagePath(item.path))
+      ];
+      const paragraphs = [];
       const attachments = [];
       const sent = [];
       const failed = [];
-      for (const item of items) {
-        const path2 = typeof item?.path === "string" ? item.path : "";
-        if (!path2) continue;
+      for (const item of ordered) {
+        const path2 = item.path;
         const name2 = item.name || path2.split("/").pop() || "\u6587\u4EF6";
         try {
+          if (isImagePath(path2)) {
+            paragraphs.push([{ tag: "img", image_key: await uploadImageKey(path2) }]);
+            sent.push({ name: name2, kind: "image" });
+            continue;
+          }
           attachments.push({ key: await uploadFileKey(path2, name2) });
-          sent.push({ name: name2, kind: isImagePath(path2) ? "image" : "file" });
+          sent.push({ name: name2, kind: "file" });
         } catch (error) {
           failed.push({ name: name2, reason: error?.message ?? String(error) });
         }
       }
       if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
-      const content = { zh_cn: { content: [] }, files: attachments };
+      const content = {
+        zh_cn: { content: paragraphs },
+        ...attachments.length > 0 ? { files: attachments } : {}
+      };
       const response = await client.im.v1.message.create({
         params: { receive_id_type: chatId ? "chat_id" : "open_id" },
         data: { receive_id: receiveId, msg_type: "post", content: JSON.stringify(content) }
