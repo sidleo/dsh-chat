@@ -97,7 +97,38 @@ export function createWeixinRuntime({
    * @param message - iLink 消息。
    * @param signal - 取消信号。
    */
+  /**
+   * 处理一条入站消息。
+   *
+   * 外层包一层：任何未预料的异常都要**留下痕迹并让用户看见**，
+   * 绝不静默（"发了没反应"是最难排查的故障形态）。
+   *
+   * @param message - iLink 消息。
+   * @param signal - 取消信号。
+   */
   async function accept(message, signal) {
+    try {
+      await handleMessage(message, signal);
+    } catch (cause) {
+      const detail = cause?.message ?? String(cause);
+      error = detail;
+      logger.error?.(`[dsh-chat-weixin] 处理入站消息异常：${detail}`);
+      await state.recordFailure(detail);
+      const sender = typeof message?.from_user_id === 'string' ? message.from_user_id.trim() : '';
+      if (sender) {
+        try {
+          const token = typeof message.context_token === 'string'
+            ? message.context_token
+            : state.contextToken(sender);
+          await reply(sender, `处理失败：${detail}`, token, message?.run_id, signal);
+        } catch {
+          // 连失败回复都发不出去时只留日志与状态文件。
+        }
+      }
+    }
+  }
+
+  async function handleMessage(message, signal) {
     // message_type 2 是自己发出去的（服务端回显），必须忽略。
     if (message?.message_type === 2) return;
     const id = messageId(message);
@@ -208,10 +239,11 @@ export function createWeixinRuntime({
     } catch (cause) {
       error = cause?.message ?? String(cause);
       logger.error?.(`[dsh-chat-weixin] 处理消息失败：${error}`);
+      await state.recordFailure(error);
       try {
         await reply(sender, `处理失败：${error}`, contextToken, runId, signal);
       } catch {
-        // 连失败回复都发不出去时只留日志。
+        // 连失败回复都发不出去时只留日志与状态文件。
       }
     } finally {
       await typing(sender, contextToken, 2, signal);

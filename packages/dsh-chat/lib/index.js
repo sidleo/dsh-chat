@@ -1767,7 +1767,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
     sourceGuidance,
     mode = "queue",
     signal,
-    handlers = {}
+    handlers = {},
+    turnTimeoutMs
   }) {
     const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
     guidance?.publish?.(sessionId, sourceGuidance ?? "");
@@ -1793,6 +1794,19 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
     const finished = new Promise((resolve3) => {
       settle = resolve3;
     });
+    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : 10 * 6e4;
+    const timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      settle({
+        sessionId,
+        text: "",
+        reason: { kind: "timeout", timeoutMs: effectiveTurnTimeoutMs },
+        tools: [...tools],
+        aborted: true
+      });
+    }, effectiveTurnTimeoutMs);
+    timeoutTimer.unref?.();
     const pump = (async () => {
       try {
         for await (const frame of frames) {
@@ -1893,6 +1907,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
       const result = await finished;
       return result;
     } finally {
+      clearTimeout(timeoutTimer);
       signal?.removeEventListener?.("abort", abort);
       activeTurns.delete(turnKey);
       try {
@@ -2077,6 +2092,11 @@ function apply(ctx, config = {}) {
       contextEnhancement: context_enhancement_exports,
       /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
       accessPolicy: Object.freeze({ ...access_policy_exports }),
+      /** 机器人命令：渠道把入站文本交进来即可，命令实现只在 hub 一份。 */
+      commands: Object.freeze({
+        handle: (options) => commands.handle(options),
+        list: () => commands.list()
+      }),
       guidance,
       sessions
     })

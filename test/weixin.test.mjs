@@ -332,6 +332,68 @@ test('运行时：上下文增强前缀与提示词经 hub 引擎生效（私聊
   }
 });
 
+test('运行时：会话失败时回复可读错误，并把错误写进状态文件', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-fail-'));
+  try {
+    const state = createWeixinStateStore({ path: join(dataDir, 'state.json'), createJsonStore });
+    await state.ready();
+    const texts = [];
+    const runtime = createWeixinRuntime({
+      account: {
+        botId: 'wx_fail', accountId: 'acc@im.bot', tokenRef: 'REF',
+        ownerUserId: 'u@im.wechat', baseUrl: 'https://ilinkai.weixin.qq.com/',
+      },
+      token: 'tok',
+      deps: {
+        channelId: 'weixin',
+        logger: { info() {}, warn() {}, error() {} },
+        ready: async () => {},
+        createJsonStore,
+        accessPolicy,
+        storage: { read: () => ({ workspace: '/ws', contextEnhancement: null, accessPolicy: null }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        sessions: {
+          async ask() {
+            const error = new Error('工作区不可用');
+            error.code = 'chat/workspace-required';
+            throw error;
+          },
+        },
+      },
+      client: {
+        async getConfig() {
+          return { typingTicket: 't' };
+        },
+        async sendTyping() {
+          return true;
+        },
+        async sendText({ text }) {
+          texts.push(text);
+          return { providerMessageIds: ['x'] };
+        },
+      },
+      state,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+
+    await runtime.accept({
+      message_id: 'm_fail',
+      from_user_id: 'u@im.wechat',
+      message_type: 1,
+      context_token: 'ctx',
+      item_list: [{ type: 1, text_item: { text: '你好' } }],
+    }, new AbortController().signal);
+
+    assert.match(texts.at(-1), /处理失败：工作区不可用/, '失败必须让用户看见，不能静默');
+    await state.flush();
+    const onDisk = JSON.parse(await readFile(join(dataDir, 'state.json'), 'utf8'));
+    assert.match(onDisk.lastError.message, /工作区不可用/);
+    assert.ok(onDisk.lastError.at, '要带时间戳');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('状态存储：去重、长轮询游标与 context_token', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-state-'));
   try {

@@ -307,6 +307,20 @@ test('服务暴露进程内渠道分派（诊断用）', async () => {
   }
 });
 
+test('渠道依赖完整：hub 不能漏给任何一项（守门测试）', async () => {
+  const app = await bootstrap();
+  try {
+    const { result } = await callRoute(app.routes, FIXTURE_PATH, 'connection.status', {});
+    assert.equal(result.ok, true);
+    const missing = Object.entries(result.value.capabilities)
+      .filter(([, present]) => present !== true)
+      .map(([name]) => name);
+    assert.deepEqual(missing, [], `hub 漏给的依赖：${missing.join('、')}`);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('每机器人设置可重复读写（同一目录再次加载保持数据）', async () => {
   const app = await bootstrap();
   const dataDir = app.dataDir;

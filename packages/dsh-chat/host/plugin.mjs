@@ -146,6 +146,11 @@ export function apply(ctx, config = {}) {
       contextEnhancement,
       /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
       accessPolicy: Object.freeze({ ...accessPolicy }),
+      /** 机器人命令：渠道把入站文本交进来即可，命令实现只在 hub 一份。 */
+      commands: Object.freeze({
+        handle: (options) => commands.handle(options),
+        list: () => commands.list(),
+      }),
       guidance,
       sessions,
     }),

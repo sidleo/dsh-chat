@@ -213,6 +213,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
    *     onTurnStart?, onAssistantMessage?, onToolCall?, onToolResult?,
    *     onDelta?, onEvent?, onTurnEnd?,
    *   },
+   *   turnTimeoutMs?,
    * }。
    * @returns { sessionId, text, reason, aborted }。
    */
@@ -226,6 +227,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
     mode = 'queue',
     signal,
     handlers = {},
+    turnTimeoutMs,
   }) {
     const { sessionId } = await ensure({ channelId, botId, key, workspacePath, signal });
     // 提示词按会话发布：host 会把它物化成该 Session 的动态提示词上下文。
@@ -255,6 +257,23 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
     const finished = new Promise((resolve) => {
       settle = resolve;
     });
+
+    // 回合超时：流断了/回合卡住时不能永远挂着——那样用户只会看到"发了没反应"。
+    const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
+      ? turnTimeoutMs
+      : 10 * 60_000;
+    const timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      settle({
+        sessionId,
+        text: '',
+        reason: { kind: 'timeout', timeoutMs: effectiveTurnTimeoutMs },
+        tools: [...tools],
+        aborted: true,
+      });
+    }, effectiveTurnTimeoutMs);
+    timeoutTimer.unref?.();
 
     const pump = (async () => {
       try {
@@ -357,6 +376,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance }) 
       const result = await finished;
       return result;
     } finally {
+      clearTimeout(timeoutTimer);
       signal?.removeEventListener?.('abort', abort);
       activeTurns.delete(turnKey);
       try {

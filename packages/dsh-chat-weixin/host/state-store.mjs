@@ -32,11 +32,15 @@ function normalizeDocument(value) {
       if (typeof token === 'string' && token) contextTokens[userId] = token;
     }
   }
+  const lastError = isPlainObject(source.lastError) && typeof source.lastError.message === 'string'
+    ? { message: source.lastError.message, at: source.lastError.at ?? null }
+    : null;
   return {
     version: 1,
     sessions,
     seenMessageIds,
     contextTokens,
+    lastError,
     getUpdatesBuf: typeof source.getUpdatesBuf === 'string' ? source.getUpdatesBuf : '',
   };
 }
@@ -121,6 +125,22 @@ export function createWeixinStateStore({ path, createJsonStore }) {
     /** 等待已排队的写入落定（停机前调用）。 */
     async flush() {
       await store.flush();
+    },
+
+    /**
+     * 记下最近一次处理失败。
+     *
+     * 目的很直接：出问题时**不需要用户去翻终端**——直接读 state.json 就能看到
+     * 最后一条错误的原文与时间。
+     *
+     * @param message - 错误原文。
+     */
+    async recordFailure(message) {
+      const text = typeof message === 'string' ? message.slice(0, 500) : String(message).slice(0, 500);
+      await store.update((current) => ({
+        ...current,
+        lastError: { message: text, at: new Date().toISOString() },
+      })).catch(() => undefined);
     },
   };
 }

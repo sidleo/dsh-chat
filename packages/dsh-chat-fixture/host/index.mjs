@@ -44,7 +44,24 @@ export function apply(ctx) {
         endpoints: {
           'connection.status': async () => ({
             ok: true,
-            value: { channel: CHANNEL_ID, phase: 'running', startedAt, dataDir: deps.dataDir },
+            value: {
+              channel: CHANNEL_ID,
+              phase: 'running',
+              startedAt,
+              dataDir: deps.dataDir,
+              // 契约能力自检：hub 漏给任何一个依赖，这里就会露出来。
+              capabilities: {
+                ready: typeof deps.ready === 'function',
+                storage: typeof deps.storage?.read === 'function',
+                contextEnhancement: typeof deps.contextEnhancement?.enhanceContent === 'function',
+                accessPolicy: typeof deps.accessPolicy?.evaluateAccess === 'function',
+                commands: typeof deps.commands?.handle === 'function',
+                createJsonStore: typeof deps.createJsonStore === 'function',
+                guidance: typeof deps.guidance?.publish === 'function',
+                sessionsAsk: typeof deps.sessions?.ask === 'function',
+                sessionsBindings: typeof deps.sessions?.bindings?.adopt === 'function',
+              },
+            },
           }),
 
           /** 回显，用于验证 client → hub → 渠道 endpoints 的连通性。 */

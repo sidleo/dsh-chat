@@ -576,6 +576,24 @@ function createWeixinRuntime({
     return chunks.length;
   }
   async function accept(message, signal) {
+    try {
+      await handleMessage(message, signal);
+    } catch (cause) {
+      const detail = cause?.message ?? String(cause);
+      error = detail;
+      logger.error?.(`[dsh-chat-weixin] \u5904\u7406\u5165\u7AD9\u6D88\u606F\u5F02\u5E38\uFF1A${detail}`);
+      await state.recordFailure(detail);
+      const sender = typeof message?.from_user_id === "string" ? message.from_user_id.trim() : "";
+      if (sender) {
+        try {
+          const token2 = typeof message.context_token === "string" ? message.context_token : state.contextToken(sender);
+          await reply(sender, `\u5904\u7406\u5931\u8D25\uFF1A${detail}`, token2, message?.run_id, signal);
+        } catch {
+        }
+      }
+    }
+  }
+  async function handleMessage(message, signal) {
     if (message?.message_type === 2) return;
     const id = messageId(message);
     const sender = typeof message?.from_user_id === "string" ? message.from_user_id.trim() : "";
@@ -673,6 +691,7 @@ function createWeixinRuntime({
     } catch (cause) {
       error = cause?.message ?? String(cause);
       logger.error?.(`[dsh-chat-weixin] \u5904\u7406\u6D88\u606F\u5931\u8D25\uFF1A${error}`);
+      await state.recordFailure(error);
       try {
         await reply(sender, `\u5904\u7406\u5931\u8D25\uFF1A${error}`, contextToken, runId, signal);
       } catch {
@@ -780,11 +799,13 @@ function normalizeDocument2(value) {
       if (typeof token === "string" && token) contextTokens[userId] = token;
     }
   }
+  const lastError = isPlainObject(source.lastError) && typeof source.lastError.message === "string" ? { message: source.lastError.message, at: source.lastError.at ?? null } : null;
   return {
     version: 1,
     sessions,
     seenMessageIds,
     contextTokens,
+    lastError,
     getUpdatesBuf: typeof source.getUpdatesBuf === "string" ? source.getUpdatesBuf : ""
   };
 }
@@ -857,6 +878,21 @@ function createWeixinStateStore({ path, createJsonStore }) {
     /** 等待已排队的写入落定（停机前调用）。 */
     async flush() {
       await store.flush();
+    },
+    /**
+     * 记下最近一次处理失败。
+     *
+     * 目的很直接：出问题时**不需要用户去翻终端**——直接读 state.json 就能看到
+     * 最后一条错误的原文与时间。
+     *
+     * @param message - 错误原文。
+     */
+    async recordFailure(message) {
+      const text = typeof message === "string" ? message.slice(0, 500) : String(message).slice(0, 500);
+      await store.update((current) => ({
+        ...current,
+        lastError: { message: text, at: (/* @__PURE__ */ new Date()).toISOString() }
+      })).catch(() => void 0);
     }
   };
 }
