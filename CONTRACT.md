@@ -337,6 +337,10 @@ hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，�
 - `contextEnhancement.enhanceContent(parts, snapshot, source)` 对内容数组会在前面插一个上下文文本块，
   因此图片消息同样带得上来来源与提示词。
 - 下载失败、类型不支持、超过大小上限都要"日志 + 用户可见回复"，并让失败能出现在 `connection.status` 里。
+- **带媒体的消息不参与交互回答与命令**：正在等用户回答提问时，用户顺手发来的图片/文件不该被当成选项答案；
+  文字以 `/` 开头但同一条消息带媒体时也按普通消息进模型（两个官方渠道都是这么判的）。
+- 平台媒体加密时先解密再判定类型（微信 iLink 是 AES-128-ECB + CDN，见
+  `packages/dsh-chat-weixin/host/media.mjs`）；下载地址只信任平台自己的域名，重定向与超限一律中止。
 
 ### 入站消息的推荐顺序（两个官方渠道就是这么做的）
 

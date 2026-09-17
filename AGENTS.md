@@ -22,7 +22,7 @@ packages/dsh-chat/             Hub：设置页入口 + 渠道注册表 + 共享�
   host/                        Node：plugin、registry、rpc、bot-settings、session-store、sessions、commands、delivery、tools、interactions、json-store
   client/                      浏览器：设置页 section、共享 UI 组件与 hook
 packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
-packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，仅私聊）
+packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
 CONTRACT.md                    **新渠道作者唯一需要读的文档**
 UPSTREAM.md                    与上游 dsh-im 的对照关系、移植范围与出处
@@ -62,7 +62,7 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P2 | 飞书渠道：长连接、私聊/群聊、任务过程展示分私聊/群聊、设置页 | ✅ 真实机器人验证通过 |
 | P3 | 微信渠道：iLink 协议、扫码登录、私聊收发 | ✅ 真实账号验证通过 |
 | P4 | 命令内核 + 访问策略 | ✅（菜单卡片、批量输入、压缩待做） |
-| P5 | 富媒体（图片/文件）与主动投递 | 主动投递文本+出站文件/图片（飞书）、飞书入站图片+入站文件已通；人在环回传已通：工具/思考收进一个折叠面板（默认收起、展开看全部，标题只写「工具与思考(N)」，工具行带参数摘要）、提问**内嵌在「正在处理」那张卡里**（Card 2.0，一页一题：单选按钮+输入框 / 多选勾选器 / 文本输入框，答完收起、标题只写「❓ N/M 已回答」，无进度卡时退回独立卡片）；未做：微信收图、微信出站文件 |
+| P5 | 富媒体（图片/文件）与主动投递 | 主动投递文本+出站文件/图片（飞书）、飞书入站图片+入站文件已通；人在环回传已通：工具/思考收进一个折叠面板（默认收起、展开看全部，标题只写「工具与思考(N)」，工具行带参数摘要）、提问**内嵌在「正在处理」那张卡里**（Card 2.0，一页一题：单选按钮+输入框 / 多选勾选器 / 文本输入框，答完收起、标题只写「❓ N/M 已回答」，无进度卡时退回独立卡片）；微信入站图片+入站文件已通（CDN 下载 + AES-128-ECB 解密）；未做：微信出站文件 |
 | P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 待开始 |
 
 ## 工作方式

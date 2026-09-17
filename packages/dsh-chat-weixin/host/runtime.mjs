@@ -14,11 +14,20 @@ import {
   rejectedResponse,
   splitText,
 } from './ilink-client.mjs';
+import {
+  MAX_FILE_BYTES,
+  MAX_IMAGE_BYTES,
+  WeixinMediaError,
+  downloadMedia,
+  extractInboundMedia,
+  sniffImageMediaType,
+} from './media.mjs';
 
 /**
  * 创建账号运行时。
  *
- * @param options - { account, token, deps, client, state, logger, pollTimeoutMs }。
+ * @param options - { account, token, deps, client, state, logger, fetchImpl }。
+ *   `fetchImpl` 只用于下载入站媒体（默认全局 fetch），便于测试注入。
  * @returns 运行时。
  */
 export function createWeixinRuntime({
@@ -28,6 +37,7 @@ export function createWeixinRuntime({
   client,
   state,
   logger = console,
+  fetchImpl = fetch,
 }) {
   if (!account?.botId) throw new TypeError('微信运行时需要账号配置。');
   if (!token) throw new TypeError('微信运行时需要访问令牌。');
@@ -106,6 +116,45 @@ export function createWeixinRuntime({
    * @param message - iLink 消息。
    * @param signal - 取消信号。
    */
+  /**
+   * 下载并准备入站附件。
+   *
+   * 图片解密后按魔数认类型，转成内容块（base64）；文件解密后先入会话换成 receipt
+   * ——文件内容块只能引用"本会话上传"得到的收据。任何一步失败都**抛出**，
+   * 由上层回复用户原因（绝不静默丢消息）。
+   *
+   * @param options - { media, key, workspacePath, signal }。
+   * @returns 内容部分数组。
+   */
+  async function loadAttachments({ media, key, workspacePath, signal }) {
+    const parts = [];
+    for (const image of media.images) {
+      const bytes = await downloadMedia(image.item, { signal, maxBytes: MAX_IMAGE_BYTES, fetchImpl });
+      const mediaType = sniffImageMediaType(bytes);
+      if (!mediaType) {
+        throw new WeixinMediaError('unsupported-image', '这张图片的格式暂不支持，请发 PNG/JPEG/WebP/GIF。');
+      }
+      parts.push({ type: 'image', mediaType, data: bytes.toString('base64'), name: image.name });
+      logger.info?.(`[dsh-chat-weixin] 已收到图片：${mediaType}（${bytes.length} 字节，${account.botId}）`);
+    }
+    for (const file of media.files) {
+      const bytes = await downloadMedia(file.item, { signal, maxBytes: MAX_FILE_BYTES, fetchImpl });
+      const { sessionId } = await deps.sessions.ensure({
+        channelId: deps.channelId,
+        botId: account.botId,
+        key,
+        workspacePath,
+      });
+      const uploaded = await deps.sessions.uploadFile({
+        sessionId, name: file.name, bytes: new Uint8Array(bytes), signal,
+      });
+      if (!uploaded?.receiptId) throw new Error('上传后没有拿到 receiptId');
+      parts.push({ type: 'file', receiptId: uploaded.receiptId });
+      logger.info?.(`[dsh-chat-weixin] 已收到文件：${file.name}（${bytes.length} 字节，${account.botId}）`);
+    }
+    return parts;
+  }
+
   async function accept(message, signal) {
     try {
       await handleMessage(message, signal);
@@ -165,8 +214,11 @@ export function createWeixinRuntime({
     }
 
     const text = extractText(message);
-    if (!text) {
-      await reply(sender, '目前只支持文本与语音转写消息，图片与文件将在后续版本支持。',
+    // 图片/文件与文字可以混在同一条消息里（item_list 各占一项），因此两者互不排斥。
+    const media = extractInboundMedia(message);
+    const hasMedia = media.images.length > 0 || media.files.length > 0;
+    if (!text && !hasMedia) {
+      await reply(sender, '目前支持文本、语音转写、图片与文件，其他类型（视频、表情等）暂不支持。',
         message.context_token, message.run_id, signal);
       return;
     }
@@ -180,7 +232,8 @@ export function createWeixinRuntime({
     const key = `p2p:${sender}`;
 
     // 正在等这个用户回答 agent 的提问/审批：这条消息就是答案，不再进模型。
-    if (deps.interactions?.offer?.({
+    // 带媒体的消息不作数——那多半是用户顺手发了张图，不该被当成选项答案。
+    if (!hasMedia && deps.interactions?.offer?.({
       channelId: deps.channelId,
       botId: account.botId,
       key,
@@ -190,41 +243,43 @@ export function createWeixinRuntime({
       return;
     }
 
-    // 命令权限单独判定（白名单用户可以被允许对话、但不允许执行命令）。
-    if (text.startsWith('/')) {
-      const commandAccess = deps.accessPolicy.evaluateAccess({
-        policy: record.accessPolicy,
+    if (!hasMedia) {
+      // 命令权限单独判定（白名单用户可以被允许对话、但不允许执行命令）。
+      if (text.startsWith('/')) {
+        const commandAccess = deps.accessPolicy.evaluateAccess({
+          policy: record.accessPolicy,
+          conversationType: 'direct',
+          senderIds: [sender],
+          isCommand: true,
+          isOwner: sender === account.ownerUserId,
+        });
+        if (!commandAccess.allowed) {
+          logger.info?.(`[dsh-chat-weixin] 命令被拒绝：${account.botId} sender=${sender}（${commandAccess.reason}）`);
+          await reply(sender, '你没有执行机器人命令的权限。', contextToken, runId, signal);
+          return;
+        }
+      }
+
+      // 命令优先：命令不进入模型、也不做上下文增强。
+      const command = await deps.commands?.handle?.({
+        text,
+        channelId: deps.channelId,
+        botId: account.botId,
+        key,
         conversationType: 'direct',
-        senderIds: [sender],
-        isCommand: true,
-        isOwner: sender === account.ownerUserId,
+        senderId: sender,
+        botLabel: account.botName ?? account.botId,
+        channelLabel: '微信',
+      }).catch((cause) => {
+        logger.warn?.(`[dsh-chat-weixin] 命令处理失败：${cause?.message ?? cause}`);
+        return null;
       });
-      if (!commandAccess.allowed) {
-        logger.info?.(`[dsh-chat-weixin] 命令被拒绝：${account.botId} sender=${sender}（${commandAccess.reason}）`);
-        await reply(sender, '你没有执行机器人命令的权限。', contextToken, runId, signal);
+      if (command?.handled) {
+        if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
+        handled += 1;
+        lastHandledAt = new Date().toISOString();
         return;
       }
-    }
-
-    // 命令优先：命令不进入模型、也不做上下文增强。
-    const command = await deps.commands?.handle?.({
-      text,
-      channelId: deps.channelId,
-      botId: account.botId,
-      key,
-      conversationType: 'direct',
-      senderId: sender,
-      botLabel: account.botName ?? account.botId,
-      channelLabel: '微信',
-    }).catch((cause) => {
-      logger.warn?.(`[dsh-chat-weixin] 命令处理失败：${cause?.message ?? cause}`);
-      return null;
-    });
-    if (command?.handled) {
-      if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
-      handled += 1;
-      lastHandledAt = new Date().toISOString();
-      return;
     }
 
     const identity = { senderId: sender, chatId: sender };
@@ -234,11 +289,48 @@ export function createWeixinRuntime({
       identity,
       () => ({ channel: 'weixin', ...identity }),
     );
-    const content = deps.contextEnhancement.enhanceContent(
-      text,
-      captured?.snapshot ?? null,
-      captured?.source,
-    );
+
+    // 附件先落地（下载 + 解密 + 入库）：失败要让用户看见原因，绝不静默。
+    let attachmentParts = [];
+    if (hasMedia) {
+      await typing(sender, contextToken, 1, signal);
+      try {
+        attachmentParts = await loadAttachments({
+          media, key, workspacePath: record.workspace, signal,
+        });
+      } catch (cause) {
+        const reason = cause?.message ?? String(cause);
+        error = reason;
+        logger.error?.(`[dsh-chat-weixin] 接收媒体失败：${reason}`);
+        await state.recordFailure(reason);
+        const label = media.images.length > 0 && media.files.length === 0 ? '图片' : '文件';
+        await typing(sender, contextToken, 2, signal);
+        await reply(sender, `这个${label}没能收下：${reason}`, contextToken, runId, signal);
+        return;
+      }
+    }
+
+    // 文本保持"前缀拼进同一个文本块"的老形态；媒体走内容数组，enhanceContent 会在
+    // 前面插一个上下文文本块，于是附件也带上来源信息。
+    let finalParts;
+    if (attachmentParts.length > 0) {
+      const base = [...(text ? [{ type: 'text', text }] : []), ...attachmentParts];
+      const enhanced = deps.contextEnhancement.enhanceContent(
+        base,
+        captured?.snapshot ?? null,
+        captured?.source,
+      );
+      finalParts = Array.isArray(enhanced) ? enhanced : base;
+    } else {
+      finalParts = [{
+        type: 'text',
+        text: deps.contextEnhancement.enhanceContent(
+          text,
+          captured?.snapshot ?? null,
+          captured?.source,
+        ),
+      }];
+    }
 
     await typing(sender, contextToken, 1, signal);
     try {
@@ -247,7 +339,7 @@ export function createWeixinRuntime({
         botId: account.botId,
         key,
         workspacePath: record.workspace,
-        content: [{ type: 'text', text: content }],
+        content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         signal,
       });

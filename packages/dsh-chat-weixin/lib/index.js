@@ -498,6 +498,170 @@ function createIlinkClient({ fetchImpl = fetch } = {}) {
   });
 }
 
+// packages/dsh-chat-weixin/host/media.mjs
+import { createDecipheriv } from "node:crypto";
+var MEDIA_CDN_HOST = "novac2c.cdn.weixin.qq.com";
+var MEDIA_CDN_BASE_URL = `https://${MEDIA_CDN_HOST}/c2c`;
+var MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+var MAX_FILE_BYTES = 30 * 1024 * 1024;
+var DOWNLOAD_TIMEOUT_MS = 3e4;
+var WeixinMediaError = class extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "WeixinMediaError";
+    this.code = code;
+  }
+};
+function nonEmptyString2(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function strictBase64(value) {
+  const text = nonEmptyString2(value);
+  if (!text || text.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return null;
+  return Buffer.from(text, "base64");
+}
+function parseMediaAesKey(item) {
+  const directHex = nonEmptyString2(item?.aeskey);
+  if (directHex) {
+    if (!/^[0-9a-fA-F]{32}$/.test(directHex)) {
+      throw new WeixinMediaError("invalid-media-key", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u52A0\u5BC6\u5BC6\u94A5\u65E0\u6548\u3002");
+    }
+    return Buffer.from(directHex, "hex");
+  }
+  const encoded = strictBase64(item?.media?.aes_key);
+  if (encoded?.length === 16) return encoded;
+  if (encoded?.length === 32 && /^[0-9a-fA-F]{32}$/.test(encoded.toString("ascii"))) {
+    return Buffer.from(encoded.toString("ascii"), "hex");
+  }
+  throw new WeixinMediaError("invalid-media-key", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u52A0\u5BC6\u5BC6\u94A5\u65E0\u6548\u3002");
+}
+function decryptMedia(ciphertext, key) {
+  const encrypted = Buffer.from(ciphertext);
+  const aesKey = Buffer.from(key);
+  if (aesKey.length !== 16 || encrypted.length === 0 || encrypted.length % 16 !== 0) {
+    throw new WeixinMediaError("invalid-media-ciphertext", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u52A0\u5BC6\u6570\u636E\u65E0\u6548\u3002");
+  }
+  try {
+    const decipher = createDecipheriv("aes-128-ecb", aesKey, null);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  } catch (cause) {
+    throw new WeixinMediaError("media-decryption-failed", "\u5FAE\u4FE1\u5A92\u4F53\u89E3\u5BC6\u5931\u8D25\u3002", { cause });
+  }
+}
+function mediaDownloadUrl(media) {
+  const query = nonEmptyString2(media?.encrypt_query_param);
+  if (query) {
+    return `${MEDIA_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(query)}`;
+  }
+  const fullUrl = nonEmptyString2(media?.full_url);
+  if (!fullUrl) throw new WeixinMediaError("missing-media-url", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u6CA1\u6709\u53EF\u7528\u7684\u4E0B\u8F7D\u5730\u5740\u3002");
+  let url;
+  try {
+    url = new URL(fullUrl);
+  } catch {
+    throw new WeixinMediaError("invalid-media-url", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u4E0B\u8F7D\u5730\u5740\u65E0\u6548\u3002");
+  }
+  if (url.protocol !== "https:" || url.hostname !== MEDIA_CDN_HOST || url.port && url.port !== "443" || !url.pathname.startsWith("/c2c/")) {
+    throw new WeixinMediaError("untrusted-media-url", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u4E0B\u8F7D\u5730\u5740\u4E0D\u53D7\u4FE1\u4EFB\u3002");
+  }
+  url.username = "";
+  url.password = "";
+  url.hash = "";
+  return url.toString();
+}
+async function readBodyLimited(response, maxBytes) {
+  const declared = Number(response?.headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response?.body?.cancel?.().catch?.(() => void 0);
+    throw new WeixinMediaError("media-too-large", `\u5185\u5BB9\u8D85\u8FC7\u4E0A\u9650\uFF08${Math.round(maxBytes / 1024 / 1024)} MB\uFF09\u3002`);
+  }
+  if (!response?.body?.[Symbol.asyncIterator]) {
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length > maxBytes) {
+      throw new WeixinMediaError("media-too-large", `\u5185\u5BB9\u8D85\u8FC7\u4E0A\u9650\uFF08${Math.round(maxBytes / 1024 / 1024)} MB\uFF09\u3002`);
+    }
+    return data;
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    const data = Buffer.from(chunk);
+    size += data.length;
+    if (size > maxBytes) {
+      await response.body.cancel?.().catch?.(() => void 0);
+      throw new WeixinMediaError("media-too-large", `\u5185\u5BB9\u8D85\u8FC7\u4E0A\u9650\uFF08${Math.round(maxBytes / 1024 / 1024)} MB\uFF09\u3002`);
+    }
+    chunks.push(data);
+  }
+  return Buffer.concat(chunks, size);
+}
+async function downloadMedia(item, {
+  signal,
+  maxBytes = MAX_IMAGE_BYTES,
+  fetchImpl = fetch
+} = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl \u5FC5\u987B\u662F\u51FD\u6570\u3002");
+  signal?.throwIfAborted();
+  const key = parseMediaAesKey(item);
+  const url = mediaDownloadUrl(item?.media);
+  const timeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let response;
+  try {
+    response = await fetchImpl(new URL(url), { method: "GET", redirect: "manual", signal: combined });
+  } catch (cause) {
+    if (signal?.aborted) signal.throwIfAborted();
+    throw new WeixinMediaError("media-download-failed", `\u5FAE\u4FE1\u5A92\u4F53\u4E0B\u8F7D\u5931\u8D25\uFF1A${cause?.message ?? cause}`, { cause });
+  }
+  if (Number.isInteger(response?.status) && response.status >= 300 && response.status < 400) {
+    await response.body?.cancel?.().catch?.(() => void 0);
+    throw new WeixinMediaError("media-redirect-blocked", "\u5FAE\u4FE1\u5A92\u4F53\u4E0B\u8F7D\u5730\u5740\u53D1\u751F\u4E86\u91CD\u5B9A\u5411\uFF0C\u5DF2\u4E2D\u6B62\u3002");
+  }
+  if (!response?.ok) {
+    await response?.body?.cancel?.().catch?.(() => void 0);
+    throw new WeixinMediaError(
+      "media-download-failed",
+      `\u5FAE\u4FE1\u5A92\u4F53\u4E0B\u8F7D\u5931\u8D25\uFF08HTTP ${response?.status ?? "unknown"}\uFF09\u3002`
+    );
+  }
+  const ciphertext = await readBodyLimited(response, maxBytes + 16);
+  signal?.throwIfAborted();
+  return decryptMedia(ciphertext, key);
+}
+function sniffImageMediaType(bytes, contentType) {
+  const supported = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  const declared = String(contentType ?? "").split(";")[0].trim().toLowerCase();
+  if (supported.has(declared)) return declared;
+  const head = bytes.subarray(0, 12);
+  if (head.length >= 8 && head[0] === 137 && head[1] === 80 && head[2] === 78) return "image/png";
+  if (head.length >= 3 && head[0] === 255 && head[1] === 216 && head[2] === 255) return "image/jpeg";
+  if (head.length >= 6 && head.subarray(0, 4).toString("latin1") === "GIF8") return "image/gif";
+  if (head.length >= 12 && head.subarray(0, 4).toString("latin1") === "RIFF" && head.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+function extractInboundMedia(message) {
+  const images = [];
+  const files = [];
+  for (const item of message?.item_list ?? []) {
+    if (item?.image_item && typeof item.image_item === "object") {
+      images.push({
+        name: images.length === 0 ? "weixin-image" : `weixin-image-${images.length + 1}`,
+        item: item.image_item
+      });
+      continue;
+    }
+    if (item?.file_item && typeof item.file_item === "object") {
+      const declaredSize = Number(item.file_item.len);
+      files.push({
+        name: nonEmptyString2(item.file_item.file_name) ?? (files.length === 0 ? "weixin-file" : `weixin-file-${files.length + 1}`),
+        ...Number.isFinite(declaredSize) && declaredSize >= 0 ? { size: declaredSize } : {},
+        item: item.file_item
+      });
+    }
+  }
+  return { images, files };
+}
+
 // packages/dsh-chat-weixin/host/runtime.mjs
 function createWeixinRuntime({
   account,
@@ -505,7 +669,8 @@ function createWeixinRuntime({
   deps,
   client,
   state,
-  logger = console
+  logger = console,
+  fetchImpl = fetch
 }) {
   if (!account?.botId) throw new TypeError("\u5FAE\u4FE1\u8FD0\u884C\u65F6\u9700\u8981\u8D26\u53F7\u914D\u7F6E\u3002");
   if (!token) throw new TypeError("\u5FAE\u4FE1\u8FD0\u884C\u65F6\u9700\u8981\u8BBF\u95EE\u4EE4\u724C\u3002");
@@ -575,6 +740,37 @@ function createWeixinRuntime({
     }
     return chunks.length;
   }
+  async function loadAttachments({ media, key, workspacePath, signal }) {
+    const parts = [];
+    for (const image of media.images) {
+      const bytes = await downloadMedia(image.item, { signal, maxBytes: MAX_IMAGE_BYTES, fetchImpl });
+      const mediaType = sniffImageMediaType(bytes);
+      if (!mediaType) {
+        throw new WeixinMediaError("unsupported-image", "\u8FD9\u5F20\u56FE\u7247\u7684\u683C\u5F0F\u6682\u4E0D\u652F\u6301\uFF0C\u8BF7\u53D1 PNG/JPEG/WebP/GIF\u3002");
+      }
+      parts.push({ type: "image", mediaType, data: bytes.toString("base64"), name: image.name });
+      logger.info?.(`[dsh-chat-weixin] \u5DF2\u6536\u5230\u56FE\u7247\uFF1A${mediaType}\uFF08${bytes.length} \u5B57\u8282\uFF0C${account.botId}\uFF09`);
+    }
+    for (const file of media.files) {
+      const bytes = await downloadMedia(file.item, { signal, maxBytes: MAX_FILE_BYTES, fetchImpl });
+      const { sessionId } = await deps.sessions.ensure({
+        channelId: deps.channelId,
+        botId: account.botId,
+        key,
+        workspacePath
+      });
+      const uploaded = await deps.sessions.uploadFile({
+        sessionId,
+        name: file.name,
+        bytes: new Uint8Array(bytes),
+        signal
+      });
+      if (!uploaded?.receiptId) throw new Error("\u4E0A\u4F20\u540E\u6CA1\u6709\u62FF\u5230 receiptId");
+      parts.push({ type: "file", receiptId: uploaded.receiptId });
+      logger.info?.(`[dsh-chat-weixin] \u5DF2\u6536\u5230\u6587\u4EF6\uFF1A${file.name}\uFF08${bytes.length} \u5B57\u8282\uFF0C${account.botId}\uFF09`);
+    }
+    return parts;
+  }
   async function accept(message, signal) {
     try {
       await handleMessage(message, signal);
@@ -622,10 +818,12 @@ function createWeixinRuntime({
       return;
     }
     const text = extractText(message);
-    if (!text) {
+    const media = extractInboundMedia(message);
+    const hasMedia = media.images.length > 0 || media.files.length > 0;
+    if (!text && !hasMedia) {
       await reply(
         sender,
-        "\u76EE\u524D\u53EA\u652F\u6301\u6587\u672C\u4E0E\u8BED\u97F3\u8F6C\u5199\u6D88\u606F\uFF0C\u56FE\u7247\u4E0E\u6587\u4EF6\u5C06\u5728\u540E\u7EED\u7248\u672C\u652F\u6301\u3002",
+        "\u76EE\u524D\u652F\u6301\u6587\u672C\u3001\u8BED\u97F3\u8F6C\u5199\u3001\u56FE\u7247\u4E0E\u6587\u4EF6\uFF0C\u5176\u4ED6\u7C7B\u578B\uFF08\u89C6\u9891\u3001\u8868\u60C5\u7B49\uFF09\u6682\u4E0D\u652F\u6301\u3002",
         message.context_token,
         message.run_id,
         signal
@@ -637,7 +835,7 @@ function createWeixinRuntime({
     if (inboundToken) await state.rememberContextToken(sender, inboundToken);
     const contextToken = inboundToken ?? state.contextToken(sender);
     const key = `p2p:${sender}`;
-    if (deps.interactions?.offer?.({
+    if (!hasMedia && deps.interactions?.offer?.({
       channelId: deps.channelId,
       botId: account.botId,
       key,
@@ -646,38 +844,40 @@ function createWeixinRuntime({
       logger.info?.(`[dsh-chat-weixin] \u8BA4\u9886\u4E3A\u4EA4\u4E92\u56DE\u7B54\uFF08${account.botId} ${key}\uFF09`);
       return;
     }
-    if (text.startsWith("/")) {
-      const commandAccess = deps.accessPolicy.evaluateAccess({
-        policy: record.accessPolicy,
+    if (!hasMedia) {
+      if (text.startsWith("/")) {
+        const commandAccess = deps.accessPolicy.evaluateAccess({
+          policy: record.accessPolicy,
+          conversationType: "direct",
+          senderIds: [sender],
+          isCommand: true,
+          isOwner: sender === account.ownerUserId
+        });
+        if (!commandAccess.allowed) {
+          logger.info?.(`[dsh-chat-weixin] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${account.botId} sender=${sender}\uFF08${commandAccess.reason}\uFF09`);
+          await reply(sender, "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002", contextToken, runId, signal);
+          return;
+        }
+      }
+      const command = await deps.commands?.handle?.({
+        text,
+        channelId: deps.channelId,
+        botId: account.botId,
+        key,
         conversationType: "direct",
-        senderIds: [sender],
-        isCommand: true,
-        isOwner: sender === account.ownerUserId
+        senderId: sender,
+        botLabel: account.botName ?? account.botId,
+        channelLabel: "\u5FAE\u4FE1"
+      }).catch((cause) => {
+        logger.warn?.(`[dsh-chat-weixin] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
+        return null;
       });
-      if (!commandAccess.allowed) {
-        logger.info?.(`[dsh-chat-weixin] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${account.botId} sender=${sender}\uFF08${commandAccess.reason}\uFF09`);
-        await reply(sender, "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002", contextToken, runId, signal);
+      if (command?.handled) {
+        if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
+        handled += 1;
+        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
         return;
       }
-    }
-    const command = await deps.commands?.handle?.({
-      text,
-      channelId: deps.channelId,
-      botId: account.botId,
-      key,
-      conversationType: "direct",
-      senderId: sender,
-      botLabel: account.botName ?? account.botId,
-      channelLabel: "\u5FAE\u4FE1"
-    }).catch((cause) => {
-      logger.warn?.(`[dsh-chat-weixin] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
-      return null;
-    });
-    if (command?.handled) {
-      if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
-      handled += 1;
-      lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
-      return;
     }
     const identity = { senderId: sender, chatId: sender };
     const captured = deps.contextEnhancement.captureContextEnhancementSource(
@@ -686,11 +886,46 @@ function createWeixinRuntime({
       identity,
       () => ({ channel: "weixin", ...identity })
     );
-    const content = deps.contextEnhancement.enhanceContent(
-      text,
-      captured?.snapshot ?? null,
-      captured?.source
-    );
+    let attachmentParts = [];
+    if (hasMedia) {
+      await typing(sender, contextToken, 1, signal);
+      try {
+        attachmentParts = await loadAttachments({
+          media,
+          key,
+          workspacePath: record.workspace,
+          signal
+        });
+      } catch (cause) {
+        const reason = cause?.message ?? String(cause);
+        error = reason;
+        logger.error?.(`[dsh-chat-weixin] \u63A5\u6536\u5A92\u4F53\u5931\u8D25\uFF1A${reason}`);
+        await state.recordFailure(reason);
+        const label = media.images.length > 0 && media.files.length === 0 ? "\u56FE\u7247" : "\u6587\u4EF6";
+        await typing(sender, contextToken, 2, signal);
+        await reply(sender, `\u8FD9\u4E2A${label}\u6CA1\u80FD\u6536\u4E0B\uFF1A${reason}`, contextToken, runId, signal);
+        return;
+      }
+    }
+    let finalParts;
+    if (attachmentParts.length > 0) {
+      const base = [...text ? [{ type: "text", text }] : [], ...attachmentParts];
+      const enhanced = deps.contextEnhancement.enhanceContent(
+        base,
+        captured?.snapshot ?? null,
+        captured?.source
+      );
+      finalParts = Array.isArray(enhanced) ? enhanced : base;
+    } else {
+      finalParts = [{
+        type: "text",
+        text: deps.contextEnhancement.enhanceContent(
+          text,
+          captured?.snapshot ?? null,
+          captured?.source
+        )
+      }];
+    }
     await typing(sender, contextToken, 1, signal);
     try {
       const result = await deps.sessions.ask({
@@ -698,7 +933,7 @@ function createWeixinRuntime({
         botId: account.botId,
         key,
         workspacePath: record.workspace,
-        content: [{ type: "text", text: content }],
+        content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
         signal
       });

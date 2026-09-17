@@ -3,6 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { createCipheriv } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +23,12 @@ import {
   splitText,
 } from '../packages/dsh-chat-weixin/host/ilink-client.mjs';
 import { createWeixinRuntime } from '../packages/dsh-chat-weixin/host/runtime.mjs';
+import {
+  decryptMedia,
+  mediaDownloadUrl,
+  parseMediaAesKey,
+  sniffImageMediaType,
+} from '../packages/dsh-chat-weixin/host/media.mjs';
 import { createWeixinStateStore } from '../packages/dsh-chat-weixin/host/state-store.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -173,6 +180,7 @@ async function makeRuntime({
   contextEnhancement = null,
   askResult = { text: '答案', reason: { kind: 'completed' } },
   onAsk = () => {},
+  fetchImpl = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-'));
   const account = {
@@ -202,6 +210,8 @@ async function makeRuntime({
       return interactions.claimed;
     },
   };
+  /** 入站文件经 uploadFile 换 receipt 的记录。 */
+  const uploads = [];
   const deps = {
     channelId: 'weixin',
     dataDir,
@@ -223,14 +233,20 @@ async function makeRuntime({
         deps.guidance.publish('session-1', options.sourceGuidance ?? '');
         return askResult;
       },
+      ensure: async () => ({ sessionId: 'session-1' }),
+      uploadFile: async ({ name, bytes }) => {
+        uploads.push({ name, bytes });
+        return { receiptId: `receipt-${uploads.length}` };
+      },
       bindings: { adopt: async () => 0 },
     },
   };
   const runtime = createWeixinRuntime({
     account, token: 'tok', deps, client, state, logger: silentLogger,
+    ...(fetchImpl ? { fetchImpl } : {}),
   });
   return {
-    runtime, client, state, deps, published, dataDir, account,
+    runtime, client, state, deps, published, uploads, dataDir, account,
     interactions, attached, offers,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -309,7 +325,7 @@ test('运行时：门禁——属主放行、访问策略 open 放行、陌生�
   }
 });
 
-test('运行时：重复投递只处理一次；非文本消息给出提示', async () => {
+test('运行时：重复投递只处理一次；不支持的消息类型给出提示', async () => {
   const app = await makeRuntime();
   try {
     await app.runtime.accept(inbound({ message_id: 'm_dup' }), new AbortController().signal);
@@ -317,9 +333,199 @@ test('运行时：重复投递只处理一次；非文本消息给出提示', as
     assert.equal(app.client.calls.texts.length, 1, '同一条消息只回一次');
 
     await app.runtime.accept(inbound({
-      message_id: 'm_img', item_list: [{ type: 2, image_item: {} }],
+      message_id: 'm_video', item_list: [{ type: 4, video_item: {} }],
     }), new AbortController().signal);
-    assert.match(app.client.calls.texts.at(-1).text, /只支持文本/);
+    assert.match(app.client.calls.texts.at(-1).text, /目前支持文本、语音转写、图片与文件/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+
+// ── 入站媒体（图片/文件）：CDN 下载 + AES-128-ECB 解密 ─────────────────────────
+
+/** 造一条 iLink 媒体项：AES-128-ECB 加密后的密文 + 两种密钥编码 + CDN 查询串。 */
+function makeMediaItem({
+  plaintext, keyEncoding = 'aeskey', media = {}, extra = {},
+}) {
+  const key = Buffer.from('0123456789abcdef', 'utf8');
+  const cipher = createCipheriv('aes-128-ecb', key, null);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const query = 'enc_param_abc';
+  const mediaField = { encrypt_query_param: query, ...media };
+  if (keyEncoding !== 'aeskey') {
+    // 文件项没有 aeskey 字段，密钥在 media.aes_key 上（base64 编码的十六进制字符串）。
+    mediaField.aes_key = Buffer.from(key.toString('hex'), 'utf8').toString('base64');
+  }
+  return {
+    ciphertext,
+    item: {
+      ...(keyEncoding === 'aeskey' ? { aeskey: key.toString('hex') } : {}),
+      media: mediaField,
+      ...extra,
+    },
+  };
+}
+
+/** 只认 CDN 下载地址、返回密文的假 fetch。 */
+function makeMediaFetch(ciphertext) {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    if (!String(url).startsWith('https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=')) {
+      return { ok: false, status: 403, headers: { get: () => null } };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => ciphertext,
+    };
+  };
+  return { fetchImpl, urls };
+}
+
+test('媒体：两种密钥编码都能解开，CDN 地址只认受信主机', () => {
+  const key = Buffer.from('0123456789abcdef', 'utf8');
+  // ① 图片：aeskey 是 32 位十六进制
+  assert.deepEqual(parseMediaAesKey({ aeskey: key.toString('hex') }), key);
+  // ② 文件：media.aes_key 是 base64（16 字节原文 / 32 位十六进制字符串两种形态）
+  assert.deepEqual(parseMediaAesKey({ media: { aes_key: key.toString('base64') } }), key);
+  assert.deepEqual(
+    parseMediaAesKey({ media: { aes_key: Buffer.from(key.toString('hex')).toString('base64') } }),
+    key,
+  );
+  assert.throws(() => parseMediaAesKey({ aeskey: 'zz' }), (error) => error.code === 'invalid-media-key');
+
+  // 加密 → 解密往返
+  const cipher = createCipheriv('aes-128-ecb', key, null);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from('图片字节')), cipher.final()]);
+  assert.equal(decryptMedia(ciphertext, key).toString('utf8'), '图片字节');
+  assert.throws(() => decryptMedia(ciphertext.subarray(0, 5), key), (error) => error.code === 'invalid-media-ciphertext');
+
+  // encrypt_query_param 自己拼地址；full_url 必须落在 CDN 主机
+  assert.match(
+    mediaDownloadUrl({ encrypt_query_param: 'a b&c' }),
+    /^https:\/\/novac2c\.cdn\.weixin\.qq\.com\/c2c\/download\?encrypted_query_param=a%20b%26c$/,
+  );
+  assert.equal(
+    mediaDownloadUrl({ full_url: 'https://novac2c.cdn.weixin.qq.com/c2c/download?x=1' }),
+    'https://novac2c.cdn.weixin.qq.com/c2c/download?x=1',
+  );
+  assert.throws(
+    () => mediaDownloadUrl({ full_url: 'https://evil.example.com/c2c/download?x=1' }),
+    (error) => error.code === 'untrusted-media-url',
+  );
+  assert.throws(() => mediaDownloadUrl({}), (error) => error.code === 'missing-media-url');
+});
+
+test('媒体：按魔数认图片类型，不认扩展名', () => {
+  assert.equal(sniffImageMediaType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0])), 'image/png');
+  assert.equal(sniffImageMediaType(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg');
+  assert.equal(sniffImageMediaType(Buffer.from('GIF89a', 'latin1')), 'image/gif');
+  assert.equal(sniffImageMediaType(Buffer.from('RIFF0000WEBP', 'latin1')), 'image/webp');
+  assert.equal(sniffImageMediaType(Buffer.from('not an image')), null);
+});
+
+test('运行时：收到图片 → 解密成内容块进模型；文字与图片混排都带上', async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const { ciphertext, item } = makeMediaItem({ plaintext: png });
+  const { fetchImpl, urls } = makeMediaFetch(ciphertext);
+  let asked = null;
+  const app = await makeRuntime({ fetchImpl, onAsk: (options) => { asked = options; } });
+  try {
+    await app.runtime.accept(inbound({
+      message_id: 'm_img',
+      item_list: [
+        { type: 1, text_item: { text: '看看这张图' } },
+        { type: 2, image_item: item },
+      ],
+    }), new AbortController().signal);
+
+    assert.equal(urls.length, 1, '要按 CDN 地址下载一次');
+    assert.equal(asked.content.length, 2, '文字 + 图片两个内容块');
+    assert.equal(asked.content[0].type, 'text');
+    assert.equal(asked.content[0].text, '看看这张图');
+    assert.equal(asked.content[1].type, 'image');
+    assert.equal(asked.content[1].mediaType, 'image/png');
+    assert.equal(Buffer.from(asked.content[1].data, 'base64').toString('hex'), png.toString('hex'));
+    assert.equal(app.client.calls.texts[0].text, '答案', '模型结果照常回复');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('运行时：纯图片消息（无文字）也能进模型', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 9, 9]);
+  const { ciphertext, item } = makeMediaItem({ plaintext: jpeg, keyEncoding: 'media-chain' });
+  const { fetchImpl } = makeMediaFetch(ciphertext);
+  let asked = null;
+  const app = await makeRuntime({ fetchImpl, onAsk: (options) => { asked = options; } });
+  try {
+    await app.runtime.accept(inbound({
+      message_id: 'm_img_only', item_list: [{ type: 2, image_item: item }],
+    }), new AbortController().signal);
+    assert.equal(asked.content.length, 1, '没有文字时只发图片块');
+    assert.equal(asked.content[0].mediaType, 'image/jpeg');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('运行时：收到文件 → 先入会话换 receipt，再把 receipt 交给模型', async () => {
+  const bytes = Buffer.from('col1,col2\n1,2\n', 'utf8');
+  const { ciphertext, item } = makeMediaItem({
+    plaintext: bytes, keyEncoding: 'media-chain', extra: { file_name: '指标.csv', len: bytes.length },
+  });
+  const { fetchImpl } = makeMediaFetch(ciphertext);
+  let asked = null;
+  const app = await makeRuntime({ fetchImpl, onAsk: (options) => { asked = options; } });
+  try {
+    await app.runtime.accept(inbound({
+      message_id: 'm_file', item_list: [{ type: 5, file_item: item }],
+    }), new AbortController().signal);
+
+    assert.equal(app.uploads.length, 1);
+    assert.equal(app.uploads[0].name, '指标.csv');
+    assert.equal(Buffer.from(app.uploads[0].bytes).toString('utf8'), bytes.toString('utf8'));
+    assert.deepEqual(asked.content, [{ type: 'file', receiptId: 'receipt-1' }]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('运行时：媒体下载失败要让用户看见，并且不进模型', async () => {
+  const { item } = makeMediaItem({ plaintext: Buffer.from([1, 2, 3, 4]) });
+  const fetchImpl = async () => { throw new Error('connection reset'); };
+  let asked = null;
+  const app = await makeRuntime({ fetchImpl, onAsk: (options) => { asked = options; } });
+  try {
+    await app.runtime.accept(inbound({
+      message_id: 'm_bad', item_list: [{ type: 2, image_item: item }],
+    }), new AbortController().signal);
+
+    assert.equal(asked, null, '失败绝不进模型');
+    assert.match(app.client.calls.texts.at(-1).text, /这个图片没能收下：/);
+    assert.match(app.client.calls.texts.at(-1).text, /connection reset/);
+    assert.match(app.runtime.status().error, /微信媒体下载失败/, '错误要写进状态，便于排查');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('运行时：带媒体的消息不抢交互回答、也不当命令', async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const { ciphertext, item } = makeMediaItem({ plaintext: png });
+  const { fetchImpl } = makeMediaFetch(ciphertext);
+  let handled = 0;
+  const app = await makeRuntime({ fetchImpl, onAsk: () => { handled += 1; } });
+  app.interactions.claimed = true;
+  try {
+    await app.runtime.accept(inbound({
+      message_id: 'm_mix', item_list: [{ type: 1, text_item: { text: '/new' } }, { type: 2, image_item: item }],
+    }), new AbortController().signal);
+    assert.equal(app.offers.length, 0, '带媒体不算交互答案');
+    assert.equal(handled, 1, '带媒体的 /new 不当命令，直接进模型');
   } finally {
     await app.cleanup();
   }

@@ -9,9 +9,14 @@
 - 使用方式：
   1. **架构与行为参考**（P0 起）：渠道 ↔ Host 的职责划分、数据目录布局、会话绑定、
      注入标签语法、动态提示词上下文机制等设计参照上游实现；本仓库代码为重新编写。
-  2. **协议层移植**（P2/P3 计划）：微信 iLink 协议客户端（扫码登录、长轮询、发消息、
+  2. **协议层移植**（P2/P3/P5）：微信 iLink 协议客户端（扫码登录、长轮询、发消息、
      AES 图片加解密、CDN 上传）与 `@larksuiteoapi/node-sdk` WSClient 生命周期补丁。
-     移植文件将在文件头注明来源与许可。
+     移植文件均在文件头注明来源与许可。P5 已落地的具体对应关系：
+
+     | 本仓库文件 | 上游来源 | 移植范围 |
+     |---|---|---|
+     | `packages/dsh-chat-weixin/host/ilink-client.mjs` | `src/channels/weixin/weixin-api.mjs` | 扫码登录、长轮询、发文本 |
+     | `packages/dsh-chat-weixin/host/media.mjs` | 同上 + `src/channels/shared/image-prompt.mjs` | 入站图片/文件的 AES-128-ECB 解密与 CDN 下载（收窄为"下载并解密成 Buffer"，去掉上游 i18n、artifact 错误分类、惰性引用包装与出站上传） |
 - 上游许可原文：
 
 ```
