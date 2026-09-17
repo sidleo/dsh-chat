@@ -1173,3 +1173,50 @@ test('交互回传：审批卡片点「允许」→ allowed-once；卡片发不�
     await fallback.cleanup();
   }
 });
+
+test('交互回传：多选/自由文本走表单提交，解析与按钮完全一致（带 questionId 按题认领）', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimKey = 'p2p:ou_owner';
+
+    // 多选：复选框提交上来的就是选项原文数组
+    const multi = await app.bridge.handleCardAction({
+      messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: {
+        tag: 'button',
+        value: { dsh: 'form', questionId: 'q_multi', multi_q_multi: ['知识库检索', '数据分析取数'] },
+      },
+    });
+    assert.equal(multi.toast.type, 'success');
+    assert.equal(app.offers.at(-1).text, '知识库检索、数据分析取数', '用「、」拼接，parseAnswer 会拆成多选');
+    assert.equal(app.offers.at(-1).questionId, 'q_multi');
+
+    // 自由文本：输入框提交上来的就是文字
+    const text = await app.bridge.handleCardAction({
+      messageId: 'om_card_text', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'form', questionId: 'q_free', text_q_free: '顺便看看 5 月数据' } },
+    });
+    assert.equal(text.toast.type, 'success');
+    assert.equal(app.offers.at(-1).text, '顺便看看 5 月数据');
+    assert.equal(app.offers.at(-1).questionId, 'q_free');
+
+    // 空提交：给提示，不认领
+    const before = app.offers.length;
+    const empty = await app.bridge.handleCardAction({
+      messageId: 'om_card_empty', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'form', questionId: 'q_free', text_q_free: '   ' } },
+    });
+    assert.match(empty.toast.content, /还没有填内容/);
+    assert.equal(app.offers.length, before, '空内容不能认领');
+
+    // 表单提交同样受身份门禁约束
+    const before2 = app.offers.length;
+    await app.bridge.handleCardAction({
+      messageId: 'om_card_stranger', chatId: 'oc_chat', operator: { openId: 'ou_stranger' },
+      action: { tag: 'button', value: { dsh: 'form', questionId: 'q_free', text_q_free: '越权试试' } },
+    });
+    assert.equal(app.offers.length, before2, '陌生人不能替答');
+  } finally {
+    await app.cleanup();
+  }
+});

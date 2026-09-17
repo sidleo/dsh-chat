@@ -279,6 +279,8 @@ const detach = deps.interactions.attach({
   // 可选：能把**一批问题**渲染成平台原生交互（如飞书按钮卡片）就提供，用户点一下即可回答。
   // 关键约定：一批问题只用**一条**消息，回答后就地更新它（answered 是 {问题id: 答案}），
   // final=true 表示全部答完，可以收尾成"已完成"的样子。缺席或首发失败时 hub 自动退回纯文本。
+  // 怎么呈现由渠道决定：飞书是"一页一题"（单选题给按钮、多选给复选框+提交、自由文本给输入框+提交，
+  // 答完 patch 同一张卡翻页），既避免一次抛出全部问题，也避免只有单选才有可点控件。
   sendQuestions: async ({ key, questions, answered, final }) => {},
   // 可选：审批（允许/拒绝）
   sendApproval: async ({ key, request }) => {},

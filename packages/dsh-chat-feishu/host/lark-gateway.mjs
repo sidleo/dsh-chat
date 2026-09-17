@@ -363,11 +363,15 @@ export function createLarkGateway({
     },
 
     /**
-     * 把**一批问题**渲染成一张卡片：发一次、答一个就地更新一次。
+     * 提问卡片：**一页一题**，答完就地翻到下一题。
      *
-     * 为什么要这样：每个问题一张卡会把聊天记录撑满（真机上 3 个问题就是 3 条卡片/文本）。
-     * 一张卡里——已答的显示答案、未答的给按钮（多选/自由文本用编号 + 文字提示，
-     * 因为一个按钮表达不了多选）。
+     * 为什么不把一批问题一次性铺开（真机反馈）：
+     * - 三个问题一次抛出来，聊天记录里很长一屏，用户不知道从哪答起；
+     * - 单选题之外的问题当时只能退化成一堆编号文字，没有可点的控件。
+     * 现在每题按类型给原生控件，答完 update 同一张卡翻页：
+     * - 单选 → 按钮（点一下即答）；
+     * - 多选 → 表单里的复选框 + 「提交」；
+     * - 自由文本 → 表单里的输入框 + 「提交」。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
      *   `messageId` 有值就原地更新（patch），没有就新建。
@@ -376,27 +380,43 @@ export function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
+      const total = questions.length;
+      const answeredList = questions.filter((question) => answered[question?.id] !== undefined);
+      const current = questions.find((question) => answered[question?.id] === undefined) ?? null;
       const elements = [];
-      const pending = questions.filter((question) => answered[question?.id] === undefined);
-      const body = [];
-      for (const [index, question] of questions.entries()) {
-        const answer = answered[question?.id];
-        body.push(`**${index + 1}. ${question?.header || '需要确认'}**`);
-        body.push(String(question?.question ?? ''));
-        if (question?.detail) body.push(String(question.detail));
-        if (answer !== undefined) {
-          const chosen = [...(answer.selected ?? [])];
-          if (answer.custom) chosen.push(answer.custom);
-          body.push('', `✅ 已选：${chosen.join('、') || '（空）'}`);
-          body.push('');
-          continue;
-        }
-        const options = Array.isArray(question?.options) ? question.options : [];
-        if (options.length > 0 && question?.multiSelect !== true) {
-          // 单选：按钮直接表达
-          body.push('');
+
+      /** 把答案渲染成一行可读文本。 */
+      const answerText = (question) => {
+        const answer = answered[question?.id] ?? {};
+        const chosen = [...(answer.selected ?? [])];
+        if (answer.custom) chosen.push(answer.custom);
+        return chosen.join('、') || '（空）';
+      };
+
+      if (answeredList.length > 0) {
+        elements.push({
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: answeredList
+              .map((question) => {
+                const index = questions.indexOf(question) + 1;
+                return `✅ **${index}. ${question?.header || '问题'}** → ${answerText(question)}`;
+              })
+              .join('\n'),
+          },
+        });
+      }
+
+      if (current) {
+        const index = questions.indexOf(current) + 1;
+        const body = [`**${index}. ${current?.header || '需要确认'}**`, String(current?.question ?? '')];
+        if (current?.detail) body.push('', String(current.detail));
+        const options = Array.isArray(current?.options) ? current.options : [];
+
+        if (options.length > 0 && current?.multiSelect !== true) {
+          // 单选：按钮直接表达，不需要提交
           elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
-          body.length = 0;
           elements.push({
             tag: 'action',
             actions: options.slice(0, 8).map((option, optionIndex) => ({
@@ -405,45 +425,82 @@ export function createLarkGateway({
               text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
               value: {
                 dsh: 'answer',
-                questionId: String(question?.id ?? ''),
+                questionId: String(current?.id ?? ''),
                 label: String(option.label),
                 index: String(optionIndex + 1),
               },
             })),
           });
-          continue;
-        }
-        // 多选 / 自由文本：编号留在卡里，用户回复编号或文字（不再另发消息把记录撑满）
-        if (options.length > 0) {
-          body.push('');
-          options.forEach((option, optionIndex) => {
-            body.push(`${optionIndex + 1}. **${option.label}**`
-              + `${option.description ? ` —— ${option.description}` : ''}`);
+        } else if (options.length > 0) {
+          // 多选：复选框 + 提交（value 用选项原文，回答解析与按钮完全一致）
+          body.push('', '可多选，选完点「提交」。');
+          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+          elements.push({
+            tag: 'form',
+            name: `dsh_form_${current?.id ?? 'q'}`,
+            elements: [
+              {
+                tag: 'checker',
+                name: `multi_${current?.id ?? 'q'}`,
+                options: options.slice(0, 8).map((option) => ({
+                  value: String(option.label).slice(0, 60),
+                  text: String(option.label).slice(0, 60),
+                })),
+              },
+              {
+                tag: 'button',
+                name: 'submit',
+                action_type: 'form_submit',
+                type: 'primary',
+                text: { tag: 'plain_text', content: '提交' },
+                value: { dsh: 'form', questionId: String(current?.id ?? '') },
+              },
+            ],
           });
-          body.push('', '可多选：回复编号（例如 `1,3`），也可以直接回复文字。');
         } else {
-          body.push('', '直接回复你的文字答案。');
+          // 自由文本：输入框 + 提交
+          body.push('', '在下面输入后点「提交」（也可以直接在聊天里回复）。');
+          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+          elements.push({
+            tag: 'form',
+            name: `dsh_form_${current?.id ?? 'q'}`,
+            elements: [
+              {
+                tag: 'input',
+                name: `text_${current?.id ?? 'q'}`,
+                placeholder: { tag: 'plain_text', content: '在这里输入' },
+              },
+              {
+                tag: 'button',
+                name: 'submit',
+                action_type: 'form_submit',
+                type: 'primary',
+                text: { tag: 'plain_text', content: '提交' },
+                value: { dsh: 'form', questionId: String(current?.id ?? '') },
+              },
+            ],
+          });
         }
-        body.push('');
-      }
-      if (body.length > 0) {
-        elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
-      }
-      if (pending.length > 0) {
         elements.push({
           tag: 'note',
-          elements: [{ tag: 'plain_text', content: '点按钮即可；也可以直接回复文字。' }],
+          elements: [{ tag: 'plain_text', content: '回答后这张卡片会自动翻到下一题；也可以直接回复文字。' }],
+        });
+      } else {
+        elements.push({
+          tag: 'div',
+          text: { tag: 'lark_md', content: '全部问题都已回答，正在继续处理…' },
         });
       }
+
       const card = {
         config: { wide_screen_mode: true, update_multi: true },
         header: {
-          template: final ? 'green' : 'blue',
+          template: final || !current ? 'green' : 'blue',
           title: {
             tag: 'plain_text',
-            content: final
+            content: final || !current
               ? '✅ 已全部回答'
-              : `❓ 需要你确认（还有 ${pending.length} 个问题）`,
+              : `❓ 需要你确认（第 ${questions.indexOf(current) + 1}/${total} 题）`,
           },
         },
         elements,

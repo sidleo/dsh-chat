@@ -480,8 +480,32 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 
-    if (value.dsh !== 'answer') return undefined;
-    const label = typeof value.label === 'string' ? value.label : '';
+    // 表单提交（多选复选框 / 文本输入框）：value 里既有按钮自带字段，也有 multi_* / text_* 表单字段。
+    const formFields = Object.entries(value)
+      .filter(([field]) => field.startsWith('multi_') || field.startsWith('text_'));
+    let label = '';
+    if (value.dsh === 'form') {
+      const picked = [];
+      for (const [field, raw] of formFields) {
+        if (field.startsWith('multi_')) {
+          for (const item of Array.isArray(raw) ? raw : [raw]) {
+            if (typeof item === 'string' && item.trim()) picked.push(item.trim());
+          }
+        } else if (typeof raw === 'string' && raw.trim()) {
+          picked.push(raw.trim());
+        }
+      }
+      // 多选拼接用「、」：hub 的 parseAnswer 对多选正是按 、/, 拆开，因此解析路径与按钮一致。
+      label = picked.join('、');
+      if (!label) {
+        logger.info?.(`[dsh-chat-feishu] 卡片表单提交没有内容（${bot.id} ${operatorId}）`);
+        return { toast: { type: 'info', content: '还没有填内容。' } };
+      }
+    } else if (value.dsh === 'answer') {
+      label = typeof value.label === 'string' ? value.label : '';
+    } else {
+      return undefined;
+    }
     if (!label) return undefined;
 
     // 身份门禁与文本回答一致：不该由谁回答，就不认领。

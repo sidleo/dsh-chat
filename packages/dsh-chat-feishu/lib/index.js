@@ -127012,8 +127012,29 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await markAnswered(event, value.dsh, decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD");
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
-    if (value.dsh !== "answer") return void 0;
-    const label = typeof value.label === "string" ? value.label : "";
+    const formFields = Object.entries(value).filter(([field]) => field.startsWith("multi_") || field.startsWith("text_"));
+    let label = "";
+    if (value.dsh === "form") {
+      const picked = [];
+      for (const [field, raw] of formFields) {
+        if (field.startsWith("multi_")) {
+          for (const item of Array.isArray(raw) ? raw : [raw]) {
+            if (typeof item === "string" && item.trim()) picked.push(item.trim());
+          }
+        } else if (typeof raw === "string" && raw.trim()) {
+          picked.push(raw.trim());
+        }
+      }
+      label = picked.join("\u3001");
+      if (!label) {
+        logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u8868\u5355\u63D0\u4EA4\u6CA1\u6709\u5185\u5BB9\uFF08${bot.id} ${operatorId}\uFF09`);
+        return { toast: { type: "info", content: "\u8FD8\u6CA1\u6709\u586B\u5185\u5BB9\u3002" } };
+      }
+    } else if (value.dsh === "answer") {
+      label = typeof value.label === "string" ? value.label : "";
+    } else {
+      return void 0;
+    }
     if (!label) return void 0;
     await deps.ready?.();
     const accessPolicy = deps.storage.read(bot.id).accessPolicy;
@@ -127496,11 +127517,15 @@ function createLarkGateway({
       return { messageId: response?.data?.message_id, imageKey };
     },
     /**
-     * 把**一批问题**渲染成一张卡片：发一次、答一个就地更新一次。
+     * 提问卡片：**一页一题**，答完就地翻到下一题。
      *
-     * 为什么要这样：每个问题一张卡会把聊天记录撑满（真机上 3 个问题就是 3 条卡片/文本）。
-     * 一张卡里——已答的显示答案、未答的给按钮（多选/自由文本用编号 + 文字提示，
-     * 因为一个按钮表达不了多选）。
+     * 为什么不把一批问题一次性铺开（真机反馈）：
+     * - 三个问题一次抛出来，聊天记录里很长一屏，用户不知道从哪答起；
+     * - 单选题之外的问题当时只能退化成一堆编号文字，没有可点的控件。
+     * 现在每题按类型给原生控件，答完 update 同一张卡翻页：
+     * - 单选 → 按钮（点一下即答）；
+     * - 多选 → 表单里的复选框 + 「提交」；
+     * - 自由文本 → 表单里的输入框 + 「提交」。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
      *   `messageId` 有值就原地更新（patch），没有就新建。
@@ -127509,26 +127534,35 @@ function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
+      const total = questions.length;
+      const answeredList = questions.filter((question) => answered[question?.id] !== void 0);
+      const current = questions.find((question) => answered[question?.id] === void 0) ?? null;
       const elements = [];
-      const pending = questions.filter((question) => answered[question?.id] === void 0);
-      const body = [];
-      for (const [index, question] of questions.entries()) {
-        const answer = answered[question?.id];
-        body.push(`**${index + 1}. ${question?.header || "\u9700\u8981\u786E\u8BA4"}**`);
-        body.push(String(question?.question ?? ""));
-        if (question?.detail) body.push(String(question.detail));
-        if (answer !== void 0) {
-          const chosen = [...answer.selected ?? []];
-          if (answer.custom) chosen.push(answer.custom);
-          body.push("", `\u2705 \u5DF2\u9009\uFF1A${chosen.join("\u3001") || "\uFF08\u7A7A\uFF09"}`);
-          body.push("");
-          continue;
-        }
-        const options = Array.isArray(question?.options) ? question.options : [];
-        if (options.length > 0 && question?.multiSelect !== true) {
-          body.push("");
+      const answerText = (question) => {
+        const answer = answered[question?.id] ?? {};
+        const chosen = [...answer.selected ?? []];
+        if (answer.custom) chosen.push(answer.custom);
+        return chosen.join("\u3001") || "\uFF08\u7A7A\uFF09";
+      };
+      if (answeredList.length > 0) {
+        elements.push({
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: answeredList.map((question) => {
+              const index = questions.indexOf(question) + 1;
+              return `\u2705 **${index}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`;
+            }).join("\n")
+          }
+        });
+      }
+      if (current) {
+        const index = questions.indexOf(current) + 1;
+        const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, String(current?.question ?? "")];
+        if (current?.detail) body.push("", String(current.detail));
+        const options = Array.isArray(current?.options) ? current.options : [];
+        if (options.length > 0 && current?.multiSelect !== true) {
           elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
-          body.length = 0;
           elements.push({
             tag: "action",
             actions: options.slice(0, 8).map((option, optionIndex) => ({
@@ -127537,41 +127571,77 @@ function createLarkGateway({
               text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
               value: {
                 dsh: "answer",
-                questionId: String(question?.id ?? ""),
+                questionId: String(current?.id ?? ""),
                 label: String(option.label),
                 index: String(optionIndex + 1)
               }
             }))
           });
-          continue;
-        }
-        if (options.length > 0) {
-          body.push("");
-          options.forEach((option, optionIndex) => {
-            body.push(`${optionIndex + 1}. **${option.label}**${option.description ? ` \u2014\u2014 ${option.description}` : ""}`);
+        } else if (options.length > 0) {
+          body.push("", "\u53EF\u591A\u9009\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
+          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+          elements.push({
+            tag: "form",
+            name: `dsh_form_${current?.id ?? "q"}`,
+            elements: [
+              {
+                tag: "checker",
+                name: `multi_${current?.id ?? "q"}`,
+                options: options.slice(0, 8).map((option) => ({
+                  value: String(option.label).slice(0, 60),
+                  text: String(option.label).slice(0, 60)
+                }))
+              },
+              {
+                tag: "button",
+                name: "submit",
+                action_type: "form_submit",
+                type: "primary",
+                text: { tag: "plain_text", content: "\u63D0\u4EA4" },
+                value: { dsh: "form", questionId: String(current?.id ?? "") }
+              }
+            ]
           });
-          body.push("", "\u53EF\u591A\u9009\uFF1A\u56DE\u590D\u7F16\u53F7\uFF08\u4F8B\u5982 `1,3`\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002");
         } else {
-          body.push("", "\u76F4\u63A5\u56DE\u590D\u4F60\u7684\u6587\u5B57\u7B54\u6848\u3002");
+          body.push("", "\u5728\u4E0B\u9762\u8F93\u5165\u540E\u70B9\u300C\u63D0\u4EA4\u300D\uFF08\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\uFF09\u3002");
+          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+          elements.push({
+            tag: "form",
+            name: `dsh_form_${current?.id ?? "q"}`,
+            elements: [
+              {
+                tag: "input",
+                name: `text_${current?.id ?? "q"}`,
+                placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" }
+              },
+              {
+                tag: "button",
+                name: "submit",
+                action_type: "form_submit",
+                type: "primary",
+                text: { tag: "plain_text", content: "\u63D0\u4EA4" },
+                value: { dsh: "form", questionId: String(current?.id ?? "") }
+              }
+            ]
+          });
         }
-        body.push("");
-      }
-      if (body.length > 0) {
-        elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
-      }
-      if (pending.length > 0) {
         elements.push({
           tag: "note",
-          elements: [{ tag: "plain_text", content: "\u70B9\u6309\u94AE\u5373\u53EF\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" }]
+          elements: [{ tag: "plain_text", content: "\u56DE\u7B54\u540E\u8FD9\u5F20\u5361\u7247\u4F1A\u81EA\u52A8\u7FFB\u5230\u4E0B\u4E00\u9898\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" }]
+        });
+      } else {
+        elements.push({
+          tag: "div",
+          text: { tag: "lark_md", content: "\u5168\u90E8\u95EE\u9898\u90FD\u5DF2\u56DE\u7B54\uFF0C\u6B63\u5728\u7EE7\u7EED\u5904\u7406\u2026" }
         });
       }
       const card = {
         config: { wide_screen_mode: true, update_multi: true },
         header: {
-          template: final ? "green" : "blue",
+          template: final || !current ? "green" : "blue",
           title: {
             tag: "plain_text",
-            content: final ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u8FD8\u6709 ${pending.length} \u4E2A\u95EE\u9898\uFF09`
+            content: final || !current ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u7B2C ${questions.indexOf(current) + 1}/${total} \u9898\uFF09`
           }
         },
         elements
