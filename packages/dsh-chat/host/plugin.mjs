@@ -1,0 +1,190 @@
+/**
+ * dsh-chat Hub：host 侧插件入口。
+ *
+ * 职责边界（见 CONTRACT.md）：
+ * - hub 提供**渠道无关**的一切：渠道注册表、每机器人共享设置、上下文增强引擎、
+ *   提示词登记、会话桥、RPC 载体、控制端点；
+ * - 渠道包提供**平台相关**的一切：协议客户端、凭据、机器人/会话状态、
+ *   渠道专属设置（如飞书的任务过程展示）与自己的设置页。
+ *
+ * @module dsh-chat/host/plugin
+ */
+
+import { CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE } from '../shared/contract.mjs';
+import * as contextEnhancement from '../shared/context-enhancement.mjs';
+import { createBotSettingsStore } from './bot-settings.mjs';
+import { createChannelRegistry } from './channel-registry.mjs';
+import { createGuidanceRegistry } from './guidance.mjs';
+import { channelDataDir, hubDataDir } from './paths.mjs';
+import { createRpcCarrier, fail, failFrom, ok } from './rpc.mjs';
+import { createSessionBridge } from './sessions.mjs';
+
+export const name = 'dsh-chat-host';
+
+/** hub 需要 DSH 的连接载体、凭据服务与会话网关（modern 路径）。 */
+export const inject = ['connection', 'credentials', 'typertGateway'];
+
+const CHANNEL_ID = /^[a-z][a-z0-9-]{1,31}$/;
+const BOT_ID = /^[A-Za-z0-9_@.:+-]{1,256}$/;
+
+function resolveLogger(ctx, scope) {
+  const logger = ctx?.logger;
+  if (typeof logger === 'function') {
+    try {
+      return logger(scope);
+    } catch {
+      // 回落 console。
+    }
+  }
+  return logger ?? console;
+}
+
+function provideService(ctx, serviceName, value) {
+  if (typeof ctx?.provide === 'function') return ctx.provide(serviceName, value);
+  if (typeof ctx?.reflect?.provide === 'function') return ctx.reflect.provide(serviceName, value);
+  throw new TypeError('dsh-chat 需要 Cordis 的 provide 能力来发布 dshChat 服务。');
+}
+
+function validBotPayload(payload, { withConfig = false } = {}) {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const allowed = withConfig ? ['channelId', 'botId', 'config'] : ['channelId', 'botId'];
+  if (Object.keys(payload).length !== allowed.length) return false;
+  if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
+  if (typeof payload.channelId !== 'string' || !CHANNEL_ID.test(payload.channelId)) return false;
+  if (typeof payload.botId !== 'string' || !BOT_ID.test(payload.botId)) return false;
+  if (!withConfig) return true;
+  return payload.config !== null && typeof payload.config === 'object' && !Array.isArray(payload.config);
+}
+
+/**
+ * Cordis host 插件入口。
+ *
+ * @param ctx - host 上下文。
+ * @param config - 插件配置：{ dataDir }。
+ */
+export function apply(ctx, config = {}) {
+  const logger = resolveLogger(ctx, 'dsh-chat');
+  const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
+  const guidance = createGuidanceRegistry();
+  const sessions = createSessionBridge({ ctx, logger });
+  const rpc = createRpcCarrier(ctx, { logger });
+
+  function storageFor(channelId) {
+    return Object.freeze({
+      read: (botId) => settings.read(channelId, botId),
+      write: (botId, patch) => settings.write(channelId, botId, patch),
+      list: () => settings.list(channelId),
+    });
+  }
+
+  const registry = createChannelRegistry({
+    logger,
+    rpc,
+    createDeps: (channelId, definition) => Object.freeze({
+      channelId,
+      logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
+      credentials: ctx.credentials,
+      /** 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）；未声明时返回 hub 数据目录。 */
+      dataDir: definition.legacy?.dir
+        ? channelDataDir(definition.legacy.dir)
+        : hubDataDir(config.dataDir),
+      resolveDataDir: (name) => channelDataDir(name),
+      storage: storageFor(channelId),
+      /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
+      ready: () => settings.ready(),
+      contextEnhancement,
+      guidance,
+      sessions,
+    }),
+  });
+
+  /**
+   * hub 控制端点：渠道无关、所有渠道共用，因此渠道包不必重复实现。
+   *
+   * @param method - 方法名。
+   * @param payload - 载荷。
+   * @returns RPC 结果。
+   */
+  async function controlHandler(method, payload) {
+    if (method === 'channel.list') {
+      if (payload !== null && (typeof payload !== 'object' || Array.isArray(payload)
+        || Object.keys(payload).length > 0)) {
+        return fail('chat/bad-request', 'channel.list 不接受参数。');
+      }
+      return ok({ contractVersion: CONTRACT_VERSION, channels: registry.list() });
+    }
+    if (method === 'bot.settings.get') {
+      if (!validBotPayload(payload)) return fail('chat/bad-request', 'bot.settings.get 需要 channelId 与 botId。');
+      await settings.ready();
+      return ok({ settings: settings.read(payload.channelId, payload.botId) });
+    }
+    if (method === 'bot.context-enhancement.set') {
+      if (!validBotPayload(payload, { withConfig: true })) {
+        return fail('chat/bad-request', 'bot.context-enhancement.set 需要 channelId、botId 与 config。');
+      }
+      try {
+        const config2 = contextEnhancement.validateContextConfig(payload.config);
+        const saved = await settings.write(payload.channelId, payload.botId, {
+          contextEnhancement: config2,
+        });
+        return ok({ contextEnhancement: saved.contextEnhancement });
+      } catch (error) {
+        return failFrom(error, 'chat/context-enhancement-failed');
+      }
+    }
+    return fail('chat/unknown-method', `控制端点不支持 ${method}。`);
+  }
+
+  void settings.load().catch((error) => {
+    logger.warn?.(`[dsh-chat] 初始化每机器人设置失败：${error?.message ?? error}`);
+  });
+
+  const service = Object.freeze({
+    contractVersion: CONTRACT_VERSION,
+
+    /**
+     * 渠道包注册自己的实现。
+     *
+     * @param definition - { id, label, order, createChannel, legacy? }。
+     * @returns 同步注销函数。
+     */
+    registerChannel: (definition) => registry.register(definition),
+
+    /** 渠道注册表的只读视图。 */
+    channels: Object.freeze({
+      list: () => registry.list(),
+      subscribe: (listener) => registry.subscribe(listener),
+    }),
+
+    /** 每机器人设置的磁盘文档就绪信号；渠道读取设置前应 await 它。 */
+    ready: () => settings.ready(),
+
+    bots: Object.freeze({
+      read: (channelId, botId) => settings.read(channelId, botId),
+      write: (channelId, botId, patch) => settings.write(channelId, botId, patch),
+      list: (channelId) => settings.list(channelId),
+      subscribe: (listener) => settings.subscribe(listener),
+      storageFor,
+    }),
+
+    contextEnhancement: Object.freeze({ ...contextEnhancement }),
+    guidance: Object.freeze({
+      publish: (sessionId, text) => guidance.publish(sessionId, text),
+      forget: (sessionId) => guidance.forget(sessionId),
+    }),
+    sessions,
+  });
+
+  ctx.effect(() => {
+    const disposeProvide = provideService(ctx, HOST_SERVICE, service);
+    return () => {
+      registry.disposeAll();
+      rpc.disposeAll();
+      if (typeof disposeProvide === 'function') disposeProvide();
+    };
+  }, 'dsh-chat: host service');
+
+  ctx.effect(() => rpc.register(CONTROL_CHANNEL_ID, controlHandler), 'dsh-chat: control rpc');
+
+  logger.info?.(`[dsh-chat] hub 已就绪（契约 v${CONTRACT_VERSION}），等待渠道插件注册。`);
+}

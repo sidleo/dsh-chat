@@ -1,0 +1,17 @@
+{
+  "name": "dsh-chat-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "DSH 聊天机器人插件工作区：dsh-chat 管理入口 + 各聊天软件渠道插件",
+  "scripts": {
+    "build": "node scripts/build-all.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/build-all.mjs && node --test test/*.test.mjs && node scripts/verify-package.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

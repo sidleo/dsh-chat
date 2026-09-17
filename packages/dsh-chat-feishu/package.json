@@ -1,0 +1,38 @@
+{
+  "name": "dsh-chat-feishu",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "dsh-chat 飞书渠道插件（凭据、长连接、私聊/群聊、任务过程展示）",
+  "license": "MIT",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "host",
+    "client",
+    "cordis.patch.yml",
+    "package.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dsh": "0.1.5-rc.2",
+      "profiles": ["web"]
+    }
+  }
+}

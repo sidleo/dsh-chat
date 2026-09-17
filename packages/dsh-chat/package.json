@@ -1,0 +1,44 @@
+{
+  "name": "dsh-chat",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "DSH 聊天机器人管理入口：渠道注册表、共享内核与设置页入口（飞书/微信等渠道各自独立成插件）",
+  "keywords": ["deepseek-harness", "dsh", "dsh-plugin", "chat", "chatbot"],
+  "license": "MIT",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "shared",
+    "host",
+    "client",
+    "cordis.patch.yml",
+    "package.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dsh": "0.1.5-rc.2",
+      "profiles": ["web"]
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-all.mjs"
+  }
+}

@@ -1,0 +1,57 @@
+# dsh-chat
+
+把聊天软件接入 DeepSeek Harness 的插件工作区。**一切皆插件**：`dsh-chat` 只做管理入口与共享内核，
+每种聊天软件是独立的渠道插件，新增聊天软件只需新增一个包。
+
+```
+packages/dsh-chat            Hub：设置页入口「Chat机器人」+ 渠道注册表 + 共享内核
+packages/dsh-chat-feishu     飞书渠道（凭据/长连接/私聊群聊/任务过程展示）
+packages/dsh-chat-weixin     微信渠道（iLink 扫码登录/长轮询/私聊）
+packages/dsh-chat-fixture    契约验证用假渠道（不发布）
+```
+
+新渠道作者请直接读 [`CONTRACT.md`](./CONTRACT.md)——那是唯一需要的文档。
+
+## 当前进度
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| P0 | 三包骨架、契约与 RPC 闭环、设置页入口、契约测试 | ✅ 已完成 |
+| P1 | 共享内核：会话桥、设置迁移导入、上下文增强 UI、共享组件库 | 待开始 |
+| P2 | 飞书渠道：长连接、私聊/群聊、流式卡片、**任务过程展示分私聊/群聊** | 待开始 |
+| P3 | 微信渠道：移植 iLink 协议客户端、扫码登录、私聊收发 | 待开始 |
+| P4–P6 | 命令/权限/菜单、富媒体与主动投递、平台化（会话标识、更新面板、i18n…） | 待开始 |
+
+## 开发
+
+```bash
+npm run build     # 构建全部包的 host + client 两半
+npm test          # 契约与引擎单元测试
+npm run check     # build + test + 打包自检（含"渠道包不得 import hub"检查）
+```
+
+构建产物 `lib/index.js`（host，ESM）与 `lib/client.js`（client，DSH 模块加载器包装）随包提交，
+因此安装方不需要构建。
+
+## 安装
+
+```bash
+dsh plugin --profile web add /绝对路径/packages/dsh-chat
+dsh plugin --profile web add /绝对路径/packages/dsh-chat-feishu
+dsh plugin --profile web add /绝对路径/packages/dsh-chat-weixin
+```
+
+安装后需重启 DSH Host（host 半边），并刷新浏览器页面（client 半边）。
+
+> ⚠️ `@xmanrui/dsh-im` 与本插件会绑定同一批机器人凭据并各自消费消息，**不能同时启用**：
+> 启用 dsh-chat 前请先 `dsh plugin --profile web remove @xmanrui/dsh-im`。
+> `npm run check` 可用 `DSH_CHAT_PROFILE_MANIFEST=<profile 的 package.json>` 检查这一点。
+
+## 数据位置
+
+| 数据 | 位置 |
+|---|---|
+| 每机器人共享设置（工作区/模型/预设/**上下文增强**/访问策略） | `~/.dsh/integrations/dsh-chat/bots.json` |
+| 飞书机器人、凭据引用、会话状态 | `~/.dsh/integrations/dsh-feishu/`（沿用旧目录，零重绑） |
+| 微信账号、token 引用、会话状态 | `~/.dsh/integrations/dsh-weixin/`（同上） |
+| 凭据本体 | `~/.dsh/.credentials.yaml`（经 DSH 凭据服务读写） |
