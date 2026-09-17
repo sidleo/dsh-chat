@@ -87,48 +87,40 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   // 第一页：单选题 → 按钮，且卡里**不出现**后面两题
   await gateway.sendQuestionsCard({ openId: 'ou_a', questions, answered: {}, final: false });
   let card = JSON.parse(calls.at(-1).data.content);
+  assert.equal(card.schema, '2.0');
   assert.match(card.header.title.content, /第 1\/3 题/);
   const first = JSON.stringify(card);
-  assert.match(first, /"tag":"action"/);
+  assert.match(first, /"behaviors":\[\{"type":"callback"/);
   assert.match(first, /"label":"A"/);
   assert.doesNotMatch(first, /选多个/, '后面的问题不该一次全抛出来');
   assert.doesNotMatch(first, /还有别的吗/);
 
-  // 第二页：多选 → 开关按钮 + 提交（不用表单：实测 checker 选项渲染不出来、值也不在回调里）
+  // 第二页：多选 → Card 2.0 表单 + 原生多选控件（multi_select_static）+ 提交
   await gateway.sendQuestionsCard({
     openId: 'ou_a', questions,
     answered: { single: { selected: ['A'] } }, final: false, messageId: 'om_1',
   });
   assert.equal(calls.at(-1).path.message_id, 'om_1', '要 patch 同一张卡');
   card = JSON.parse(calls.at(-1).data.content);
+  assert.equal(card.schema, '2.0', '表单/输入这类组件只在 Card 2.0 生效');
   assert.match(card.header.title.content, /第 2\/3 题/);
   const second = JSON.stringify(card);
-  assert.match(second, /"dsh":"toggle"/);
-  assert.match(second, /"content":"☐ X"/);
-  assert.match(second, /"dsh":"submit"/);
-  assert.match(second, /提交（已选 0）/);
+  assert.match(second, /"tag":"form"/);
+  assert.match(second, /"tag":"multi_select_static"/);
+  assert.match(second, /"form_action_type":"submit"/);
+  assert.match(second, /"name":"multi_multi"/, '组件名要带问题 id：表单值靠它归属');
   assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在卡里留一行答案');
   assert.doesNotMatch(second, /还有别的吗/);
 
-  // 勾选状态要画回卡片（已选的选项用 ☑ + primary，提交按钮显示已选数量）
-  await gateway.sendQuestionsCard({
-    openId: 'ou_a', questions,
-    answered: { single: { selected: ['A'] } }, final: false, messageId: 'om_1',
-    selection: { multi: ['X'] },
-  });
-  const toggled = JSON.stringify(JSON.parse(calls.at(-1).data.content));
-  assert.match(toggled, /"content":"☑ X"/);
-  assert.match(toggled, /"content":"☐ Y"/);
-  assert.match(toggled, /提交（已选 1）/);
-
-  // 第三页：自由文本 → 输入框 + 提交
+  // 第三页：自由文本 → 表单 + 原生输入框 + 提交
   await gateway.sendQuestionsCard({
     openId: 'ou_a', questions,
     answered: { single: { selected: ['A'] }, multi: { selected: ['X', 'Y'] } }, final: false,
   });
   const third = JSON.stringify(JSON.parse(calls.at(-1).data.content));
   assert.match(third, /"tag":"input"/);
-  assert.match(third, /"action_type":"form_submit"/);
+  assert.match(third, /"name":"text_free"/);
+  assert.match(third, /"form_action_type":"submit"/);
 
   // 收尾：绿色 + 全部答案
   await gateway.sendQuestionsCard({

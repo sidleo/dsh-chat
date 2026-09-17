@@ -134,22 +134,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   const questionCards = new Map();
   /** 会话键 → 最近一次渲染用的批次（多选开关要就地重渲染，得知道原样数据）。 */
   const questionBatches = new Map();
-  /** `${会话键}\u0000${问题id}` → 多选已勾选的选项原文。 */
-  const multiSelections = new Map();
 
-  const selectionKey = (key, questionId) => `${key}\u0000${questionId}`;
-
-  /** 取某会话当前的多选勾选状态（按问题 id 分组）。 */
-  function selectionOf(key) {
-    const result = {};
-    for (const [id, labels] of multiSelections.entries()) {
-      const separator = id.indexOf('\u0000');
-      if (id.slice(0, separator) !== key) continue;
-      if (labels.size === 0) continue; // 空集合不必带进渲染参数
-      result[id.slice(separator + 1)] = [...labels];
-    }
-    return result;
-  }
 
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
@@ -175,15 +160,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         answered,
         final,
         messageId: existing,
-        selection: selectionOf(key),
       });
       if (sent?.messageId) questionCards.set(key, sent.messageId);
       if (final) {
         questionCards.delete(key);
         questionBatches.delete(key);
-        for (const id of [...multiSelections.keys()]) {
-          if (id.slice(0, id.indexOf('\u0000')) === key) multiSelections.delete(id);
-        }
       }
     },
     sendApproval: async ({ key, request }) => {
@@ -510,73 +491,17 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 
-    // 多选：点选项只切换勾选状态并就地重渲染，点「提交」才算答完。
-    if (value.dsh === 'toggle') {
-      const label = typeof value.label === 'string' ? value.label : '';
-      const questionId = typeof value.questionId === 'string' ? value.questionId : '';
-      const key = `p2p:${operatorId}`;
-      const batchKey = questionBatches.has(key) ? key : `group:${chatId}`;
-      const batch = questionBatches.get(batchKey);
-      if (!label || !questionId || !batch) {
-        logger.info?.(`[dsh-chat-feishu] 多选开关没有对应的问题（${bot.id} ${questionId || '未知'}）`);
-        return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
-      }
-      const id = selectionKey(batchKey, questionId);
-      const chosen = new Set(multiSelections.get(id) ?? []);
-      if (chosen.has(label)) chosen.delete(label); else chosen.add(label);
-      multiSelections.set(id, chosen);
-      // 就地重渲染：把勾选状态画回同一张卡
-      const messageId = questionCards.get(batchKey) ?? event.messageId;
-      await gateway.sendQuestionsCard({
-        ...routeOf(batchKey),
-        questions: batch.questions,
-        answered: batch.answered,
-        final: false,
-        messageId,
-        selection: selectionOf(batchKey),
-      });
-      return { toast: { type: 'success', content: chosen.has(label) ? `已选：${label}` : `取消：${label}` } };
-    }
-
-    if (value.dsh === 'submit') {
-      const questionId = typeof value.questionId === 'string' ? value.questionId : '';
-      const groupKey = `group:${chatId}`;
-      const directKey = `p2p:${operatorId}`;
-      const batchKey = questionBatches.has(groupKey) ? groupKey : (questionBatches.has(directKey) ? directKey : null);
-      if (!batchKey) {
-        logger.info?.(`[dsh-chat-feishu] 多选提交没有对应批次（${bot.id} ${questionId || '未知'}）`);
-        return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
-      }
-      const chosen = [...(multiSelections.get(selectionKey(batchKey, questionId)) ?? [])];
-      if (chosen.length === 0) {
-        return { toast: { type: 'info', content: '还没有勾选任何选项。' } };
-      }
-      multiSelections.delete(selectionKey(batchKey, questionId));
-      if (deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: batchKey,
-        text: chosen.join('、'),
-        questionId: questionId || undefined,
-      })) {
-        logger.info?.(`[dsh-chat-feishu] 多选提交已认领：${bot.id} ${batchKey} → ${chosen.join('、')}`);
-        lastHandledAt = new Date().toISOString();
-        return { toast: { type: 'success', content: `已提交：${chosen.join('、')}` } };
-      }
-      return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
-    }
-
-    if (value.dsh === 'hint-text') {
-      return { toast: { type: 'info', content: '直接在聊天里回复文字即可，我会把它当作答案。' } };
-    }
-
-    // 表单提交（自由文本输入框）：value 里既有按钮自带字段，也有 text_* 表单字段。
-    const formFields = Object.entries(value)
+    // 表单提交（多选控件 / 文本输入框）：值在 action.form_value[组件name]，
+    // 组件名是 `multi_<问题id>` / `text_<问题id>`——问题 id 直接从名字里取，不依赖按钮的 value。
+    const formValue = event?.action?.formValue ?? {};
+    const formEntries = Object.entries(formValue)
       .filter(([field]) => field.startsWith('multi_') || field.startsWith('text_'));
     let label = '';
-    if (value.dsh === 'form') {
+    let questionId;
+    if (formEntries.length > 0) {
       const picked = [];
-      for (const [field, raw] of formFields) {
+      for (const [field, raw] of formEntries) {
+        questionId = field.slice(field.indexOf('_') + 1);
         if (field.startsWith('multi_')) {
           for (const item of Array.isArray(raw) ? raw : [raw]) {
             if (typeof item === 'string' && item.trim()) picked.push(item.trim());
@@ -585,7 +510,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           picked.push(raw.trim());
         }
       }
-      // 多选拼接用「、」：hub 的 parseAnswer 对多选正是按 、/, 拆开，因此解析路径与按钮一致。
+      // 多选拼接用「、」：hub 的 parseAnswer 对多选正是按 、/, 拆开，解析路径与按钮一致。
       label = picked.join('、');
       if (!label) {
         logger.info?.(`[dsh-chat-feishu] 卡片表单提交没有内容（${bot.id} ${operatorId}）`);
@@ -593,6 +518,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       }
     } else if (value.dsh === 'answer') {
       label = typeof value.label === 'string' ? value.label : '';
+      questionId = typeof value.questionId === 'string' ? value.questionId : undefined;
     } else {
       return undefined;
     }
@@ -618,7 +544,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         botId: bot.id,
         key: candidate.key,
         text: label,
-        questionId: typeof value.questionId === 'string' ? value.questionId : undefined,
+        questionId: questionId || (typeof value.questionId === 'string' ? value.questionId : undefined),
       })) {
         logger.info?.(`[dsh-chat-feishu] 卡片回答已认领：${bot.id} ${candidate.key} → ${label}`);
         lastHandledAt = new Date().toISOString();

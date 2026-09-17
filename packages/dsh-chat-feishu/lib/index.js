@@ -126717,18 +126717,6 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   }
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
-  const multiSelections = /* @__PURE__ */ new Map();
-  const selectionKey = (key, questionId) => `${key}\0${questionId}`;
-  function selectionOf(key) {
-    const result = {};
-    for (const [id, labels] of multiSelections.entries()) {
-      const separator = id.indexOf("\0");
-      if (id.slice(0, separator) !== key) continue;
-      if (labels.size === 0) continue;
-      result[id.slice(separator + 1)] = [...labels];
-    }
-    return result;
-  }
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -126748,16 +126736,12 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         questions,
         answered,
         final,
-        messageId: existing,
-        selection: selectionOf(key)
+        messageId: existing
       });
       if (sent?.messageId) questionCards.set(key, sent.messageId);
       if (final) {
         questionCards.delete(key);
         questionBatches.delete(key);
-        for (const id of [...multiSelections.keys()]) {
-          if (id.slice(0, id.indexOf("\0")) === key) multiSelections.delete(id);
-        }
       }
     },
     sendApproval: async ({ key, request }) => {
@@ -127033,67 +127017,14 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await markAnswered(event, value.dsh, decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD");
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
-    if (value.dsh === "toggle") {
-      const label2 = typeof value.label === "string" ? value.label : "";
-      const questionId = typeof value.questionId === "string" ? value.questionId : "";
-      const key = `p2p:${operatorId}`;
-      const batchKey = questionBatches.has(key) ? key : `group:${chatId}`;
-      const batch = questionBatches.get(batchKey);
-      if (!label2 || !questionId || !batch) {
-        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u5F00\u5173\u6CA1\u6709\u5BF9\u5E94\u7684\u95EE\u9898\uFF08${bot.id} ${questionId || "\u672A\u77E5"}\uFF09`);
-        return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
-      }
-      const id = selectionKey(batchKey, questionId);
-      const chosen = new Set(multiSelections.get(id) ?? []);
-      if (chosen.has(label2)) chosen.delete(label2);
-      else chosen.add(label2);
-      multiSelections.set(id, chosen);
-      const messageId = questionCards.get(batchKey) ?? event.messageId;
-      await gateway.sendQuestionsCard({
-        ...routeOf(batchKey),
-        questions: batch.questions,
-        answered: batch.answered,
-        final: false,
-        messageId,
-        selection: selectionOf(batchKey)
-      });
-      return { toast: { type: "success", content: chosen.has(label2) ? `\u5DF2\u9009\uFF1A${label2}` : `\u53D6\u6D88\uFF1A${label2}` } };
-    }
-    if (value.dsh === "submit") {
-      const questionId = typeof value.questionId === "string" ? value.questionId : "";
-      const groupKey = `group:${chatId}`;
-      const directKey = `p2p:${operatorId}`;
-      const batchKey = questionBatches.has(groupKey) ? groupKey : questionBatches.has(directKey) ? directKey : null;
-      if (!batchKey) {
-        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u63D0\u4EA4\u6CA1\u6709\u5BF9\u5E94\u6279\u6B21\uFF08${bot.id} ${questionId || "\u672A\u77E5"}\uFF09`);
-        return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
-      }
-      const chosen = [...multiSelections.get(selectionKey(batchKey, questionId)) ?? []];
-      if (chosen.length === 0) {
-        return { toast: { type: "info", content: "\u8FD8\u6CA1\u6709\u52FE\u9009\u4EFB\u4F55\u9009\u9879\u3002" } };
-      }
-      multiSelections.delete(selectionKey(batchKey, questionId));
-      if (deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: batchKey,
-        text: chosen.join("\u3001"),
-        questionId: questionId || void 0
-      })) {
-        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u63D0\u4EA4\u5DF2\u8BA4\u9886\uFF1A${bot.id} ${batchKey} \u2192 ${chosen.join("\u3001")}`);
-        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
-        return { toast: { type: "success", content: `\u5DF2\u63D0\u4EA4\uFF1A${chosen.join("\u3001")}` } };
-      }
-      return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
-    }
-    if (value.dsh === "hint-text") {
-      return { toast: { type: "info", content: "\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\u6587\u5B57\u5373\u53EF\uFF0C\u6211\u4F1A\u628A\u5B83\u5F53\u4F5C\u7B54\u6848\u3002" } };
-    }
-    const formFields = Object.entries(value).filter(([field]) => field.startsWith("multi_") || field.startsWith("text_"));
+    const formValue = event?.action?.formValue ?? {};
+    const formEntries = Object.entries(formValue).filter(([field]) => field.startsWith("multi_") || field.startsWith("text_"));
     let label = "";
-    if (value.dsh === "form") {
+    let questionId;
+    if (formEntries.length > 0) {
       const picked = [];
-      for (const [field, raw] of formFields) {
+      for (const [field, raw] of formEntries) {
+        questionId = field.slice(field.indexOf("_") + 1);
         if (field.startsWith("multi_")) {
           for (const item of Array.isArray(raw) ? raw : [raw]) {
             if (typeof item === "string" && item.trim()) picked.push(item.trim());
@@ -127109,6 +127040,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       }
     } else if (value.dsh === "answer") {
       label = typeof value.label === "string" ? value.label : "";
+      questionId = typeof value.questionId === "string" ? value.questionId : void 0;
     } else {
       return void 0;
     }
@@ -127132,7 +127064,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         botId: bot.id,
         key: candidate.key,
         text: label,
-        questionId: typeof value.questionId === "string" ? value.questionId : void 0
+        questionId: questionId || (typeof value.questionId === "string" ? value.questionId : void 0)
       })) {
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${bot.id} ${candidate.key} \u2192 ${label}`);
         lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -127338,6 +127270,8 @@ function normalizeCardAction(raw) {
     action: Object.freeze({
       tag: action.tag ?? "unknown",
       value: action.value ?? {},
+      // 表单（form）内组件的值在这里：action.form_value[组件name]。
+      formValue: action.form_value ?? action.formValue ?? {},
       ...action.name === void 0 ? {} : { name: action.name }
     }),
     raw
@@ -127594,29 +127528,20 @@ function createLarkGateway({
       return { messageId: response?.data?.message_id, imageKey };
     },
     /**
-     * 提问卡片：**一页一题**，答完就地翻到下一题。
+     * 提问卡片：**一页一题**，答完就地翻到下一题。Card 2.0。
      *
-     * 为什么不把一批问题一次性铺开（真机反馈）：
-     * - 三个问题一次抛出来，聊天记录里很长一屏，用户不知道从哪答起；
-     * - 单选题之外的问题当时只能退化成一堆编号文字，没有可点的控件。
-     * 现在每题按类型给原生控件，答完 update 同一张卡翻页：
-     * - 单选 → 按钮（点一下即答）；
-     * - 多选 → 表单里的复选框 + 「提交」；
-     * - 自由文本 → 表单里的输入框 + 「提交」。
+     * 组件选择有依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0 组件）：
+     * - 单选 → `button` + `behaviors:[{type:'callback'}]`；
+     * - 多选 → `form` 内的 **`multi_select_static`**（原生多选控件）+ `form_action_type:'submit'` 的提交按钮；
+     * - 自由文本 → `form` 内的 `input` + 提交按钮；
+     * - 表单值回调在 `action.form_value[组件name]`（不是 `action.value`）。
+     * 早前用 Card 1.0 的 `checker` 当"多选组"是错的：它是**任务勾选器**（单个），
+     * 且 1.0 里没有表单，所以既渲染不出选项、也拿不到提交值。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
-     *   `messageId` 有值就原地更新（patch），没有就新建。
      * @returns { messageId }。
      */
-    async sendQuestionsCard({
-      chatId,
-      openId,
-      questions = [],
-      answered = {},
-      final = false,
-      messageId = null,
-      selection = {}
-    }) {
+    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
       const total = questions.length;
@@ -127631,104 +127556,98 @@ function createLarkGateway({
       };
       if (answeredList.length > 0) {
         elements.push({
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: answeredList.map((question) => {
-              const index = questions.indexOf(question) + 1;
-              return `\u2705 **${index}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`;
-            }).join("\n")
-          }
+          tag: "markdown",
+          content: answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n")
         });
+        elements.push({ tag: "hr" });
       }
       if (current) {
         const index = questions.indexOf(current) + 1;
-        const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, String(current?.question ?? "")];
+        const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, "", String(current?.question ?? "")];
         if (current?.detail) body.push("", String(current.detail));
         const options = Array.isArray(current?.options) ? current.options : [];
+        const questionId = String(current?.id ?? "");
         if (options.length > 0 && current?.multiSelect !== true) {
-          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
-          elements.push({
-            tag: "action",
-            actions: options.slice(0, 8).map((option, optionIndex) => ({
+          elements.push({ tag: "markdown", content: body.join("\n") });
+          options.slice(0, 8).forEach((option, optionIndex) => {
+            const label = String(option.label).slice(0, 60);
+            elements.push({
               tag: "button",
-              type: "default",
-              text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
-              value: {
-                dsh: "answer",
-                questionId: String(current?.id ?? ""),
-                label: String(option.label),
-                index: String(optionIndex + 1)
-              }
-            }))
+              text: { tag: "plain_text", content: option.description ? `${label} \u2014\u2014 ${option.description}`.slice(0, 100) : label },
+              type: optionIndex === 0 ? "primary_filled" : "default",
+              width: "fill",
+              behaviors: [{
+                type: "callback",
+                value: { dsh: "answer", questionId, label, index: String(optionIndex + 1) }
+              }]
+            });
           });
         } else if (options.length > 0) {
-          const chosen = new Set(Array.isArray(selection?.[current?.id]) ? selection[current.id] : []);
-          body.push("", "\u53EF\u591A\u9009\uFF1A\u70B9\u9009\u9879\u5207\u6362\u9009\u4E2D\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
-          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+          body.push("", "\u53EF\u591A\u9009\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
+          elements.push({ tag: "markdown", content: body.join("\n") });
           elements.push({
-            tag: "action",
-            actions: [
-              ...options.slice(0, 8).map((option) => {
-                const label = String(option.label).slice(0, 60);
-                const on = chosen.has(label);
-                return {
-                  tag: "button",
-                  type: on ? "primary" : "default",
-                  text: { tag: "plain_text", content: `${on ? "\u2611" : "\u2610"} ${label}` },
-                  value: { dsh: "toggle", questionId: String(current?.id ?? ""), label }
-                };
-              }),
+            tag: "form",
+            name: `dsh_form_${questionId}`,
+            elements: [
+              {
+                tag: "multi_select_static",
+                name: `multi_${questionId}`,
+                placeholder: { tag: "plain_text", content: "\u8BF7\u9009\u62E9\uFF08\u53EF\u591A\u9009\uFF09" },
+                options: options.slice(0, 20).map((option) => ({
+                  text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
+                  value: String(option.label).slice(0, 60)
+                }))
+              },
               {
                 tag: "button",
-                type: "primary",
-                text: { tag: "plain_text", content: `\u63D0\u4EA4\uFF08\u5DF2\u9009 ${chosen.size}\uFF09` },
-                value: { dsh: "submit", questionId: String(current?.id ?? "") }
+                name: "submit",
+                form_action_type: "submit",
+                type: "primary_filled",
+                width: "fill",
+                text: { tag: "plain_text", content: "\u63D0\u4EA4" }
               }
             ]
           });
         } else {
           body.push("", "\u5728\u4E0B\u9762\u8F93\u5165\u540E\u70B9\u300C\u63D0\u4EA4\u300D\uFF08\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\uFF09\u3002");
-          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+          elements.push({ tag: "markdown", content: body.join("\n") });
           elements.push({
             tag: "form",
-            name: `dsh_form_${current?.id ?? "q"}`,
+            name: `dsh_form_${questionId}`,
             elements: [
               {
                 tag: "input",
-                name: `text_${current?.id ?? "q"}`,
-                placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" }
+                name: `text_${questionId}`,
+                placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" },
+                label: { tag: "plain_text", content: "\u4F60\u7684\u56DE\u7B54" },
+                input_type: "multiline_text",
+                rows: 2
               },
               {
                 tag: "button",
                 name: "submit",
-                action_type: "form_submit",
-                type: "primary",
-                text: { tag: "plain_text", content: "\u63D0\u4EA4" },
-                value: { dsh: "form", questionId: String(current?.id ?? "") }
-              },
-              {
-                // 兜底：万一表单值没随提交带回来，用户还能点这个用"最近一条聊天消息"当答案
-                tag: "button",
-                type: "default",
-                text: { tag: "plain_text", content: "\u6539\u7528\u804A\u5929\u56DE\u590D" },
-                value: { dsh: "hint-text", questionId: String(current?.id ?? "") }
+                form_action_type: "submit",
+                type: "primary_filled",
+                width: "fill",
+                text: { tag: "plain_text", content: "\u63D0\u4EA4" }
               }
             ]
           });
         }
         elements.push({
-          tag: "note",
-          elements: [{ tag: "plain_text", content: "\u56DE\u7B54\u540E\u8FD9\u5F20\u5361\u7247\u4F1A\u81EA\u52A8\u7FFB\u5230\u4E0B\u4E00\u9898\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" }]
+          tag: "div",
+          text: {
+            tag: "plain_text",
+            content: "\u56DE\u7B54\u540E\u8FD9\u5F20\u5361\u7247\u4F1A\u81EA\u52A8\u7FFB\u5230\u4E0B\u4E00\u9898\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002",
+            text_size: "notation"
+          }
         });
       } else {
-        elements.push({
-          tag: "div",
-          text: { tag: "lark_md", content: "\u5168\u90E8\u95EE\u9898\u90FD\u5DF2\u56DE\u7B54\uFF0C\u6B63\u5728\u7EE7\u7EED\u5904\u7406\u2026" }
-        });
+        elements.push({ tag: "markdown", content: "\u5168\u90E8\u95EE\u9898\u90FD\u5DF2\u56DE\u7B54\uFF0C\u6B63\u5728\u7EE7\u7EED\u5904\u7406\u2026" });
       }
       const card = {
-        config: { wide_screen_mode: true, update_multi: true },
+        schema: "2.0",
+        config: { update_multi: true, width_mode: "default" },
         header: {
           template: final || !current ? "green" : "blue",
           title: {
@@ -127736,7 +127655,7 @@ function createLarkGateway({
             content: final || !current ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u7B2C ${questions.indexOf(current) + 1}/${total} \u9898\uFF09`
           }
         },
-        elements
+        body: { direction: "vertical", elements }
       };
       if (messageId) {
         const patched = await client.im.v1.message.patch({

@@ -61,6 +61,8 @@ export function normalizeCardAction(raw) {
     action: Object.freeze({
       tag: action.tag ?? 'unknown',
       value: action.value ?? {},
+      // 表单（form）内组件的值在这里：action.form_value[组件name]。
+      formValue: action.form_value ?? action.formValue ?? {},
       ...(action.name === undefined ? {} : { name: action.name }),
     }),
     raw,
@@ -365,23 +367,20 @@ export function createLarkGateway({
     },
 
     /**
-     * 提问卡片：**一页一题**，答完就地翻到下一题。
+     * 提问卡片：**一页一题**，答完就地翻到下一题。Card 2.0。
      *
-     * 为什么不把一批问题一次性铺开（真机反馈）：
-     * - 三个问题一次抛出来，聊天记录里很长一屏，用户不知道从哪答起；
-     * - 单选题之外的问题当时只能退化成一堆编号文字，没有可点的控件。
-     * 现在每题按类型给原生控件，答完 update 同一张卡翻页：
-     * - 单选 → 按钮（点一下即答）；
-     * - 多选 → 表单里的复选框 + 「提交」；
-     * - 自由文本 → 表单里的输入框 + 「提交」。
+     * 组件选择有依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0 组件）：
+     * - 单选 → `button` + `behaviors:[{type:'callback'}]`；
+     * - 多选 → `form` 内的 **`multi_select_static`**（原生多选控件）+ `form_action_type:'submit'` 的提交按钮；
+     * - 自由文本 → `form` 内的 `input` + 提交按钮；
+     * - 表单值回调在 `action.form_value[组件name]`（不是 `action.value`）。
+     * 早前用 Card 1.0 的 `checker` 当"多选组"是错的：它是**任务勾选器**（单个），
+     * 且 1.0 里没有表单，所以既渲染不出选项、也拿不到提交值。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
-     *   `messageId` 有值就原地更新（patch），没有就新建。
      * @returns { messageId }。
      */
-    async sendQuestionsCard({
-      chatId, openId, questions = [], answered = {}, final = false, messageId = null, selection = {},
-    }) {
+    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
       const total = questions.length;
@@ -389,7 +388,6 @@ export function createLarkGateway({
       const current = questions.find((question) => answered[question?.id] === undefined) ?? null;
       const elements = [];
 
-      /** 把答案渲染成一行可读文本。 */
       const answerText = (question) => {
         const answer = answered[question?.id] ?? {};
         const chosen = [...(answer.selected ?? [])];
@@ -399,116 +397,106 @@ export function createLarkGateway({
 
       if (answeredList.length > 0) {
         elements.push({
-          tag: 'div',
-          text: {
-            tag: 'lark_md',
-            content: answeredList
-              .map((question) => {
-                const index = questions.indexOf(question) + 1;
-                return `✅ **${index}. ${question?.header || '问题'}** → ${answerText(question)}`;
-              })
-              .join('\n'),
-          },
+          tag: 'markdown',
+          content: answeredList
+            .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
+            .join('\n'),
         });
+        elements.push({ tag: 'hr' });
       }
 
       if (current) {
         const index = questions.indexOf(current) + 1;
-        const body = [`**${index}. ${current?.header || '需要确认'}**`, String(current?.question ?? '')];
+        const body = [`**${index}. ${current?.header || '需要确认'}**`, '', String(current?.question ?? '')];
         if (current?.detail) body.push('', String(current.detail));
         const options = Array.isArray(current?.options) ? current.options : [];
+        const questionId = String(current?.id ?? '');
 
         if (options.length > 0 && current?.multiSelect !== true) {
-          // 单选：按钮直接表达，不需要提交
-          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
-          elements.push({
-            tag: 'action',
-            actions: options.slice(0, 8).map((option, optionIndex) => ({
+          // 单选：直接给按钮（点了即答，无需提交）
+          elements.push({ tag: 'markdown', content: body.join('\n') });
+          options.slice(0, 8).forEach((option, optionIndex) => {
+            const label = String(option.label).slice(0, 60);
+            elements.push({
               tag: 'button',
-              type: 'default',
-              text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
-              value: {
-                dsh: 'answer',
-                questionId: String(current?.id ?? ''),
-                label: String(option.label),
-                index: String(optionIndex + 1),
-              },
-            })),
+              text: { tag: 'plain_text', content: option.description ? `${label} —— ${option.description}`.slice(0, 100) : label },
+              type: optionIndex === 0 ? 'primary_filled' : 'default',
+              width: 'fill',
+              behaviors: [{
+                type: 'callback',
+                value: { dsh: 'answer', questionId, label, index: String(optionIndex + 1) },
+              }],
+            });
           });
         } else if (options.length > 0) {
-          // 多选：**开关按钮 + 提交**。
-          // 为什么不用表单里的复选框：实测 checker 的选项渲染不出来，提交上来的值也不在
-          // action.value 里（SDK 的类型甚至没有表单元素，形状无法从类型推断）。
-          // 按钮回调是已经验证可用的通道，因此用"点一下切换选中状态、点提交才算答完"，
-          // 状态由桥持有，每次点击就地重渲染这张卡。
-          const chosen = new Set(Array.isArray(selection?.[current?.id]) ? selection[current.id] : []);
-          body.push('', '可多选：点选项切换选中，选完点「提交」。');
-          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
-          elements.push({
-            tag: 'action',
-            actions: [
-              ...options.slice(0, 8).map((option) => {
-                const label = String(option.label).slice(0, 60);
-                const on = chosen.has(label);
-                return {
-                  tag: 'button',
-                  type: on ? 'primary' : 'default',
-                  text: { tag: 'plain_text', content: `${on ? '☑' : '☐'} ${label}` },
-                  value: { dsh: 'toggle', questionId: String(current?.id ?? ''), label },
-                };
-              }),
-              {
-                tag: 'button',
-                type: 'primary',
-                text: { tag: 'plain_text', content: `提交（已选 ${chosen.size}）` },
-                value: { dsh: 'submit', questionId: String(current?.id ?? '') },
-              },
-            ],
-          });
-        } else {
-          // 自由文本：输入框 + 提交
-          body.push('', '在下面输入后点「提交」（也可以直接在聊天里回复）。');
-          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+          // 多选：原生多选控件 + 提交
+          body.push('', '可多选，选完点「提交」。');
+          elements.push({ tag: 'markdown', content: body.join('\n') });
           elements.push({
             tag: 'form',
-            name: `dsh_form_${current?.id ?? 'q'}`,
+            name: `dsh_form_${questionId}`,
             elements: [
               {
-                tag: 'input',
-                name: `text_${current?.id ?? 'q'}`,
-                placeholder: { tag: 'plain_text', content: '在这里输入' },
+                tag: 'multi_select_static',
+                name: `multi_${questionId}`,
+                placeholder: { tag: 'plain_text', content: '请选择（可多选）' },
+                options: options.slice(0, 20).map((option) => ({
+                  text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
+                  value: String(option.label).slice(0, 60),
+                })),
               },
               {
                 tag: 'button',
                 name: 'submit',
-                action_type: 'form_submit',
-                type: 'primary',
+                form_action_type: 'submit',
+                type: 'primary_filled',
+                width: 'fill',
                 text: { tag: 'plain_text', content: '提交' },
-                value: { dsh: 'form', questionId: String(current?.id ?? '') },
+              },
+            ],
+          });
+        } else {
+          // 自由文本：原生输入框 + 提交
+          body.push('', '在下面输入后点「提交」（也可以直接在聊天里回复）。');
+          elements.push({ tag: 'markdown', content: body.join('\n') });
+          elements.push({
+            tag: 'form',
+            name: `dsh_form_${questionId}`,
+            elements: [
+              {
+                tag: 'input',
+                name: `text_${questionId}`,
+                placeholder: { tag: 'plain_text', content: '在这里输入' },
+                label: { tag: 'plain_text', content: '你的回答' },
+                input_type: 'multiline_text',
+                rows: 2,
               },
               {
-                // 兜底：万一表单值没随提交带回来，用户还能点这个用"最近一条聊天消息"当答案
                 tag: 'button',
-                type: 'default',
-                text: { tag: 'plain_text', content: '改用聊天回复' },
-                value: { dsh: 'hint-text', questionId: String(current?.id ?? '') },
+                name: 'submit',
+                form_action_type: 'submit',
+                type: 'primary_filled',
+                width: 'fill',
+                text: { tag: 'plain_text', content: '提交' },
               },
             ],
           });
         }
         elements.push({
-          tag: 'note',
-          elements: [{ tag: 'plain_text', content: '回答后这张卡片会自动翻到下一题；也可以直接回复文字。' }],
+          tag: 'div',
+          text: {
+            tag: 'plain_text',
+            content: '回答后这张卡片会自动翻到下一题；也可以直接回复文字。',
+            text_size: 'notation',
+          },
         });
       } else {
-        elements.push({
-          tag: 'div',
-          text: { tag: 'lark_md', content: '全部问题都已回答，正在继续处理…' },
-        });
+        elements.push({ tag: 'markdown', content: '全部问题都已回答，正在继续处理…' });
       }
 
       const card = {
-        config: { wide_screen_mode: true, update_multi: true },
+        schema: '2.0',
+        config: { update_multi: true, width_mode: 'default' },
         header: {
           template: final || !current ? 'green' : 'blue',
           title: {
@@ -518,7 +506,7 @@ export function createLarkGateway({
               : `❓ 需要你确认（第 ${questions.indexOf(current) + 1}/${total} 题）`,
           },
         },
-        elements,
+        body: { direction: 'vertical', elements },
       };
       if (messageId) {
         const patched = await client.im.v1.message.patch({
