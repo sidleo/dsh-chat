@@ -203,12 +203,16 @@ export function createTurnPresenter({
         });
         const questions = payload?.questions ?? [];
         const current = rendered.current;
-        // final 或没有待答题 → 收起提问区（只保留已答摘要一行，答完就不再占地方）
-        question = current
-          ? { elements: rendered.elements, current, index: questions.indexOf(current) + 1, total: questions.length }
-          : (payload?.final === true || rendered.elements.length === 0
-            ? null
-            : { elements: rendered.elements, current: null, index: 0, total: questions.length });
+        // 全部答完时**不删掉提问区**：渲染器会把它折叠起来（collapsible_panel，
+        // 默认收起、点标题可展开回看）。真机反馈要的正是"收起"而不是"消失"。
+        question = rendered.elements.length > 0
+          ? {
+            elements: rendered.elements,
+            current,
+            index: current ? questions.indexOf(current) + 1 : 0,
+            total: questions.length,
+          }
+          : null;
         const ok = await patch(lines, lastAnswer);
         return ok;
       });

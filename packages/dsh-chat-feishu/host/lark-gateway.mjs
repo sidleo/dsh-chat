@@ -215,11 +215,28 @@ export function createLarkGateway({
     };
 
     if (answeredList.length > 0) {
+      const summary = answeredList
+        .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
+        .join('\n');
+      // 已答部分放进**折叠面板**：还有题要答时默认展开（方便对照），全部答完后默认收起。
+      // 关键：**收起而不是消失**——面板仍在卡里，点标题还能展开回看（真机要求）。
+      // 面板内不能放 form，所以交互控件始终放在面板外面。
       elements.push({
-        tag: 'markdown',
-        content: answeredList
-          .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
-          .join('\n'),
+        tag: 'collapsible_panel',
+        expanded: Boolean(current),
+        border: { color: 'grey', corner_radius: '4px' },
+        header: {
+          title: {
+            tag: 'markdown',
+            content: current
+              ? `✅ 已回答 ${answeredList.length}/${questions.length} 题（点标题展开回看）`
+              : `✅ 已全部回答（共 ${questions.length} 题，点标题展开回看）`,
+          },
+          width: 'fill',
+          icon_position: 'right',
+          icon_expanded_angle: -180,
+        },
+        elements: [{ tag: 'markdown', content: summary }],
       });
     }
     if (!current) return { elements, current: null };

@@ -126630,7 +126630,12 @@ function createTurnPresenter({
         });
         const questions = payload?.questions ?? [];
         const current = rendered.current;
-        question = current ? { elements: rendered.elements, current, index: questions.indexOf(current) + 1, total: questions.length } : payload?.final === true || rendered.elements.length === 0 ? null : { elements: rendered.elements, current: null, index: 0, total: questions.length };
+        question = rendered.elements.length > 0 ? {
+          elements: rendered.elements,
+          current,
+          index: current ? questions.indexOf(current) + 1 : 0,
+          total: questions.length
+        } : null;
         const ok = await patch(lines, lastAnswer);
         return ok;
       });
@@ -127448,9 +127453,21 @@ function createLarkGateway({
       return chosen.join("\u3001") || "\uFF08\u7A7A\uFF09";
     };
     if (answeredList.length > 0) {
+      const summary = answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n");
       elements.push({
-        tag: "markdown",
-        content: answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n")
+        tag: "collapsible_panel",
+        expanded: Boolean(current),
+        border: { color: "grey", corner_radius: "4px" },
+        header: {
+          title: {
+            tag: "markdown",
+            content: current ? `\u2705 \u5DF2\u56DE\u7B54 ${answeredList.length}/${questions.length} \u9898\uFF08\u70B9\u6807\u9898\u5C55\u5F00\u56DE\u770B\uFF09` : `\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54\uFF08\u5171 ${questions.length} \u9898\uFF0C\u70B9\u6807\u9898\u5C55\u5F00\u56DE\u770B\uFF09`
+          },
+          width: "fill",
+          icon_position: "right",
+          icon_expanded_angle: -180
+        },
+        elements: [{ tag: "markdown", content: summary }]
       });
     }
     if (!current) return { elements, current: null };

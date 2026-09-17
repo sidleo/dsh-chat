@@ -1247,13 +1247,20 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
     },
     renderQuestionElements({ questions, answered, final }) {
       const elements = [];
-      // 真实现会把"已答摘要"先画出来（这里照抄这个行为，否则测不出收起后的样子）
-      for (const question of questions) {
-        if (answered[question.id] === undefined) continue;
-        const chosen = [...(answered[question.id].selected ?? [])];
-        elements.push({ tag: 'markdown', content: `✅ ${question.question} → ${chosen.join('、')}` });
-      }
+      const answeredList = questions.filter((q) => answered[q.id] !== undefined);
       const current = final ? null : questions.find((q) => answered[q.id] === undefined);
+      // 已答部分进折叠面板（真实现的行为），交互控件在面板外
+      if (answeredList.length > 0) {
+        elements.push({
+          tag: 'collapsible_panel',
+          expanded: Boolean(current),
+          header: { title: { tag: 'markdown', content: current ? '已回答（点标题展开）' : '✅ 已全部回答（点标题展开回看）' } },
+          elements: answeredList.map((q) => ({
+            tag: 'markdown',
+            content: `✅ ${q.question} → ${[...(answered[q.id].selected ?? [])].join('、')}`,
+          })),
+        });
+      }
       if (current) {
         elements.push({ tag: 'markdown', content: `题目：${current.question}` });
         elements.push({ tag: 'button', text: { tag: 'plain_text', content: 'A' } });
@@ -1287,11 +1294,14 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
   assert.doesNotMatch(second, /题目：选一个/, '答过的题不再占位');
   assert.match(second, /✅/);
 
-  // 收尾：提问区完全收起，卡里只剩进度/答案
+  // 收尾：提问区**收起但不消失**——折叠面板仍在卡里，交互控件消失
   await presenter.finish('最终答案', { kind: 'completed' });
   const last = JSON.stringify(patches.at(-1).card);
-  assert.doesNotMatch(last, /题目：选一个/);
+  assert.doesNotMatch(last, /题目：选一个/, '答过的交互控件要收掉');
   assert.doesNotMatch(last, /等你确认/);
+  assert.match(last, /collapsible_panel/, '收起要保留可展开的面板，而不是整块删掉');
+  assert.match(last, /"expanded":false/, '默认收起');
+  assert.match(last, /已全部回答（点标题展开回看）/, '标题要告诉用户还能展开回看');
   assert.match(last, /最终答案/);
 });
 

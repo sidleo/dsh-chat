@@ -115,7 +115,9 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.match(second, /"name":"chk_1_multi"/);
   assert.match(second, /"content":"X"/, '每个勾选器带自己的选项文案');
   assert.match(second, /"form_action_type":"submit"/);
-  assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在卡里留一行答案');
+  assert.match(second, /"tag":"collapsible_panel"/, '已答部分放折叠面板里（收起但不消失）');
+  assert.match(second, /"expanded":true/, '还有题要答时面板展开，方便对照');
+  assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在面板里留一行答案');
   assert.doesNotMatch(second, /还有别的吗/);
 
   // 第三页：自由文本 → 表单 + 原生输入框 + 提交
@@ -140,5 +142,8 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   card = JSON.parse(calls.at(-1).data.content);
   assert.equal(card.header.template, 'green');
   assert.match(card.header.title.content, /已全部回答/);
-  assert.match(JSON.stringify(card), /随便聊聊/);
+  const done = JSON.stringify(card);
+  assert.match(done, /随便聊聊/, '答案仍可回看');
+  assert.match(done, /"expanded":false/, '全部答完默认收起');
+  assert.match(done, /点标题展开回看/, '要告诉用户还能展开');
 });
