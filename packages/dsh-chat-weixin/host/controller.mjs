@@ -199,8 +199,46 @@ export function createWeixinController({ deps, logger = console, config = {}, in
     await Promise.all(accounts.map((account) => startAccount(account)));
   }
 
+  const delivery = Object.freeze({
+    /** 主动发文本：私聊对端就是 `from_user_id`，回复要带该用户最近一次的 context_token。 */
+    async send({ botId, target, text }) {
+      const record = runtimes.get(botId);
+      if (!record?.runtime || record.phase !== 'running') {
+        const error = new Error(`账号 ${botId} 当前不在线，无法投递。`);
+        error.code = 'weixin/account-offline';
+        throw error;
+      }
+      const userId = target.route?.userId;
+      if (!userId) {
+        const error = new Error('投递目标的 route 缺少 userId。');
+        error.code = 'chat/bad-target';
+        throw error;
+      }
+      return record.runtime.sendProactive({ userId, text });
+    },
+
+    /** 从该账号的会话记录里发现候选目标。 */
+    async discover({ botId }) {
+      const record = runtimes.get(botId);
+      if (!record?.state) return [];
+      return Object.keys(record.state.sessions?.() ?? {})
+        .filter((key) => key.startsWith('p2p:'))
+        .map((key) => {
+          const userId = key.slice(4);
+          const short = userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
+          return {
+            id: key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64),
+            name: `私聊 · ${short}`,
+            kind: 'direct',
+            route: { userId },
+          };
+        });
+    },
+  });
+
   return Object.freeze({
     start: startAll,
+    delivery,
     async stop() {
       await Promise.all([...runtimes.keys()].map((botId) => stopAccount(botId)));
     },

@@ -131,6 +131,12 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
     storageFor(channelId),                   // 渠道通常用 deps.storage（已按渠道绑定）
   },
 
+  delivery: {
+    send({ channelId, botId, targetId, text }),   // 定时任务/脚本用这个
+    list({ channelId, botId }), save({ channelId, botId, target }),
+    remove({ channelId, botId, targetId }), supports(channelId),
+  },
+
   contextEnhancement: { /* §4 全部导出，见 CONTRACT 附录 A */ },
   guidance: { publish(sessionId, text), forget(sessionId) },
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
@@ -175,8 +181,19 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   start(): Promise<void>,   // 可选
   stop(): Promise<void>,    // 可选
   endpoints: { '<method>': async (payload, { signal, channelId }) => result },  // 可选
+  delivery: {               // 可选：声明后该渠道自动获得"主动投递"能力
+    async send({ botId, target, text }) { /* 按 target.route 发 */ },
+    async discover({ botId }) { /* 返回候选目标，不落盘 */ },
+  },
 }
 ```
+
+**主动投递**：hub 持有目标清单（每机器人设置的 `deliveryTargets`）与调度；
+渠道只实现"怎么发"和"能发给谁"。`send` 只会收到**已保存**的目标，
+`discover` 返回的候选在用户保存前不可发送——避免误发到没确认过的会话。
+
+目标结构：`{ id, name?, kind: 'direct'|'group', route: { ... } }`，`route` 只允许
+1–8 个短标量字段（不放 Secret）；`id` 需满足 `[A-Za-z0-9_-]{1,64}`。
 
 - `registerChannel` **同步返回注销函数**（Cordis `ctx.effect` 要求），创建与启动在后台进行；
 - 启动失败不会抛出到调用方，而是把该渠道状态标成 `failed` 并在 RPC 上返回可读错误；
@@ -210,6 +227,9 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `bot.settings.get` | `{ channelId, botId }` | 读每机器人共享设置 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
 | `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |
+| `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |
+| `delivery.save` / `delivery.remove` | `{ channelId, botId, target }` / `{ …, targetId }` | 目标增删 |
+| `delivery.send` | `{ channelId, botId, targetId, text }` | 主动发一条文本 |
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
 

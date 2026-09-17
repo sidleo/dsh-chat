@@ -47,6 +47,8 @@ export function apply(ctx) {
           await controller.stop();
         },
         endpoints: controller.endpoints,
+        // hub 用它把"主动投递"接到该渠道上。
+        delivery: controller.delivery,
       };
     },
   }), 'dsh-chat-weixin: 注册渠道');

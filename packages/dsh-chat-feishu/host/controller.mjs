@@ -184,8 +184,61 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
 
+  /** 会话键 → 可投递目标（`p2p:ou_x` / `group:oc_y`）。 */
+  function targetsFromState(state) {
+    const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+    const targets = [];
+    for (const key of Object.keys(state?.sessions?.() ?? {})) {
+      const [kind, id] = key.split(':', 2);
+      if (!id) continue;
+      if (kind === 'p2p') {
+        targets.push({
+          id: ids(key),
+          name: `私聊 · ${maskAppId(id)}`,
+          kind: 'direct',
+          route: { openId: id },
+        });
+      } else if (kind === 'group') {
+        targets.push({
+          id: ids(key),
+          name: `群聊 · ${maskAppId(id)}`,
+          kind: 'group',
+          route: { chatId: id },
+        });
+      }
+    }
+    return targets;
+  }
+
+  const delivery = Object.freeze({
+    /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
+    async send({ botId, target, text }) {
+      const record = runtimes.get(botId);
+      if (!record?.gateway || record.phase !== 'running') {
+        const error = new Error(`机器人 ${botId} 当前不在线，无法投递。`);
+        error.code = 'feishu/bot-offline';
+        throw error;
+      }
+      const { chatId, openId } = target.route ?? {};
+      if (!chatId && !openId) {
+        const error = new Error('投递目标的 route 既没有 chatId 也没有 openId。');
+        error.code = 'chat/bad-target';
+        throw error;
+      }
+      return record.gateway.sendText({ chatId, openId, text });
+    },
+
+    /** 从该机器人的会话记录里发现候选目标。 */
+    async discover({ botId }) {
+      const record = runtimes.get(botId);
+      if (!record?.state) return [];
+      return targetsFromState(record.state);
+    },
+  });
+
   return Object.freeze({
     start: startAll,
+    delivery,
     async stop() {
       await Promise.all([...runtimes.keys()].map((botId) => stopBot(botId)));
     },

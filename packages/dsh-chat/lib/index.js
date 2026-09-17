@@ -915,7 +915,8 @@ function createChannelRegistry({
   logger = console,
   rpc,
   createDeps,
-  onRegistered
+  onRegistered,
+  onDelivery
 }) {
   if (typeof rpc?.register !== "function") throw new TypeError("\u6E20\u9053\u6CE8\u518C\u8868\u9700\u8981 rpc \u8F7D\u4F53\u3002");
   if (typeof createDeps !== "function") throw new TypeError("\u6E20\u9053\u6CE8\u518C\u8868\u9700\u8981 createDeps\u3002");
@@ -959,9 +960,13 @@ function createChannelRegistry({
         throw new TypeError(`\u6E20\u9053 ${definition.id} \u7684 endpoints \u5FC5\u987B\u662F\u65B9\u6CD5\u8868\u3002`);
       }
       record.instance = instance;
+      if (instance.delivery !== void 0 && typeof onDelivery === "function") {
+        record.releaseDelivery = onDelivery(definition.id, instance.delivery);
+      }
       await instance.start?.();
       if (record.disposed) {
         await instance.stop?.();
+        record.releaseDelivery?.();
         return;
       }
       if (record.status === "starting") setStatus(record, "running");
@@ -974,6 +979,8 @@ function createChannelRegistry({
     record.disposed = true;
     record.releaseRoutes?.();
     record.releaseRoutes = null;
+    record.releaseDelivery?.();
+    record.releaseDelivery = null;
     try {
       await record.instance?.stop?.();
     } catch (error) {
@@ -1414,6 +1421,158 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
   });
 }
 
+// packages/dsh-chat/host/delivery.mjs
+var TARGET_ID = /^[A-Za-z0-9_-]{1,64}$/;
+var TARGET_NAME_MAX = 80;
+var ROUTE_MAX_KEYS = 8;
+var ROUTE_VALUE_MAX = 256;
+var CONTROL_CHARACTERS3 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+var CONTROL_CHARACTER_TEST2 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+function isPlainObject5(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function deliveryError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+function normalizeRoute(route) {
+  if (!isPlainObject5(route)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u7684 route \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+  const keys = Object.keys(route);
+  if (keys.length === 0 || keys.length > ROUTE_MAX_KEYS) {
+    throw deliveryError("chat/bad-target", `\u6295\u9012\u76EE\u6807\u7684 route \u9700\u8981 1\u2013${ROUTE_MAX_KEYS} \u4E2A\u5B57\u6BB5\u3002`);
+  }
+  const normalized = {};
+  for (const key of keys) {
+    const value = route[key];
+    if (!/^[A-Za-z][A-Za-z0-9]{0,31}$/u.test(key)) {
+      throw deliveryError("chat/bad-target", `route \u5B57\u6BB5\u540D\u4E0D\u5408\u6CD5\uFF1A${key}`);
+    }
+    if (typeof value !== "string" || !value.trim() || value.length > ROUTE_VALUE_MAX || CONTROL_CHARACTER_TEST2.test(value)) {
+      throw deliveryError("chat/bad-target", `route.${key} \u5FC5\u987B\u662F\u975E\u7A7A\u77ED\u5B57\u7B26\u4E32\u3002`);
+    }
+    normalized[key] = value.replace(CONTROL_CHARACTERS3, "").trim();
+  }
+  return Object.freeze(normalized);
+}
+function normalizeTarget(input) {
+  if (!isPlainObject5(input)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+  const { id, name: name2, kind, route } = input;
+  if (typeof id !== "string" || !TARGET_ID.test(id)) {
+    throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807 id \u53EA\u80FD\u662F 1\u201364 \u4F4D\u5B57\u6BCD/\u6570\u5B57/\u4E0B\u5212\u7EBF/\u8FDE\u5B57\u7B26\u3002");
+  }
+  if (kind !== "direct" && kind !== "group") {
+    throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807 kind \u53EA\u80FD\u662F direct \u6216 group\u3002");
+  }
+  const label = typeof name2 === "string" ? name2.replace(CONTROL_CHARACTERS3, "").trim() : "";
+  if (label.length > TARGET_NAME_MAX) {
+    throw deliveryError("chat/bad-target", `\u6295\u9012\u76EE\u6807\u540D\u79F0\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_NAME_MAX} \u4E2A\u5B57\u7B26\u3002`);
+  }
+  return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
+}
+function normalizeStoredTargets(value) {
+  if (!isPlainObject5(value)) return {};
+  const targets = {};
+  for (const [id, target] of Object.entries(value)) {
+    try {
+      targets[id] = normalizeTarget({ ...target, id });
+    } catch {
+    }
+  }
+  return targets;
+}
+function createDeliveryService({ settings, logger = console }) {
+  if (!settings?.read) throw new TypeError("\u6295\u9012\u670D\u52A1\u9700\u8981\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E\u5B58\u50A8\u3002");
+  const providers = /* @__PURE__ */ new Map();
+  return Object.freeze({
+    /**
+     * 渠道注册投递实现（实例创建时由注册表调用，注销时释放）。
+     *
+     * @param channelId - 渠道 id。
+     * @param provider - `{ send({ botId, target, text }), discover?({ botId }) }`。
+     * @returns 注销函数。
+     */
+    attach(channelId, provider) {
+      if (typeof provider?.send !== "function") {
+        throw new TypeError(`\u6E20\u9053 ${channelId} \u7684\u6295\u9012\u5B9E\u73B0\u7F3A\u5C11 send\u3002`);
+      }
+      providers.set(channelId, provider);
+      return () => {
+        if (providers.get(channelId) === provider) providers.delete(channelId);
+      };
+    },
+    /** @returns 该渠道是否具备主动投递能力。 */
+    supports: (channelId) => providers.has(channelId),
+    /** @returns 已保存的投递目标（含渠道发现的候选，候选不落盘）。 */
+    async list({ channelId, botId }) {
+      const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const provider = providers.get(channelId);
+      let discovered = [];
+      if (typeof provider?.discover === "function") {
+        try {
+          discovered = await provider.discover({ botId });
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u6E20\u9053 ${channelId} \u53D1\u73B0\u6295\u9012\u76EE\u6807\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        }
+      }
+      const candidates = [];
+      for (const candidate of Array.isArray(discovered) ? discovered : []) {
+        try {
+          const target = normalizeTarget(candidate);
+          if (!saved[target.id]) candidates.push(Object.freeze({ ...target, discovered: true }));
+        } catch {
+        }
+      }
+      return Object.freeze({
+        targets: Object.freeze([...Object.values(saved), ...candidates]),
+        canSend: providers.has(channelId)
+      });
+    },
+    /**
+     * 保存（或覆盖）一个投递目标。
+     *
+     * @param options - { channelId, botId, target }。
+     */
+    async save({ channelId, botId, target }) {
+      const normalized = normalizeTarget(target);
+      const current = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      await settings.write(channelId, botId, {
+        deliveryTargets: { ...current, [normalized.id]: normalized }
+      });
+      return normalized;
+    },
+    /** 删除一个投递目标。 */
+    async remove({ channelId, botId, targetId }) {
+      const current = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      if (!Object.hasOwn(current, targetId)) return false;
+      const next = { ...current };
+      delete next[targetId];
+      await settings.write(channelId, botId, { deliveryTargets: next });
+      return true;
+    },
+    /**
+     * 发一条文本。
+     *
+     * @param options - { channelId, botId, targetId, text }。
+     * @returns 渠道返回的发送结果。
+     */
+    async send({ channelId, botId, targetId, text }) {
+      const provider = providers.get(channelId);
+      if (!provider) {
+        throw deliveryError("chat/delivery-unavailable", `\u6E20\u9053 ${channelId} \u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002`);
+      }
+      const content = typeof text === "string" ? text.trim() : "";
+      if (!content) throw deliveryError("chat/empty-text", "\u6295\u9012\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+      const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const target = saved[targetId];
+      if (!target) {
+        throw deliveryError("chat/unknown-target", `\u627E\u4E0D\u5230\u6295\u9012\u76EE\u6807 ${targetId}\uFF08\u5148\u5728\u8BBE\u7F6E\u9875\u4FDD\u5B58\u6216\u6539\u7528\u5019\u9009\u76EE\u6807\uFF09\u3002`);
+      }
+      return provider.send({ botId, target, text: content });
+    }
+  });
+}
+
 // packages/dsh-chat/host/guidance.mjs
 var GUIDANCE_MAX_LENGTH2 = 8e3;
 var MAX_SESSIONS = 1024;
@@ -1478,18 +1637,18 @@ function integrationRoot(configured) {
 // packages/dsh-chat/host/session-store.mjs
 import { join as join3 } from "node:path";
 var DOCUMENT_VERSION2 = 1;
-function isPlainObject5(value) {
+function isPlainObject6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeDocument2(value) {
-  const source = isPlainObject5(value) && value.version === DOCUMENT_VERSION2 ? value : {};
+  const source = isPlainObject6(value) && value.version === DOCUMENT_VERSION2 ? value : {};
   const channels = {};
-  if (isPlainObject5(source.channels)) {
+  if (isPlainObject6(source.channels)) {
     for (const [channelId, bots] of Object.entries(source.channels)) {
-      if (!isPlainObject5(bots)) continue;
+      if (!isPlainObject6(bots)) continue;
       const accounts = {};
       for (const [botId, keys] of Object.entries(bots)) {
-        if (!isPlainObject5(keys)) continue;
+        if (!isPlainObject6(keys)) continue;
         const entries = {};
         for (const [key, entry] of Object.entries(keys)) {
           const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
@@ -1590,7 +1749,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
      * @returns 实际接管的条数。
      */
     async adopt(channelId, botId, entries) {
-      if (!isPlainObject5(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
+      if (!isPlainObject6(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
       let adopted = 0;
       await store.update((current) => {
         const accounts = current.channels[channelId] ?? {};
@@ -1601,7 +1760,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
           if (typeof sessionId !== "string" || !sessionId) continue;
           keys[key] = {
             sessionId,
-            workspacePath: isPlainObject5(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
+            workspacePath: isPlainObject6(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
             boundAt: (/* @__PURE__ */ new Date()).toISOString()
           };
           adopted += 1;
@@ -2025,6 +2184,9 @@ function provideService(ctx, serviceName, value) {
   if (typeof ctx?.reflect?.provide === "function") return ctx.reflect.provide(serviceName, value);
   throw new TypeError("dsh-chat \u9700\u8981 Cordis \u7684 provide \u80FD\u529B\u6765\u53D1\u5E03 dshChat \u670D\u52A1\u3002");
 }
+function isPlainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function validBotPayload(payload, { withConfig = false } = {}) {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
   const allowed = withConfig ? ["channelId", "botId", "config"] : ["channelId", "botId"];
@@ -2044,6 +2206,7 @@ function apply(ctx, config = {}) {
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
   const rpc = createRpcCarrier(ctx, { logger });
+  const delivery = createDeliveryService({ settings, logger });
   function storageFor(channelId) {
     return Object.freeze({
       read: (botId) => settings.read(channelId, botId),
@@ -2054,6 +2217,7 @@ function apply(ctx, config = {}) {
   const registry = createChannelRegistry({
     logger,
     rpc,
+    onDelivery: (channelId, provider) => delivery.attach(channelId, provider),
     /**
      * 渠道注册后按 `legacy.dir` 做一次性旧设置导入（只读旧文件，绝不改写）。
      * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
@@ -2154,6 +2318,50 @@ function apply(ctx, config = {}) {
         return failFrom(error, "chat/import-failed");
       }
     }
+    if (method === "delivery.list") {
+      if (!validBotPayload(payload)) return fail("chat/bad-request", "delivery.list \u9700\u8981 channelId \u4E0E botId\u3002");
+      return ok(await delivery.list({ channelId: payload.channelId, botId: payload.botId }));
+    }
+    if (method === "delivery.save") {
+      if (!isPlainRecord(payload) || typeof payload.channelId !== "string" || typeof payload.botId !== "string" || !isPlainRecord(payload.target)) {
+        return fail("chat/bad-request", "delivery.save \u9700\u8981 { channelId, botId, target }\u3002");
+      }
+      try {
+        const saved = await delivery.save({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          target: payload.target
+        });
+        return ok({ target: saved });
+      } catch (error) {
+        return failFrom(error, "chat/delivery-save-failed");
+      }
+    }
+    if (method === "delivery.remove") {
+      if (!validBotPayload(payload) || typeof payload.targetId !== "string") {
+        return fail("chat/bad-request", "delivery.remove \u9700\u8981 { channelId, botId, targetId }\u3002");
+      }
+      return ok({ removed: await delivery.remove({
+        channelId: payload.channelId,
+        botId: payload.botId,
+        targetId: payload.targetId
+      }) });
+    }
+    if (method === "delivery.send") {
+      if (!validBotPayload(payload) || typeof payload.targetId !== "string" || typeof payload.text !== "string") {
+        return fail("chat/bad-request", "delivery.send \u9700\u8981 { channelId, botId, targetId, text }\u3002");
+      }
+      try {
+        return ok(await delivery.send({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          targetId: payload.targetId,
+          text: payload.text
+        }));
+      } catch (error) {
+        return failFrom(error, "chat/delivery-failed");
+      }
+    }
     return fail("chat/unknown-method", `\u63A7\u5236\u7AEF\u70B9\u4E0D\u652F\u6301 ${method}\u3002`);
   }
   void settings.ready().catch((error) => {
@@ -2195,6 +2403,14 @@ function apply(ctx, config = {}) {
     commands: Object.freeze({
       handle: (options) => commands.handle(options),
       list: () => commands.list()
+    }),
+    /** 主动投递：定时任务/脚本用 `send` 把结果推到指定会话。 */
+    delivery: Object.freeze({
+      send: (options) => delivery.send(options),
+      list: (options) => delivery.list(options),
+      save: (options) => delivery.save(options),
+      remove: (options) => delivery.remove(options),
+      supports: (channelId) => delivery.supports(channelId)
     }),
     contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
     guidance: Object.freeze({

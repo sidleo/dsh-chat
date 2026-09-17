@@ -127100,11 +127100,17 @@ function createLarkGateway({
         threadId: response?.data?.thread_id
       };
     },
-    /** 向会话主动发文本。 */
-    async sendText({ chatId, text }) {
+    /**
+     * 主动发文本。
+     *
+     * @param options - { chatId }（群/会话）或 { openId }（私聊用户，二选一）、{ text }。
+     */
+    async sendText({ chatId, openId, text }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendText \u9700\u8981 chatId \u6216 openId\u3002");
       const response = await client.im.v1.message.create({
-        params: { receive_id_type: "chat_id" },
-        data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) }
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "text", content: JSON.stringify({ text }) }
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u6D88\u606F", response);
       return { messageId: response?.data?.message_id };
@@ -127386,8 +127392,57 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     logger.info?.(`[dsh-chat-feishu] \u53D1\u73B0 ${bots.length} \u4E2A\u5DF2\u914D\u7F6E\u673A\u5668\u4EBA`);
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
+  function targetsFromState(state) {
+    const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+    const targets = [];
+    for (const key of Object.keys(state?.sessions?.() ?? {})) {
+      const [kind, id] = key.split(":", 2);
+      if (!id) continue;
+      if (kind === "p2p") {
+        targets.push({
+          id: ids(key),
+          name: `\u79C1\u804A \xB7 ${maskAppId(id)}`,
+          kind: "direct",
+          route: { openId: id }
+        });
+      } else if (kind === "group") {
+        targets.push({
+          id: ids(key),
+          name: `\u7FA4\u804A \xB7 ${maskAppId(id)}`,
+          kind: "group",
+          route: { chatId: id }
+        });
+      }
+    }
+    return targets;
+  }
+  const delivery = Object.freeze({
+    /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
+    async send({ botId, target, text }) {
+      const record = runtimes.get(botId);
+      if (!record?.gateway || record.phase !== "running") {
+        const error = new Error(`\u673A\u5668\u4EBA ${botId} \u5F53\u524D\u4E0D\u5728\u7EBF\uFF0C\u65E0\u6CD5\u6295\u9012\u3002`);
+        error.code = "feishu/bot-offline";
+        throw error;
+      }
+      const { chatId, openId } = target.route ?? {};
+      if (!chatId && !openId) {
+        const error = new Error("\u6295\u9012\u76EE\u6807\u7684 route \u65E2\u6CA1\u6709 chatId \u4E5F\u6CA1\u6709 openId\u3002");
+        error.code = "chat/bad-target";
+        throw error;
+      }
+      return record.gateway.sendText({ chatId, openId, text });
+    },
+    /** 从该机器人的会话记录里发现候选目标。 */
+    async discover({ botId }) {
+      const record = runtimes.get(botId);
+      if (!record?.state) return [];
+      return targetsFromState(record.state);
+    }
+  });
   return Object.freeze({
     start: startAll,
+    delivery,
     async stop() {
       await Promise.all([...runtimes.keys()].map((botId) => stopBot(botId)));
     },
@@ -127478,7 +127533,9 @@ function apply(ctx) {
         async stop() {
           await controller.stop();
         },
-        endpoints: controller.endpoints
+        endpoints: controller.endpoints,
+        // hub 用它把"主动投递"接到该渠道上。
+        delivery: controller.delivery
       };
     }
   }), "dsh-chat-feishu: \u6CE8\u518C\u6E20\u9053");

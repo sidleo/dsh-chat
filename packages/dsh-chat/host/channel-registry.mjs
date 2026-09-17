@@ -37,6 +37,7 @@ export function createChannelRegistry({
   rpc,
   createDeps,
   onRegistered,
+  onDelivery,
 }) {
   if (typeof rpc?.register !== 'function') throw new TypeError('渠道注册表需要 rpc 载体。');
   if (typeof createDeps !== 'function') throw new TypeError('渠道注册表需要 createDeps。');
@@ -89,9 +90,14 @@ export function createChannelRegistry({
         throw new TypeError(`渠道 ${definition.id} 的 endpoints 必须是方法表。`);
       }
       record.instance = instance;
+      // 渠道声明了投递能力就挂到 hub 的投递服务上（注销时自动摘掉）。
+      if (instance.delivery !== undefined && typeof onDelivery === 'function') {
+        record.releaseDelivery = onDelivery(definition.id, instance.delivery);
+      }
       await instance.start?.();
       if (record.disposed) {
         await instance.stop?.();
+        record.releaseDelivery?.();
         return;
       }
       if (record.status === 'starting') setStatus(record, 'running');
@@ -105,6 +111,8 @@ export function createChannelRegistry({
     record.disposed = true;
     record.releaseRoutes?.();
     record.releaseRoutes = null;
+    record.releaseDelivery?.();
+    record.releaseDelivery = null;
     try {
       await record.instance?.stop?.();
     } catch (error) {

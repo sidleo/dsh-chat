@@ -20,6 +20,7 @@ import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
 import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
+import { createDeliveryService } from './delivery.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
@@ -65,6 +66,10 @@ function provideService(ctx, serviceName, value) {
   throw new TypeError('dsh-chat 需要 Cordis 的 provide 能力来发布 dshChat 服务。');
 }
 
+function isPlainRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function validBotPayload(payload, { withConfig = false } = {}) {  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
   const allowed = withConfig ? ['channelId', 'botId', 'config'] : ['channelId', 'botId'];
   if (Object.keys(payload).length !== allowed.length) return false;
@@ -91,6 +96,8 @@ export function apply(ctx, config = {}) {
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   const sessions = createSessionBridge({ ctx, logger, store: sessionStore, guidance });
   const rpc = createRpcCarrier(ctx, { logger });
+  /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
+  const delivery = createDeliveryService({ settings, logger });
 
   function storageFor(channelId) {
     return Object.freeze({
@@ -103,6 +110,7 @@ export function apply(ctx, config = {}) {
   const registry = createChannelRegistry({
     logger,
     rpc,
+    onDelivery: (channelId, provider) => delivery.attach(channelId, provider),
     /**
      * 渠道注册后按 `legacy.dir` 做一次性旧设置导入（只读旧文件，绝不改写）。
      * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
@@ -223,6 +231,48 @@ export function apply(ctx, config = {}) {
         return failFrom(error, 'chat/import-failed');
       }
     }
+    if (method === 'delivery.list') {
+      if (!validBotPayload(payload)) return fail('chat/bad-request', 'delivery.list 需要 channelId 与 botId。');
+      return ok(await delivery.list({ channelId: payload.channelId, botId: payload.botId }));
+    }
+    if (method === 'delivery.save') {
+      if (!isPlainRecord(payload) || typeof payload.channelId !== 'string'
+        || typeof payload.botId !== 'string' || !isPlainRecord(payload.target)) {
+        return fail('chat/bad-request', 'delivery.save 需要 { channelId, botId, target }。');
+      }
+      try {
+        const saved = await delivery.save({
+          channelId: payload.channelId, botId: payload.botId, target: payload.target,
+        });
+        return ok({ target: saved });
+      } catch (error) {
+        return failFrom(error, 'chat/delivery-save-failed');
+      }
+    }
+    if (method === 'delivery.remove') {
+      if (!validBotPayload(payload) || typeof payload.targetId !== 'string') {
+        return fail('chat/bad-request', 'delivery.remove 需要 { channelId, botId, targetId }。');
+      }
+      return ok({ removed: await delivery.remove({
+        channelId: payload.channelId, botId: payload.botId, targetId: payload.targetId,
+      }) });
+    }
+    if (method === 'delivery.send') {
+      if (!validBotPayload(payload) || typeof payload.targetId !== 'string'
+        || typeof payload.text !== 'string') {
+        return fail('chat/bad-request', 'delivery.send 需要 { channelId, botId, targetId, text }。');
+      }
+      try {
+        return ok(await delivery.send({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          targetId: payload.targetId,
+          text: payload.text,
+        }));
+      } catch (error) {
+        return failFrom(error, 'chat/delivery-failed');
+      }
+    }
     return fail('chat/unknown-method', `控制端点不支持 ${method}。`);
   }
 
@@ -268,6 +318,15 @@ export function apply(ctx, config = {}) {
     commands: Object.freeze({
       handle: (options) => commands.handle(options),
       list: () => commands.list(),
+    }),
+
+    /** 主动投递：定时任务/脚本用 `send` 把结果推到指定会话。 */
+    delivery: Object.freeze({
+      send: (options) => delivery.send(options),
+      list: (options) => delivery.list(options),
+      save: (options) => delivery.save(options),
+      remove: (options) => delivery.remove(options),
+      supports: (channelId) => delivery.supports(channelId),
     }),
 
     contextEnhancement: Object.freeze({ ...contextEnhancement }),

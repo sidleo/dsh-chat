@@ -765,6 +765,17 @@ function createWeixinRuntime({
         logger.warn?.(`[dsh-chat-weixin] \u505C\u6B62\u901A\u77E5\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
       }
     },
+    /**
+     * 主动发一条文本（定时任务/脚本用）。
+     *
+     * @param options - { userId, text, signal }。
+     */
+    async sendProactive({ userId, text, signal }) {
+      const recipient = typeof userId === "string" ? userId.trim() : "";
+      if (!recipient) throw new TypeError("sendProactive \u9700\u8981 userId\u3002");
+      const chunks = await reply(recipient, String(text ?? ""), state.contextToken(recipient), void 0, signal);
+      return { chunks };
+    },
     status: () => Object.freeze({
       botId: account.botId,
       phase,
@@ -1055,8 +1066,42 @@ function createWeixinController({ deps, logger = console, config = {}, internals
     logger.info?.(`[dsh-chat-weixin] \u53D1\u73B0 ${accounts.length} \u4E2A\u5DF2\u7ED1\u5B9A\u8D26\u53F7`);
     await Promise.all(accounts.map((account) => startAccount(account)));
   }
+  const delivery = Object.freeze({
+    /** 主动发文本：私聊对端就是 `from_user_id`，回复要带该用户最近一次的 context_token。 */
+    async send({ botId, target, text }) {
+      const record = runtimes.get(botId);
+      if (!record?.runtime || record.phase !== "running") {
+        const error = new Error(`\u8D26\u53F7 ${botId} \u5F53\u524D\u4E0D\u5728\u7EBF\uFF0C\u65E0\u6CD5\u6295\u9012\u3002`);
+        error.code = "weixin/account-offline";
+        throw error;
+      }
+      const userId = target.route?.userId;
+      if (!userId) {
+        const error = new Error("\u6295\u9012\u76EE\u6807\u7684 route \u7F3A\u5C11 userId\u3002");
+        error.code = "chat/bad-target";
+        throw error;
+      }
+      return record.runtime.sendProactive({ userId, text });
+    },
+    /** 从该账号的会话记录里发现候选目标。 */
+    async discover({ botId }) {
+      const record = runtimes.get(botId);
+      if (!record?.state) return [];
+      return Object.keys(record.state.sessions?.() ?? {}).filter((key) => key.startsWith("p2p:")).map((key) => {
+        const userId = key.slice(4);
+        const short = userId.length > 12 ? `${userId.slice(0, 6)}\u2026${userId.slice(-4)}` : userId;
+        return {
+          id: key.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64),
+          name: `\u79C1\u804A \xB7 ${short}`,
+          kind: "direct",
+          route: { userId }
+        };
+      });
+    }
+  });
   return Object.freeze({
     start: startAll,
+    delivery,
     async stop() {
       await Promise.all([...runtimes.keys()].map((botId) => stopAccount(botId)));
     },
@@ -1228,7 +1273,9 @@ function apply(ctx) {
         async stop() {
           await controller.stop();
         },
-        endpoints: controller.endpoints
+        endpoints: controller.endpoints,
+        // hub 用它把"主动投递"接到该渠道上。
+        delivery: controller.delivery
       };
     }
   }), "dsh-chat-weixin: \u6CE8\u518C\u6E20\u9053");

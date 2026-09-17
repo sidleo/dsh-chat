@@ -201,11 +201,17 @@ export function createLarkGateway({
       };
     },
 
-    /** 向会话主动发文本。 */
-    async sendText({ chatId, text }) {
+    /**
+     * 主动发文本。
+     *
+     * @param options - { chatId }（群/会话）或 { openId }（私聊用户，二选一）、{ text }。
+     */
+    async sendText({ chatId, openId, text }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendText 需要 chatId 或 openId。');
       const response = await client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) },
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'text', content: JSON.stringify({ text }) },
       });
       assertSuccess('飞书发送消息', response);
       return { messageId: response?.data?.message_id };

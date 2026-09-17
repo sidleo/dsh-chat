@@ -322,6 +322,18 @@ export function createWeixinRuntime({
       }
     },
 
+    /**
+     * 主动发一条文本（定时任务/脚本用）。
+     *
+     * @param options - { userId, text, signal }。
+     */
+    async sendProactive({ userId, text, signal }) {
+      const recipient = typeof userId === 'string' ? userId.trim() : '';
+      if (!recipient) throw new TypeError('sendProactive 需要 userId。');
+      const chunks = await reply(recipient, String(text ?? ''), state.contextToken(recipient), undefined, signal);
+      return { chunks };
+    },
+
     status: () => Object.freeze({
       botId: account.botId,
       phase,
