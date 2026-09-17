@@ -303,6 +303,9 @@ hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，�
 
 - 图片 `mediaType` 只认 `image/png | image/jpeg | image/webp | image/gif`；平台给不出类型时用魔数兜底，
   仍认不出就**明确拒绝并回复原因**，不要把非图片字节当图片交出去。
+- **文件不能直接塞字节**：文件块是 `{ type:'file', receiptId }`，receipt 必须由**同一会话**的上传产生，
+  因此入站文件要 `sessions.ensure(...)` 拿到 `sessionId` → `sessions.uploadFile({ sessionId, name, bytes })`
+  → 用返回的 `receiptId` 拼内容块。上传失败要回可读原因并记 `lastError`（没入库就不能进模型）。
 - `contextEnhancement.enhanceContent(parts, snapshot, source)` 对内容数组会在前面插一个上下文文本块，
   因此图片消息同样带得上来来源与提示词。
 - 下载失败、类型不支持、超过大小上限都要"日志 + 用户可见回复"，并让失败能出现在 `connection.status` 里。
@@ -328,6 +331,7 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `stream(namespace, method, args, signal)` | 流式调用；`session/follow`、`session/control`、`workspace/follow` **必须**用它 |
 | `ensure({ channelId, botId, key, workspacePath, signal })` | 找到或创建该会话键对应的 DSH 会话（`{ sessionId, created }`）；绑定的会话被删会自动重建 |
 | `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools }` |
+| `uploadFile({ sessionId, name, bytes })` | 把一段字节入库成**该会话可引用**的文件，返回 `{ receiptId, file }`（入站文件必须走它） |
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
 | `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |
 | `bindings` | 会话绑定表：`get` / `entries` / `bind` / `unbind` / `adopt` / `locate` |

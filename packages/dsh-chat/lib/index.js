@@ -2096,6 +2096,11 @@ function sessionError(error, fallbackCode = "chat/session-failed") {
   wrapped.details = error?.details ?? {};
   return wrapped;
 }
+function fileUploadFailure(error) {
+  const wrapped = new Error(typeof error?.message === "string" && error.message ? `\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\uFF1A${error.message}` : "\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\u3002");
+  wrapped.code = typeof error?.code === "string" ? error.code : "chat/upload-failed";
+  return wrapped;
+}
 function textOfAssistantMessage(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return "";
@@ -2457,9 +2462,41 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       }
     };
   }
+  async function uploadFile({ sessionId, name: name2, bytes, signal }) {
+    const service = typeof ctx?.get === "function" ? ctx.get("fileUploads") : void 0;
+    if (typeof service?.uploadStream !== "function") {
+      const error = new Error("\u5F53\u524D Host \u6CA1\u6709 fileUploads \u670D\u52A1\uFF0C\u65E0\u6CD5\u628A\u6587\u4EF6\u4EA4\u7ED9\u4F1A\u8BDD\u3002");
+      error.code = "chat/upload-unavailable";
+      throw error;
+    }
+    if (typeof sessionId !== "string" || !sessionId) {
+      const error = new Error("\u4E0A\u4F20\u6587\u4EF6\u9700\u8981 sessionId\u3002");
+      error.code = "chat/bad-request";
+      throw error;
+    }
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.byteLength === 0) {
+      const error = new Error("\u4E0A\u4F20\u6587\u4EF6\u7684\u5185\u5BB9\u4E3A\u7A7A\u3002");
+      error.code = "chat/bad-request";
+      throw error;
+    }
+    try {
+      return await service.uploadStream({
+        sessionId,
+        name: typeof name2 === "string" && name2.trim() ? name2.trim() : void 0,
+        data: (async function* chunks() {
+          yield data;
+        })(),
+        signal
+      });
+    } catch (error) {
+      throw fileUploadFailure(error);
+    }
+  }
   return Object.freeze({
     invoke,
     stream,
+    uploadFile,
     resolveWorkspaceId,
     sessionExists,
     ensure,

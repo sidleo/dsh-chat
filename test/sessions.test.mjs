@@ -461,3 +461,66 @@ test('提示词投递被拒时要立刻抛出，而不是等超时', async () =>
     await app.cleanup();
   }
 });
+
+test('uploadFile：把入站文件交给会话（内容块要的是同会话的 receiptId）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
+  const store = createSessionStore({ dataDir, logger: silentLogger });
+  const uploaded = [];
+  const ctx = {
+    typertGateway: createFakeGateway({ script: [[]] }),
+    get: (name) => (name === 'fileUploads' ? {
+      async uploadStream(request) {
+        const chunks = [];
+        for await (const chunk of request.data) chunks.push(chunk);
+        uploaded.push({ sessionId: request.sessionId, name: request.name, bytes: Buffer.concat(chunks).length });
+        return { receiptId: 'receipt-1', file: { attachmentId: 'sha256:x', name: request.name, bytes: 3 } };
+      },
+    } : undefined),
+  };
+  const bridge = createSessionBridge({ ctx, logger: silentLogger, store });
+  try {
+    const result = await bridge.uploadFile({
+      sessionId: 'session-1', name: '报表.xlsx', bytes: new Uint8Array([1, 2, 3]),
+    });
+    assert.equal(result.receiptId, 'receipt-1');
+    assert.deepEqual(uploaded, [{ sessionId: 'session-1', name: '报表.xlsx', bytes: 3 }]);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('uploadFile：服务缺席/内容为空/服务报错都有稳定错误码', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
+  const store = createSessionStore({ dataDir, logger: silentLogger });
+  try {
+    // 没装 fileUploads：要给出可读原因，而不是静默丢文件
+    const noService = createSessionBridge({
+      ctx: { typertGateway: createFakeGateway({ script: [[]] }), get: () => undefined },
+      logger: silentLogger,
+      store,
+    });
+    await assert.rejects(
+      () => noService.uploadFile({ sessionId: 's', name: 'a.txt', bytes: new Uint8Array([1]) }),
+      (error) => error.code === 'chat/upload-unavailable',
+    );
+
+    const failing = createSessionBridge({
+      ctx: {
+        typertGateway: createFakeGateway({ script: [[]] }),
+        get: () => ({ async uploadStream() { const e = new Error('磁盘满了'); e.code = 'attachment/io'; throw e; } }),
+      },
+      logger: silentLogger,
+      store,
+    });
+    await assert.rejects(
+      () => failing.uploadFile({ sessionId: 's', name: 'a.txt', bytes: new Uint8Array([1]) }),
+      (error) => error.code === 'attachment/io' && /上传文件失败：磁盘满了/.test(error.message),
+    );
+    await assert.rejects(
+      () => failing.uploadFile({ sessionId: 's', name: 'a.txt', bytes: new Uint8Array([]) }),
+      (error) => error.code === 'chat/bad-request',
+    );
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

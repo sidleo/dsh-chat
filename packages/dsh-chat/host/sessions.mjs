@@ -37,6 +37,21 @@ function sessionError(error, fallbackCode = 'chat/session-failed') {
   return wrapped;
 }
 
+/**
+ * 把一批字节上传成"本会话可引用的文件"，换回 DSH 的 `receiptId`。
+ *
+ * 为什么要它：`session/prompt` 的文件内容块是 `{ type:'file', receiptId }`，
+ * 而 receipt 必须由**同一会话**的上传产生——所以入站文件（飞书/微信里的附件）
+ * 只能走这条路交给模型。
+ */
+function fileUploadFailure(error) {
+  const wrapped = new Error(typeof error?.message === 'string' && error.message
+    ? `上传文件失败：${error.message}`
+    : '上传文件失败。');
+  wrapped.code = typeof error?.code === 'string' ? error.code : 'chat/upload-failed';
+  return wrapped;
+}
+
 function textOfAssistantMessage(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return '';
@@ -503,9 +518,49 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
     };
   }
 
+  /**
+   * 上传一段字节到指定会话，返回可放进提示词的 `{ receiptId, file }`。
+   *
+   * `fileUploads` 是 DSH 的可选服务（没装就没有）；缺席时给出可读错误，
+   * 调用方据此把"这个渠道暂时收不了文件"告诉用户，而不是静默丢消息。
+   *
+   * @param options - { sessionId, name, bytes, signal }。
+   * @returns { receiptId, file }。
+   */
+  async function uploadFile({ sessionId, name, bytes, signal }) {
+    const service = typeof ctx?.get === 'function' ? ctx.get('fileUploads') : undefined;
+    if (typeof service?.uploadStream !== 'function') {
+      const error = new Error('当前 Host 没有 fileUploads 服务，无法把文件交给会话。');
+      error.code = 'chat/upload-unavailable';
+      throw error;
+    }
+    if (typeof sessionId !== 'string' || !sessionId) {
+      const error = new Error('上传文件需要 sessionId。');
+      error.code = 'chat/bad-request';
+      throw error;
+    }
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.byteLength === 0) {
+      const error = new Error('上传文件的内容为空。');
+      error.code = 'chat/bad-request';
+      throw error;
+    }
+    try {
+      return await service.uploadStream({
+        sessionId,
+        name: typeof name === 'string' && name.trim() ? name.trim() : undefined,
+        data: (async function* chunks() { yield data; })(),
+        signal,
+      });
+    } catch (error) {
+      throw fileUploadFailure(error);
+    }
+  }
+
   return Object.freeze({
     invoke,
     stream,
+    uploadFile,
     resolveWorkspaceId,
     sessionExists,
     ensure,

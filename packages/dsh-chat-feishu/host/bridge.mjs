@@ -54,16 +54,21 @@ function parseInbound(message) {
   const text = messageText(message);
   if (text !== null) return { kind: 'text', text };
   const type = String(message?.message_type ?? 'unknown');
-  if (type === 'image') {
+  if (type === 'image' || type === 'file') {
     try {
       const parsed = JSON.parse(message.content ?? '{}');
-      if (typeof parsed?.image_key === 'string' && parsed.image_key) {
-        return { kind: 'image', fileKey: parsed.image_key };
+      const fileKey = type === 'image' ? parsed?.image_key : parsed?.file_key;
+      if (typeof fileKey === 'string' && fileKey) {
+        const label = type === 'image' ? 'feishu-image' : 'feishu-file';
+        const fileName = type === 'file' && typeof parsed?.file_name === 'string' && parsed.file_name
+          ? parsed.file_name
+          : label;
+        return { kind: type, fileKey, fileName };
       }
     } catch {
       // 落到"内容无法解析"。
     }
-    return { kind: 'unsupported', label: '图片（内容无法解析）' };
+    return { kind: 'unsupported', label: `${type === 'image' ? '图片' : '文件'}（内容无法解析）` };
   }
   return { kind: 'unsupported', label: type };
 }
@@ -167,7 +172,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     if (inbound.kind === 'unsupported') {
       await gateway.replyText({
         messageId: message.message_id,
-        text: `暂时还不能处理「${inbound.label}」类型的消息（目前支持文本与图片）。`,
+        text: `暂时还不能处理「${inbound.label}」类型的消息（目前支持文本、图片与文件）。`,
       });
       return;
     }
@@ -199,42 +204,75 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return;
     }
 
-    // 图片：先下载成 PromptContentPart，再和文本走同一条会话链路。
+    // 图片/文件：先下载，再变成 PromptContentPart，和文本走同一条会话链路。
     let attachmentParts = null;
     let text = '';
-    if (inbound.kind === 'image') {
+    if (inbound.kind === 'image' || inbound.kind === 'file') {
+      const isImage = inbound.kind === 'image';
       let downloaded;
       try {
         downloaded = await gateway.downloadResource({
           messageId: message.message_id,
           fileKey: inbound.fileKey,
-          type: 'image',
+          type: isImage ? 'image' : 'file',
         });
       } catch (error) {
         const reason = error?.message ?? String(error);
         lastError = reason;
-        logger.error?.(`[dsh-chat-feishu] 下载图片失败：${reason}`);
+        logger.error?.(`[dsh-chat-feishu] 下载${isImage ? '图片' : '文件'}失败：${reason}`);
         await gateway.replyText({
           messageId: message.message_id,
-          text: `图片下载失败：${reason}`,
+          text: `${isImage ? '图片' : '文件'}下载失败：${reason}`,
         }).catch(() => {});
         return;
       }
-      const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
-      if (!mediaType) {
-        logger.info?.(`[dsh-chat-feishu] 忽略不支持的图片类型：${downloaded.contentType ?? '未知'}`);
-        await gateway.replyText({
-          messageId: message.message_id,
-          text: `这张图片的格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`,
-        });
-        return;
+      if (isImage) {
+        const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
+        if (!mediaType) {
+          logger.info?.(`[dsh-chat-feishu] 忽略不支持的图片类型：${downloaded.contentType ?? '未知'}`);
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `这张图片的格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`,
+          });
+          return;
+        }
+        attachmentParts = [{
+          type: 'image',
+          mediaType,
+          data: downloaded.bytes.toString('base64'),
+          name: 'feishu-image',
+        }];
+      } else {
+        // 文件内容块只能引用"本会话上传"得到的 receipt，因此先上传再交给模型。
+        try {
+          const { sessionId } = await deps.sessions.ensure({
+            channelId: deps.channelId,
+            botId: bot.id,
+            key: conversationKey,
+            workspacePath: deps.storage.read(bot.id).workspace,
+          });
+          const uploaded = await deps.sessions.uploadFile({
+            sessionId,
+            name: inbound.fileName,
+            bytes: new Uint8Array(downloaded.bytes),
+          });
+          if (!uploaded?.receiptId) {
+            throw new Error('上传后没有拿到 receiptId');
+          }
+          attachmentParts = [{ type: 'file', receiptId: uploaded.receiptId }];
+          logger.info?.(`[dsh-chat-feishu] 已接收文件并入库：${inbound.fileName}`
+            + `（${downloaded.bytes.length} 字节，${bot.id}）`);
+        } catch (error) {
+          const reason = error?.message ?? String(error);
+          lastError = reason;
+          logger.error?.(`[dsh-chat-feishu] 接收文件失败：${reason}`);
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `这个文件暂时没能收下：${reason}`,
+          }).catch(() => {});
+          return;
+        }
       }
-      attachmentParts = [{
-        type: 'image',
-        mediaType,
-        data: downloaded.bytes.toString('base64'),
-        name: 'feishu-image',
-      }];
     } else {
       text = stripMentions(inbound.text, message.mentions);
       if (!text) return;

@@ -126669,15 +126669,18 @@ function parseInbound(message) {
   const text = messageText(message);
   if (text !== null) return { kind: "text", text };
   const type = String(message?.message_type ?? "unknown");
-  if (type === "image") {
+  if (type === "image" || type === "file") {
     try {
       const parsed = JSON.parse(message.content ?? "{}");
-      if (typeof parsed?.image_key === "string" && parsed.image_key) {
-        return { kind: "image", fileKey: parsed.image_key };
+      const fileKey = type === "image" ? parsed?.image_key : parsed?.file_key;
+      if (typeof fileKey === "string" && fileKey) {
+        const label = type === "image" ? "feishu-image" : "feishu-file";
+        const fileName = type === "file" && typeof parsed?.file_name === "string" && parsed.file_name ? parsed.file_name : label;
+        return { kind: type, fileKey, fileName };
       }
     } catch {
     }
-    return { kind: "unsupported", label: "\u56FE\u7247\uFF08\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\uFF09" };
+    return { kind: "unsupported", label: `${type === "image" ? "\u56FE\u7247" : "\u6587\u4EF6"}\uFF08\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\uFF09` };
   }
   return { kind: "unsupported", label: type };
 }
@@ -126742,7 +126745,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (inbound.kind === "unsupported") {
       await gateway.replyText({
         messageId: message.message_id,
-        text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u4E0E\u56FE\u7247\uFF09\u3002`
+        text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u3001\u56FE\u7247\u4E0E\u6587\u4EF6\uFF09\u3002`
       });
       return;
     }
@@ -126766,40 +126769,72 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     }
     let attachmentParts = null;
     let text = "";
-    if (inbound.kind === "image") {
+    if (inbound.kind === "image" || inbound.kind === "file") {
+      const isImage = inbound.kind === "image";
       let downloaded;
       try {
         downloaded = await gateway.downloadResource({
           messageId: message.message_id,
           fileKey: inbound.fileKey,
-          type: "image"
+          type: isImage ? "image" : "file"
         });
       } catch (error) {
         const reason = error?.message ?? String(error);
         lastError = reason;
-        logger.error?.(`[dsh-chat-feishu] \u4E0B\u8F7D\u56FE\u7247\u5931\u8D25\uFF1A${reason}`);
+        logger.error?.(`[dsh-chat-feishu] \u4E0B\u8F7D${isImage ? "\u56FE\u7247" : "\u6587\u4EF6"}\u5931\u8D25\uFF1A${reason}`);
         await gateway.replyText({
           messageId: message.message_id,
-          text: `\u56FE\u7247\u4E0B\u8F7D\u5931\u8D25\uFF1A${reason}`
+          text: `${isImage ? "\u56FE\u7247" : "\u6587\u4EF6"}\u4E0B\u8F7D\u5931\u8D25\uFF1A${reason}`
         }).catch(() => {
         });
         return;
       }
-      const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
-      if (!mediaType) {
-        logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u4E0D\u652F\u6301\u7684\u56FE\u7247\u7C7B\u578B\uFF1A${downloaded.contentType ?? "\u672A\u77E5"}`);
-        await gateway.replyText({
-          messageId: message.message_id,
-          text: `\u8FD9\u5F20\u56FE\u7247\u7684\u683C\u5F0F\u6682\u4E0D\u652F\u6301\uFF08${downloaded.contentType ?? "\u672A\u77E5\u7C7B\u578B"}\uFF09\uFF0C\u8BF7\u53D1 PNG/JPEG/WebP/GIF\u3002`
-        });
-        return;
+      if (isImage) {
+        const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
+        if (!mediaType) {
+          logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u4E0D\u652F\u6301\u7684\u56FE\u7247\u7C7B\u578B\uFF1A${downloaded.contentType ?? "\u672A\u77E5"}`);
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `\u8FD9\u5F20\u56FE\u7247\u7684\u683C\u5F0F\u6682\u4E0D\u652F\u6301\uFF08${downloaded.contentType ?? "\u672A\u77E5\u7C7B\u578B"}\uFF09\uFF0C\u8BF7\u53D1 PNG/JPEG/WebP/GIF\u3002`
+          });
+          return;
+        }
+        attachmentParts = [{
+          type: "image",
+          mediaType,
+          data: downloaded.bytes.toString("base64"),
+          name: "feishu-image"
+        }];
+      } else {
+        try {
+          const { sessionId } = await deps.sessions.ensure({
+            channelId: deps.channelId,
+            botId: bot.id,
+            key: conversationKey,
+            workspacePath: deps.storage.read(bot.id).workspace
+          });
+          const uploaded = await deps.sessions.uploadFile({
+            sessionId,
+            name: inbound.fileName,
+            bytes: new Uint8Array(downloaded.bytes)
+          });
+          if (!uploaded?.receiptId) {
+            throw new Error("\u4E0A\u4F20\u540E\u6CA1\u6709\u62FF\u5230 receiptId");
+          }
+          attachmentParts = [{ type: "file", receiptId: uploaded.receiptId }];
+          logger.info?.(`[dsh-chat-feishu] \u5DF2\u63A5\u6536\u6587\u4EF6\u5E76\u5165\u5E93\uFF1A${inbound.fileName}\uFF08${downloaded.bytes.length} \u5B57\u8282\uFF0C${bot.id}\uFF09`);
+        } catch (error) {
+          const reason = error?.message ?? String(error);
+          lastError = reason;
+          logger.error?.(`[dsh-chat-feishu] \u63A5\u6536\u6587\u4EF6\u5931\u8D25\uFF1A${reason}`);
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `\u8FD9\u4E2A\u6587\u4EF6\u6682\u65F6\u6CA1\u80FD\u6536\u4E0B\uFF1A${reason}`
+          }).catch(() => {
+          });
+          return;
+        }
       }
-      attachmentParts = [{
-        type: "image",
-        mediaType,
-        data: downloaded.bytes.toString("base64"),
-        name: "feishu-image"
-      }];
     } else {
       text = stripMentions(inbound.text, message.mentions);
       if (!text) return;

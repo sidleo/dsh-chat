@@ -127,10 +127,13 @@ function messageEvent({
   mentions = undefined,
   messageType = 'text',
   imageKey = 'img_v2_test',
+  fileKey = 'file_v3_test',
+  fileName = '报表.xlsx',
 } = {}) {
   const content = messageType === 'text'
     ? JSON.stringify({ text })
-    : messageType === 'image' ? JSON.stringify({ image_key: imageKey }) : '{}';
+    : messageType === 'image' ? JSON.stringify({ image_key: imageKey })
+      : messageType === 'file' ? JSON.stringify({ file_key: fileKey, file_name: fileName }) : '{}';
   return {
     sender: { sender_id: { open_id: senderId } },
     message: {
@@ -170,6 +173,9 @@ async function makeBridge({
   const state = createFeishuStateStore({ path: join(dataDir, 'state.json'), logger: silentLogger });
   await state.load();
   const published = [];
+  /** 记录上传给会话的文件（入站文件链路用）；uploadFailure 可注入失败。 */
+  const uploads = [];
+  let uploadFailure = null;
   const deps = {
     channelId: 'feishu',
     dataDir,
@@ -185,6 +191,12 @@ async function makeBridge({
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     sessions: {
+      ensure: async ({ key }) => ({ sessionId: `session-${key}`, created: false }),
+      uploadFile: async (options) => {
+        uploads.push({ name: options.name, bytes: options.bytes?.length ?? 0 });
+        if (uploadFailure) throw uploadFailure;
+        return { receiptId: 'receipt-test-1', file: { attachmentId: 'sha256:x', name: options.name, bytes: options.bytes?.length ?? 0 } };
+      },
       ask: async (options) => {
         onAsk(options);
         // 模拟 hub 的会话桥：发布 guidance 后回调过程事件。
@@ -210,6 +222,8 @@ async function makeBridge({
     interactions,
     attached,
     offers,
+    uploads,
+    setUploadFailure(error) { uploadFailure = error; },
     dataDir,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -428,9 +442,9 @@ test('门禁：非属主不响应、群聊未 @ 不响应、重复消息只处�
 
     // 暂时不支持的富媒体类型给出明确提示（带类型名）。
     await app.bridge.accept(messageEvent({
-      messageId: 'om_file', messageType: 'file', text: undefined,
+      messageId: 'om_sticker', messageType: 'sticker', text: undefined,
     }));
-    assert.match(app.gateway.calls.replies.at(-1).text, /暂时还不能处理「file」/);
+    assert.match(app.gateway.calls.replies.at(-1).text, /暂时还不能处理「sticker」/);
     void asked;
   } finally {
     await app.cleanup();
@@ -952,5 +966,62 @@ test('控制器投递：文件走 file 消息、图片走 image 消息，机器�
     );
   } finally {
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('入站文件：下载 → 上传到会话 → 以 file 内容块交给模型', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_file_1',
+      messageType: 'file',
+      text: undefined,
+      fileKey: 'file_v3_abc',
+      fileName: '月度报表.xlsx',
+    }));
+
+    assert.deepEqual(app.gateway.calls.resources, [
+      { messageId: 'om_file_1', fileKey: 'file_v3_abc', type: 'file' },
+    ]);
+    assert.deepEqual(app.uploads, [{ name: '月度报表.xlsx', bytes: TINY_PNG.length }]);
+    assert.equal(asked.content.length, 1);
+    assert.deepEqual(asked.content[0], { type: 'file', receiptId: 'receipt-test-1' });
+    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('入站文件：上传失败要回可读原因并记进状态，绝不当成收下来了', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    const failure = new Error('上传文件失败：磁盘满了');
+    failure.code = 'attachment/io';
+    app.setUploadFailure(failure);
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_file_2', messageType: 'file', text: undefined, fileName: '大文件.zip',
+    }));
+
+    assert.equal(asked, null, '没入库就不能进模型');
+    assert.match(app.gateway.calls.replies.at(-1).text, /这个文件暂时没能收下：上传文件失败：磁盘满了/);
+    assert.match(app.bridge.status().lastError, /上传文件失败/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('入站文件：群聊未 @ 时连下载都不做', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_file_g', chatType: 'group', messageType: 'file', text: undefined,
+    }));
+    assert.deepEqual(app.gateway.calls.resources, []);
+    assert.deepEqual(app.uploads, []);
+    assert.equal(app.gateway.calls.replies.length, 0);
+  } finally {
+    await app.cleanup();
   }
 });
