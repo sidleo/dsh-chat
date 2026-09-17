@@ -1,5 +1,7 @@
 /**
- * dsh-chat-weixin（client 侧）：把微信渠道的元数据与设置页注册进 hub。
+ * dsh-chat-weixin（client 侧）：微信设置页（扫码接入 + 账号状态）。
+ *
+ * 渠道无关的面板（上下文增强等）直接用 hub 的共享组件与 hook。
  *
  * @module dsh-chat-weixin/client
  */
@@ -17,23 +19,275 @@ const LOCALE_NAMESPACE = 'dsh-chat-weixin';
 const zh = {
   '微信': '微信',
   '微信渠道': '微信渠道',
-  '渠道插件已加载，iLink 协议实现将在 P3 提供（当前仅私聊）。':
-    '渠道插件已加载，iLink 协议实现将在 P3 提供（当前仅私聊）。',
+  '已绑定的账号': '已绑定的账号',
+  '扫码接入': '扫码接入',
+  '重新连接': '重新连接',
+  '移除接入': '移除接入',
+  '确认移除': '确认移除',
+  '取消': '取消',
   '读取状态': '读取状态',
   '读取中…': '读取中…',
+  '正在生成二维码…': '正在生成二维码…',
+  '用手机微信扫描二维码并在手机上确认。': '用手机微信扫描二维码并在手机上确认。',
+  '二维码由腾讯微信 iLink 服务签发；账号凭据只写入本机 Host，浏览器拿不到 token。':
+    '二维码由腾讯微信 iLink 服务签发；账号凭据只写入本机 Host，浏览器拿不到 token。',
+  '等待扫码': '等待扫码',
+  '已扫码，请在手机上确认': '已扫码，请在手机上确认',
+  '需要配对码，请在下方输入手机上显示的配对码': '需要配对码，请在下方输入手机上显示的配对码',
+  '提交配对码': '提交配对码',
+  '二维码已失效，请重新生成': '二维码已失效，请重新生成',
+  '该微信账号已在别处绑定': '该微信账号已在别处绑定',
+  '已接入，正在启动长轮询…': '已接入，正在启动长轮询…',
+  '重新生成二维码': '重新生成二维码',
+  '没有已绑定的微信账号': '没有已绑定的微信账号',
+  '本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。':
+    '本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。',
+  '已处理消息': '已处理消息',
   '状态': '状态',
+  '启动中': '启动中',
+  '运行正常': '运行正常',
+  '重连中': '重连中',
+  '启动失败': '启动失败',
+  '已停止': '已停止',
+  '仅私聊': '仅私聊',
 };
+
 const en = {
   '微信': 'WeChat',
   '微信渠道': 'WeChat channel',
-  '渠道插件已加载，iLink 协议实现将在 P3 提供（当前仅私聊）。':
-    'Channel plugin loaded; iLink protocol lands in P3 (direct messages only).',
-  '读取状态': 'Load status',
+  '已绑定的账号': 'Linked accounts',
+  '扫码接入': 'Scan to link',
+  '重新连接': 'Reconnect',
+  '移除接入': 'Remove',
+  '确认移除': 'Confirm removal',
+  '取消': 'Cancel',
+  '读取状态': 'Reload',
   '读取中…': 'Loading…',
-  '状态': 'Status',
+  '正在生成二维码…': 'Requesting a QR code…',
+  '用手机微信扫描二维码并在手机上确认。':
+    'Scan the QR code with WeChat on your phone and confirm there.',
+  '二维码由腾讯微信 iLink 服务签发；账号凭据只写入本机 Host，浏览器拿不到 token。':
+    'The QR code is issued by Tencent iLink; credentials are written on the Host only.',
+  '等待扫码': 'Waiting for a scan',
+  '已扫码，请在手机上确认': 'Scanned — confirm on your phone',
+  '需要配对码，请在下方输入手机上显示的配对码':
+    'A pairing code is required; enter the code shown on your phone',
+  '提交配对码': 'Submit code',
+  '二维码已失效，请重新生成': 'The QR code expired; generate a new one',
+  '该微信账号已在别处绑定': 'This WeChat account is already linked elsewhere',
+  '已接入，正在启动长轮询…': 'Linked — starting the message connection…',
+  '重新生成二维码': 'Generate a new QR code',
+  '没有已绑定的微信账号': 'No WeChat account linked',
+  '本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。':
+    'No WeChat account on this Host yet. Use “Scan to link” above.',
+  '已处理消息': 'Messages handled',
+  '状态': 'State',
+  '启动中': 'Starting',
+  '运行正常': 'Connected',
+  '重连中': 'Reconnecting',
+  '启动失败': 'Failed',
+  '已停止': 'Stopped',
+  '仅私聊': 'Direct messages only',
 };
 
 const h = React.createElement;
+
+const STATE_TEXT = {
+  starting: '启动中',
+  running: '运行正常',
+  reconnecting: '重连中',
+  failed: '启动失败',
+  stopped: '已停止',
+};
+
+const STATUS_TEXT = {
+  wait: '等待扫码',
+  scaned: '已扫码，请在手机上确认',
+  need_verifycode: '需要配对码，请在下方输入手机上显示的配对码',
+  expired: '二维码已失效，请重新生成',
+  verify_code_blocked: '二维码已失效，请重新生成',
+  binded_redirect: '该微信账号已在别处绑定',
+  connected: '已接入，正在启动长轮询…',
+};
+
+function QrLogin({ chatUi, connection, translate, onDone }) {
+  const t = typeof translate === 'function' ? translate : (key) => key;
+  const [state, setState] = React.useState({ phase: 'idle' });
+  const [verifyCode, setVerifyCode] = React.useState('');
+  const aliveRef = React.useRef(true);
+
+  React.useEffect(() => () => { aliveRef.current = false; }, []);
+
+  const begin = React.useCallback(async () => {
+    setState({ phase: 'starting' });
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'login.begin', {});
+      const value = chatUi.unwrapRpc(result);
+      if (!aliveRef.current) return;
+      setState({ phase: 'waiting', attemptId: value.attemptId, qrcodeUrl: value.qrcodeUrl, status: 'wait' });
+    } catch (error) {
+      if (aliveRef.current) setState({ phase: 'error', error });
+    }
+  }, [chatUi, connection]);
+
+  // 轮询扫码状态（服务端长轮询，这里每 2s 一次）。
+  React.useEffect(() => {
+    if (state.phase !== 'waiting' || !state.attemptId) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'login.poll', {
+          attemptId: state.attemptId,
+          ...(verifyCode ? { verifyCode } : {}),
+        });
+        const value = chatUi.unwrapRpc(result);
+        if (stopped || !aliveRef.current) return;
+        if (value.status === 'connected') {
+          setState({ phase: 'done' });
+          onDone?.();
+          return;
+        }
+        setState((current) => ({ ...current, status: value.status }));
+        if (value.status === 'expired' || value.status === 'verify_code_blocked') return;
+      } catch (error) {
+        if (!stopped && aliveRef.current) setState((current) => ({ ...current, error }));
+        return;
+      }
+      if (!stopped) timer = setTimeout(tick, 2_000);
+    };
+    let timer = setTimeout(tick, 500);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [state.phase, state.attemptId, verifyCode, chatUi, connection, onDone]);
+
+  const { Panel } = chatUi.components;
+
+  if (state.phase === 'idle') {
+    return h(Panel, {
+      title: t('扫码接入'),
+      description: t('二维码由腾讯微信 iLink 服务签发；账号凭据只写入本机 Host，浏览器拿不到 token。'),
+      actions: h('button', {
+        type: 'button', className: 'dchat-button dchat-buttonPrimary', onClick: () => { void begin(); },
+      }, t('扫码接入')),
+    });
+  }
+  if (state.phase === 'starting') {
+    return h(Panel, { title: t('扫码接入'), description: t('正在生成二维码…') });
+  }
+  if (state.phase === 'done') {
+    return h(Panel, { title: t('扫码接入'), description: t('已接入，正在启动长轮询…') });
+  }
+  if (state.phase === 'error') {
+    return h(Panel, {
+      title: t('扫码接入'),
+      actions: h('button', {
+        type: 'button', className: 'dchat-button', onClick: () => { void begin(); },
+      }, t('重新生成二维码')),
+    }, h('p', { className: 'dchat-error', role: 'alert' }, state.error?.message ?? '发起扫码失败。'));
+  }
+
+  const expired = status => status === 'expired' || status === 'verify_code_blocked';
+  return h(Panel, {
+    title: t('扫码接入'),
+    description: t('用手机微信扫描二维码并在手机上确认。'),
+    actions: h('button', {
+      type: 'button', className: 'dchat-button', onClick: () => { void begin(); },
+    }, t('重新生成二维码')),
+  },
+  state.qrcodeUrl
+    ? h('img', {
+      src: state.qrcodeUrl,
+      alt: t('扫码接入'),
+      style: { width: 200, height: 200, imageRendering: 'pixelated' },
+    })
+    : null,
+  h('p', { className: 'dchat-cardDescription' }, t(STATUS_TEXT[state.status] ?? '等待扫码')),
+  state.status === 'need_verifycode'
+    ? h('div', { className: 'dchat-actions' },
+      h('input', {
+        type: 'text', value: verifyCode, placeholder: t('提交配对码'),
+        onChange: (event) => setVerifyCode(event.target.value),
+      }))
+    : null,
+  expired(state.status) ? h('p', { className: 'dchat-error' }, t('二维码已失效，请重新生成')) : null);
+}
+
+function AccountCard({ account, chatUi, connection, translate, onChanged }) {
+  const t = typeof translate === 'function' ? translate : (key) => key;
+  const { Panel, StatusPill, ContextEnhancementEditor } = chatUi.components;
+  const settings = chatUi.hooks.useBotSettings({
+    connection, channelId: CHANNEL_ID, botId: account.botId,
+  });
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [confirming, setConfirming] = React.useState(false);
+
+  const run = async (method, payload) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, method, payload);
+      return chatUi.unwrapRpc(result);
+    } catch (cause) {
+      setError(cause.message);
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return h(Panel, {
+    title: account.botName ?? account.accountIdMasked,
+    description: `${account.accountIdMasked} · ${t('仅私聊')}`,
+    actions: h('div', { className: 'dchat-actions' },
+      h(StatusPill, { status: account.state, label: t(STATE_TEXT[account.state] ?? '状态') }),
+      h('button', {
+        type: 'button', className: 'dchat-button', disabled: busy,
+        onClick: async () => {
+          try {
+            await run('account.reconnect', { botId: account.botId });
+            await onChanged?.();
+          } catch { /* 错误已展示 */ }
+        },
+      }, t('重新连接')),
+      confirming
+        ? h(React.Fragment, null,
+          h('button', {
+            type: 'button', className: 'dchat-button', disabled: busy,
+            onClick: async () => {
+              try {
+                await run('account.delete', { botId: account.botId, confirm: true });
+                setConfirming(false);
+                await onChanged?.();
+              } catch { /* 错误已展示 */ }
+            },
+          }, t('确认移除')),
+          h('button', {
+            type: 'button', className: 'dchat-button', disabled: busy,
+            onClick: () => setConfirming(false),
+          }, t('取消')))
+        : h('button', {
+          type: 'button', className: 'dchat-button', disabled: busy,
+          onClick: () => setConfirming(true),
+        }, t('移除接入'))),
+  },
+  account.errorMessage
+    ? h('p', { className: 'dchat-error', role: 'alert' }, account.errorMessage)
+    : null,
+  error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
+  h('div', { className: 'dchat-list' },
+    h('div', { className: 'dchat-listItem' },
+      h('span', null, t('已处理消息')),
+      h('span', null, String(account.handled ?? 0)))),
+  h(ContextEnhancementEditor, {
+    config: settings.record?.contextEnhancement ?? null,
+    disabled: settings.phase !== 'ready',
+    translate: t,
+    onSave: settings.saveContextEnhancement,
+  }));
+}
 
 function WeixinPage(props) {
   const { chatUi, connection, translate } = props;
@@ -41,41 +295,43 @@ function WeixinPage(props) {
   const [state, setState] = React.useState({ phase: 'idle', value: null, error: null });
 
   const load = React.useCallback(async () => {
-    setState({ phase: 'loading', value: null, error: null });
+    setState((current) => ({ ...current, phase: 'loading' }));
     try {
       const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'connection.status', {});
-      setState({ phase: 'done', value: chatUi.unwrapRpc(result), error: null });
+      setState({ phase: 'ready', value: chatUi.unwrapRpc(result), error: null });
     } catch (error) {
       setState({ phase: 'error', value: null, error });
     }
   }, [chatUi, connection]);
 
-  const { Panel, StatusPill } = chatUi.components;
+  React.useEffect(() => {
+    void load();
+  }, [load]);
 
-  return h(Panel, {
-    title: t('微信渠道'),
-    description: t('渠道插件已加载，iLink 协议实现将在 P3 提供（当前仅私聊）。'),
-    actions: h('button', {
-      type: 'button',
-      className: 'dchat-button',
-      disabled: state.phase === 'loading',
-      onClick: load,
-    }, state.phase === 'loading' ? t('读取中…') : t('读取状态')),
-  },
-  state.phase === 'idle' ? null : h('div', { className: 'dchat-list' },
-    h('div', { className: 'dchat-listItem' },
-      h('span', null, t('状态')),
-      state.error
-        ? h(StatusPill, { status: 'failed', label: state.error.message })
-        : h(StatusPill, {
-          status: state.value?.phase === 'skeleton' ? 'starting' : 'running',
-          label: state.value?.phase ?? 'ok',
-        })),
-    state.value
-      ? h('div', { className: 'dchat-listItem' },
-        h('span', null, 'dataDir'),
-        h('code', { className: 'dchat-code' }, state.value.dataDir ?? '—'))
-      : null));
+  const { Panel, EmptyState } = chatUi.components;
+  const accounts = state.value?.accounts ?? [];
+
+  return h(React.Fragment, null,
+    h(Panel, {
+      title: t('微信渠道'),
+      description: `dataDir：${state.value?.dataDir ?? '—'}`,
+      actions: h('button', {
+        type: 'button', className: 'dchat-button',
+        disabled: state.phase === 'loading',
+        onClick: () => { void load(); },
+      }, state.phase === 'loading' ? t('读取中…') : t('读取状态')),
+    },
+    state.error ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message) : null,
+    state.phase === 'ready' && accounts.length === 0
+      ? h(EmptyState, {
+        title: t('没有已绑定的微信账号'),
+        description: t('本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。'),
+      })
+      : null),
+    h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
+    accounts.map((account) => h(AccountCard, {
+      key: account.botId, account, chatUi, connection, translate: t, onChanged: load,
+    })));
 }
 
 /**

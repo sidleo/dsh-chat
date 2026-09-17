@@ -147,6 +147,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 | `dataDir` | 渠道历史数据目录（按 `legacy.dir` 解析，默认 hub 数据目录） |
 | `resolveDataDir(name)` | 需要多个目录时用 |
 | `storage` | 本渠道的每机器人共享设置：`read/write/list` |
+| `createJsonStore` | 渠道自建存储用的 JSON 文档工厂（原子写/首次覆盖备份/串行队列/订阅），签名见 §6 末尾 |
 | `ready()` | 等设置文档就绪 |
 | `contextEnhancement` | 上下文增强引擎（校验/解析/拼装） |
 | `guidance` | 每会话提示词登记 |

@@ -457,6 +457,10 @@ function createJsonStore({
         return document;
       });
     },
+    /** 等待已排队的写入落定（停机前调用，避免和进程退出抢时间）。 */
+    async flush() {
+      await queue;
+    },
     /**
      * 订阅文档变更（写入成功后触发）。
      *
@@ -1545,6 +1549,11 @@ function apply(ctx, config = {}) {
       dataDir: channelDataDirOverride(config, channelId) ?? (definition.legacy?.dir ? channelDataDir(definition.legacy.dir, integrations) : hubDataDir(config.dataDir)),
       resolveDataDir: (name2) => channelDataDir(name2, integrations),
       storage: storageFor(channelId),
+      /**
+       * 渠道自建存储用的 JSON 文档工厂：原子写、首次覆盖备份、串行队列、变更订阅
+       * 由 hub 统一实现，渠道不必各写一遍。
+       */
+      createJsonStore,
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
       contextEnhancement: context_enhancement_exports,

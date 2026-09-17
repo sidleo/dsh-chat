@@ -17,6 +17,7 @@ import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
+import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
 import { createRpcCarrier, fail, failFrom, ok } from './rpc.mjs';
 import { createSessionStore } from './session-store.mjs';
@@ -131,6 +132,11 @@ export function apply(ctx, config = {}) {
           : hubDataDir(config.dataDir)),
       resolveDataDir: (name) => channelDataDir(name, integrations),
       storage: storageFor(channelId),
+      /**
+       * 渠道自建存储用的 JSON 文档工厂：原子写、首次覆盖备份、串行队列、变更订阅
+       * 由 hub 统一实现，渠道不必各写一遍。
+       */
+      createJsonStore,
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
       contextEnhancement,

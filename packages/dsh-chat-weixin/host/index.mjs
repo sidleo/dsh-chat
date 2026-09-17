@@ -2,10 +2,11 @@
  * dsh-chat-weixin（host 侧）：把微信渠道注册进 hub。
  *
  * 本包**不 import hub 包**，只依赖运行期契约（见仓库 CONTRACT.md）。
- * P0 只有骨架；iLink 协议客户端与桥接见 P3。
  *
  * @module dsh-chat-weixin/host
  */
+
+import { createWeixinController } from './controller.mjs';
 
 export const name = 'dsh-chat-weixin-host';
 
@@ -36,23 +37,16 @@ export function apply(ctx) {
     order: 10,
     legacy: { dir: 'dsh-weixin' },
     async createChannel(deps) {
-      deps.logger.info?.('[dsh-chat-weixin] 渠道已注册（P0 骨架，协议实现在 P3）');
+      const controller = createWeixinController({ deps, logger: deps.logger });
+      void controller.start().catch((error) => {
+        deps.reportStatus('failed', error);
+        deps.logger.error?.(`[dsh-chat-weixin] 启动失败：${error?.message ?? error}`);
+      });
       return {
-        async start() {},
-        async stop() {},
-        endpoints: {
-          'connection.status': async () => ({
-            ok: true,
-            value: {
-              channel: CHANNEL_ID,
-              phase: 'skeleton',
-              contractVersion: EXPECTED_CONTRACT,
-              dataDir: deps.dataDir,
-              accounts: [],
-              note: '微信 iLink 协议实现将在 P3 提供。',
-            },
-          }),
+        async stop() {
+          await controller.stop();
         },
+        endpoints: controller.endpoints,
       };
     },
   }), 'dsh-chat-weixin: 注册渠道');

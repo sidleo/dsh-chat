@@ -125,6 +125,11 @@ export function createJsonStore({
       });
     },
 
+    /** 等待已排队的写入落定（停机前调用，避免和进程退出抢时间）。 */
+    async flush() {
+      await queue;
+    },
+
     /**
      * 订阅文档变更（写入成功后触发）。
      *

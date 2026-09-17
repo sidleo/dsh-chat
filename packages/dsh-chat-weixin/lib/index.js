@@ -5,6 +5,1127 @@ const require = __dshCreateRequire(import.meta.url);
 const __filename = __dshFileURLToPath(import.meta.url);
 const __dirname = __dshDirname(__filename);
 
+// packages/dsh-chat-weixin/host/controller.mjs
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { join } from "node:path";
+
+// packages/dsh-chat-weixin/host/config-store.mjs
+var ACCOUNT_ID = /^[A-Za-z0-9_@.:+-]{1,128}$/;
+var TOKEN_REF = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var FALLBACK_BASE_URL = "https://ilinkai.weixin.qq.com/";
+function cleanString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function normalizeAccount(value) {
+  if (!value || typeof value !== "object") return null;
+  const botId = cleanString(value.botId);
+  const accountId = cleanString(value.accountId);
+  const tokenRef = cleanString(value.tokenRef);
+  const ownerUserId = cleanString(value.ownerUserId);
+  if (!botId || !ACCOUNT_ID.test(botId)) return null;
+  if (!accountId || !ACCOUNT_ID.test(accountId)) return null;
+  if (!tokenRef || !TOKEN_REF.test(tokenRef)) return null;
+  if (!ownerUserId) return null;
+  return Object.freeze({
+    botId,
+    accountId,
+    tokenRef,
+    ownerUserId,
+    baseUrl: cleanString(value.baseUrl) ?? FALLBACK_BASE_URL,
+    botName: cleanString(value.botName),
+    createdAt: cleanString(value.createdAt),
+    connectedAt: cleanString(value.connectedAt)
+  });
+}
+function normalizeDocument(value) {
+  const source = value && typeof value === "object" && Array.isArray(value.accounts) ? value : null;
+  if (!source) return { version: 1, accounts: [] };
+  const accounts = source.accounts.map((account) => normalizeAccount(account));
+  if (accounts.some((account) => account === null)) {
+    throw new Error("dsh-weixin config.json \u542B\u65E0\u6CD5\u8BC6\u522B\u7684\u8D26\u53F7\u6761\u76EE");
+  }
+  return { version: 1, accounts };
+}
+function createWeixinConfigStore({ path, createJsonStore }) {
+  if (typeof createJsonStore !== "function") {
+    throw new TypeError("\u5FAE\u4FE1\u914D\u7F6E\u5B58\u50A8\u9700\u8981 hub \u63D0\u4F9B\u7684 createJsonStore\u3002");
+  }
+  const store = createJsonStore({
+    path,
+    normalize: normalizeDocument,
+    empty: () => ({ version: 1, accounts: [] }),
+    label: "\u5FAE\u4FE1\u8D26\u53F7\u914D\u7F6E"
+  });
+  return {
+    path,
+    ready: () => store.ready(),
+    subscribe: (listener) => store.subscribe(listener),
+    /** @returns 全部账号。 */
+    list() {
+      return Object.freeze([...store.snapshot().accounts ?? []]);
+    },
+    /** @returns 指定账号，未配置时 undefined。 */
+    get(botId) {
+      return store.snapshot().accounts.find((account) => account.botId === botId);
+    },
+    /** 追加或覆盖一个账号。 */
+    async saveAccount(account) {
+      const normalized = normalizeAccount(account);
+      if (!normalized) throw new TypeError("\u5FAE\u4FE1\u8D26\u53F7\u4FE1\u606F\u4E0D\u5B8C\u6574\uFF08botId/accountId/tokenRef/ownerUserId \u5FC5\u586B\uFF09\u3002");
+      await store.update((current) => {
+        const accounts = [...current.accounts];
+        const index = accounts.findIndex((item) => item.botId === normalized.botId);
+        if (index >= 0) accounts[index] = normalized;
+        else accounts.push(normalized);
+        return { version: 1, accounts };
+      });
+      return normalized;
+    },
+    /** 删除一个账号。 */
+    async removeAccount(botId) {
+      let removed = false;
+      await store.update((current) => {
+        const accounts = current.accounts.filter((account) => account.botId !== botId);
+        if (accounts.length === current.accounts.length) return null;
+        removed = true;
+        return { version: 1, accounts };
+      });
+      return removed;
+    }
+  };
+}
+
+// packages/dsh-chat-weixin/host/ilink-client.mjs
+import { randomBytes, randomUUID } from "node:crypto";
+var DEFAULT_QR_BASE_URL = "https://ilinkai.weixin.qq.com/";
+var PROTOCOL_VERSION = "2.4.6";
+var DEFAULT_BOT_TYPE = "3";
+var MAX_MESSAGE_CHARS = 1800;
+var ILINK_APP_ID = "bot";
+var ILINK_CLIENT_VERSION = 2 << 16 | 4 << 8 | 6;
+var DEFAULT_TIMEOUT_MS = 15e3;
+var LONG_POLL_TIMEOUT_MS = 35e3;
+var LOGIN_STATUSES = Object.freeze([
+  "wait",
+  "scaned",
+  "confirmed",
+  "expired",
+  "scaned_but_redirect",
+  "need_verifycode",
+  "verify_code_blocked",
+  "binded_redirect"
+]);
+var IlinkError = class extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "IlinkError";
+    this.code = code;
+    this.status = options.status;
+    this.providerCode = options.providerCode;
+    this.timeoutMs = options.timeoutMs;
+  }
+};
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function abortError(signal) {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error("\u64CD\u4F5C\u5DF2\u53D6\u6D88");
+  error.name = "AbortError";
+  return error;
+}
+function rejectedResponse(value, fields = ["ret", "errcode"]) {
+  if (!value || typeof value !== "object") return null;
+  for (const field of fields) {
+    const raw = value[field];
+    if (raw === void 0 || raw === 0 || raw === "0") continue;
+    return typeof raw === "string" || typeof raw === "number" ? String(raw) : "rejected";
+  }
+  return null;
+}
+function isWeixinHost(hostname) {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return normalized === "weixin.qq.com" || normalized.endsWith(".weixin.qq.com") || normalized === "wechat.com" || normalized.endsWith(".wechat.com");
+}
+function normalizeBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new IlinkError("invalid-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u8FDE\u63A5\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || !isWeixinHost(url.hostname) || url.port !== "" && url.port !== "443") {
+    throw new IlinkError("untrusted-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u8FDE\u63A5\u5730\u5740\u3002");
+  }
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url.toString();
+}
+function normalizeQrUrl(value) {
+  const text = nonEmptyString(value);
+  if (!text) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u626B\u7801\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || !isWeixinHost(url.hostname)) {
+    throw new IlinkError("untrusted-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u626B\u7801\u5730\u5740\u3002");
+  }
+  return url.toString();
+}
+function commonHeaders() {
+  return {
+    "iLink-App-Id": ILINK_APP_ID,
+    "iLink-App-ClientVersion": String(ILINK_CLIENT_VERSION)
+  };
+}
+function authenticatedHeaders(token) {
+  const headers = {
+    ...commonHeaders(),
+    "content-type": "application/json",
+    AuthorizationType: "ilink_bot_token",
+    "X-WECHAT-UIN": Buffer.from(String(randomBytes(4).readUInt32BE(0)), "utf8").toString("base64")
+  };
+  const value = nonEmptyString(token);
+  if (value) headers.Authorization = `Bearer ${value}`;
+  return headers;
+}
+function baseInfo() {
+  return { channel_version: PROTOCOL_VERSION, bot_agent: "dsh-chat/0.0.1" };
+}
+async function requestJson(fetchImpl, {
+  method,
+  baseUrl,
+  endpoint,
+  body,
+  token,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal,
+  authenticated = true
+}) {
+  const trustedBase = normalizeBaseUrl(baseUrl);
+  const url = new URL(endpoint, trustedBase);
+  if (!isWeixinHost(url.hostname)) {
+    throw new IlinkError("untrusted-endpoint", "\u62D2\u7EDD\u8BBF\u95EE\u4E0D\u53D7\u4FE1\u4EFB\u7684\u5FAE\u4FE1\u670D\u52A1\u5730\u5740\u3002");
+  }
+  if (signal?.aborted) throw abortError(signal);
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let timedOut = false;
+  const timer = timeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : null;
+  try {
+    const response = await fetchImpl(url, {
+      method,
+      headers: authenticated ? authenticatedHeaders(token) : commonHeaders(),
+      ...body === void 0 ? {} : { body: JSON.stringify(body) },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new IlinkError("http-error", `\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u5931\u8D25\uFF08HTTP ${response.status}\uFF09\u3002`, {
+        status: response.status
+      });
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new IlinkError("invalid-response", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u54CD\u5E94\u3002", { cause: error });
+    }
+  } catch (error) {
+    if (signal?.aborted) throw abortError(signal);
+    if (timedOut) {
+      throw new IlinkError("timeout", "\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u8D85\u65F6\u3002", { cause: error, timeoutMs });
+    }
+    throw error instanceof IlinkError ? error : new IlinkError("network-error", "\u6682\u65F6\u65E0\u6CD5\u8BBF\u95EE\u5FAE\u4FE1\u670D\u52A1\u3002", { cause: error });
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener?.("abort", onAbort);
+  }
+}
+function extractText(message) {
+  for (const item of message?.item_list ?? []) {
+    if (item?.type === 1 && typeof item.text_item?.text === "string") {
+      const text = item.text_item.text.trim();
+      if (text) return text;
+    }
+    if (item?.type === 3 && typeof item.voice_item?.text === "string") {
+      const text = item.voice_item.text.trim();
+      if (text) return text;
+    }
+  }
+  return null;
+}
+function messageId(message) {
+  if (message?.message_id !== void 0 && message.message_id !== null) {
+    return String(message.message_id);
+  }
+  return nonEmptyString(message?.client_id);
+}
+function splitText(text, maxChars = MAX_MESSAGE_CHARS) {
+  if (text.length <= maxChars) return [text];
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf("\n", maxChars);
+    if (splitAt < Math.floor(maxChars * 0.6)) splitAt = maxChars;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+function createIlinkClient({ fetchImpl = fetch } = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("ilink \u5BA2\u6237\u7AEF\u9700\u8981 fetch\u3002");
+  return Object.freeze({
+    /**
+     * 申请登录二维码。
+     *
+     * @param options - { localTokens, botType, signal }。
+     * @returns { qrcode, qrcodeUrl }。
+     */
+    async beginLogin({ localTokens = [], botType = DEFAULT_BOT_TYPE, signal } = {}) {
+      const tokens = [...new Set(localTokens.map(nonEmptyString).filter(Boolean))].slice(-10);
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl: DEFAULT_QR_BASE_URL,
+        endpoint: `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(botType)}`,
+        body: { local_token_list: tokens },
+        timeoutMs: 1e4,
+        signal
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError("qr-request-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u4E8C\u7EF4\u7801\u7533\u8BF7\u3002", {
+          providerCode: rejection
+        });
+      }
+      const qrcode = nonEmptyString(response?.qrcode);
+      if (!qrcode) throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u4E8C\u7EF4\u7801\u4EE4\u724C\u3002");
+      return { qrcode, qrcodeUrl: normalizeQrUrl(response?.qrcode_img_content) };
+    },
+    /**
+     * 轮询扫码状态。
+     *
+     * @param options - { qrcode, baseUrl, verifyCode, signal }。
+     * @returns 服务端状态对象。
+     */
+    async pollLogin({ qrcode, baseUrl = DEFAULT_QR_BASE_URL, verifyCode, signal }) {
+      const qr = nonEmptyString(qrcode);
+      if (!qr) throw new TypeError("pollLogin \u9700\u8981 qrcode\u3002");
+      let endpoint = `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qr)}`;
+      const code = nonEmptyString(verifyCode);
+      if (code) endpoint += `&verify_code=${encodeURIComponent(code)}`;
+      const response = await requestJson(fetchImpl, {
+        method: "GET",
+        baseUrl,
+        endpoint,
+        timeoutMs: LONG_POLL_TIMEOUT_MS,
+        signal,
+        authenticated: false
+      });
+      if (!response || typeof response !== "object" || !LOGIN_STATUSES.includes(response.status)) {
+        throw new IlinkError("invalid-login-status", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u8BC6\u522B\u7684\u626B\u7801\u72B6\u6001\u3002");
+      }
+      return response;
+    },
+    /**
+     * 长轮询收取消息；超时视为"这一轮没有新消息"。
+     *
+     * @param options - { baseUrl, token, getUpdatesBuf, timeoutMs, signal }。
+     * @returns { ret, msgs, get_updates_buf }。
+     */
+    async getUpdates({ baseUrl, token, getUpdatesBuf = "", timeoutMs, signal }) {
+      try {
+        return await requestJson(fetchImpl, {
+          method: "POST",
+          baseUrl,
+          endpoint: "ilink/bot/getupdates",
+          body: { get_updates_buf: getUpdatesBuf, base_info: baseInfo() },
+          token,
+          timeoutMs: timeoutMs ?? LONG_POLL_TIMEOUT_MS,
+          signal
+        });
+      } catch (error) {
+        if (error instanceof IlinkError && error.code === "timeout") {
+          return { ret: 0, msgs: [], get_updates_buf: getUpdatesBuf };
+        }
+        throw error;
+      }
+    },
+    /**
+     * 取该用户的机器人配置（主要是 typing_ticket）。
+     *
+     * @param options - { baseUrl, token, toUserId, contextToken, signal }。
+     * @returns { typingTicket }。
+     */
+    async getConfig({ baseUrl, token, toUserId, contextToken, signal }) {
+      const recipient = nonEmptyString(toUserId);
+      if (!recipient) throw new TypeError("getConfig \u9700\u8981 toUserId\u3002");
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/getconfig",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: {
+          ilink_user_id: recipient,
+          ...nonEmptyString(contextToken) ? { context_token: contextToken } : {},
+          base_info: baseInfo()
+        }
+      });
+      if (response?.ret !== void 0 && response.ret !== 0) {
+        throw new IlinkError("config-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u673A\u5668\u4EBA\u914D\u7F6E\u8BF7\u6C42\u3002", {
+          providerCode: String(response.ret)
+        });
+      }
+      return { typingTicket: nonEmptyString(response?.typing_ticket) };
+    },
+    /**
+     * 发送/结束"正在输入"。
+     *
+     * @param options - { baseUrl, token, toUserId, typingTicket, status }，status 1=开始 2=结束。
+     */
+    async sendTyping({ baseUrl, token, toUserId, typingTicket, status, signal }) {
+      const recipient = nonEmptyString(toUserId);
+      const ticket = nonEmptyString(typingTicket);
+      if (!recipient || !ticket) throw new TypeError("sendTyping \u9700\u8981 toUserId \u4E0E typingTicket\u3002");
+      if (status !== 1 && status !== 2) throw new TypeError("typing status \u53EA\u80FD\u662F 1 \u6216 2\u3002");
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/sendtyping",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: {
+          ilink_user_id: recipient,
+          typing_ticket: ticket,
+          status,
+          base_info: baseInfo()
+        }
+      });
+      if (response?.ret !== void 0 && response.ret !== 0) {
+        throw new IlinkError("typing-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u8F93\u5165\u72B6\u6001\u8BF7\u6C42\u3002", {
+          providerCode: String(response.ret)
+        });
+      }
+      return true;
+    },
+    /**
+     * 发送一条文本消息。
+     *
+     * @param options - { baseUrl, token, toUserId, text, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendText({ baseUrl, token, toUserId, text, contextToken, runId, signal }) {
+      const recipient = nonEmptyString(toUserId);
+      const content = nonEmptyString(text);
+      if (!recipient || !content) throw new TypeError("sendText \u9700\u8981 toUserId \u4E0E text\u3002");
+      const clientId = `dsh-chat-weixin-${randomUUID()}`;
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/sendmessage",
+        token,
+        signal,
+        body: {
+          msg: {
+            from_user_id: "",
+            to_user_id: recipient,
+            client_id: clientId,
+            message_type: 2,
+            message_state: 2,
+            item_list: [{ type: 1, text_item: { text: content } }],
+            ...nonEmptyString(contextToken) ? { context_token: contextToken } : {},
+            ...nonEmptyString(runId) ? { run_id: runId } : {}
+          },
+          base_info: baseInfo()
+        }
+      });
+      const rejection = rejectedResponse(response);
+      if (rejection) {
+        throw new IlinkError("send-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u56DE\u590D\u6D88\u606F\u3002", { providerCode: rejection });
+      }
+      return { providerMessageIds: [clientId] };
+    },
+    /** 告诉服务端本机器人开始工作（连接建立时调用）。 */
+    async notifyStart({ baseUrl, token, signal }) {
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/msg/notifystart",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: { base_info: baseInfo() }
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError(
+          rejection === "-14" ? "stale-token" : "start-rejected",
+          rejection === "-14" ? "\u5FAE\u4FE1\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801\u3002" : "\u5FAE\u4FE1\u8D26\u53F7\u8FDE\u63A5\u542F\u52A8\u5931\u8D25\u3002",
+          { providerCode: rejection }
+        );
+      }
+      return response;
+    },
+    /** 告诉服务端本机器人停止工作。 */
+    async notifyStop({ baseUrl, token, signal }) {
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/msg/notifystop",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: { base_info: baseInfo() }
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError("stop-rejected", "\u5FAE\u4FE1\u670D\u52A1\u672A\u786E\u8BA4\u505C\u6B62\u901A\u77E5\u3002", { providerCode: rejection });
+      }
+      return response;
+    }
+  });
+}
+
+// packages/dsh-chat-weixin/host/runtime.mjs
+function createWeixinRuntime({
+  account,
+  token,
+  deps,
+  client,
+  state,
+  logger = console
+}) {
+  if (!account?.botId) throw new TypeError("\u5FAE\u4FE1\u8FD0\u884C\u65F6\u9700\u8981\u8D26\u53F7\u914D\u7F6E\u3002");
+  if (!token) throw new TypeError("\u5FAE\u4FE1\u8FD0\u884C\u65F6\u9700\u8981\u8BBF\u95EE\u4EE4\u724C\u3002");
+  if (typeof deps?.sessions?.ask !== "function" || typeof deps?.contextEnhancement?.enhanceContent !== "function") {
+    throw new TypeError("\u5FAE\u4FE1\u8FD0\u884C\u65F6\u9700\u8981 hub \u7684 sessions.ask \u4E0E contextEnhancement\u3002");
+  }
+  const baseUrl = account.baseUrl;
+  let phase = "idle";
+  let error = null;
+  let handled = 0;
+  let lastHandledAt = null;
+  let lastMessageAt = null;
+  let typingTickets = /* @__PURE__ */ new Map();
+  let loop = null;
+  function setPhase(next, detail = null) {
+    phase = next;
+    error = detail;
+  }
+  async function typingTicket(userId, contextToken, signal) {
+    const cached = typingTickets.get(userId);
+    if (cached) return cached;
+    const config = await client.getConfig({
+      baseUrl,
+      token,
+      toUserId: userId,
+      contextToken,
+      signal
+    });
+    if (config?.typingTicket) {
+      if (typingTickets.size > 200) typingTickets = /* @__PURE__ */ new Map();
+      typingTickets.set(userId, config.typingTicket);
+      return config.typingTicket;
+    }
+    return null;
+  }
+  async function typing(userId, contextToken, status, signal) {
+    try {
+      const ticket = await typingTicket(userId, contextToken, signal);
+      if (!ticket) return false;
+      await client.sendTyping({
+        baseUrl,
+        token,
+        toUserId: userId,
+        typingTicket: ticket,
+        status,
+        signal
+      });
+      return true;
+    } catch (cause) {
+      typingTickets.delete(userId);
+      logger.warn?.(`[dsh-chat-weixin] \u53D1\u9001\u8F93\u5165\u72B6\u6001\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
+      return false;
+    }
+  }
+  async function reply(userId, text, contextToken, runId, signal) {
+    const chunks = splitText(text);
+    for (const chunk of chunks) {
+      await client.sendText({
+        baseUrl,
+        token,
+        toUserId: userId,
+        text: chunk,
+        contextToken,
+        runId,
+        signal
+      });
+    }
+    return chunks.length;
+  }
+  async function accept(message, signal) {
+    if (message?.message_type === 2) return;
+    const id = messageId(message);
+    const sender = typeof message?.from_user_id === "string" ? message.from_user_id.trim() : "";
+    if (!id || !sender) return;
+    if (!state.markSeen(id)) return;
+    lastMessageAt = (/* @__PURE__ */ new Date()).toISOString();
+    await deps.ready?.();
+    const record = deps.storage.read(account.botId);
+    const allowed = sender === account.ownerUserId || record.accessPolicy?.direct?.mode === "open";
+    if (!allowed) {
+      logger.info?.(`[dsh-chat-weixin] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${account.botId} sender=${sender}`);
+      return;
+    }
+    const text = extractText(message);
+    if (!text) {
+      await reply(
+        sender,
+        "\u76EE\u524D\u53EA\u652F\u6301\u6587\u672C\u4E0E\u8BED\u97F3\u8F6C\u5199\u6D88\u606F\uFF0C\u56FE\u7247\u4E0E\u6587\u4EF6\u5C06\u5728\u540E\u7EED\u7248\u672C\u652F\u6301\u3002",
+        message.context_token,
+        message.run_id,
+        signal
+      );
+      return;
+    }
+    const inboundToken = typeof message.context_token === "string" ? message.context_token : void 0;
+    const runId = typeof message.run_id === "string" ? message.run_id : void 0;
+    if (inboundToken) await state.rememberContextToken(sender, inboundToken);
+    const contextToken = inboundToken ?? state.contextToken(sender);
+    const key = `p2p:${sender}`;
+    const identity = { senderId: sender, chatId: sender };
+    const captured = deps.contextEnhancement.captureContextEnhancementSource(
+      { botId: account.botId, channel: "weixin", readConfig: () => record.contextEnhancement },
+      "direct",
+      identity,
+      () => ({ channel: "weixin", ...identity })
+    );
+    const content = deps.contextEnhancement.enhanceContent(
+      text,
+      captured?.snapshot ?? null,
+      captured?.source
+    );
+    await typing(sender, contextToken, 1, signal);
+    try {
+      const result = await deps.sessions.ask({
+        channelId: deps.channelId,
+        botId: account.botId,
+        key,
+        workspacePath: record.workspace,
+        content: [{ type: "text", text: content }],
+        sourceGuidance: captured?.snapshot?.scope?.guidance,
+        signal
+      });
+      const answer = typeof result?.text === "string" && result.text.trim() ? result.text.trim() : result?.reason?.kind && result.reason.kind !== "completed" ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${result.reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09";
+      await reply(sender, answer, contextToken, runId, signal);
+      handled += 1;
+      lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+    } catch (cause) {
+      error = cause?.message ?? String(cause);
+      logger.error?.(`[dsh-chat-weixin] \u5904\u7406\u6D88\u606F\u5931\u8D25\uFF1A${error}`);
+      try {
+        await reply(sender, `\u5904\u7406\u5931\u8D25\uFF1A${error}`, contextToken, runId, signal);
+      } catch {
+      }
+    } finally {
+      await typing(sender, contextToken, 2, signal);
+    }
+  }
+  async function runLoop(signal) {
+    setPhase("running");
+    while (!signal.aborted) {
+      let response;
+      try {
+        response = await client.getUpdates({
+          baseUrl,
+          token,
+          getUpdatesBuf: state.getUpdatesBuf(),
+          signal
+        });
+      } catch (cause) {
+        if (signal.aborted) break;
+        setPhase("reconnecting", cause?.message ?? String(cause));
+        logger.warn?.(`[dsh-chat-weixin] \u957F\u8F6E\u8BE2\u5931\u8D25\uFF0C2s \u540E\u91CD\u8BD5\uFF1A${cause?.message ?? cause}`);
+        await new Promise((resolve) => setTimeout(resolve, 2e3));
+        continue;
+      }
+      if (signal.aborted) break;
+      const rejection = rejectedResponse(response);
+      if (rejection) {
+        if (rejection === "-14") {
+          setPhase("failed", "\u5FAE\u4FE1\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u9875\u91CD\u65B0\u626B\u7801\u3002");
+          logger.error?.("[dsh-chat-weixin] \u4EE4\u724C\u5931\u6548\uFF0C\u505C\u6B62\u957F\u8F6E\u8BE2");
+          return;
+        }
+        logger.warn?.(`[dsh-chat-weixin] \u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE ${rejection}\uFF0C\u5FFD\u7565\u672C\u8F6E`);
+      }
+      if (typeof response?.get_updates_buf === "string" && response.get_updates_buf) {
+        await state.saveGetUpdatesBuf(response.get_updates_buf).catch(() => void 0);
+      }
+      for (const message of response?.msgs ?? []) {
+        if (signal.aborted) break;
+        try {
+          await accept(message, signal);
+        } catch (cause) {
+          logger.error?.(`[dsh-chat-weixin] \u5904\u7406\u5165\u7AD9\u6D88\u606F\u5F02\u5E38\uFF1A${cause?.message ?? cause}`);
+        }
+      }
+    }
+    if (!signal.aborted) return;
+    setPhase("stopped");
+  }
+  return {
+    botId: account.botId,
+    /**
+     * 启动：先 notifyStart，再进入长轮询。
+     *
+     * @param options - { signal }。
+     */
+    async start({ signal }) {
+      setPhase("starting");
+      await client.notifyStart({ baseUrl, token, signal });
+      loop = runLoop(signal);
+      await loop;
+    },
+    /** 停止：中断长轮询并尽力通知服务端。 */
+    async stop(signal) {
+      setPhase("stopped");
+      try {
+        await client.notifyStop({ baseUrl, token, signal });
+      } catch (cause) {
+        logger.warn?.(`[dsh-chat-weixin] \u505C\u6B62\u901A\u77E5\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
+      }
+    },
+    status: () => Object.freeze({
+      botId: account.botId,
+      phase,
+      error,
+      handled,
+      lastHandledAt,
+      lastMessageAt
+    }),
+    /** 供测试直接投喂一条消息。 */
+    accept
+  };
+}
+
+// packages/dsh-chat-weixin/host/state-store.mjs
+var MAX_SEEN = 1e3;
+var MAX_CONTEXT_TOKENS = 200;
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeDocument2(value) {
+  const source = isPlainObject(value) ? value : {};
+  const sessions = {};
+  if (isPlainObject(source.sessions)) {
+    for (const [key, sessionId] of Object.entries(source.sessions)) {
+      if (typeof sessionId === "string" && sessionId) sessions[key] = sessionId;
+    }
+  }
+  const seenMessageIds = Array.isArray(source.seenMessageIds) ? source.seenMessageIds.filter((id) => typeof id === "string" && id).slice(-MAX_SEEN) : [];
+  const contextTokens = {};
+  if (isPlainObject(source.contextTokens)) {
+    for (const [userId, token] of Object.entries(source.contextTokens).slice(-MAX_CONTEXT_TOKENS)) {
+      if (typeof token === "string" && token) contextTokens[userId] = token;
+    }
+  }
+  return {
+    version: 1,
+    sessions,
+    seenMessageIds,
+    contextTokens,
+    getUpdatesBuf: typeof source.getUpdatesBuf === "string" ? source.getUpdatesBuf : ""
+  };
+}
+function createWeixinStateStore({ path, createJsonStore }) {
+  if (typeof createJsonStore !== "function") {
+    throw new TypeError("\u5FAE\u4FE1\u72B6\u6001\u5B58\u50A8\u9700\u8981 hub \u63D0\u4F9B\u7684 createJsonStore\u3002");
+  }
+  const store = createJsonStore({
+    path,
+    normalize: normalizeDocument2,
+    empty: () => ({
+      version: 1,
+      sessions: {},
+      seenMessageIds: [],
+      contextTokens: {},
+      getUpdatesBuf: ""
+    }),
+    label: "\u5FAE\u4FE1\u8D26\u53F7\u72B6\u6001"
+  });
+  return {
+    path,
+    ready: () => store.ready(),
+    /** @returns 旧实现的会话绑定（交给 hub 的会话桥 adopt）。 */
+    sessions() {
+      return Object.freeze({ ...store.snapshot().sessions ?? {} });
+    },
+    /** @returns 长轮询游标。 */
+    getUpdatesBuf() {
+      return store.snapshot().getUpdatesBuf ?? "";
+    },
+    /** 记录长轮询游标（每轮都会变，写入串行且失败不阻塞收消息）。 */
+    async saveGetUpdatesBuf(value) {
+      if (typeof value !== "string" || value === store.snapshot().getUpdatesBuf) return;
+      await store.update((current) => ({ ...current, getUpdatesBuf: value }));
+    },
+    /** 某个用户最近一次的 context_token（回复时要原样带回）。 */
+    contextToken(userId) {
+      return store.snapshot().contextTokens?.[userId];
+    },
+    /** 记录 context_token。 */
+    async rememberContextToken(userId, token) {
+      if (typeof userId !== "string" || !userId) return;
+      if (typeof token !== "string" || !token) return;
+      if (store.snapshot().contextTokens?.[userId] === token) return;
+      await store.update((current) => {
+        const contextTokens = { ...current.contextTokens ?? {} };
+        delete contextTokens[userId];
+        contextTokens[userId] = token;
+        const keys = Object.keys(contextTokens);
+        for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_CONTEXT_TOKENS))) {
+          delete contextTokens[stale];
+        }
+        return { ...current, contextTokens };
+      });
+    },
+    /**
+     * 去重：第一次见到返回 true。
+     *
+     * @param id - 平台消息 id。
+     */
+    markSeen(id) {
+      if (typeof id !== "string" || !id) return true;
+      const current = store.snapshot();
+      if (current.seenMessageIds.includes(id)) return false;
+      const seenMessageIds = [...current.seenMessageIds, id].slice(-MAX_SEEN);
+      void store.update((doc) => ({ ...doc, seenMessageIds })).catch(() => {
+      });
+      return true;
+    },
+    /** 等待已排队的写入落定（停机前调用）。 */
+    async flush() {
+      await store.flush();
+    }
+  };
+}
+
+// packages/dsh-chat-weixin/host/controller.mjs
+var LOGIN_TTL_MS = 5 * 6e4;
+function deriveIdentity(accountId) {
+  const raw = typeof accountId === "string" ? accountId.trim() : "";
+  if (!raw) throw new TypeError("deriveIdentity \u9700\u8981 accountId\u3002");
+  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
+  return { botId: `wx_${digest}`, tokenRef: `DSH_WEIXIN_BOT_TOKEN_${digest.toUpperCase()}` };
+}
+function maskAccountId(accountId) {
+  const raw = typeof accountId === "string" ? accountId : "";
+  if (raw.length <= 8) return "****";
+  return `${raw.slice(0, 4)}****${raw.slice(-4)}`;
+}
+function apiBaseFromServer(value, fallback) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return fallback;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:") return fallback;
+    const host = url.hostname.toLowerCase();
+    if (!host.endsWith("weixin.qq.com") && !host.endsWith("wechat.com")) return fallback;
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+}
+async function resolveToken(credentials, ref) {
+  if (typeof credentials?.resolve !== "function") {
+    throw new Error("\u5F53\u524D Host \u672A\u63D0\u4F9B\u51ED\u636E\u670D\u52A1\uFF0C\u65E0\u6CD5\u8BFB\u53D6\u5FAE\u4FE1\u767B\u5F55\u4EE4\u724C\u3002");
+  }
+  const resolved = await credentials.resolve(ref);
+  if (!resolved?.value) {
+    const error = new Error("\u5FAE\u4FE1\u767B\u5F55\u4EE4\u724C\u7F3A\u5931\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u9875\u91CD\u65B0\u626B\u7801\u3002");
+    error.code = "weixin/token-missing";
+    throw error;
+  }
+  return resolved.value;
+}
+function createWeixinController({ deps, logger = console, config = {}, internals = {} }) {
+  const dataDir = deps.dataDir;
+  if (typeof dataDir !== "string" || !dataDir) throw new TypeError("\u5FAE\u4FE1\u63A7\u5236\u5668\u9700\u8981 deps.dataDir\u3002");
+  if (typeof deps.sessions?.ask !== "function" || typeof deps.contextEnhancement?.enhanceContent !== "function") {
+    throw new TypeError("\u5FAE\u4FE1\u63A7\u5236\u5668\u9700\u8981 hub \u7684 sessions.ask \u4E0E contextEnhancement\uFF08\u8BF7\u786E\u8BA4 dsh-chat \u5DF2\u52A0\u8F7D\uFF09\u3002");
+  }
+  if (typeof deps.createJsonStore !== "function") {
+    throw new TypeError("\u5FAE\u4FE1\u63A7\u5236\u5668\u9700\u8981 hub \u7684 createJsonStore\u3002");
+  }
+  const clientFactory = internals.createClient ?? createIlinkClient;
+  const configStore = createWeixinConfigStore({
+    path: join(dataDir, "config.json"),
+    createJsonStore: deps.createJsonStore
+  });
+  const runtimes = /* @__PURE__ */ new Map();
+  const attempts = /* @__PURE__ */ new Map();
+  function newClient() {
+    return clientFactory({ fetchImpl: internals.fetchImpl });
+  }
+  async function startAccount(account) {
+    const existing = runtimes.get(account.botId);
+    if (existing && ["starting", "running", "reconnecting"].includes(existing.phase)) return existing;
+    const record = {
+      account,
+      phase: "starting",
+      error: null,
+      runtime: null,
+      controller: new AbortController()
+    };
+    runtimes.set(account.botId, record);
+    try {
+      const token = await resolveToken(deps.credentials, account.tokenRef);
+      const client = newClient();
+      const state = createWeixinStateStore({
+        path: join(dataDir, "accounts", account.botId, "state.json"),
+        createJsonStore: deps.createJsonStore
+      });
+      await state.ready();
+      if (deps.sessions?.bindings?.adopt) {
+        await deps.sessions.bindings.adopt(deps.channelId, account.botId, state.sessions());
+      }
+      const runtime = createWeixinRuntime({
+        account,
+        token,
+        deps,
+        client,
+        state,
+        logger
+      });
+      record.runtime = runtime;
+      record.state = state;
+      void runtime.start({ signal: record.controller.signal }).catch((error) => {
+        record.phase = "failed";
+        record.error = error?.code ?? "weixin/runtime-failed";
+        record.errorMessage = error?.message ?? String(error);
+        logger.error?.(`[dsh-chat-weixin] ${account.botId} \u8FD0\u884C\u5931\u8D25\uFF1A${record.errorMessage}`);
+      });
+      record.phase = "running";
+      record.error = null;
+      logger.info?.(`[dsh-chat-weixin] ${account.botName ?? maskAccountId(account.accountId)} \u957F\u8F6E\u8BE2\u5DF2\u542F\u52A8`);
+    } catch (error) {
+      record.phase = "failed";
+      record.error = typeof error?.code === "string" ? error.code : "weixin/start-failed";
+      record.errorMessage = error?.message ?? String(error);
+      logger.error?.(`[dsh-chat-weixin] ${account.botId} \u542F\u52A8\u5931\u8D25\uFF1A${record.errorMessage}`);
+    }
+    return record;
+  }
+  async function stopAccount(botId) {
+    const record = runtimes.get(botId);
+    if (!record) return;
+    record.controller?.abort?.();
+    try {
+      await record.runtime?.stop?.(record.controller.signal);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-weixin] ${botId} \u505C\u6B62\u65F6\u62A5\u9519\uFF1A${error?.message ?? error}`);
+    }
+    try {
+      await record.state?.flush?.();
+    } catch {
+    }
+    record.runtime = null;
+    if (record.phase !== "failed") record.phase = "stopped";
+  }
+  function accountStatus(record) {
+    const runtime = record.runtime?.status?.() ?? {};
+    return Object.freeze({
+      botId: record.account.botId,
+      accountIdMasked: maskAccountId(record.account.accountId),
+      botName: record.account.botName ?? null,
+      state: runtime.phase ?? record.phase,
+      error: record.error ?? null,
+      errorMessage: record.errorMessage ?? runtime.error ?? null,
+      handled: runtime.handled ?? 0,
+      lastHandledAt: runtime.lastHandledAt ?? null,
+      lastMessageAt: runtime.lastMessageAt ?? null
+    });
+  }
+  function pruneAttempts() {
+    const now = Date.now();
+    for (const [id, attempt] of attempts) {
+      if (now - attempt.createdAt > LOGIN_TTL_MS) attempts.delete(id);
+    }
+  }
+  async function status() {
+    await configStore.ready();
+    return Object.freeze({
+      channel: deps.channelId,
+      dataDir,
+      accounts: Object.freeze(configStore.list().map((account) => accountStatus(
+        runtimes.get(account.botId) ?? { account, phase: "stopped", runtime: null }
+      )))
+    });
+  }
+  async function startAll() {
+    await configStore.ready();
+    const accounts = configStore.list();
+    logger.info?.(`[dsh-chat-weixin] \u53D1\u73B0 ${accounts.length} \u4E2A\u5DF2\u7ED1\u5B9A\u8D26\u53F7`);
+    await Promise.all(accounts.map((account) => startAccount(account)));
+  }
+  return Object.freeze({
+    start: startAll,
+    async stop() {
+      await Promise.all([...runtimes.keys()].map((botId) => stopAccount(botId)));
+    },
+    status,
+    endpoints: Object.freeze({
+      "connection.status": async () => ({ ok: true, value: await status() }),
+      /** 申请登录二维码。 */
+      "login.begin": async () => {
+        try {
+          const client = newClient();
+          const known = configStore.list().map((account) => account.accountId);
+          const { qrcode, qrcodeUrl } = await client.beginLogin({ localTokens: known });
+          pruneAttempts();
+          const attemptId = randomUUID2();
+          attempts.set(attemptId, {
+            qrcode,
+            createdAt: Date.now(),
+            baseUrl: config.connectBaseUrl
+          });
+          return { ok: true, value: { attemptId, qrcodeUrl, expiresInMs: LOGIN_TTL_MS } };
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error?.code ?? "weixin/qr-failed",
+              message: error?.message ?? "\u7533\u8BF7\u4E8C\u7EF4\u7801\u5931\u8D25\u3002",
+              details: {}
+            }
+          };
+        }
+      },
+      /**
+       * 轮询扫码状态；确认后落盘账号并启动长轮询。
+       *
+       * @param payload - { attemptId, verifyCode? }。
+       */
+      "login.poll": async (payload) => {
+        const attempt = attempts.get(payload?.attemptId);
+        if (!attempt) {
+          return {
+            ok: false,
+            error: { code: "weixin/unknown-attempt", message: "\u767B\u5F55\u5C1D\u8BD5\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801\u3002", details: {} }
+          };
+        }
+        try {
+          const client = newClient();
+          const response = await client.pollLogin({
+            qrcode: attempt.qrcode,
+            baseUrl: attempt.baseUrl,
+            verifyCode: payload?.verifyCode
+          });
+          const statusValue = response.status;
+          if (statusValue === "scaned_but_redirect") {
+            attempt.baseUrl = apiBaseFromServer(response.redirect_host, attempt.baseUrl);
+          }
+          if (statusValue !== "confirmed") {
+            if (statusValue === "expired" || statusValue === "verify_code_blocked") {
+              attempts.delete(payload.attemptId);
+            }
+            return { ok: true, value: { status: statusValue } };
+          }
+          const accountId = typeof response.ilink_bot_id === "string" ? response.ilink_bot_id.trim() : "";
+          const ownerUserId = typeof response.ilink_user_id === "string" ? response.ilink_user_id.trim() : "";
+          const token = typeof response.bot_token === "string" ? response.bot_token.trim() : "";
+          if (!accountId || !ownerUserId || !token) {
+            return {
+              ok: false,
+              error: { code: "weixin/incomplete-login", message: "\u5FAE\u4FE1\u6388\u6743\u6210\u529F\u4F46\u8FD4\u56DE\u7684\u51ED\u636E\u4E0D\u5B8C\u6574\u3002", details: {} }
+            };
+          }
+          const identity = deriveIdentity(accountId);
+          await deps.credentials.set(identity.tokenRef, token);
+          const account = await configStore.saveAccount({
+            ...identity,
+            accountId,
+            ownerUserId,
+            baseUrl: apiBaseFromServer(response.baseurl, attempt.baseUrl),
+            botName: typeof response.nickname === "string" ? response.nickname : null,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+            connectedAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          attempts.delete(payload.attemptId);
+          await startAccount(account);
+          return { ok: true, value: { status: "connected", botId: account.botId } };
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error?.code ?? "weixin/login-poll-failed",
+              message: error?.message ?? "\u67E5\u8BE2\u626B\u7801\u72B6\u6001\u5931\u8D25\u3002",
+              details: {}
+            }
+          };
+        }
+      },
+      /** 取消扫码。 */
+      "login.cancel": async (payload) => {
+        const existed = attempts.delete(payload?.attemptId);
+        return { ok: true, value: { cancelled: existed } };
+      },
+      /** 重连某个账号。 */
+      "account.reconnect": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId) {
+          return { ok: false, error: { code: "chat/bad-request", message: "\u9700\u8981 botId\u3002", details: {} } };
+        }
+        await configStore.ready();
+        const account = configStore.get(payload.botId);
+        if (!account) {
+          return {
+            ok: false,
+            error: { code: "weixin/unknown-account", message: `\u672A\u627E\u5230\u8D26\u53F7 ${payload.botId}\u3002`, details: {} }
+          };
+        }
+        await stopAccount(account.botId);
+        const record = await startAccount(account);
+        return { ok: true, value: accountStatus(record) };
+      },
+      /** 移除账号（配置与运行态；凭据一并清除）。 */
+      "account.delete": async (payload) => {
+        if (typeof payload?.botId !== "string" || payload.confirm !== true) {
+          return {
+            ok: false,
+            error: { code: "chat/bad-request", message: "\u5220\u9664\u9700\u8981 botId \u4E0E confirm=true\u3002", details: {} }
+          };
+        }
+        await configStore.ready();
+        const account = configStore.get(payload.botId);
+        await stopAccount(payload.botId);
+        runtimes.delete(payload.botId);
+        if (account) {
+          await configStore.removeAccount(payload.botId);
+          try {
+            await deps.credentials.unset(account.tokenRef);
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-weixin] \u6E05\u9664\u51ED\u636E\u5931\u8D25\uFF1A${error?.message ?? error}`);
+          }
+        }
+        return { ok: true, value: { removed: Boolean(account) } };
+      }
+    })
+  });
+}
+
 // packages/dsh-chat-weixin/host/index.mjs
 var name = "dsh-chat-weixin-host";
 var inject = ["dshChat"];
@@ -24,25 +1145,16 @@ function apply(ctx) {
     order: 10,
     legacy: { dir: "dsh-weixin" },
     async createChannel(deps) {
-      deps.logger.info?.("[dsh-chat-weixin] \u6E20\u9053\u5DF2\u6CE8\u518C\uFF08P0 \u9AA8\u67B6\uFF0C\u534F\u8BAE\u5B9E\u73B0\u5728 P3\uFF09");
+      const controller = createWeixinController({ deps, logger: deps.logger });
+      void controller.start().catch((error) => {
+        deps.reportStatus("failed", error);
+        deps.logger.error?.(`[dsh-chat-weixin] \u542F\u52A8\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      });
       return {
-        async start() {
-        },
         async stop() {
+          await controller.stop();
         },
-        endpoints: {
-          "connection.status": async () => ({
-            ok: true,
-            value: {
-              channel: CHANNEL_ID,
-              phase: "skeleton",
-              contractVersion: EXPECTED_CONTRACT,
-              dataDir: deps.dataDir,
-              accounts: [],
-              note: "\u5FAE\u4FE1 iLink \u534F\u8BAE\u5B9E\u73B0\u5C06\u5728 P3 \u63D0\u4F9B\u3002"
-            }
-          })
-        }
+        endpoints: controller.endpoints
       };
     }
   }), "dsh-chat-weixin: \u6CE8\u518C\u6E20\u9053");

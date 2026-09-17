@@ -48,65 +48,345 @@ var LOCALE_NAMESPACE = "dsh-chat-weixin";
 var zh = {
   "\u5FAE\u4FE1": "\u5FAE\u4FE1",
   "\u5FAE\u4FE1\u6E20\u9053": "\u5FAE\u4FE1\u6E20\u9053",
-  "\u6E20\u9053\u63D2\u4EF6\u5DF2\u52A0\u8F7D\uFF0CiLink \u534F\u8BAE\u5B9E\u73B0\u5C06\u5728 P3 \u63D0\u4F9B\uFF08\u5F53\u524D\u4EC5\u79C1\u804A\uFF09\u3002": "\u6E20\u9053\u63D2\u4EF6\u5DF2\u52A0\u8F7D\uFF0CiLink \u534F\u8BAE\u5B9E\u73B0\u5C06\u5728 P3 \u63D0\u4F9B\uFF08\u5F53\u524D\u4EC5\u79C1\u804A\uFF09\u3002",
+  "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7": "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7",
+  "\u626B\u7801\u63A5\u5165": "\u626B\u7801\u63A5\u5165",
+  "\u91CD\u65B0\u8FDE\u63A5": "\u91CD\u65B0\u8FDE\u63A5",
+  "\u79FB\u9664\u63A5\u5165": "\u79FB\u9664\u63A5\u5165",
+  "\u786E\u8BA4\u79FB\u9664": "\u786E\u8BA4\u79FB\u9664",
+  "\u53D6\u6D88": "\u53D6\u6D88",
   "\u8BFB\u53D6\u72B6\u6001": "\u8BFB\u53D6\u72B6\u6001",
   "\u8BFB\u53D6\u4E2D\u2026": "\u8BFB\u53D6\u4E2D\u2026",
-  "\u72B6\u6001": "\u72B6\u6001"
+  "\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026": "\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026",
+  "\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u63CF\u4E8C\u7EF4\u7801\u5E76\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u3002": "\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u63CF\u4E8C\u7EF4\u7801\u5E76\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u3002",
+  "\u4E8C\u7EF4\u7801\u7531\u817E\u8BAF\u5FAE\u4FE1 iLink \u670D\u52A1\u7B7E\u53D1\uFF1B\u8D26\u53F7\u51ED\u636E\u53EA\u5199\u5165\u672C\u673A Host\uFF0C\u6D4F\u89C8\u5668\u62FF\u4E0D\u5230 token\u3002": "\u4E8C\u7EF4\u7801\u7531\u817E\u8BAF\u5FAE\u4FE1 iLink \u670D\u52A1\u7B7E\u53D1\uFF1B\u8D26\u53F7\u51ED\u636E\u53EA\u5199\u5165\u672C\u673A Host\uFF0C\u6D4F\u89C8\u5668\u62FF\u4E0D\u5230 token\u3002",
+  "\u7B49\u5F85\u626B\u7801": "\u7B49\u5F85\u626B\u7801",
+  "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4": "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4",
+  "\u9700\u8981\u914D\u5BF9\u7801\uFF0C\u8BF7\u5728\u4E0B\u65B9\u8F93\u5165\u624B\u673A\u4E0A\u663E\u793A\u7684\u914D\u5BF9\u7801": "\u9700\u8981\u914D\u5BF9\u7801\uFF0C\u8BF7\u5728\u4E0B\u65B9\u8F93\u5165\u624B\u673A\u4E0A\u663E\u793A\u7684\u914D\u5BF9\u7801",
+  "\u63D0\u4EA4\u914D\u5BF9\u7801": "\u63D0\u4EA4\u914D\u5BF9\u7801",
+  "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210": "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210",
+  "\u8BE5\u5FAE\u4FE1\u8D26\u53F7\u5DF2\u5728\u522B\u5904\u7ED1\u5B9A": "\u8BE5\u5FAE\u4FE1\u8D26\u53F7\u5DF2\u5728\u522B\u5904\u7ED1\u5B9A",
+  "\u5DF2\u63A5\u5165\uFF0C\u6B63\u5728\u542F\u52A8\u957F\u8F6E\u8BE2\u2026": "\u5DF2\u63A5\u5165\uFF0C\u6B63\u5728\u542F\u52A8\u957F\u8F6E\u8BE2\u2026",
+  "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801": "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801",
+  "\u6CA1\u6709\u5DF2\u7ED1\u5B9A\u7684\u5FAE\u4FE1\u8D26\u53F7": "\u6CA1\u6709\u5DF2\u7ED1\u5B9A\u7684\u5FAE\u4FE1\u8D26\u53F7",
+  "\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002": "\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002",
+  "\u5DF2\u5904\u7406\u6D88\u606F": "\u5DF2\u5904\u7406\u6D88\u606F",
+  "\u72B6\u6001": "\u72B6\u6001",
+  "\u542F\u52A8\u4E2D": "\u542F\u52A8\u4E2D",
+  "\u8FD0\u884C\u6B63\u5E38": "\u8FD0\u884C\u6B63\u5E38",
+  "\u91CD\u8FDE\u4E2D": "\u91CD\u8FDE\u4E2D",
+  "\u542F\u52A8\u5931\u8D25": "\u542F\u52A8\u5931\u8D25",
+  "\u5DF2\u505C\u6B62": "\u5DF2\u505C\u6B62",
+  "\u4EC5\u79C1\u804A": "\u4EC5\u79C1\u804A"
 };
 var en = {
   "\u5FAE\u4FE1": "WeChat",
   "\u5FAE\u4FE1\u6E20\u9053": "WeChat channel",
-  "\u6E20\u9053\u63D2\u4EF6\u5DF2\u52A0\u8F7D\uFF0CiLink \u534F\u8BAE\u5B9E\u73B0\u5C06\u5728 P3 \u63D0\u4F9B\uFF08\u5F53\u524D\u4EC5\u79C1\u804A\uFF09\u3002": "Channel plugin loaded; iLink protocol lands in P3 (direct messages only).",
-  "\u8BFB\u53D6\u72B6\u6001": "Load status",
+  "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7": "Linked accounts",
+  "\u626B\u7801\u63A5\u5165": "Scan to link",
+  "\u91CD\u65B0\u8FDE\u63A5": "Reconnect",
+  "\u79FB\u9664\u63A5\u5165": "Remove",
+  "\u786E\u8BA4\u79FB\u9664": "Confirm removal",
+  "\u53D6\u6D88": "Cancel",
+  "\u8BFB\u53D6\u72B6\u6001": "Reload",
   "\u8BFB\u53D6\u4E2D\u2026": "Loading\u2026",
-  "\u72B6\u6001": "Status"
+  "\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026": "Requesting a QR code\u2026",
+  "\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u63CF\u4E8C\u7EF4\u7801\u5E76\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u3002": "Scan the QR code with WeChat on your phone and confirm there.",
+  "\u4E8C\u7EF4\u7801\u7531\u817E\u8BAF\u5FAE\u4FE1 iLink \u670D\u52A1\u7B7E\u53D1\uFF1B\u8D26\u53F7\u51ED\u636E\u53EA\u5199\u5165\u672C\u673A Host\uFF0C\u6D4F\u89C8\u5668\u62FF\u4E0D\u5230 token\u3002": "The QR code is issued by Tencent iLink; credentials are written on the Host only.",
+  "\u7B49\u5F85\u626B\u7801": "Waiting for a scan",
+  "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4": "Scanned \u2014 confirm on your phone",
+  "\u9700\u8981\u914D\u5BF9\u7801\uFF0C\u8BF7\u5728\u4E0B\u65B9\u8F93\u5165\u624B\u673A\u4E0A\u663E\u793A\u7684\u914D\u5BF9\u7801": "A pairing code is required; enter the code shown on your phone",
+  "\u63D0\u4EA4\u914D\u5BF9\u7801": "Submit code",
+  "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210": "The QR code expired; generate a new one",
+  "\u8BE5\u5FAE\u4FE1\u8D26\u53F7\u5DF2\u5728\u522B\u5904\u7ED1\u5B9A": "This WeChat account is already linked elsewhere",
+  "\u5DF2\u63A5\u5165\uFF0C\u6B63\u5728\u542F\u52A8\u957F\u8F6E\u8BE2\u2026": "Linked \u2014 starting the message connection\u2026",
+  "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801": "Generate a new QR code",
+  "\u6CA1\u6709\u5DF2\u7ED1\u5B9A\u7684\u5FAE\u4FE1\u8D26\u53F7": "No WeChat account linked",
+  "\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002": "No WeChat account on this Host yet. Use \u201CScan to link\u201D above.",
+  "\u5DF2\u5904\u7406\u6D88\u606F": "Messages handled",
+  "\u72B6\u6001": "State",
+  "\u542F\u52A8\u4E2D": "Starting",
+  "\u8FD0\u884C\u6B63\u5E38": "Connected",
+  "\u91CD\u8FDE\u4E2D": "Reconnecting",
+  "\u542F\u52A8\u5931\u8D25": "Failed",
+  "\u5DF2\u505C\u6B62": "Stopped",
+  "\u4EC5\u79C1\u804A": "Direct messages only"
 };
 var h = React.createElement;
-function WeixinPage(props) {
-  const { chatUi, connection, translate } = props;
+var STATE_TEXT = {
+  starting: "\u542F\u52A8\u4E2D",
+  running: "\u8FD0\u884C\u6B63\u5E38",
+  reconnecting: "\u91CD\u8FDE\u4E2D",
+  failed: "\u542F\u52A8\u5931\u8D25",
+  stopped: "\u5DF2\u505C\u6B62"
+};
+var STATUS_TEXT = {
+  wait: "\u7B49\u5F85\u626B\u7801",
+  scaned: "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4",
+  need_verifycode: "\u9700\u8981\u914D\u5BF9\u7801\uFF0C\u8BF7\u5728\u4E0B\u65B9\u8F93\u5165\u624B\u673A\u4E0A\u663E\u793A\u7684\u914D\u5BF9\u7801",
+  expired: "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210",
+  verify_code_blocked: "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210",
+  binded_redirect: "\u8BE5\u5FAE\u4FE1\u8D26\u53F7\u5DF2\u5728\u522B\u5904\u7ED1\u5B9A",
+  connected: "\u5DF2\u63A5\u5165\uFF0C\u6B63\u5728\u542F\u52A8\u957F\u8F6E\u8BE2\u2026"
+};
+function QrLogin({ chatUi, connection, translate, onDone }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const [state, setState] = React.useState({ phase: "idle", value: null, error: null });
-  const load = React.useCallback(async () => {
-    setState({ phase: "loading", value: null, error: null });
+  const [state, setState] = React.useState({ phase: "idle" });
+  const [verifyCode, setVerifyCode] = React.useState("");
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => () => {
+    aliveRef.current = false;
+  }, []);
+  const begin = React.useCallback(async () => {
+    setState({ phase: "starting" });
     try {
-      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "connection.status", {});
-      setState({ phase: "done", value: chatUi.unwrapRpc(result), error: null });
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "login.begin", {});
+      const value = chatUi.unwrapRpc(result);
+      if (!aliveRef.current) return;
+      setState({ phase: "waiting", attemptId: value.attemptId, qrcodeUrl: value.qrcodeUrl, status: "wait" });
     } catch (error) {
-      setState({ phase: "error", value: null, error });
+      if (aliveRef.current) setState({ phase: "error", error });
     }
   }, [chatUi, connection]);
-  const { Panel, StatusPill } = chatUi.components;
-  return h(
-    Panel,
-    {
-      title: t("\u5FAE\u4FE1\u6E20\u9053"),
-      description: t("\u6E20\u9053\u63D2\u4EF6\u5DF2\u52A0\u8F7D\uFF0CiLink \u534F\u8BAE\u5B9E\u73B0\u5C06\u5728 P3 \u63D0\u4F9B\uFF08\u5F53\u524D\u4EC5\u79C1\u804A\uFF09\u3002"),
+  React.useEffect(() => {
+    if (state.phase !== "waiting" || !state.attemptId) return void 0;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "login.poll", {
+          attemptId: state.attemptId,
+          ...verifyCode ? { verifyCode } : {}
+        });
+        const value = chatUi.unwrapRpc(result);
+        if (stopped || !aliveRef.current) return;
+        if (value.status === "connected") {
+          setState({ phase: "done" });
+          onDone?.();
+          return;
+        }
+        setState((current) => ({ ...current, status: value.status }));
+        if (value.status === "expired" || value.status === "verify_code_blocked") return;
+      } catch (error) {
+        if (!stopped && aliveRef.current) setState((current) => ({ ...current, error }));
+        return;
+      }
+      if (!stopped) timer = setTimeout(tick, 2e3);
+    };
+    let timer = setTimeout(tick, 500);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [state.phase, state.attemptId, verifyCode, chatUi, connection, onDone]);
+  const { Panel } = chatUi.components;
+  if (state.phase === "idle") {
+    return h(Panel, {
+      title: t("\u626B\u7801\u63A5\u5165"),
+      description: t("\u4E8C\u7EF4\u7801\u7531\u817E\u8BAF\u5FAE\u4FE1 iLink \u670D\u52A1\u7B7E\u53D1\uFF1B\u8D26\u53F7\u51ED\u636E\u53EA\u5199\u5165\u672C\u673A Host\uFF0C\u6D4F\u89C8\u5668\u62FF\u4E0D\u5230 token\u3002"),
+      actions: h("button", {
+        type: "button",
+        className: "dchat-button dchat-buttonPrimary",
+        onClick: () => {
+          void begin();
+        }
+      }, t("\u626B\u7801\u63A5\u5165"))
+    });
+  }
+  if (state.phase === "starting") {
+    return h(Panel, { title: t("\u626B\u7801\u63A5\u5165"), description: t("\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026") });
+  }
+  if (state.phase === "done") {
+    return h(Panel, { title: t("\u626B\u7801\u63A5\u5165"), description: t("\u5DF2\u63A5\u5165\uFF0C\u6B63\u5728\u542F\u52A8\u957F\u8F6E\u8BE2\u2026") });
+  }
+  if (state.phase === "error") {
+    return h(Panel, {
+      title: t("\u626B\u7801\u63A5\u5165"),
       actions: h("button", {
         type: "button",
         className: "dchat-button",
-        disabled: state.phase === "loading",
-        onClick: load
-      }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u8BFB\u53D6\u72B6\u6001"))
+        onClick: () => {
+          void begin();
+        }
+      }, t("\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801"))
+    }, h("p", { className: "dchat-error", role: "alert" }, state.error?.message ?? "\u53D1\u8D77\u626B\u7801\u5931\u8D25\u3002"));
+  }
+  const expired = (status) => status === "expired" || status === "verify_code_blocked";
+  return h(
+    Panel,
+    {
+      title: t("\u626B\u7801\u63A5\u5165"),
+      description: t("\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u63CF\u4E8C\u7EF4\u7801\u5E76\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u3002"),
+      actions: h("button", {
+        type: "button",
+        className: "dchat-button",
+        onClick: () => {
+          void begin();
+        }
+      }, t("\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801"))
     },
-    state.phase === "idle" ? null : h(
+    state.qrcodeUrl ? h("img", {
+      src: state.qrcodeUrl,
+      alt: t("\u626B\u7801\u63A5\u5165"),
+      style: { width: 200, height: 200, imageRendering: "pixelated" }
+    }) : null,
+    h("p", { className: "dchat-cardDescription" }, t(STATUS_TEXT[state.status] ?? "\u7B49\u5F85\u626B\u7801")),
+    state.status === "need_verifycode" ? h(
+      "div",
+      { className: "dchat-actions" },
+      h("input", {
+        type: "text",
+        value: verifyCode,
+        placeholder: t("\u63D0\u4EA4\u914D\u5BF9\u7801"),
+        onChange: (event) => setVerifyCode(event.target.value)
+      })
+    ) : null,
+    expired(state.status) ? h("p", { className: "dchat-error" }, t("\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210")) : null
+  );
+}
+function AccountCard({ account, chatUi, connection, translate, onChanged }) {
+  const t = typeof translate === "function" ? translate : (key) => key;
+  const { Panel, StatusPill, ContextEnhancementEditor } = chatUi.components;
+  const settings = chatUi.hooks.useBotSettings({
+    connection,
+    channelId: CHANNEL_ID,
+    botId: account.botId
+  });
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [confirming, setConfirming] = React.useState(false);
+  const run = async (method, payload) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, method, payload);
+      return chatUi.unwrapRpc(result);
+    } catch (cause) {
+      setError(cause.message);
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return h(
+    Panel,
+    {
+      title: account.botName ?? account.accountIdMasked,
+      description: `${account.accountIdMasked} \xB7 ${t("\u4EC5\u79C1\u804A")}`,
+      actions: h(
+        "div",
+        { className: "dchat-actions" },
+        h(StatusPill, { status: account.state, label: t(STATE_TEXT[account.state] ?? "\u72B6\u6001") }),
+        h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: busy,
+          onClick: async () => {
+            try {
+              await run("account.reconnect", { botId: account.botId });
+              await onChanged?.();
+            } catch {
+            }
+          }
+        }, t("\u91CD\u65B0\u8FDE\u63A5")),
+        confirming ? h(
+          React.Fragment,
+          null,
+          h("button", {
+            type: "button",
+            className: "dchat-button",
+            disabled: busy,
+            onClick: async () => {
+              try {
+                await run("account.delete", { botId: account.botId, confirm: true });
+                setConfirming(false);
+                await onChanged?.();
+              } catch {
+              }
+            }
+          }, t("\u786E\u8BA4\u79FB\u9664")),
+          h("button", {
+            type: "button",
+            className: "dchat-button",
+            disabled: busy,
+            onClick: () => setConfirming(false)
+          }, t("\u53D6\u6D88"))
+        ) : h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: busy,
+          onClick: () => setConfirming(true)
+        }, t("\u79FB\u9664\u63A5\u5165"))
+      )
+    },
+    account.errorMessage ? h("p", { className: "dchat-error", role: "alert" }, account.errorMessage) : null,
+    error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
+    h(
       "div",
       { className: "dchat-list" },
       h(
         "div",
         { className: "dchat-listItem" },
-        h("span", null, t("\u72B6\u6001")),
-        state.error ? h(StatusPill, { status: "failed", label: state.error.message }) : h(StatusPill, {
-          status: state.value?.phase === "skeleton" ? "starting" : "running",
-          label: state.value?.phase ?? "ok"
-        })
-      ),
-      state.value ? h(
-        "div",
-        { className: "dchat-listItem" },
-        h("span", null, "dataDir"),
-        h("code", { className: "dchat-code" }, state.value.dataDir ?? "\u2014")
-      ) : null
-    )
+        h("span", null, t("\u5DF2\u5904\u7406\u6D88\u606F")),
+        h("span", null, String(account.handled ?? 0))
+      )
+    ),
+    h(ContextEnhancementEditor, {
+      config: settings.record?.contextEnhancement ?? null,
+      disabled: settings.phase !== "ready",
+      translate: t,
+      onSave: settings.saveContextEnhancement
+    })
+  );
+}
+function WeixinPage(props) {
+  const { chatUi, connection, translate } = props;
+  const t = typeof translate === "function" ? translate : (key) => key;
+  const [state, setState] = React.useState({ phase: "idle", value: null, error: null });
+  const load = React.useCallback(async () => {
+    setState((current) => ({ ...current, phase: "loading" }));
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "connection.status", {});
+      setState({ phase: "ready", value: chatUi.unwrapRpc(result), error: null });
+    } catch (error) {
+      setState({ phase: "error", value: null, error });
+    }
+  }, [chatUi, connection]);
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+  const { Panel, EmptyState } = chatUi.components;
+  const accounts = state.value?.accounts ?? [];
+  return h(
+    React.Fragment,
+    null,
+    h(
+      Panel,
+      {
+        title: t("\u5FAE\u4FE1\u6E20\u9053"),
+        description: `dataDir\uFF1A${state.value?.dataDir ?? "\u2014"}`,
+        actions: h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: state.phase === "loading",
+          onClick: () => {
+            void load();
+          }
+        }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u8BFB\u53D6\u72B6\u6001"))
+      },
+      state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
+      state.phase === "ready" && accounts.length === 0 ? h(EmptyState, {
+        title: t("\u6CA1\u6709\u5DF2\u7ED1\u5B9A\u7684\u5FAE\u4FE1\u8D26\u53F7"),
+        description: t("\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002")
+      }) : null
+    ),
+    h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
+    accounts.map((account) => h(AccountCard, {
+      key: account.botId,
+      account,
+      chatUi,
+      connection,
+      translate: t,
+      onChanged: load
+    }))
   );
 }
 function apply(ctx) {
