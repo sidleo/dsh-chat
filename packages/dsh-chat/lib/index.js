@@ -2027,6 +2027,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
 // packages/dsh-chat/host/sessions.mjs
 import { randomUUID } from "node:crypto";
 var MAX_ASSISTANT_TEXT = 2e5;
+var STREAM_CLOSE_GRACE_MS = 1e3;
 function sessionError(error, fallbackCode = "chat/session-failed") {
   const code = typeof error?.code === "string" ? error.code : fallbackCode;
   const wrapped = new Error(typeof error?.message === "string" && error.message ? error.message : "\u4F1A\u8BDD\u64CD\u4F5C\u5931\u8D25\u3002");
@@ -2179,6 +2180,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     }, controller.signal);
     let cursor = -1;
     let promptSent = false;
+    let closing = false;
     let currentTurn = null;
     const assistantText = /* @__PURE__ */ new Map();
     const tools = [];
@@ -2291,7 +2293,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
           tools: [...tools],
           aborted: true
         });
-        if (wasSettled) {
+        if (wasSettled && !closing) {
           logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u4E8B\u4EF6\u6D41\u4E2D\u65AD\uFF1A${error?.message ?? error}`);
         }
       }
@@ -2299,16 +2301,38 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     try {
       promptSent = true;
       logger.info?.(`[dsh-chat] \u53D1\u9001\u63D0\u793A\u8BCD\uFF1A${turnKey} \u4F1A\u8BDD=${sessionId} \u5185\u5BB9=${content.map((part) => part?.type ?? "?").join("+")} mode=${mode}`);
-      await prompt({ sessionId, content, mode, signal: controller.signal });
-      const result = await finished;
-      return result;
+      const receiptFailure = prompt({ sessionId, content, mode, signal: controller.signal }).then(() => new Promise(() => {
+      }), (error) => ({ error }));
+      const first = await Promise.race([
+        finished.then((value) => ({ value })),
+        receiptFailure
+      ]);
+      if (first.error) throw first.error;
+      return first.value;
     } finally {
       clearTimeout(timeoutTimer);
       signal?.removeEventListener?.("abort", abort);
       activeTurns.delete(turnKey);
+      closing = true;
       try {
-        await frames?.return?.();
+        controller.abort();
       } catch {
+      }
+      const closing0 = typeof frames?.return === "function" ? frames.return() : null;
+      if (closing0) {
+        let graceTimer;
+        try {
+          await Promise.race([
+            Promise.resolve(closing0).catch(() => {
+            }),
+            // 故意不 unref：这是"让调用方拿到结果"的兜底时限，必须真的会到点。
+            new Promise((resolve3) => {
+              graceTimer = setTimeout(resolve3, STREAM_CLOSE_GRACE_MS);
+            })
+          ]);
+        } finally {
+          clearTimeout(graceTimer);
+        }
       }
       void pump;
     }

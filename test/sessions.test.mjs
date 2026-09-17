@@ -25,7 +25,9 @@ function remoteError(code, message = code) {
 }
 
 /** 一个可编排的假 DSH：记录调用，并按脚本逐个产出 follow 帧。 */
-function createFakeGateway({ script = [] } = {}) {
+function createFakeGateway({
+  script = [], stuckReturn = false, stuckPrompt = false, failPrompt = false,
+} = {}) {
   const calls = [];
   const sessions = new Set();
   const knownWorkspaces = new Map();
@@ -64,6 +66,9 @@ function createFakeGateway({ script = [] } = {}) {
         if (args?.request?.mode !== 'queue' && args?.request?.mode !== 'steer') {
           throw remoteError('gateway/arguments-invalid');
         }
+        // 真机上出现过"提示词已受理，但收据迟迟不回"的情况。
+        if (stuckPrompt) return new Promise(() => {});
+        if (failPrompt) throw remoteError('session/not-found');
         return { accepted: true };
       }
       if (namespace === 'session' && method === 'list') {
@@ -82,9 +87,16 @@ function createFakeGateway({ script = [] } = {}) {
       }
       const frames = script[scriptIndex] ?? [];
       scriptIndex += 1;
-      return (async function* iterate() {
+      const iterator = (async function* iterate() {
         for (const frame of frames) yield frame;
       })();
+      if (!stuckReturn) return iterator;
+      // 模拟"订阅关闭请求永远不落地"
+      return Object.assign(Object.create(null), {
+        [Symbol.asyncIterator]: () => iterator,
+        next: (...args) => iterator.next(...args),
+        return: () => new Promise(() => {}),
+      });
     },
   };
   return gateway;
@@ -375,6 +387,76 @@ test('网关错误按 code 透出，不吞掉也不伪造', async () => {
       (error) => error.code === 'gateway/method-unavailable');
     await assert.rejects(() => app.bridge.stream('session', 'nope', { request: {} }),
       (error) => error.code === 'gateway/method-unavailable');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('ask 的返回必须有界：关流永不落地 / 提示词收据不回，都不能把结果吞掉', async () => {
+  // ① follow 流的 return() 永不落地（真机上就是这么丢回复的）
+  const app = await makeBridge({
+    script: [[
+      { event: { seq: 1, type: 'turn/start', data: { turn: 1 } } },
+      { event: { seq: 2, type: 'assistant/message', data: { turn: 1, message: { role: 'assistant', content: [{ type: 'text', text: '答案' }] } } } },
+      { event: { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } },
+    ]],
+    // 让流的 return() 永远不 settle
+    stuckReturn: true,
+  });
+  try {
+    const { sessionId } = await app.bridge.ensure({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+    });
+    const started = Date.now();
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [{ type: 'image', mediaType: 'image/png', data: 'AA==' }],
+      sourceGuidance: '',
+    });
+    assert.equal(result.sessionId, sessionId);
+    assert.equal(result.text, '答案', '结果必须交回渠道');
+    assert.equal(result.reason.kind, 'completed');
+    assert.ok(Date.now() - started < 5_000, '不能被关流拖住');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('ask 的返回必须有界：提示词收据一直不回，也不影响回合结束', async () => {
+  const app = await makeBridge({
+    script: [[
+      { event: { seq: 1, type: 'turn/start', data: { turn: 1 } } },
+      { event: { seq: 2, type: 'assistant/message', data: { turn: 1, message: { role: 'assistant', content: [{ type: 'text', text: '答案' }] } } } },
+      { event: { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } },
+    ]],
+    stuckPrompt: true,
+  });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [{ type: 'text', text: '在吗' }],
+      sourceGuidance: '',
+    });
+    assert.equal(result.text, '答案');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('提示词投递被拒时要立刻抛出，而不是等超时', async () => {
+  const app = await makeBridge({
+    script: [[{ event: { seq: 1, type: 'turn/start', data: { turn: 1 } } }]],
+    failPrompt: true,
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.ask({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+        content: [{ type: 'text', text: '在吗' }],
+        sourceGuidance: '',
+      }),
+      (error) => error.code === 'session/not-found',
+    );
   } finally {
     await app.cleanup();
   }

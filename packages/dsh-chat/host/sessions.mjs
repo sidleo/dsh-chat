@@ -19,6 +19,13 @@ import { randomUUID } from 'node:crypto';
 
 const MAX_ASSISTANT_TEXT = 200_000;
 
+/**
+ * 关流的宽限时间：`ask()` 已经拿到结果后，绝不允许"关闭订阅"把返回值拖住。
+ * 真机上出现过 follow 流的 return() 永不落地，导致回合明明跑完、渠道却永远收不到
+ * 结果（用户看到的就是"发了没反应"，而且日志里连渠道侧一行都没有）。
+ */
+const STREAM_CLOSE_GRACE_MS = 1_000;
+
 /** 把 DSH 的 RemoteError 折成带 code 的普通错误，便于渠道判断。 */
 function sessionError(error, fallbackCode = 'chat/session-failed') {
   const code = typeof error?.code === 'string' ? error.code : fallbackCode;
@@ -247,6 +254,8 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
 
     let cursor = -1;
     let promptSent = false;
+    /** 我们自己主动收摊时为 true：此时事件流中断属于正常，不该报成异常。 */
+    let closing = false;
     let currentTurn = null;
     const assistantText = new Map();
     const tools = [];
@@ -370,7 +379,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
           tools: [...tools],
           aborted: true,
         });
-        if (wasSettled) {
+        if (wasSettled && !closing) {
           logger.warn?.(`[dsh-chat] 会话 ${sessionId} 的事件流中断：${error?.message ?? error}`);
         }
       }
@@ -380,17 +389,41 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       promptSent = true;
       logger.info?.(`[dsh-chat] 发送提示词：${turnKey} 会话=${sessionId}`
         + ` 内容=${content.map((part) => part?.type ?? '?').join('+')} mode=${mode}`);
-      await prompt({ sessionId, content, mode, signal: controller.signal });
-      const result = await finished;
-      return result;
+      // 提示词的返回值只是"投递收据"：回合结束不该等它（它可能迟迟不回），
+      // 但它失败时必须立刻抛出来，否则消息会像被吞掉一样。
+      const receiptFailure = prompt({ sessionId, content, mode, signal: controller.signal })
+        .then(() => new Promise(() => {}), (error) => ({ error }));
+      const first = await Promise.race([
+        finished.then((value) => ({ value })),
+        receiptFailure,
+      ]);
+      if (first.error) throw first.error;
+      return first.value;
     } finally {
       clearTimeout(timeoutTimer);
       signal?.removeEventListener?.('abort', abort);
       activeTurns.delete(turnKey);
+      closing = true;
+      // 主动中止这条订阅，然后用一个有界的宽限时间等它收摊：宁可放手，也不能卡住返回值。
       try {
-        await frames?.return?.();
+        controller.abort();
       } catch {
-        // 关流失败不影响返回值。
+        // 已经中止过。
+      }
+      const closing0 = typeof frames?.return === 'function' ? frames.return() : null;
+      if (closing0) {
+        let graceTimer;
+        try {
+          await Promise.race([
+            Promise.resolve(closing0).catch(() => {}),
+            // 故意不 unref：这是"让调用方拿到结果"的兜底时限，必须真的会到点。
+            new Promise((resolve) => {
+              graceTimer = setTimeout(resolve, STREAM_CLOSE_GRACE_MS);
+            }),
+          ]);
+        } finally {
+          clearTimeout(graceTimer);
+        }
       }
       void pump;
     }
