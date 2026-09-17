@@ -1878,6 +1878,7 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
     offer({ channelId, botId, key, text }) {
       const entry = waiters.get(waiterKey(channelId, botId, key));
       if (!entry) return false;
+      logger.info?.(`[dsh-chat] IM \u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${channelId}/${botId}/${key}`);
       entry.resolve(text);
       return true;
     },
@@ -1891,6 +1892,7 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
       const sender = senderFor(channelId, botId);
       if (!sender) return null;
       if (kind === "approval") {
+        logger.info?.(`[dsh-chat] \u5BA1\u6279\u5DF2\u53D1\u5F80 IM\uFF1A${channelId}/${botId}/${key} \u5DE5\u5177=${request?.toolName ?? "?"} \u65B9\u5F0F=${sender.sendApproval ? "\u5361\u7247" : "\u6587\u672C"}`);
         if (sender.sendApproval) {
           await sender.sendApproval({ key, request });
         } else {
@@ -1910,6 +1912,7 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
       const answers = [];
       for (const [index, question] of questions.entries()) {
         const canRenderCard = sender.sendQuestion && question?.multiSelect !== true && Array.isArray(question?.options) && question.options.length > 0;
+        logger.info?.(`[dsh-chat] \u63D0\u95EE\u5DF2\u53D1\u5F80 IM\uFF1A${channelId}/${botId}/${key} \u95EE\u9898=${question?.id ?? "?"} \u9009\u9879=${question?.options?.length ?? 0} \u65B9\u5F0F=${canRenderCard ? "\u5361\u7247" : "\u6587\u672C"}`);
         if (canRenderCard) {
           await sender.sendQuestion({
             key,

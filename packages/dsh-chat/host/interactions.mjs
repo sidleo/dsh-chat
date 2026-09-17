@@ -193,6 +193,7 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
     offer({ channelId, botId, key, text }) {
       const entry = waiters.get(waiterKey(channelId, botId, key));
       if (!entry) return false;
+      logger.info?.(`[dsh-chat] IM 回答已认领：${channelId}/${botId}/${key}`);
       entry.resolve(text);
       return true;
     },
@@ -208,6 +209,8 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
       if (!sender) return null;
 
       if (kind === 'approval') {
+        logger.info?.(`[dsh-chat] 审批已发往 IM：${channelId}/${botId}/${key}`
+          + ` 工具=${request?.toolName ?? '?'} 方式=${sender.sendApproval ? '卡片' : '文本'}`);
         if (sender.sendApproval) {
           await sender.sendApproval({ key, request });
         } else {
@@ -230,6 +233,10 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
         // 多选没法用"一个按钮一个答案"表达，因此多选、以及不支持卡片的渠道走文本。
         const canRenderCard = sender.sendQuestion && question?.multiSelect !== true
           && Array.isArray(question?.options) && question.options.length > 0;
+        // 送出去时留一行：出问题时才能分清"没发出去"还是"发了没人答"。
+        logger.info?.(`[dsh-chat] 提问已发往 IM：${channelId}/${botId}/${key}`
+          + ` 问题=${question?.id ?? '?'} 选项=${question?.options?.length ?? 0}`
+          + ` 方式=${canRenderCard ? '卡片' : '文本'}`);
         if (canRenderCard) {
           await sender.sendQuestion({
             key, question, position: index + 1, total: questions.length,
