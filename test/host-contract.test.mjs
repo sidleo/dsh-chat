@@ -292,6 +292,21 @@ test('渠道经服务使用 hub 的上下文增强引擎（指定用户 + 叠加
   }
 });
 
+test('服务暴露进程内渠道分派（诊断用）', async () => {
+  const app = await bootstrap();
+  try {
+    const result = await app.service.channels.call('fixture', 'echo', { from: 'in-process' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.echo, { from: 'in-process' });
+
+    const missing = await app.service.channels.call('nope', 'echo', {});
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error.code, 'chat/unknown-channel');
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('每机器人设置可重复读写（同一目录再次加载保持数据）', async () => {
   const app = await bootstrap();
   const dataDir = app.dataDir;

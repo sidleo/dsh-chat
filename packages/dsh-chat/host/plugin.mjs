@@ -210,10 +210,13 @@ export function apply(ctx, config = {}) {
      */
     registerChannel: (definition) => registry.register(definition),
 
-    /** 渠道注册表的只读视图。 */
+    /** 渠道注册表：只读视图 + 进程内分派（诊断/CLI 用，省掉走浏览器 RPC）。 */
     channels: Object.freeze({
       list: () => registry.list(),
       subscribe: (listener) => registry.subscribe(listener),
+      call: (channelId, method, payload, signal) => registry.handleRpc(
+        channelId, method, payload, signal,
+      ),
     }),
 
     /** 每机器人设置的磁盘文档就绪信号；渠道读取设置前应 await 它。 */

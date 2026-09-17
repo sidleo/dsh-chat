@@ -38,6 +38,28 @@ function stripMentions(text, mentions) {
 }
 
 /**
+ * 判断本次会话类型下是否允许该发送者。
+ *
+ * P2 的放行规则（P4 会被完整的白名单/命令权限模型取代）：
+ * 1. 属主名单含 `*` → 不限制发送者（该机器人绑定时没有记录单一属主）；
+ * 2. 发送者在属主名单里 → 允许；
+ * 3. 旧实现的访问策略在该会话类型下是 `open` → 允许。
+ * 其余情况静默忽略，但**必须留日志**——否则"发了没反应"根本无从排查。
+ *
+ * @param bot - 机器人配置（`ownerOpenIds` 来自 dsh-im 的 config.json）。
+ * @param accessPolicy - hub 持有的该机器人访问策略（可能为 null）。
+ * @param conversationType - 'direct' | 'group'。
+ * @param senderId - 发送者 open_id。
+ * @returns true 表示放行。
+ */
+function senderAllowed(bot, accessPolicy, conversationType, senderId) {
+  if (bot.ownerOpenIds.includes('*')) return true;
+  if (bot.ownerOpenIds.includes(senderId)) return true;
+  const scope = conversationType === 'direct' ? 'direct' : 'group';
+  return accessPolicy?.[scope]?.mode === 'open';
+}
+
+/**
  * 创建飞书消息桥。
  *
  * @param options - { bot, deps, gateway, state, logger }。
@@ -67,14 +89,18 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     const conversationType = message.chat_type === 'p2p' ? 'direct' : 'group';
     const senderId = event?.sender?.sender_id?.open_id;
     if (!senderId) return;
+    // 门禁要用到 hub 持有的访问策略；这一步只读内存快照，很便宜。
+    await deps.ready?.();
+    const accessPolicy = deps.storage.read(bot.id).accessPolicy;
 
-    // 属主门禁：只有绑定机器人的本人可以与它对话（P4 会加入白名单）。
-    if (!bot.ownerOpenIds.includes(senderId)) {
-      logger.info?.(`[dsh-chat-feishu] 忽略非属主消息（${senderId}）`);
+    // 门禁：属主 / 通配属主 / 该会话类型的访问策略是 open（P4 会换成完整白名单）。
+    if (!senderAllowed(bot, accessPolicy, conversationType, senderId)) {
+      logger.info?.(`[dsh-chat-feishu] 忽略未放行的消息：${bot.id} ${conversationType} sender=${senderId}`);
       return;
     }
     if (conversationType === 'group' && bot.groupResponseMode !== 'all'
       && !mentionsBot(message, bot.botOpenId)) {
+      logger.info?.(`[dsh-chat-feishu] 群消息未 @ 本机器人，忽略（${bot.id} group=${message.chat_id}）`);
       return;
     }
 

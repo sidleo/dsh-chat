@@ -126641,6 +126641,12 @@ function stripMentions(text, mentions) {
   }
   return result.trim();
 }
+function senderAllowed(bot, accessPolicy, conversationType, senderId) {
+  if (bot.ownerOpenIds.includes("*")) return true;
+  if (bot.ownerOpenIds.includes(senderId)) return true;
+  const scope = conversationType === "direct" ? "direct" : "group";
+  return accessPolicy?.[scope]?.mode === "open";
+}
 function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   if (!bot?.id) throw new TypeError("\u98DE\u4E66\u6865\u9700\u8981\u673A\u5668\u4EBA\u914D\u7F6E\u3002");
   if (!deps?.sessions || !deps?.contextEnhancement) {
@@ -126656,11 +126662,14 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     const conversationType = message.chat_type === "p2p" ? "direct" : "group";
     const senderId = event?.sender?.sender_id?.open_id;
     if (!senderId) return;
-    if (!bot.ownerOpenIds.includes(senderId)) {
-      logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u975E\u5C5E\u4E3B\u6D88\u606F\uFF08${senderId}\uFF09`);
+    await deps.ready?.();
+    const accessPolicy = deps.storage.read(bot.id).accessPolicy;
+    if (!senderAllowed(bot, accessPolicy, conversationType, senderId)) {
+      logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${bot.id} ${conversationType} sender=${senderId}`);
       return;
     }
     if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId)) {
+      logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
       return;
     }
     const raw = messageText(message);

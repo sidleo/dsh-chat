@@ -95,6 +95,7 @@ function messageEvent({
 async function makeBridge({
   bot = BOT,
   contextEnhancement = null,
+  accessPolicy = null,
   askResult = { text: '最终答案', reason: { kind: 'completed' }, tools: [] },
   onAsk = () => {},
 } = {}) {
@@ -109,7 +110,9 @@ async function makeBridge({
     logger: silentLogger,
     ready: async () => {},
     storage: {
-      read: () => ({ workspace: '/ws', contextEnhancement, model: null, agentPreset: null }),
+      read: () => ({
+        workspace: '/ws', contextEnhancement, accessPolicy, model: null, agentPreset: null,
+      }),
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
@@ -227,6 +230,52 @@ test('状态存储：按消息 id 去重且能读出旧的会话绑定', async (
     assert.equal(state.markSeen('om_new'), true);
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('放行规则：通配属主、指定属主、访问策略 open 三种都放行', async () => {
+  // 通配属主（现实里群机器人就是这样绑的：ownerOpenIds=['*']）
+  const wildcard = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['*'] } });
+  try {
+    await wildcard.bridge.accept(messageEvent({ messageId: 'om_w', senderId: 'ou_anyone' }));
+    assert.equal(wildcard.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await wildcard.cleanup();
+  }
+
+  // 指定属主
+  const owner = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['ou_owner'] } });
+  try {
+    await owner.bridge.accept(messageEvent({ messageId: 'om_o', senderId: 'ou_owner' }));
+    assert.equal(owner.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await owner.cleanup();
+  }
+
+  // 访问策略 open（旧配置里 direct 为 open 的机器人）
+  const open = await makeBridge({
+    bot: { ...BOT, ownerOpenIds: ['ou_someone_else'] },
+    accessPolicy: { direct: { mode: 'open' }, group: { mode: 'allowlist' } },
+  });
+  try {
+    await open.bridge.accept(messageEvent({ messageId: 'om_p', senderId: 'ou_anyone' }));
+    assert.equal(open.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await open.cleanup();
+  }
+});
+
+test('放行规则：allowlist 且不在名单里的人被静默忽略', async () => {
+  const app = await makeBridge({
+    bot: { ...BOT, ownerOpenIds: ['ou_owner'] },
+    accessPolicy: { direct: { mode: 'allowlist' }, group: { mode: 'allowlist' } },
+  });
+  try {
+    await app.bridge.accept(messageEvent({ messageId: 'om_x', senderId: 'ou_other' }));
+    assert.equal(app.gateway.calls.replies.length, 0);
+    assert.equal(app.gateway.calls.cards.length, 0);
+  } finally {
+    await app.cleanup();
   }
 });
 
