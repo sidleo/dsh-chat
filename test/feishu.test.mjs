@@ -104,6 +104,12 @@ function createFakeGateway() {
     setFailure(method, error) {
       gatewayState.failures[method] = error;
     },
+    /** 一批问题一张卡：messageId 有值即为就地更新。 */
+    async sendQuestionsCard({ chatId, openId, questions, answered, final, messageId }) {
+      if (gatewayState.failures.sendQuestionsCard) throw gatewayState.failures.sendQuestionsCard;
+      calls.questionCards.push({ chatId, openId, ids: questions?.map((q) => q.id), answered, final, messageId });
+      return { messageId: messageId ?? 'om_question_card' };
+    },
     /** 提问/审批卡片（交互回传用）。 */
     async sendQuestionCard({ chatId, openId, question, position, total }) {
       if (gatewayState.failures.sendQuestionCard) throw gatewayState.failures.sendQuestionCard;
@@ -1050,23 +1056,37 @@ test('交互回传：单选提问发按钮卡片；点按钮即答案（与手�
   try {
     app.interactions.claimKey = 'p2p:ou_owner';
     const attach = app.attached[0];
-    assert.equal(typeof attach.sendQuestion, 'function', '桥要提供卡片渲染能力');
+    assert.equal(typeof attach.sendQuestions, 'function', '桥要提供批量卡片渲染能力');
     assert.equal(typeof attach.sendApproval, 'function');
 
-    await attach.sendQuestion({
-      key: 'p2p:ou_owner',
-      question: {
+    const questions = [
+      {
         id: 'intent',
         header: '确认需求',
         question: '这份指标表你想怎么处理？',
         options: [{ label: '映射到知识库口径' }, { label: '只做格式检查' }],
       },
-      position: 1,
-      total: 1,
-    });
+      { id: 'scope', question: '口径按哪个版本？', options: [{ label: '最新' }] },
+    ];
+    await attach.sendQuestions({ key: 'p2p:ou_owner', questions, answered: {}, final: false });
     assert.equal(app.gateway.calls.questionCards.length, 1);
+    assert.deepEqual(app.gateway.calls.questionCards[0].ids, ['intent', 'scope'], '一批问题只发一张卡');
     assert.equal(app.gateway.calls.questionCards[0].openId, 'ou_owner');
-    assert.equal(app.gateway.calls.questionCards[0].question.options.length, 2);
+    assert.equal(app.gateway.calls.questionCards[0].messageId, null);
+
+    // 答完第一个就地更新同一张卡（不新发消息）
+    await attach.sendQuestions({
+      key: 'p2p:ou_owner', questions,
+      answered: { intent: { selected: ['映射到知识库口径'] } },
+      final: false,
+    });
+    assert.equal(app.gateway.calls.questionCards.length, 2);
+    assert.equal(app.gateway.calls.questionCards[1].messageId, 'om_question_card', '要带上原卡片 id');
+    assert.deepEqual(app.gateway.calls.questionCards[1].answered, { intent: { selected: ['映射到知识库口径'] } });
+
+    // 全部答完：更新成最终态并忘掉这张卡
+    await attach.sendQuestions({ key: 'p2p:ou_owner', questions, answered: {}, final: true });
+    assert.equal(app.gateway.calls.questionCards[2].final, true);
 
     // 用户点了第一个按钮：operator/chatId 由飞书给出
     const response = await app.bridge.handleCardAction({
@@ -1078,8 +1098,10 @@ test('交互回传：单选提问发按钮卡片；点按钮即答案（与手�
     assert.equal(response.toast.type, 'success');
     assert.match(response.toast.content, /映射到知识库口径/);
     assert.equal(app.offers.at(-1).text, '映射到知识库口径');
+    assert.equal(app.offers.at(-1).questionId, 'intent', '按题认领，才能支持任意顺序作答');
     assert.equal(app.offers.at(-1).key, 'p2p:ou_owner', '群聊键没等待者时回落到私聊键');
-    assert.equal(app.gateway.calls.markedCards.length, 1, '答过的卡片要变成静态卡片');
+    assert.equal(app.gateway.calls.markedCards.length, 0,
+      '批量卡片模式下不能把卡替换成静态卡（会抹掉其余问题），由 hub 带着已答状态重渲染');
   } finally {
     await app.cleanup();
   }
@@ -1089,11 +1111,11 @@ test('交互回传：卡片回调同样过身份门禁，且不越权回答别�
   const app = await makeBridge();
   try {
     const attach = app.attached[0];
-    await attach.sendQuestion({
+    await attach.sendQuestions({
       key: 'p2p:ou_owner',
-      question: { id: 'q', question: '选哪个？', options: [{ label: 'A' }] },
-      position: 1,
-      total: 1,
+      questions: [{ id: 'q', question: '选哪个？', options: [{ label: 'A' }] }],
+      answered: {},
+      final: false,
     });
 
     // 未被放行的人点按钮：不能认领
@@ -1137,14 +1159,16 @@ test('交互回传：审批卡片点「允许」→ allowed-once；卡片发不�
   // 卡片发送失败 → 回退纯文本，用户仍然有办法回答
   const fallback = await makeBridge();
   try {
-    fallback.gateway.setFailure('sendQuestionCard', new Error('飞书拒绝卡片'));
-    await fallback.attached[0].sendQuestion({
-      key: 'p2p:ou_owner',
-      question: { id: 'q', question: '选哪个？', options: [{ label: 'A' }] },
-      position: 1, total: 1,
-    });
-    assert.equal(fallback.gateway.calls.texts.at(-1).text.includes('选哪个？'), true);
-    assert.equal(fallback.gateway.calls.texts.at(-1).openId, 'ou_owner');
+    fallback.gateway.setFailure('sendQuestionsCard', new Error('飞书拒绝卡片'));
+    await assert.rejects(
+      () => fallback.attached[0].sendQuestions({
+        key: 'p2p:ou_owner',
+        questions: [{ id: 'q', question: '选哪个？', options: [{ label: 'A' }] }],
+        answered: {}, final: false,
+      }),
+      /飞书拒绝卡片/,
+      '渲染失败要抛给 hub，由 hub 决定是否退回文本（静默吞掉会让用户什么都看不到）',
+    );
   } finally {
     await fallback.cleanup();
   }

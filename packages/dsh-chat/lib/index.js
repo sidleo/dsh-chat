@@ -1826,7 +1826,8 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
   function senderFor(channelId, botId) {
     return senders.get(`${channelId}\0${botId}`) ?? null;
   }
-  function wait({ channelId, botId, key, kind, signal }) {
+  function wait({ channelId, botId, key, kind, signal, budgetMs }) {
+    const timeout = Math.max(0, Number.isFinite(budgetMs) ? budgetMs : timeoutMs);
     return new Promise((resolve4) => {
       const id = waiterKey(channelId, botId, key);
       let settled = false;
@@ -1841,8 +1842,8 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
         }
         resolve4(value);
       };
-      const entry = { resolve: (text) => finish(text) };
-      const timer = setTimeout(() => finish(null), timeoutMs);
+      const entry = { resolve: (value) => finish(value) };
+      const timer = setTimeout(() => finish(null), timeout);
       const onAbort = () => finish(null);
       signal?.addEventListener?.("abort", onAbort, { once: true });
       waiters.set(id, entry);
@@ -1855,12 +1856,14 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
      * @param options - { channelId, botId, send({ key, text }) }。
      * @returns 注销函数。
      */
-    attach({ channelId, botId, send, sendQuestion, sendApproval }) {
+    attach({ channelId, botId, send, sendQuestion, sendQuestions, sendApproval }) {
       if (typeof send !== "function") throw new TypeError("\u4EA4\u4E92\u56DE\u4F20\u9700\u8981\u6E20\u9053\u63D0\u4F9B send\u3002");
       const id = `${channelId}\0${botId}`;
       senders.set(id, {
         send,
         // 可选：渠道能把问题/审批渲染成平台原生交互（飞书的按钮卡片），比纯文本好用得多。
+        // `sendQuestions` 是"一批问题一张卡、回答后就地更新"的形态，优先用它。
+        sendQuestions: typeof sendQuestions === "function" ? sendQuestions : typeof sendQuestion === "function" ? null : null,
         sendQuestion: typeof sendQuestion === "function" ? sendQuestion : null,
         sendApproval: typeof sendApproval === "function" ? sendApproval : null
       });
@@ -1876,11 +1879,11 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
      * @param options - { channelId, botId, key, text }。
      * @returns 是否被认领。
      */
-    offer({ channelId, botId, key, text }) {
+    offer({ channelId, botId, key, text, questionId }) {
       const entry = waiters.get(waiterKey(channelId, botId, key));
       if (!entry) return false;
-      logger.info?.(`[dsh-chat] IM \u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${channelId}/${botId}/${key}`);
-      entry.resolve(text);
+      logger.info?.(`[dsh-chat] IM \u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${channelId}/${botId}/${key}${questionId ? ` \u95EE\u9898=${questionId}` : ""}`);
+      entry.resolve({ text, questionId });
       return true;
     },
     /**
@@ -1901,37 +1904,70 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
         }
         const reply = await wait({ channelId, botId, key, kind: "\u5BA1\u6279", signal: request?.signal });
         if (reply === null) return null;
-        const outcome = parseApproval(reply);
+        const outcome = parseApproval(reply.text);
         if (outcome === null) {
-          logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u590D\u65E0\u6CD5\u8BC6\u522B\uFF08${JSON.stringify(reply)}\uFF09\uFF0C\u6309\u62D2\u7EDD\u5904\u7406`);
+          logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u590D\u65E0\u6CD5\u8BC6\u522B\uFF08${JSON.stringify(reply.text)}\uFF09\uFF0C\u6309\u62D2\u7EDD\u5904\u7406`);
           return "rejected";
         }
         return outcome;
       }
       const questions = Array.isArray(request?.questions) ? request.questions : [];
       if (questions.length === 0) return null;
-      const answers = [];
-      for (const [index, question] of questions.entries()) {
-        const canRenderCard = sender.sendQuestion && question?.multiSelect !== true && Array.isArray(question?.options) && question.options.length > 0;
-        logger.info?.(`[dsh-chat] \u63D0\u95EE\u5DF2\u53D1\u5F80 IM\uFF1A${channelId}/${botId}/${key} \u95EE\u9898=${question?.id ?? "?"} \u9009\u9879=${question?.options?.length ?? 0} \u65B9\u5F0F=${canRenderCard ? "\u5361\u7247" : "\u6587\u672C"}`);
-        if (canRenderCard) {
-          await sender.sendQuestion({
+      let useCard = typeof sender.sendQuestions === "function";
+      const answered = /* @__PURE__ */ new Map();
+      const render = async ({ final = false } = {}) => {
+        if (!useCard) return;
+        try {
+          await sender.sendQuestions({
             key,
-            question,
-            position: index + 1,
-            total: questions.length
+            questions,
+            answered: Object.fromEntries(answered),
+            final
           });
-        } else {
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u63D0\u95EE\u5361\u7247\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        }
+      };
+      logger.info?.(`[dsh-chat] \u63D0\u95EE\u5DF2\u53D1\u5F80 IM\uFF1A${channelId}/${botId}/${key} \u95EE\u9898\u6570=${questions.length} \u65B9\u5F0F=${useCard ? "\u5361\u7247" : "\u6587\u672C"}`);
+      if (useCard) {
+        try {
+          await sender.sendQuestions({ key, questions, answered: {}, final: false });
+        } catch (error) {
+          useCard = false;
+          logger.warn?.(`[dsh-chat] \u63D0\u95EE\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
+        }
+      }
+      if (!useCard) {
+        for (const [index, question] of questions.entries()) {
           await sender.send({
             key,
             text: renderQuestion(question, { position: index + 1, total: questions.length })
           });
         }
-        const reply = await wait({ channelId, botId, key, kind: "\u63D0\u95EE", signal: request?.signal });
-        if (reply === null) return null;
-        answers.push(parseAnswer(question, reply));
       }
-      return { answers };
+      const deadline = Date.now() + timeoutMs;
+      while (answered.size < questions.length) {
+        const budgetMs = deadline - Date.now();
+        if (budgetMs <= 0) return null;
+        const reply = await wait({
+          channelId,
+          botId,
+          key,
+          kind: "\u63D0\u95EE",
+          signal: request?.signal,
+          budgetMs
+        });
+        if (reply === null) return null;
+        const target = reply.questionId ? questions.find((item) => item?.id === reply.questionId && !answered.has(item.id)) : questions.find((item) => !answered.has(item?.id));
+        if (!target) {
+          logger.info?.(`[dsh-chat] \u5FFD\u7565\u65E0\u6CD5\u5F52\u5C5E\u7684\u56DE\u7B54\uFF08questionId=${reply.questionId ?? "\u65E0"}\uFF09`);
+          continue;
+        }
+        answered.set(target.id, parseAnswer(target, reply.text));
+        await render();
+      }
+      await render({ final: true });
+      return { answers: questions.map((question) => answered.get(question?.id)) };
     }
   });
 }

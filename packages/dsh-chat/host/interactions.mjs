@@ -55,6 +55,33 @@ export function renderQuestion(question, { position = 0, total = 1 } = {}) {
 }
 
 /**
+ * 把一个问题渲染成卡片正文（不带按钮）：用于"多选/自由文本"这类按钮表达不了的提问，
+ * 好处是仍然留在**同一张卡片**里，不会再单独发一条文本消息把聊天记录撑满。
+ *
+ * @param question - DSH 的 `AskUserQuestionItem`。
+ * @returns 若干行文本（markdown）。
+ */
+export function renderQuestionLines(question) {
+  const lines = [];
+  const header = question?.header ? `**${question.header}**\n` : '';
+  lines.push(`${header}${question?.question ?? ''}`);
+  if (question?.detail) lines.push('', String(question.detail));
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (options.length > 0) {
+    lines.push('');
+    options.forEach((option, index) => {
+      lines.push(`${index + 1}. **${option.label}**${option.description ? ` —— ${option.description}` : ''}`);
+    });
+    lines.push('', question?.multiSelect
+      ? '可多选：回复编号（例如 `1,3`），也可以直接回复文字。'
+      : '回复编号或选项文字即可，也可以直接回复文字。');
+  } else {
+    lines.push('', '直接回复你的文字答案。');
+  }
+  return lines;
+}
+
+/**
  * 渲染一次审批请求。
  *
  * @param request - `ApprovalRequestEvent`。
@@ -135,8 +162,14 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
     return senders.get(`${channelId}\u0000${botId}`) ?? null;
   }
 
-  /** 等一条回答；超时或取消返回 null（= 让给其他应答方）。 */
-  function wait({ channelId, botId, key, kind, signal }) {
+  /**
+   * 等一条回答；超时或取消返回 null（= 让给其他应答方）。
+   *
+   * @param options - { channelId, botId, key, kind, signal, budgetMs }。
+   * @returns `{ text, questionId }` 或 null。
+   */
+  function wait({ channelId, botId, key, kind, signal, budgetMs }) {
+    const timeout = Math.max(0, Number.isFinite(budgetMs) ? budgetMs : timeoutMs);
     return new Promise((resolve) => {
       const id = waiterKey(channelId, botId, key);
       let settled = false;
@@ -152,8 +185,8 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
         }
         resolve(value);
       };
-      const entry = { resolve: (text) => finish(text) };
-      const timer = setTimeout(() => finish(null), timeoutMs);
+      const entry = { resolve: (value) => finish(value) };
+      const timer = setTimeout(() => finish(null), timeout);
       const onAbort = () => finish(null);
       signal?.addEventListener?.('abort', onAbort, { once: true });
       waiters.set(id, entry);
@@ -167,12 +200,16 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
      * @param options - { channelId, botId, send({ key, text }) }。
      * @returns 注销函数。
      */
-    attach({ channelId, botId, send, sendQuestion, sendApproval }) {
+    attach({ channelId, botId, send, sendQuestion, sendQuestions, sendApproval }) {
       if (typeof send !== 'function') throw new TypeError('交互回传需要渠道提供 send。');
       const id = `${channelId}\u0000${botId}`;
       senders.set(id, {
         send,
         // 可选：渠道能把问题/审批渲染成平台原生交互（飞书的按钮卡片），比纯文本好用得多。
+        // `sendQuestions` 是"一批问题一张卡、回答后就地更新"的形态，优先用它。
+        sendQuestions: typeof sendQuestions === 'function'
+          ? sendQuestions
+          : (typeof sendQuestion === 'function' ? null : null),
         sendQuestion: typeof sendQuestion === 'function' ? sendQuestion : null,
         sendApproval: typeof sendApproval === 'function' ? sendApproval : null,
       });
@@ -190,11 +227,12 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
      * @param options - { channelId, botId, key, text }。
      * @returns 是否被认领。
      */
-    offer({ channelId, botId, key, text }) {
+    offer({ channelId, botId, key, text, questionId }) {
       const entry = waiters.get(waiterKey(channelId, botId, key));
       if (!entry) return false;
-      logger.info?.(`[dsh-chat] IM 回答已认领：${channelId}/${botId}/${key}`);
-      entry.resolve(text);
+      logger.info?.(`[dsh-chat] IM 回答已认领：${channelId}/${botId}/${key}`
+        + `${questionId ? ` 问题=${questionId}` : ''}`);
+      entry.resolve({ text, questionId });
       return true;
     },
 
@@ -218,9 +256,9 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
         }
         const reply = await wait({ channelId, botId, key, kind: '审批', signal: request?.signal });
         if (reply === null) return null;
-        const outcome = parseApproval(reply);
+        const outcome = parseApproval(reply.text);
         if (outcome === null) {
-          logger.warn?.(`[dsh-chat] 审批回复无法识别（${JSON.stringify(reply)}），按拒绝处理`);
+          logger.warn?.(`[dsh-chat] 审批回复无法识别（${JSON.stringify(reply.text)}），按拒绝处理`);
           return 'rejected';
         }
         return outcome;
@@ -228,30 +266,65 @@ export function createInteractionService({ logger = console, timeoutMs = DEFAULT
 
       const questions = Array.isArray(request?.questions) ? request.questions : [];
       if (questions.length === 0) return null;
-      const answers = [];
-      for (const [index, question] of questions.entries()) {
-        // 多选没法用"一个按钮一个答案"表达，因此多选、以及不支持卡片的渠道走文本。
-        const canRenderCard = sender.sendQuestion && question?.multiSelect !== true
-          && Array.isArray(question?.options) && question.options.length > 0;
-        // 送出去时留一行：出问题时才能分清"没发出去"还是"发了没人答"。
-        logger.info?.(`[dsh-chat] 提问已发往 IM：${channelId}/${botId}/${key}`
-          + ` 问题=${question?.id ?? '?'} 选项=${question?.options?.length ?? 0}`
-          + ` 方式=${canRenderCard ? '卡片' : '文本'}`);
-        if (canRenderCard) {
-          await sender.sendQuestion({
-            key, question, position: index + 1, total: questions.length,
+
+      // 一批问题只用一张卡片（渠道支持的话），回答后就地更新——避免每问一条把聊天记录撑满。
+      let useCard = typeof sender.sendQuestions === 'function';
+      const answered = new Map();
+      const render = async ({ final = false } = {}) => {
+        if (!useCard) return;
+        try {
+          await sender.sendQuestions({
+            key,
+            questions,
+            answered: Object.fromEntries(answered),
+            final,
           });
-        } else {
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] 提问卡片更新失败：${error?.message ?? error}`);
+        }
+      };
+
+      logger.info?.(`[dsh-chat] 提问已发往 IM：${channelId}/${botId}/${key}`
+        + ` 问题数=${questions.length} 方式=${useCard ? '卡片' : '文本'}`);
+      if (useCard) {
+        // 首发失败要真的退回文本，否则用户什么都看不到、这一轮白等。
+        try {
+          await sender.sendQuestions({ key, questions, answered: {}, final: false });
+        } catch (error) {
+          useCard = false;
+          logger.warn?.(`[dsh-chat] 提问卡片发送失败，回退为文本：${error?.message ?? error}`);
+        }
+      }
+      if (!useCard) {
+        for (const [index, question] of questions.entries()) {
           await sender.send({
             key,
             text: renderQuestion(question, { position: index + 1, total: questions.length }),
           });
         }
-        const reply = await wait({ channelId, botId, key, kind: '提问', signal: request?.signal });
-        if (reply === null) return null;
-        answers.push(parseAnswer(question, reply));
       }
-      return { answers };
+
+      const deadline = Date.now() + timeoutMs;
+      while (answered.size < questions.length) {
+        const budgetMs = deadline - Date.now();
+        if (budgetMs <= 0) return null;
+        const reply = await wait({
+          channelId, botId, key, kind: '提问', signal: request?.signal, budgetMs,
+        });
+        if (reply === null) return null;
+        // 按钮点击带 questionId（可以按任意顺序点）；手打文字则答给"第一个还没答的问题"。
+        const target = reply.questionId
+          ? questions.find((item) => item?.id === reply.questionId && !answered.has(item.id))
+          : questions.find((item) => !answered.has(item?.id));
+        if (!target) {
+          logger.info?.(`[dsh-chat] 忽略无法归属的回答（questionId=${reply.questionId ?? '无'}）`);
+          continue;
+        }
+        answered.set(target.id, parseAnswer(target, reply.text));
+        await render();
+      }
+      await render({ final: true });
+      return { answers: questions.map((question) => answered.get(question?.id)) };
     },
   });
 }

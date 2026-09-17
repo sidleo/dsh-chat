@@ -130,6 +130,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     return gateway.sendText({ openId: id, text });
   }
 
+  /** 会话键 → 已经发出去的那张提问卡片（回答后就地更新，不再新发消息）。 */
+  const questionCards = new Map();
+
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
     const separator = key.indexOf(':');
@@ -144,18 +147,14 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     channelId: deps.channelId,
     botId: bot.id,
     send: sendToConversation,
-    sendQuestion: async ({ key, question, position, total }) => {
-      try {
-        await gateway.sendQuestionCard({
-          ...routeOf(key), question, position, total,
-        });
-      } catch (error) {
-        logger.warn?.(`[dsh-chat-feishu] 提问卡片发送失败，回退为文本：${error?.message ?? error}`);
-        await sendToConversation({
-          key,
-          text: `❓ ${question?.header ?? '需要你确认'}\n\n${question?.question ?? ''}`,
-        });
-      }
+    // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
+    sendQuestions: async ({ key, questions, answered, final }) => {
+      const existing = questionCards.get(key) ?? null;
+      const sent = await gateway.sendQuestionsCard({
+        ...routeOf(key), questions, answered, final, messageId: existing,
+      });
+      if (sent?.messageId) questionCards.set(key, sent.messageId);
+      if (final) questionCards.delete(key);
     },
     sendApproval: async ({ key, request }) => {
       try {
@@ -501,11 +500,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       });
       if (!access.allowed) continue;
       if (deps.interactions?.offer?.({
-        channelId: deps.channelId, botId: bot.id, key: candidate.key, text: label,
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: candidate.key,
+        text: label,
+        questionId: typeof value.questionId === 'string' ? value.questionId : undefined,
       })) {
         logger.info?.(`[dsh-chat-feishu] 卡片回答已认领：${bot.id} ${candidate.key} → ${label}`);
         lastHandledAt = new Date().toISOString();
-        await markAnswered(event, '已收到你的选择', label);
+        // 这里**不**把卡片替换成静态卡：一批问题共用一张卡，hub 会带着"已回答"状态
+        // 重新渲染（把剩下没答的继续留在卡上）。替换掉会把其余问题一起抹掉。
         return { toast: { type: 'success', content: `已选择：${label}` } };
       }
     }

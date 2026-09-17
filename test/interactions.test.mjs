@@ -105,10 +105,17 @@ test('提问回传：问题发到 IM、IM 回复被认领为答案、认领后�
   assert.equal(service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '1' }), false);
 });
 
-test('多个问题按顺序逐个问，答案按 id 收齐', async () => {
+test('一批问题只用一张卡片：发一次、答一个就地更新一次、最后收尾更新', async () => {
   const service = createInteractionService({ logger: silentLogger, timeoutMs: 1_000 });
-  const sent = [];
-  service.attach({ channelId: 'feishu', botId: 'bot_1', send: async (m) => sent.push(m.text) });
+  const renders = [];
+  service.attach({
+    channelId: 'feishu',
+    botId: 'bot_1',
+    send: async (m) => renders.push({ text: m.text }),
+    sendQuestions: async ({ questions, answered, final }) => {
+      renders.push({ ids: questions.map((q) => q.id), answered: Object.keys(answered), final });
+    },
+  });
 
   const pending = service.handle({
     kind: 'question',
@@ -124,16 +131,69 @@ test('多个问题按顺序逐个问，答案按 id 收齐', async () => {
   });
 
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(sent.length, 1, '先问第一个');
-  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_1', text: '生产' });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(sent.length, 2, '第一个答完再问第二个');
-  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_1', text: 'yh_dm' });
+  assert.equal(renders.length, 1, '整批只发一次');
+  assert.deepEqual(renders[0].ids, ['a', 'b']);
+  assert.deepEqual(renders[0].answered, []);
 
+  // 按钮点击带 questionId：可以先答第二个
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_1', text: 'yh_dm', questionId: 'b' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(renders.length, 2, '答一个就更新一次同一张卡');
+  assert.deepEqual(renders[1].answered, ['b']);
+
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_1', text: '生产' });
   assert.deepEqual(await pending, {
     answers: [
       { id: 'a', selected: ['生产'] },
       { id: 'b', selected: [], custom: 'yh_dm' },
+    ],
+  });
+  const last = renders.at(-1);
+  assert.equal(last.final, true, '收尾要把卡片更新成最终态');
+  assert.deepEqual(last.answered.sort(), ['a', 'b']);
+});
+
+test('一批问题都塞进同一张卡片：多选不再另发文本，也认不出归属的回复会被忽略', async () => {
+  const service = createInteractionService({ logger: silentLogger, timeoutMs: 1_000 });
+  const cards = [];
+  const texts = [];
+  service.attach({
+    channelId: 'feishu',
+    botId: 'bot_1',
+    send: async ({ text }) => texts.push(text),
+    sendQuestions: async ({ answered, final }) => cards.push({ answered: Object.keys(answered), final }),
+  });
+
+  const pending = service.handle({
+    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    request: {
+      questions: [
+        { id: 'single', question: '选一个', options: [{ label: 'A' }, { label: 'B' }] },
+        { id: 'multi', question: '多选', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+        { id: 'free', question: '库名？' },
+      ],
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cards.length, 1, '三个问题一张卡');
+  assert.deepEqual(texts, [], '多选与自由文本也留在卡片里，不再另发消息');
+
+  // 归属不上（已答过 / 未知 id）的回复被忽略，不会误答到别的题
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'A', questionId: 'nope' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cards.length, 1, '忽略后不重新渲染');
+
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '1,2' });
+  await new Promise((resolve) => setImmediate(resolve));
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'yh_dm' });
+
+  assert.deepEqual(await pending, {
+    answers: [
+      { id: 'single', selected: ['A'] },
+      { id: 'multi', selected: ['X', 'Y'] },
+      { id: 'free', selected: [], custom: 'yh_dm' },
     ],
   });
 });
@@ -206,54 +266,37 @@ test('审批回传：问出去、按回复给结论、认不出的回复按拒�
   assert.equal(await rejected, 'rejected', '认不出来的审批回复要 fail closed');
 });
 
-test('渠道能渲染原生交互时优先用卡片；多选与不支持卡片的渠道走文本', async () => {
+test('渠道不支持卡片时整批退回文本；支持时一张卡搞定', async () => {
   const service = createInteractionService({ logger: silentLogger, timeoutMs: 1_000 });
-  const cards = [];
   const texts = [];
   service.attach({
-    channelId: 'feishu',
+    channelId: 'weixin',
     botId: 'bot_1',
     send: async ({ text }) => texts.push(text),
-    sendQuestion: async ({ question }) => cards.push(question.id),
   });
 
-  // 单选 + 有选项 → 卡片
-  const single = service.handle({
-    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+  // 微信没有卡片能力：每个问题一条文本（含编号与多选提示）
+  const pending = service.handle({
+    kind: 'question', channelId: 'weixin', botId: 'bot_1', key: 'p2p:ou_a',
     request: {
-      questions: [{
-        id: 'env', question: '哪个环境？', options: [{ label: '生产' }, { label: '测试' }],
-      }],
+      questions: [
+        { id: 'single', question: '选一个', options: [{ label: 'A' }, { label: 'B' }] },
+        { id: 'multi', question: '多选', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+      ],
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(cards, ['env']);
-  assert.deepEqual(texts, [], '能出卡片就不发文本');
-  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '生产' });
-  assert.deepEqual(await single, { answers: [{ id: 'env', selected: ['生产'] }] });
+  assert.equal(texts.length, 2, '不支持卡片的渠道按题发文');
+  assert.match(texts[0], /1\. A/);
+  assert.match(texts[1], /回复多个编号/);
 
-  // 多选 → 文本（一个按钮表达不了多选）
-  cards.length = 0;
-  const multi = service.handle({
-    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
-    request: { questions: [{ id: 'm', question: '要哪些？', multiSelect: true, options: [{ label: 'A' }] }] },
-  });
+  service.offer({ channelId: 'weixin', botId: 'bot_1', key: 'p2p:ou_a', text: 'A' });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(cards, [], '多选不发卡片');
-  assert.equal(texts.length, 1);
-  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'A' });
-  assert.deepEqual((await multi).answers[0].selected, ['A']);
-
-  // 没有选项的自由提问 → 文本
-  texts.length = 0;
-  const free = service.handle({
-    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
-    request: { questions: [{ id: 'free', question: '库名？' }] },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(texts.length, 1);
-  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'yh_dm' });
-  assert.deepEqual((await free).answers[0].custom, 'yh_dm');
+  service.offer({ channelId: 'weixin', botId: 'bot_1', key: 'p2p:ou_a', text: '1,2' });
+  assert.deepEqual((await pending).answers, [
+    { id: 'single', selected: ['A'] },
+    { id: 'multi', selected: ['X', 'Y'] },
+  ]);
 });
 
 test('审批也能用原生交互（卡片按钮），认领路径与文本一致', async () => {

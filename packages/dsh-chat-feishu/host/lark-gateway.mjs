@@ -363,6 +363,108 @@ export function createLarkGateway({
     },
 
     /**
+     * 把**一批问题**渲染成一张卡片：发一次、答一个就地更新一次。
+     *
+     * 为什么要这样：每个问题一张卡会把聊天记录撑满（真机上 3 个问题就是 3 条卡片/文本）。
+     * 一张卡里——已答的显示答案、未答的给按钮（多选/自由文本用编号 + 文字提示，
+     * 因为一个按钮表达不了多选）。
+     *
+     * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
+     *   `messageId` 有值就原地更新（patch），没有就新建。
+     * @returns { messageId }。
+     */
+    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
+      const receiveId = chatId ?? openId;
+      if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
+      const elements = [];
+      const pending = questions.filter((question) => answered[question?.id] === undefined);
+      const body = [];
+      for (const [index, question] of questions.entries()) {
+        const answer = answered[question?.id];
+        body.push(`**${index + 1}. ${question?.header || '需要确认'}**`);
+        body.push(String(question?.question ?? ''));
+        if (question?.detail) body.push(String(question.detail));
+        if (answer !== undefined) {
+          const chosen = [...(answer.selected ?? [])];
+          if (answer.custom) chosen.push(answer.custom);
+          body.push('', `✅ 已选：${chosen.join('、') || '（空）'}`);
+          body.push('');
+          continue;
+        }
+        const options = Array.isArray(question?.options) ? question.options : [];
+        if (options.length > 0 && question?.multiSelect !== true) {
+          // 单选：按钮直接表达
+          body.push('');
+          elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+          body.length = 0;
+          elements.push({
+            tag: 'action',
+            actions: options.slice(0, 8).map((option, optionIndex) => ({
+              tag: 'button',
+              type: 'default',
+              text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
+              value: {
+                dsh: 'answer',
+                questionId: String(question?.id ?? ''),
+                label: String(option.label),
+                index: String(optionIndex + 1),
+              },
+            })),
+          });
+          continue;
+        }
+        // 多选 / 自由文本：编号留在卡里，用户回复编号或文字（不再另发消息把记录撑满）
+        if (options.length > 0) {
+          body.push('');
+          options.forEach((option, optionIndex) => {
+            body.push(`${optionIndex + 1}. **${option.label}**`
+              + `${option.description ? ` —— ${option.description}` : ''}`);
+          });
+          body.push('', '可多选：回复编号（例如 `1,3`），也可以直接回复文字。');
+        } else {
+          body.push('', '直接回复你的文字答案。');
+        }
+        body.push('');
+      }
+      if (body.length > 0) {
+        elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+      }
+      if (pending.length > 0) {
+        elements.push({
+          tag: 'note',
+          elements: [{ tag: 'plain_text', content: '点按钮即可；也可以直接回复文字。' }],
+        });
+      }
+      const card = {
+        config: { wide_screen_mode: true, update_multi: true },
+        header: {
+          template: final ? 'green' : 'blue',
+          title: {
+            tag: 'plain_text',
+            content: final
+              ? '✅ 已全部回答'
+              : `❓ 需要你确认（还有 ${pending.length} 个问题）`,
+          },
+        },
+        elements,
+      };
+      if (messageId) {
+        const patched = await client.im.v1.message.patch({
+          path: { message_id: messageId },
+          data: { content: JSON.stringify(card) },
+        });
+        assertSuccess('飞书更新提问卡片', patched);
+        return { messageId };
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'interactive', content: JSON.stringify(card) },
+      });
+      assertSuccess('飞书发送提问卡片', response);
+      return { messageId: response?.data?.message_id };
+    },
+
+    /**
      * 把一个提问渲染成带按钮的卡片发出去。
      *
      * 按钮 `value` 里带的是**答案原文**（选项 label），点击后由桥交给 hub 的交互服务

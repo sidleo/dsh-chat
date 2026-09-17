@@ -126715,6 +126715,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (kind === "group") return gateway.sendText({ chatId: id, text });
     return gateway.sendText({ openId: id, text });
   }
+  const questionCards = /* @__PURE__ */ new Map();
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -126725,23 +126726,18 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     channelId: deps.channelId,
     botId: bot.id,
     send: sendToConversation,
-    sendQuestion: async ({ key, question, position, total }) => {
-      try {
-        await gateway.sendQuestionCard({
-          ...routeOf(key),
-          question,
-          position,
-          total
-        });
-      } catch (error) {
-        logger.warn?.(`[dsh-chat-feishu] \u63D0\u95EE\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
-        await sendToConversation({
-          key,
-          text: `\u2753 ${question?.header ?? "\u9700\u8981\u4F60\u786E\u8BA4"}
-
-${question?.question ?? ""}`
-        });
-      }
+    // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
+    sendQuestions: async ({ key, questions, answered, final }) => {
+      const existing = questionCards.get(key) ?? null;
+      const sent = await gateway.sendQuestionsCard({
+        ...routeOf(key),
+        questions,
+        answered,
+        final,
+        messageId: existing
+      });
+      if (sent?.messageId) questionCards.set(key, sent.messageId);
+      if (final) questionCards.delete(key);
     },
     sendApproval: async ({ key, request }) => {
       try {
@@ -127037,11 +127033,11 @@ ${question?.question ?? ""}`
         channelId: deps.channelId,
         botId: bot.id,
         key: candidate.key,
-        text: label
+        text: label,
+        questionId: typeof value.questionId === "string" ? value.questionId : void 0
       })) {
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${bot.id} ${candidate.key} \u2192 ${label}`);
         lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
-        await markAnswered(event, "\u5DF2\u6536\u5230\u4F60\u7684\u9009\u62E9", label);
         return { toast: { type: "success", content: `\u5DF2\u9009\u62E9\uFF1A${label}` } };
       }
     }
@@ -127498,6 +127494,102 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u56FE\u7247", response);
       return { messageId: response?.data?.message_id, imageKey };
+    },
+    /**
+     * 把**一批问题**渲染成一张卡片：发一次、答一个就地更新一次。
+     *
+     * 为什么要这样：每个问题一张卡会把聊天记录撑满（真机上 3 个问题就是 3 条卡片/文本）。
+     * 一张卡里——已答的显示答案、未答的给按钮（多选/自由文本用编号 + 文字提示，
+     * 因为一个按钮表达不了多选）。
+     *
+     * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
+     *   `messageId` 有值就原地更新（patch），没有就新建。
+     * @returns { messageId }。
+     */
+    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
+      const receiveId = chatId ?? openId;
+      if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
+      const elements = [];
+      const pending = questions.filter((question) => answered[question?.id] === void 0);
+      const body = [];
+      for (const [index, question] of questions.entries()) {
+        const answer = answered[question?.id];
+        body.push(`**${index + 1}. ${question?.header || "\u9700\u8981\u786E\u8BA4"}**`);
+        body.push(String(question?.question ?? ""));
+        if (question?.detail) body.push(String(question.detail));
+        if (answer !== void 0) {
+          const chosen = [...answer.selected ?? []];
+          if (answer.custom) chosen.push(answer.custom);
+          body.push("", `\u2705 \u5DF2\u9009\uFF1A${chosen.join("\u3001") || "\uFF08\u7A7A\uFF09"}`);
+          body.push("");
+          continue;
+        }
+        const options = Array.isArray(question?.options) ? question.options : [];
+        if (options.length > 0 && question?.multiSelect !== true) {
+          body.push("");
+          elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+          body.length = 0;
+          elements.push({
+            tag: "action",
+            actions: options.slice(0, 8).map((option, optionIndex) => ({
+              tag: "button",
+              type: "default",
+              text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
+              value: {
+                dsh: "answer",
+                questionId: String(question?.id ?? ""),
+                label: String(option.label),
+                index: String(optionIndex + 1)
+              }
+            }))
+          });
+          continue;
+        }
+        if (options.length > 0) {
+          body.push("");
+          options.forEach((option, optionIndex) => {
+            body.push(`${optionIndex + 1}. **${option.label}**${option.description ? ` \u2014\u2014 ${option.description}` : ""}`);
+          });
+          body.push("", "\u53EF\u591A\u9009\uFF1A\u56DE\u590D\u7F16\u53F7\uFF08\u4F8B\u5982 `1,3`\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002");
+        } else {
+          body.push("", "\u76F4\u63A5\u56DE\u590D\u4F60\u7684\u6587\u5B57\u7B54\u6848\u3002");
+        }
+        body.push("");
+      }
+      if (body.length > 0) {
+        elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+      }
+      if (pending.length > 0) {
+        elements.push({
+          tag: "note",
+          elements: [{ tag: "plain_text", content: "\u70B9\u6309\u94AE\u5373\u53EF\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" }]
+        });
+      }
+      const card = {
+        config: { wide_screen_mode: true, update_multi: true },
+        header: {
+          template: final ? "green" : "blue",
+          title: {
+            tag: "plain_text",
+            content: final ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u8FD8\u6709 ${pending.length} \u4E2A\u95EE\u9898\uFF09`
+          }
+        },
+        elements
+      };
+      if (messageId) {
+        const patched = await client.im.v1.message.patch({
+          path: { message_id: messageId },
+          data: { content: JSON.stringify(card) }
+        });
+        assertSuccess("\u98DE\u4E66\u66F4\u65B0\u63D0\u95EE\u5361\u7247", patched);
+        return { messageId };
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "interactive", content: JSON.stringify(card) }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u63D0\u95EE\u5361\u7247", response);
+      return { messageId: response?.data?.message_id };
     },
     /**
      * 把一个提问渲染成带按钮的卡片发出去。

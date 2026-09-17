@@ -276,9 +276,11 @@ const detach = deps.interactions.attach({
   channelId: deps.channelId,
   botId: bot.id,
   send: async ({ key, text }) => { /* 发到 key 对应的会话 */ },
-  // 可选：能把问题/审批渲染成平台原生交互（如飞书按钮卡片）就提供，用户点一下即可回答。
-  // 缺席、多选提问、或渲染失败时 hub 会自动退回上面的纯文本。
-  sendQuestion: async ({ key, question, position, total }) => {},
+  // 可选：能把**一批问题**渲染成平台原生交互（如飞书按钮卡片）就提供，用户点一下即可回答。
+  // 关键约定：一批问题只用**一条**消息，回答后就地更新它（answered 是 {问题id: 答案}），
+  // final=true 表示全部答完，可以收尾成"已完成"的样子。缺席或首发失败时 hub 自动退回纯文本。
+  sendQuestions: async ({ key, questions, answered, final }) => {},
+  // 可选：审批（允许/拒绝）
   sendApproval: async ({ key, request }) => {},
 });
 
@@ -294,9 +296,13 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
 - 10 分钟没人回答就**交回其他应答方**（浏览器 UI），不会把这一轮卡死；
 - 审批回复认不出来时 fail closed（按拒绝）；
 - 渠道没 `attach` 时 hub 一律不认领——能力缺失只退化成旧行为，不会静默丢消息。
-- **原生交互（按钮）与文本回答必须走同一条认领路径**：按钮 `value` 里带的就是选项原文，
-  点击后由渠道调用同一个 `offer({ key, text })`——两条路共用解析与门禁，不许各写一套。
+- **原生交互（按钮）与文本回答必须走同一条认领路径**：按钮 `value` 里带的就是选项原文、
+  外加 `questionId`；点击后由渠道调用同一个 `offer({ key, text, questionId })`——
+  两条路共用解析与门禁，不许各写一套。带 `questionId` 才能支持"任意顺序作答"，
+  不带的文本回复按"第一个还没答的问题"处理。
   渠道侧的卡片回调也要过身份门禁（谁能回答，谁能打字回答，二者必须一致）。
+- 多选提问（`multiSelect: true`）按钮表达不了，标准做法是**留在同一张卡片里**用编号 + 文字提示，
+  不要另发一条消息——否则一批问题会把聊天记录撑满。
 
 ### 入站内容（文本与图片）
 
