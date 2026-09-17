@@ -15,6 +15,7 @@ import { resolve as resolve2 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
+var HUB_VERSION = "0.0.1";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";
@@ -57,6 +58,169 @@ function channelLabel(definition) {
   } catch {
     return definition.id;
   }
+}
+
+// packages/dsh-chat/shared/access-policy.mjs
+var access_policy_exports = {};
+__export(access_policy_exports, {
+  ACCESS_CONVERSATION_TYPES: () => ACCESS_CONVERSATION_TYPES,
+  ACCESS_POLICY_MODES: () => ACCESS_POLICY_MODES,
+  ACCESS_RESULTS: () => ACCESS_RESULTS,
+  defaultAccessPolicy: () => defaultAccessPolicy,
+  describeAccessScope: () => describeAccessScope,
+  evaluateAccess: () => evaluateAccess,
+  normalizeAccessPolicy: () => normalizeAccessPolicy,
+  validateAccessPolicy: () => validateAccessPolicy
+});
+var ACCESS_POLICY_MODES = Object.freeze(["open", "allowlist"]);
+var ACCESS_CONVERSATION_TYPES = Object.freeze(["direct", "group"]);
+var USER_ID_MAX_LENGTH = 256;
+var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+var ACCESS_RESULTS = Object.freeze({
+  OWNER: "owner",
+  OPEN: "open",
+  ALLOWLIST: "allowlist",
+  NOT_LISTED: "sender-not-allowed",
+  COMMAND_DENIED: "command-not-allowed",
+  NO_POLICY: "no-policy",
+  INVALID: "invalid-context"
+});
+function invalid(message) {
+  const error = new TypeError(message);
+  error.code = "access-policy-invalid";
+  return error;
+}
+function isPlainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function hasExactKeys(input, keys) {
+  return isPlainObject2(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+}
+function normalizeUserId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) value = String(value);
+  if (typeof value !== "string") throw invalid("\u7528\u6237\u6807\u8BC6\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002");
+  const normalized = value.replace(CONTROL_CHARACTERS, "").trim();
+  if (!normalized || normalized.length > USER_ID_MAX_LENGTH) throw invalid("\u7528\u6237\u6807\u8BC6\u65E0\u6548\u3002");
+  return normalized;
+}
+function validateUser(input) {
+  if (!hasExactKeys(input, ["id", "canExecuteCommands"])) throw invalid("\u767D\u540D\u5355\u6761\u76EE\u683C\u5F0F\u4E0D\u6B63\u786E\u3002");
+  if (typeof input.canExecuteCommands !== "boolean") throw invalid("\u547D\u4EE4\u6743\u9650\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  return Object.freeze({
+    id: normalizeUserId(input.id),
+    canExecuteCommands: input.canExecuteCommands
+  });
+}
+function validateScope(input) {
+  if (!hasExactKeys(input, ["mode", "open", "allowlist"])) throw invalid("\u8BBF\u95EE\u7B56\u7565\u7F3A\u5C11\u5B57\u6BB5\u3002");
+  if (!ACCESS_POLICY_MODES.includes(input.mode)) throw invalid("\u8BBF\u95EE\u6A21\u5F0F\u53EA\u80FD\u662F open \u6216 allowlist\u3002");
+  if (!hasExactKeys(input.open, ["defaultCanExecuteCommands", "commandPermissionOverrides"])) {
+    throw invalid("open \u6BB5\u683C\u5F0F\u4E0D\u6B63\u786E\u3002");
+  }
+  if (typeof input.open.defaultCanExecuteCommands !== "boolean") {
+    throw invalid("\u9ED8\u8BA4\u547D\u4EE4\u6743\u9650\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  }
+  if (!Array.isArray(input.open.commandPermissionOverrides) || !Array.isArray(input.allowlist?.users)) {
+    throw invalid("\u8BBF\u95EE\u7B56\u7565\u7684\u540D\u5355\u5FC5\u987B\u662F\u6570\u7EC4\u3002");
+  }
+  return Object.freeze({
+    mode: input.mode,
+    open: Object.freeze({
+      defaultCanExecuteCommands: input.open.defaultCanExecuteCommands,
+      commandPermissionOverrides: Object.freeze(input.open.commandPermissionOverrides.map(validateUser))
+    }),
+    allowlist: Object.freeze({ users: Object.freeze(input.allowlist.users.map(validateUser)) })
+  });
+}
+function validateAccessPolicy(input) {
+  if (!hasExactKeys(input, ["direct", "group"])) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u8BBF\u95EE\u7B56\u7565\u3002");
+  return Object.freeze({
+    direct: validateScope(input.direct),
+    group: validateScope(input.group)
+  });
+}
+function normalizeAccessPolicy(input) {
+  if (!isPlainObject2(input)) return null;
+  const scopeOf = (value) => {
+    const source = isPlainObject2(value) ? value : {};
+    const open = isPlainObject2(source.open) ? source.open : {};
+    const allowlist = isPlainObject2(source.allowlist) ? source.allowlist : {};
+    const usersOf = (value2) => Array.isArray(value2) ? value2.map((user) => {
+      try {
+        return validateUser(user);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean) : [];
+    return {
+      mode: ACCESS_POLICY_MODES.includes(source.mode) ? source.mode : "allowlist",
+      open: {
+        defaultCanExecuteCommands: open.defaultCanExecuteCommands === true,
+        commandPermissionOverrides: usersOf(open.commandPermissionOverrides)
+      },
+      allowlist: { users: usersOf(allowlist.users) }
+    };
+  };
+  return Object.freeze({
+    direct: Object.freeze(scopeOf(input.direct)),
+    group: Object.freeze(scopeOf(input.group))
+  });
+}
+function defaultAccessPolicy() {
+  const scope = () => ({
+    mode: "allowlist",
+    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+    allowlist: { users: [] }
+  });
+  return validateAccessPolicy({ direct: scope(), group: scope() });
+}
+function evaluateAccess({
+  policy,
+  conversationType,
+  senderIds,
+  isCommand = false,
+  isOwner = false
+} = {}) {
+  if (isOwner) return { allowed: true, reason: ACCESS_RESULTS.OWNER };
+  if (!ACCESS_CONVERSATION_TYPES.includes(conversationType)) {
+    return { allowed: false, reason: ACCESS_RESULTS.INVALID };
+  }
+  const normalized = normalizeAccessPolicy(policy);
+  if (!normalized) return { allowed: false, reason: ACCESS_RESULTS.NO_POLICY };
+  const candidates = (Array.isArray(senderIds) ? senderIds : [senderIds]).map((candidate) => {
+    try {
+      return normalizeUserId(candidate);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  if (candidates.length === 0) return { allowed: false, reason: ACCESS_RESULTS.NOT_LISTED };
+  const scope = normalized[conversationType];
+  const users = scope.mode === "open" ? scope.open.commandPermissionOverrides : scope.allowlist.users;
+  const matched = users.filter((user) => candidates.includes(user.id));
+  if (scope.mode === "allowlist" && matched.length === 0) {
+    return { allowed: false, reason: ACCESS_RESULTS.NOT_LISTED };
+  }
+  if (isCommand) {
+    const canExecute = scope.mode === "open" ? matched.length > 0 ? matched.every((user) => user.canExecuteCommands) : scope.open.defaultCanExecuteCommands : matched.every((user) => user.canExecuteCommands);
+    if (!canExecute) return { allowed: false, reason: ACCESS_RESULTS.COMMAND_DENIED };
+  }
+  return {
+    allowed: true,
+    reason: scope.mode === "open" ? ACCESS_RESULTS.OPEN : ACCESS_RESULTS.ALLOWLIST
+  };
+}
+function describeAccessScope(policy, conversationType) {
+  const normalized = normalizeAccessPolicy(policy);
+  if (!normalized) return "\u672A\u8BBE\u7F6E\uFF08\u4EC5\u5C5E\u4E3B\u53EF\u7528\uFF09";
+  const scope = normalized[conversationType];
+  if (scope.mode === "open") {
+    return `\u4EFB\u4F55\u4EBA\u53EF\u7528\uFF08\u547D\u4EE4\u9ED8\u8BA4${scope.open.defaultCanExecuteCommands ? "\u5141\u8BB8" : "\u4E0D\u5141\u8BB8"}\uFF09`;
+  }
+  const count = scope.allowlist.users.length;
+  return count === 0 ? "\u4EC5\u5C5E\u4E3B\u53EF\u7528" : `\u540D\u5355\u5185 ${count} \u4EBA\u53EF\u7528`;
 }
 
 // packages/dsh-chat/shared/context-enhancement.mjs
@@ -142,34 +306,34 @@ var SOURCE_LIMITS = Object.freeze({
   threadId: 256,
   botId: 128
 });
-var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+var CONTROL_CHARACTERS2 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 var CONTROL_CHARACTER_TEST = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 var KNOWN_CHANNELS = /* @__PURE__ */ new Set(["feishu", "weixin"]);
-function invalid(message) {
+function invalid2(message) {
   const error = new TypeError(message);
   error.code = "context-enhancement-invalid";
   return error;
 }
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
-function hasExactKeys(input, keys) {
-  return isPlainObject2(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+function hasExactKeys2(input, keys) {
+  return isPlainObject3(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
 }
 function offlineText(value, maxLength) {
-  return typeof value === "string" ? value.replace(CONTROL_CHARACTERS, "").slice(0, maxLength) : "";
+  return typeof value === "string" ? value.replace(CONTROL_CHARACTERS2, "").slice(0, maxLength) : "";
 }
-function validateScope(input, where) {
-  if (!hasExactKeys(input, SCOPE_KEYS)) throw invalid(`${where}\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002`);
+function validateScope2(input, where) {
+  if (!hasExactKeys2(input, SCOPE_KEYS)) throw invalid2(`${where}\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002`);
   const { enabled, fields, guidance } = input;
-  if (typeof enabled !== "boolean") throw invalid(`${where}\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002`);
+  if (typeof enabled !== "boolean") throw invalid2(`${where}\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002`);
   if (!Array.isArray(fields) || !fields.every((field) => CONTEXT_FIELDS.includes(field))) {
-    throw invalid(`${where}\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002`);
+    throw invalid2(`${where}\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002`);
   }
   if (typeof guidance !== "string" || guidance.length > GUIDANCE_MAX_LENGTH) {
-    throw invalid(`${where}\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`${where}\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
   return Object.freeze({
     enabled,
@@ -178,7 +342,7 @@ function validateScope(input, where) {
   });
 }
 function validateTarget(input) {
-  if (!hasExactKeys(input, TARGET_KEYS)) throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002");
+  if (!hasExactKeys2(input, TARGET_KEYS)) throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002");
   const {
     kind,
     id,
@@ -188,22 +352,22 @@ function validateTarget(input) {
     guidance,
     merge
   } = input;
-  if (!TARGET_KINDS.includes(kind)) throw invalid('\u6307\u5B9A\u8BBE\u7F6E\u7684\u7C7B\u578B\u53EA\u80FD\u662F"\u6307\u5B9A\u7528\u6237"\u6216"\u6307\u5B9A\u7FA4"\u3002');
+  if (!TARGET_KINDS.includes(kind)) throw invalid2('\u6307\u5B9A\u8BBE\u7F6E\u7684\u7C7B\u578B\u53EA\u80FD\u662F"\u6307\u5B9A\u7528\u6237"\u6216"\u6307\u5B9A\u7FA4"\u3002');
   const targetId = typeof id === "string" ? id.trim() : "";
   if (!targetId || targetId.length > TARGET_ID_MAX_LENGTH || CONTROL_CHARACTER_TEST.test(targetId) || /\s/.test(targetId)) {
-    throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6807\u8BC6\u4E0D\u80FD\u4E3A\u7A7A\u3001\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\uFF0C\u4E14\u4E0D\u5F97\u8D85\u8FC7 256 \u4E2A\u5B57\u7B26\u3002");
+    throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6807\u8BC6\u4E0D\u80FD\u4E3A\u7A7A\u3001\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\uFF0C\u4E14\u4E0D\u5F97\u8D85\u8FC7 256 \u4E2A\u5B57\u7B26\u3002");
   }
   if (typeof label !== "string" || label.length > TARGET_LABEL_MAX_LENGTH) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u5907\u6CE8\u540D\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_LABEL_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u5907\u6CE8\u540D\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_LABEL_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
-  if (typeof enabled !== "boolean") throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  if (typeof enabled !== "boolean") throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
   if (!Array.isArray(fields) || !fields.every((field) => CONTEXT_FIELDS.includes(field))) {
-    throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002");
+    throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002");
   }
   if (typeof guidance !== "string" || guidance.length > GUIDANCE_MAX_LENGTH) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
-  if (!TARGET_MERGES.includes(merge)) throw invalid('\u6307\u5B9A\u8BBE\u7F6E\u7684\u63D0\u793A\u8BCD\u53E0\u52A0\u65B9\u5F0F\u53EA\u652F\u6301"\u53E0\u52A0"\u6216"\u8986\u76D6"\u3002');
+  if (!TARGET_MERGES.includes(merge)) throw invalid2('\u6307\u5B9A\u8BBE\u7F6E\u7684\u63D0\u793A\u8BCD\u53E0\u52A0\u65B9\u5F0F\u53EA\u652F\u6301"\u53E0\u52A0"\u6216"\u8986\u76D6"\u3002');
   return Object.freeze({
     kind,
     id: targetId,
@@ -215,26 +379,26 @@ function validateTarget(input) {
   });
 }
 function validateContextConfig(input) {
-  if (!hasExactKeys(input, CONFIG_KEYS)) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
-  if (!Array.isArray(input.targets)) throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u5FC5\u987B\u662F\u5217\u8868\u3002");
+  if (!hasExactKeys2(input, CONFIG_KEYS)) throw invalid2("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
+  if (!Array.isArray(input.targets)) throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u5FC5\u987B\u662F\u5217\u8868\u3002");
   if (input.targets.length > TARGET_LIMIT) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\u3002`);
   }
   const targets = input.targets.map(validateTarget);
   const seen = /* @__PURE__ */ new Set();
   for (const target of targets) {
     const key = `${target.kind}:${target.id}`;
-    if (seen.has(key)) throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u4E2D\u300C${target.id}\u300D\u91CD\u590D\uFF0C\u8BF7\u5408\u5E76\u540E\u518D\u4FDD\u5B58\u3002`);
+    if (seen.has(key)) throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u4E2D\u300C${target.id}\u300D\u91CD\u590D\uFF0C\u8BF7\u5408\u5E76\u540E\u518D\u4FDD\u5B58\u3002`);
     seen.add(key);
   }
   return Object.freeze({
-    group: validateScope(input.group, "\u7FA4\u804A"),
-    direct: validateScope(input.direct, "\u79C1\u804A"),
+    group: validateScope2(input.group, "\u7FA4\u804A"),
+    direct: validateScope2(input.direct, "\u79C1\u804A"),
     targets: Object.freeze(targets)
   });
 }
 function migrateLegacyConfig(input) {
-  if (!hasExactKeys(input, LEGACY_KEYS)) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
+  if (!hasExactKeys2(input, LEGACY_KEYS)) throw invalid2("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
   return validateContextConfig({
     group: { enabled: input.groupEnabled, fields: input.fields, guidance: input.guidance },
     direct: { enabled: input.directEnabled, fields: input.fields, guidance: input.guidance },
@@ -249,7 +413,7 @@ function normalizeContextConfig(input) {
       return migrateLegacyConfig(input);
     } catch {
       try {
-        if (isPlainObject2(input)) {
+        if (isPlainObject3(input)) {
           return validateContextConfig({ ...input, targets: input.targets ?? [] });
         }
       } catch {
@@ -297,7 +461,7 @@ function sourceValue(value, field) {
     value = String(value);
   }
   if (typeof value !== "string") return void 0;
-  const normalized = value.replace(CONTROL_CHARACTERS, "").trim().slice(0, SOURCE_LIMITS[field]);
+  const normalized = value.replace(CONTROL_CHARACTERS2, "").trim().slice(0, SOURCE_LIMITS[field]);
   if (!normalized) return void 0;
   if (field === "channel" && !KNOWN_CHANNELS.has(normalized)) return void 0;
   return normalized;
@@ -493,25 +657,25 @@ var LEGACY_SOURCES = Object.freeze({
   accessPolicies: "accessPolicy",
   deliveryTargets: "deliveryTargets"
 });
-function isPlainObject3(value) {
+function isPlainObject4(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function cloneRecord(record) {
   return {
     ...EMPTY_RECORD,
-    ...isPlainObject3(record) ? record : {}
+    ...isPlainObject4(record) ? record : {}
   };
 }
 function normalizeDocument(value) {
-  const source = isPlainObject3(value) && value.version === DOCUMENT_VERSION ? value : {};
-  const imports = isPlainObject3(source.imports) ? { ...source.imports } : {};
+  const source = isPlainObject4(value) && value.version === DOCUMENT_VERSION ? value : {};
+  const imports = isPlainObject4(source.imports) ? { ...source.imports } : {};
   const channels = {};
-  if (isPlainObject3(source.channels)) {
+  if (isPlainObject4(source.channels)) {
     for (const [channelId, bots] of Object.entries(source.channels)) {
-      if (!isPlainObject3(bots)) continue;
+      if (!isPlainObject4(bots)) continue;
       const entries = {};
       for (const [botId, record] of Object.entries(bots)) {
-        if (!isPlainObject3(record)) continue;
+        if (!isPlainObject4(record)) continue;
         entries[botId] = cloneRecord(record);
       }
       channels[channelId] = entries;
@@ -546,7 +710,7 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
     async write(channelId, botId, patch) {
       if (typeof channelId !== "string" || !channelId) throw new TypeError("channelId \u5FC5\u586B\u3002");
       if (typeof botId !== "string" || !botId) throw new TypeError("botId \u5FC5\u586B\u3002");
-      if (!isPlainObject3(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+      if (!isPlainObject4(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       const unknown = Object.keys(patch).filter((key) => !RECORD_KEYS.includes(key));
       if (unknown.length > 0) throw new TypeError(`\u672A\u77E5\u7684\u8BBE\u7F6E\u5B57\u6BB5\uFF1A${unknown.join("\u3001")}`);
       const normalized = Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) } : patch;
@@ -608,7 +772,7 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
       const perBot = /* @__PURE__ */ new Map();
       for (const [legacyKey, recordKey] of Object.entries(LEGACY_SOURCES)) {
         const table = legacy?.[legacyKey];
-        if (!isPlainObject3(table)) continue;
+        if (!isPlainObject4(table)) continue;
         for (const [botId, value] of Object.entries(table)) {
           if (value === null || value === void 0) continue;
           const entry = perBot.get(botId) ?? {};
@@ -896,6 +1060,360 @@ function createChannelRegistry({
   return { register, list, get, subscribe, handleRpc, disposeAll };
 }
 
+// packages/dsh-chat/host/commands.mjs
+var PREFIX = "/";
+var MAX_LINE = 120;
+function line(text) {
+  const value = String(text ?? "").replace(/\s+$/u, "");
+  return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}\u2026` : value;
+}
+function parseArgs(text) {
+  const raw = text.slice(1);
+  const match = /^(\S+)\s*(.*)$/su.exec(raw);
+  if (!match) return { name: "", args: [] };
+  const name2 = match[1].toLowerCase();
+  const rest = match[2].trim();
+  if (!rest) return { name: name2, args: [] };
+  const args = rest.match(/"[^"]*"|\S+/gu) ?? [];
+  return { name: name2, args: args.map((arg) => arg.startsWith('"') && arg.endsWith('"') ? arg.slice(1, -1) : arg) };
+}
+function indexOf(value) {
+  if (!/^\d{1,3}$/u.test(value)) return null;
+  const index = Number(value) - 1;
+  return index >= 0 ? index : null;
+}
+function createCommandRegistry({ logger = console, services = {} } = {}) {
+  const commands = /* @__PURE__ */ new Map();
+  const aliasIndex = /* @__PURE__ */ new Map();
+  function register(definition) {
+    const { name: name2, summary, usage, scope = "both", execute } = definition;
+    if (!/^[a-z][a-z0-9-]{0,31}$/u.test(name2 ?? "")) {
+      throw new TypeError(`\u547D\u4EE4\u540D\u4E0D\u5408\u6CD5\uFF1A${String(name2)}`);
+    }
+    if (typeof execute !== "function") throw new TypeError(`\u547D\u4EE4 ${name2} \u7F3A\u5C11 execute\u3002`);
+    if (commands.has(name2)) throw new Error(`\u547D\u4EE4 ${name2} \u91CD\u590D\u6CE8\u518C\u3002`);
+    const record = Object.freeze({
+      name: name2,
+      summary: String(summary ?? ""),
+      usage: usage ?? `/${name2}`,
+      scope,
+      execute,
+      aliases: Object.freeze([...definition.aliases ?? []])
+    });
+    commands.set(name2, record);
+    for (const alias of record.aliases) aliasIndex.set(alias, name2);
+    return () => {
+      if (commands.get(name2) !== record) return;
+      commands.delete(name2);
+      for (const alias of record.aliases) aliasIndex.delete(alias);
+    };
+  }
+  function lookup(name2) {
+    return commands.get(name2) ?? commands.get(aliasIndex.get(name2));
+  }
+  async function handle(options) {
+    const text = typeof options?.text === "string" ? options.text.trim() : "";
+    if (!text.startsWith(PREFIX)) return { handled: false };
+    const { name: name2, args } = parseArgs(text);
+    const command = lookup(name2);
+    if (!command) {
+      return {
+        handled: true,
+        reply: `\u672A\u77E5\u547D\u4EE4 ${PREFIX}${name2}\u3002\u53D1\u9001 ${PREFIX}help \u67E5\u770B\u53EF\u7528\u547D\u4EE4\u3002`
+      };
+    }
+    if (command.scope !== "both" && command.scope !== options.conversationType) {
+      return { handled: true, reply: `\u547D\u4EE4 ${PREFIX}${command.name} \u4E0D\u80FD\u5728\u5F53\u524D\u4F1A\u8BDD\u7C7B\u578B\u4E0B\u4F7F\u7528\u3002` };
+    }
+    const context = {
+      ...options,
+      args,
+      rawArgs: args.join(" "),
+      services,
+      log: logger
+    };
+    try {
+      const reply = await command.execute(context);
+      return { handled: true, reply: reply ?? "" };
+    } catch (error) {
+      const message = error?.message ?? String(error);
+      logger.warn?.(`[dsh-chat] \u547D\u4EE4 ${command.name} \u6267\u884C\u5931\u8D25\uFF1A${message}`);
+      return { handled: true, reply: `\u547D\u4EE4\u6267\u884C\u5931\u8D25\uFF1A${message}` };
+    }
+  }
+  function list() {
+    return Object.freeze([...commands.values()].sort((left, right) => left.name.localeCompare(right.name)));
+  }
+  return { register, handle, list, names: () => [...commands.keys()] };
+}
+async function boundSession(context) {
+  const { services, channelId, botId, key } = context;
+  return services.sessions?.bindings?.get?.(channelId, botId, key)?.sessionId ?? null;
+}
+async function modelCatalog(context) {
+  const catalog = await context.services.sessions.invoke("session", "modelCatalog", {});
+  const rows = [];
+  for (const group of catalog?.groups ?? []) {
+    for (const model of group.models ?? []) {
+      rows.push({
+        provider: group.provider ?? group.providerId,
+        providerName: group.providerName ?? group.displayName ?? group.provider,
+        model: model.id ?? model.model,
+        name: model.name ?? model.id,
+        efforts: model.reasoning?.efforts ?? [],
+        defaultEffort: model.reasoning?.defaultEffort ?? null
+      });
+    }
+  }
+  return { catalog, rows };
+}
+function findModel(rows, token) {
+  const byIndex = indexOf(token);
+  if (byIndex !== null) return rows[byIndex] ?? null;
+  const [provider, model] = String(token).split("/");
+  if (!provider || !model) return null;
+  return rows.find((row) => row.provider === provider && row.model === model) ?? null;
+}
+function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
+  registry.register({
+    name: "help",
+    aliases: ["h"],
+    summary: "\u663E\u793A\u673A\u5668\u4EBA\u652F\u6301\u7684\u547D\u4EE4\u4E0E\u7528\u6CD5",
+    execute: () => {
+      const rows = registry.list().map((command) => line(`${command.usage} \u2014 ${command.summary}`));
+      return ["\u53EF\u7528\u547D\u4EE4\uFF1A", ...rows].join("\n");
+    }
+  });
+  registry.register({
+    name: "version",
+    summary: "\u67E5\u770B dsh-chat \u63D2\u4EF6\u7248\u672C",
+    execute: () => `dsh-chat ${hubVersion}\uFF08\u6E20\u9053\u5951\u7EA6 v${CONTRACT_VERSION}\uFF09`
+  });
+  registry.register({
+    name: "status",
+    summary: "\u67E5\u770B\u5F53\u524D\u673A\u5668\u4EBA\u3001\u4F1A\u8BDD\u4E0E\u8FD0\u884C\u72B6\u6001",
+    execute: async (context) => {
+      const { services, channelId, botId, key } = context;
+      const channel = services.channels?.list?.().find((item) => item.id === channelId);
+      const record = services.bots?.read?.(channelId, botId) ?? {};
+      const bound = services.sessions?.bindings?.get?.(channelId, botId, key);
+      let running = null;
+      if (bound?.sessionId) {
+        running = await context.services.sessions.isRunning(bound.sessionId).catch(() => null);
+      }
+      return [
+        `\u6E20\u9053\uFF1A${channel?.label ?? channelId}\uFF08${channel?.status ?? "\u672A\u77E5"}\uFF09`,
+        `\u673A\u5668\u4EBA\uFF1A${context.botLabel ?? botId}`,
+        `\u4F1A\u8BDD\uFF1A${bound?.sessionId ?? "\u672A\u7ED1\u5B9A\uFF08\u53D1\u4E00\u6761\u6D88\u606F\u5373\u53EF\u521B\u5EFA\uFF09"}`,
+        `\u8FD0\u884C\u4E2D\uFF1A${running === null ? "\u672A\u77E5" : running ? "\u662F" : "\u5426"}`,
+        `\u5DE5\u4F5C\u533A\uFF1A${record.workspace ?? "\u672A\u8BBE\u7F6E"}`,
+        `\u6A21\u578B\uFF1A${record.model ? `${record.model.providerId ?? record.model.provider}/${record.model.modelId ?? record.model.model}` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+        `Agent Preset\uFF1A${record.agentPreset ?? "\u8DDF\u968F Host \u9ED8\u8BA4"}`
+      ].join("\n");
+    }
+  });
+  registry.register({
+    name: "new",
+    summary: "\u89E3\u9664\u5F53\u524D\u804A\u5929\u7684\u4F1A\u8BDD\u7ED1\u5B9A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u5F00\u542F\u65B0\u4F1A\u8BDD",
+    execute: async (context) => {
+      await context.services.sessions.reset({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key
+      });
+      return "\u5DF2\u89E3\u9664\u5F53\u524D\u4F1A\u8BDD\u7ED1\u5B9A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u5C06\u5F00\u542F\u65B0\u4F1A\u8BDD\u3002";
+    }
+  });
+  registry.register({
+    name: "stop",
+    summary: "\u505C\u6B62\u5F53\u524D\u804A\u5929\u6B63\u5728\u8FD0\u884C\u7684\u4EFB\u52A1",
+    execute: async (context) => {
+      const sessionId = await boundSession(context);
+      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u7ED1\u5B9A\u4F1A\u8BDD\u3002";
+      const result = await context.services.sessions.cancel({
+        channelId: context.channelId,
+        botId: context.botId,
+        key: context.key
+      });
+      return result?.accepted ? "\u5DF2\u8BF7\u6C42\u505C\u6B62\u5F53\u524D\u4EFB\u52A1\u3002" : "\u5F53\u524D\u6CA1\u6709\u6B63\u5728\u8FD0\u884C\u7684\u4EFB\u52A1\u3002";
+    }
+  });
+  registry.register({
+    name: "session",
+    summary: "\u67E5\u770B\u5F53\u524D\u4F1A\u8BDD\uFF1B\u5E26\u4F1A\u8BDD id \u65F6\u5207\u6362\u7ED1\u5B9A",
+    usage: "/session [\u4F1A\u8BDDid]",
+    execute: async (context) => {
+      const { services } = context;
+      if (context.args.length === 0) {
+        const bound = services.sessions.bindings.get(context.channelId, context.botId, context.key);
+        if (!bound) return "\u5F53\u524D\u804A\u5929\u672A\u7ED1\u5B9A\u4F1A\u8BDD\uFF08\u53D1\u4E00\u6761\u6D88\u606F\u5373\u53EF\u521B\u5EFA\uFF09\u3002";
+        const running = await services.sessions.isRunning(bound.sessionId).catch(() => null);
+        return `\u5F53\u524D\u4F1A\u8BDD\uFF1A${bound.sessionId}${running ? "\uFF08\u8FD0\u884C\u4E2D\uFF09" : ""}`;
+      }
+      const target = context.args[0];
+      const exists = await services.sessions.sessionExists(target).catch(() => false);
+      if (!exists) return `\u627E\u4E0D\u5230\u4F1A\u8BDD ${target}\u3002`;
+      await services.sessions.bindings.bind(context.channelId, context.botId, context.key, {
+        sessionId: target
+      });
+      return `\u5DF2\u5207\u6362\u5230\u4F1A\u8BDD ${target}\u3002`;
+    }
+  });
+  registry.register({
+    name: "models",
+    summary: "\u6309\u5E8F\u53F7\u5217\u51FA\u5F53\u524D\u53EF\u7528\u7684\u6A21\u578B",
+    execute: async (context) => {
+      const { rows } = await modelCatalog(context);
+      if (rows.length === 0) return "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002";
+      const body = rows.map((row, index) => line(
+        `${index + 1}. ${row.provider}/${row.model}${row.name && row.name !== row.model ? `\uFF08${row.name}\uFF09` : ""}${row.efforts.length > 0 ? ` \xB7 \u63A8\u7406\u7B49\u7EA7 ${row.efforts.map((effort) => effort.id).join("/")}` : ""}`
+      ));
+      return ["\u53EF\u7528\u6A21\u578B\uFF1A", ...body, `\u7528 /model <\u5E8F\u53F7\u6216 provider/\u6A21\u578Bid> [\u63A8\u7406\u7B49\u7EA7] \u5207\u6362\u3002`].join("\n");
+    }
+  });
+  registry.register({
+    name: "model",
+    summary: "\u67E5\u770B\u6216\u5207\u6362\u5F53\u524D\u4F1A\u8BDD\u4F7F\u7528\u7684\u6A21\u578B",
+    usage: "/model [\u5E8F\u53F7\u6216 provider/\u6A21\u578Bid] [\u63A8\u7406\u7B49\u7EA7]",
+    execute: async (context) => {
+      const sessionId = await boundSession(context);
+      if (context.args.length === 0) {
+        if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u7528 /model \u5728\u5DF2\u6709\u4F1A\u8BDD\u91CC\u5207\u6362\u3002";
+        const rows2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
+        const item = rows2?.items?.find((entry) => entry.sessionId === sessionId);
+        const selection = item?.projections?.values?.modelSelection;
+        return selection ? `\u5F53\u524D\u6A21\u578B\uFF1A${selection.provider}/${selection.model}${selection.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${selection.reasoningEffort}\uFF09` : ""}` : "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF08\u8DDF\u968F Host \u9ED8\u8BA4\uFF09\u3002";
+      }
+      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u6A21\u578B\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
+      const { rows } = await modelCatalog(context);
+      const target = findModel(rows, context.args[0]);
+      if (!target) return `\u627E\u4E0D\u5230\u6A21\u578B ${context.args[0]}\uFF1B\u7528 /models \u67E5\u770B\u53EF\u7528\u5217\u8868\u3002`;
+      const effort = context.args[1];
+      if (effort && !target.efforts.some((item) => item.id === effort)) {
+        return `\u6A21\u578B ${target.provider}/${target.model} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7 ${effort}\u3002`;
+      }
+      const selected = await context.services.sessions.invoke("session", "selectModel", {
+        request: {
+          sessionId,
+          provider: target.provider,
+          model: target.model,
+          ...effort ? { reasoningEffort: effort } : {}
+        }
+      });
+      const value = selected?.selected ?? {};
+      return `\u5DF2\u5207\u6362\u4E3A ${value.provider ?? target.provider}/${value.model ?? target.model}${value.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${value.reasoningEffort}\uFF09` : ""}\u3002`;
+    }
+  });
+  registry.register({
+    name: "reasonings",
+    aliases: ["reasoninglist"],
+    summary: "\u5217\u51FA\u5F53\u524D\u6A21\u578B\u652F\u6301\u7684\u63A8\u7406\u7B49\u7EA7",
+    execute: async (context) => {
+      const { rows } = await modelCatalog(context);
+      const sessionId = await boundSession(context);
+      const current = rows.find((row) => row.efforts.length > 0) ?? rows[0];
+      if (!current) return "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002";
+      const efforts = current.efforts.length > 0 ? current.efforts : [];
+      if (efforts.length === 0) return `\u6A21\u578B ${current.provider}/${current.model} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7\u3002`;
+      return [
+        `\u6A21\u578B ${current.provider}/${current.model} \u652F\u6301\u7684\u63A8\u7406\u7B49\u7EA7\uFF1A`,
+        ...efforts.map((effort, index) => line(`${index + 1}. ${effort.id}${effort.label ? `\uFF08${effort.label}\uFF09` : ""}`)),
+        `\u9ED8\u8BA4\uFF1A${current.defaultEffort ?? "\u2014"}`,
+        `\u7528 /reasoning <\u5E8F\u53F7\u6216\u7B49\u7EA7id> \u5207\u6362\uFF0C/reasoning --default \u6062\u590D\u9ED8\u8BA4\u3002`,
+        sessionId ? "" : "\uFF08\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u5207\u6362\u4F1A\u5728\u6709\u4F1A\u8BDD\u540E\u751F\u6548\u3002\uFF09"
+      ].filter(Boolean).join("\n");
+    }
+  });
+  registry.register({
+    name: "reasoning",
+    summary: "\u67E5\u770B\u6216\u5207\u6362\u5F53\u524D\u6A21\u578B\u7684\u63A8\u7406\u7B49\u7EA7",
+    usage: "/reasoning [\u5E8F\u53F7\u6216\u7B49\u7EA7id|--default]",
+    execute: async (context) => {
+      const sessionId = await boundSession(context);
+      if (context.args.length === 0) {
+        if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u3002";
+        const list2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
+        const item2 = list2?.items?.find((entry) => entry.sessionId === sessionId);
+        const selection2 = item2?.projections?.values?.modelSelection;
+        if (!selection2) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\u3002";
+        return `\u5F53\u524D\u6A21\u578B ${selection2.provider}/${selection2.model}\uFF0C\u63A8\u7406\u7B49\u7EA7 ${selection2.reasoningEffort ?? "\uFF08\u9ED8\u8BA4\uFF09"}\u3002`;
+      }
+      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u63A8\u7406\u7B49\u7EA7\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
+      const list = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
+      const item = list?.items?.find((entry) => entry.sessionId === sessionId);
+      const selection = item?.projections?.values?.modelSelection;
+      if (!selection) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u65E0\u6CD5\u5355\u72EC\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7\u3002";
+      const { rows } = await modelCatalog(context);
+      const current = rows.find((row) => row.provider === selection.provider && row.model === selection.model);
+      if (!current) return "\u5F53\u524D\u6A21\u578B\u4E0D\u5728\u53EF\u7528\u5217\u8868\u91CC\u3002";
+      if (context.args[0] === "--default") {
+        await context.services.sessions.invoke("session", "selectModel", {
+          request: { sessionId, provider: current.provider, model: current.model }
+        });
+        return `\u5DF2\u6062\u590D ${current.provider}/${current.model} \u7684\u9ED8\u8BA4\u63A8\u7406\u7B49\u7EA7${current.defaultEffort ? `\uFF08${current.defaultEffort}\uFF09` : ""}\u3002`;
+      }
+      const index = indexOf(context.args[0]);
+      const effort = index !== null ? current.efforts[index]?.id : context.args[0];
+      if (!effort || !current.efforts.some((item2) => item2.id === effort)) {
+        return `\u627E\u4E0D\u5230\u63A8\u7406\u7B49\u7EA7 ${context.args[0]}\uFF1B\u7528 /reasonings \u67E5\u770B\u53EF\u7528\u5217\u8868\u3002`;
+      }
+      await context.services.sessions.invoke("session", "selectModel", {
+        request: {
+          sessionId,
+          provider: current.provider,
+          model: current.model,
+          reasoningEffort: effort
+        }
+      });
+      return `\u5DF2\u5207\u6362\u63A8\u7406\u7B49\u7EA7\u4E3A ${effort}\u3002`;
+    }
+  });
+  registry.register({
+    name: "presets",
+    aliases: ["presetlist"],
+    summary: "\u5217\u51FA\u5F53\u524D Host \u53EF\u7528\u7684 Agent Preset",
+    execute: async (context) => {
+      const presets = context.services.agentPresets;
+      if (!presets?.remoteExportList) return "\u5F53\u524D Host \u4E0D\u652F\u6301\u8BFB\u53D6 Agent Preset \u5217\u8868\u3002";
+      const { presets: rows } = await presets.remoteExportList();
+      if (!rows || rows.length === 0) return "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528 Agent Preset\u3002";
+      const record = context.services.bots.read(context.channelId, context.botId);
+      return [
+        "\u53EF\u7528 Agent Preset\uFF1A",
+        ...rows.map((row, index) => line(
+          `${index + 1}. ${row.id}${row.isDefault ? "\uFF08Host \u9ED8\u8BA4\uFF09" : ""}${record.agentPreset === row.id ? "\uFF08\u5F53\u524D\u673A\u5668\u4EBA\uFF09" : ""}${row.name && row.name !== row.id ? ` \xB7 ${row.name}` : ""}`
+        )),
+        "\u7528 /preset <\u5E8F\u53F7\u6216 id> \u8BBE\u7F6E\uFF0C/preset --default \u8DDF\u968F Host \u9ED8\u8BA4\u3002"
+      ].join("\n");
+    }
+  });
+  registry.register({
+    name: "preset",
+    summary: "\u67E5\u770B\u6216\u8BBE\u7F6E\u5F53\u524D\u673A\u5668\u4EBA\u7684 Agent Preset\uFF08\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF09",
+    usage: "/preset [\u5E8F\u53F7\u6216 id|--default]",
+    execute: async (context) => {
+      const { services } = context;
+      const record = services.bots.read(context.channelId, context.botId);
+      if (context.args.length === 0) {
+        return record.agentPreset ? `\u5F53\u524D\u673A\u5668\u4EBA Agent Preset\uFF1A${record.agentPreset}` : "\u5F53\u524D\u673A\u5668\u4EBA\u8DDF\u968F Host \u9ED8\u8BA4 Agent Preset\u3002";
+      }
+      if (context.args[0] === "--default") {
+        await services.bots.write(context.channelId, context.botId, { agentPreset: null });
+        return "\u5DF2\u6E05\u9664\u673A\u5668\u4EBA\u7EA7 Agent Preset\uFF0C\u4E4B\u540E\u7684\u65B0\u4F1A\u8BDD\u8DDF\u968F Host \u9ED8\u8BA4\u3002";
+      }
+      if (!services.agentPresets?.remoteExportList) return "\u5F53\u524D Host \u4E0D\u652F\u6301\u8BBE\u7F6E Agent Preset\u3002";
+      const { presets: rows } = await services.agentPresets.remoteExportList();
+      const index = indexOf(context.args[0]);
+      const target = index !== null ? rows[index]?.id : context.args[0];
+      if (!target || !rows.some((row) => row.id === target)) {
+        return `\u627E\u4E0D\u5230 Agent Preset ${context.args[0]}\uFF1B\u7528 /presets \u67E5\u770B\u5217\u8868\u3002`;
+      }
+      await services.bots.write(context.channelId, context.botId, { agentPreset: target });
+      return `\u5DF2\u8BBE\u7F6E Agent Preset \u4E3A ${target}\uFF1B\u5F53\u524D\u804A\u5929\u9700\u8981\u5148\u53D1\u9001 /new\uFF0C\u518D\u53D1\u4E00\u6761\u6D88\u606F\u624D\u4F1A\u7528\u65B0\u9884\u8BBE\u521B\u5EFA\u4F1A\u8BDD\u3002`;
+    }
+  });
+}
+
 // packages/dsh-chat/host/guidance.mjs
 var GUIDANCE_MAX_LENGTH2 = 8e3;
 var MAX_SESSIONS = 1024;
@@ -960,18 +1478,18 @@ function integrationRoot(configured) {
 // packages/dsh-chat/host/session-store.mjs
 import { join as join3 } from "node:path";
 var DOCUMENT_VERSION2 = 1;
-function isPlainObject4(value) {
+function isPlainObject5(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeDocument2(value) {
-  const source = isPlainObject4(value) && value.version === DOCUMENT_VERSION2 ? value : {};
+  const source = isPlainObject5(value) && value.version === DOCUMENT_VERSION2 ? value : {};
   const channels = {};
-  if (isPlainObject4(source.channels)) {
+  if (isPlainObject5(source.channels)) {
     for (const [channelId, bots] of Object.entries(source.channels)) {
-      if (!isPlainObject4(bots)) continue;
+      if (!isPlainObject5(bots)) continue;
       const accounts = {};
       for (const [botId, keys] of Object.entries(bots)) {
-        if (!isPlainObject4(keys)) continue;
+        if (!isPlainObject5(keys)) continue;
         const entries = {};
         for (const [key, entry] of Object.entries(keys)) {
           const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
@@ -1072,7 +1590,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
      * @returns 实际接管的条数。
      */
     async adopt(channelId, botId, entries) {
-      if (!isPlainObject4(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
+      if (!isPlainObject5(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
       let adopted = 0;
       await store.update((current) => {
         const accounts = current.channels[channelId] ?? {};
@@ -1083,7 +1601,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
           if (typeof sessionId !== "string" || !sessionId) continue;
           keys[key] = {
             sessionId,
-            workspacePath: isPlainObject4(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
+            workspacePath: isPlainObject5(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
             boundAt: (/* @__PURE__ */ new Date()).toISOString()
           };
           adopted += 1;
@@ -1557,10 +2075,26 @@ function apply(ctx, config = {}) {
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
       contextEnhancement: context_enhancement_exports,
+      /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
+      accessPolicy: Object.freeze({ ...access_policy_exports }),
       guidance,
       sessions
     })
   });
+  const optionalAgentPresets = typeof ctx.get === "function" ? ctx.get("agentPresets") : void 0;
+  const commands = createCommandRegistry({
+    logger,
+    services: {
+      sessions,
+      bots: {
+        read: (channelId, botId) => settings.read(channelId, botId),
+        write: (channelId, botId, patch) => settings.write(channelId, botId, patch)
+      },
+      channels: { list: () => registry.list() },
+      agentPresets: optionalAgentPresets
+    }
+  });
+  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION });
   async function controlHandler(method, payload) {
     if (method === "channel.list") {
       if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {
@@ -1636,6 +2170,11 @@ function apply(ctx, config = {}) {
       list: (channelId) => settings.list(channelId),
       subscribe: (listener) => settings.subscribe(listener),
       storageFor
+    }),
+    /** 机器人命令：渠道把入站文本交进来，拿回要回复的文本。 */
+    commands: Object.freeze({
+      handle: (options) => commands.handle(options),
+      list: () => commands.list()
     }),
     contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
     guidance: Object.freeze({

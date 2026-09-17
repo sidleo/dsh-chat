@@ -213,6 +213,15 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
 
+### 入站消息的推荐顺序（两个官方渠道就是这么做的）
+
+1. 去重（平台消息 id）；
+2. 属主/访问策略判定：`deps.accessPolicy.evaluateAccess({ policy, conversationType, senderIds, isOwner })`，
+   不允许就**静默忽略但必须打日志**（否则"发了没反应"无从排查）；
+3. 命令：`text` 以 `/` 开头时先用 `isCommand: true` 再判一次权限，被拒就回"没有执行命令的权限"；
+   放行则交给 `deps.commands.handle(...)`，`handled: true` 时直接回复命令结果——**命令不进模型、也不做上下文增强**；
+4. 普通消息：捕获上下文增强 → `deps.sessions.ask(...)` → 按渠道方式呈现回复。
+
 ---
 
 ## 5. 会话桥 `sessions`

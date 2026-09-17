@@ -11,6 +11,9 @@
 /** 契约版本。渠道包激活时校验，不匹配即大声失败。 */
 export const CONTRACT_VERSION = 1;
 
+/** hub 版本（与 package.json 的 version 保持一致，用于 /version 命令）。 */
+export const HUB_VERSION = '0.0.1';
+
 /** hub 包名与行 id。 */
 export const HUB_PACKAGE = 'dsh-chat';
 

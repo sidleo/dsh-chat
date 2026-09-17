@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh-chat/shared/context-enhancement.mjs';
 import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
 import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feishu/host/config-store.mjs';
@@ -95,7 +96,7 @@ function messageEvent({
 async function makeBridge({
   bot = BOT,
   contextEnhancement = null,
-  accessPolicy = null,
+  policy = null,
   askResult = { text: '最终答案', reason: { kind: 'completed' }, tools: [] },
   onAsk = () => {},
 } = {}) {
@@ -111,10 +112,11 @@ async function makeBridge({
     ready: async () => {},
     storage: {
       read: () => ({
-        workspace: '/ws', contextEnhancement, accessPolicy, model: null, agentPreset: null,
+        workspace: '/ws', contextEnhancement, accessPolicy: policy, model: null, agentPreset: null,
       }),
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     sessions: {
       ask: async (options) => {
@@ -255,7 +257,7 @@ test('放行规则：通配属主、指定属主、访问策略 open 三种都�
   // 访问策略 open（旧配置里 direct 为 open 的机器人）
   const open = await makeBridge({
     bot: { ...BOT, ownerOpenIds: ['ou_someone_else'] },
-    accessPolicy: { direct: { mode: 'open' }, group: { mode: 'allowlist' } },
+    policy: { direct: { mode: 'open' }, group: { mode: 'allowlist' } },
   });
   try {
     await open.bridge.accept(messageEvent({ messageId: 'om_p', senderId: 'ou_anyone' }));
@@ -268,7 +270,7 @@ test('放行规则：通配属主、指定属主、访问策略 open 三种都�
 test('放行规则：allowlist 且不在名单里的人被静默忽略', async () => {
   const app = await makeBridge({
     bot: { ...BOT, ownerOpenIds: ['ou_owner'] },
-    accessPolicy: { direct: { mode: 'allowlist' }, group: { mode: 'allowlist' } },
+    policy: { direct: { mode: 'allowlist' }, group: { mode: 'allowlist' } },
   });
   try {
     await app.bridge.accept(messageEvent({ messageId: 'om_x', senderId: 'ou_other' }));
@@ -435,6 +437,7 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
         logger: silentLogger,
         credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
         sessions: {
           ask: async () => ({ text: '', reason: { kind: 'completed' } }),
           bindings: { adopt: async (channelId, botId, entries) => { adopted.push({ channelId, botId, entries }); return 0; } },
@@ -507,6 +510,7 @@ test('控制器：凭据缺失时该机器人标记失败，但不影响其他�
           resolve: async (ref) => (ref === 'REF_OK' ? { value: 'ok' } : { configured: false }),
         },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
         sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },
       },
       logger: silentLogger,

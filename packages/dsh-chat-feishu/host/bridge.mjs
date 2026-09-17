@@ -38,25 +38,15 @@ function stripMentions(text, mentions) {
 }
 
 /**
- * 判断本次会话类型下是否允许该发送者。
+ * 是否本机器人的属主。`ownerOpenIds` 里的 `*` 表示绑定时没有记录单一属主，
+ * 此时任何人都算"属主"（上游就是这么写的）。
  *
- * P2 的放行规则（P4 会被完整的白名单/命令权限模型取代）：
- * 1. 属主名单含 `*` → 不限制发送者（该机器人绑定时没有记录单一属主）；
- * 2. 发送者在属主名单里 → 允许；
- * 3. 旧实现的访问策略在该会话类型下是 `open` → 允许。
- * 其余情况静默忽略，但**必须留日志**——否则"发了没反应"根本无从排查。
- *
- * @param bot - 机器人配置（`ownerOpenIds` 来自 dsh-im 的 config.json）。
- * @param accessPolicy - hub 持有的该机器人访问策略（可能为 null）。
- * @param conversationType - 'direct' | 'group'。
+ * @param bot - 机器人配置。
  * @param senderId - 发送者 open_id。
- * @returns true 表示放行。
+ * @returns true 表示属主。
  */
-function senderAllowed(bot, accessPolicy, conversationType, senderId) {
-  if (bot.ownerOpenIds.includes('*')) return true;
-  if (bot.ownerOpenIds.includes(senderId)) return true;
-  const scope = conversationType === 'direct' ? 'direct' : 'group';
-  return accessPolicy?.[scope]?.mode === 'open';
+function isOwner(bot, senderId) {
+  return bot.ownerOpenIds.includes('*') || bot.ownerOpenIds.includes(senderId);
 }
 
 /**
@@ -93,9 +83,17 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     await deps.ready?.();
     const accessPolicy = deps.storage.read(bot.id).accessPolicy;
 
-    // 门禁：属主 / 通配属主 / 该会话类型的访问策略是 open（P4 会换成完整白名单）。
-    if (!senderAllowed(bot, accessPolicy, conversationType, senderId)) {
-      logger.info?.(`[dsh-chat-feishu] 忽略未放行的消息：${bot.id} ${conversationType} sender=${senderId}`);
+    // 门禁：属主绕过，其余按访问策略（open / allowlist）判定。
+    const messageAccess = deps.accessPolicy.evaluateAccess({
+      policy: accessPolicy,
+      conversationType,
+      senderIds: [senderId],
+      isOwner: isOwner(bot, senderId),
+    });
+    if (!messageAccess.allowed) {
+      logger.info?.(
+        `[dsh-chat-feishu] 忽略未放行的消息：${bot.id} ${conversationType} sender=${senderId}（${messageAccess.reason}）`,
+      );
       return;
     }
     if (conversationType === 'group' && bot.groupResponseMode !== 'all'
@@ -114,6 +112,46 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
     const text = stripMentions(raw, message.mentions);
     if (!text) return;
+
+    // 命令优先：命令不进入模型、也不做上下文增强。
+    const conversationKeyForCommands = conversationType === 'direct'
+      ? `p2p:${senderId}`
+      : `group:${message.chat_id}`;
+    const commandAccess = deps.accessPolicy.evaluateAccess({
+      policy: accessPolicy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: true,
+      isOwner: isOwner(bot, senderId),
+    });
+    if (!commandAccess.allowed && text.startsWith('/')) {
+      logger.info?.(`[dsh-chat-feishu] 命令被拒绝：${bot.id} sender=${senderId}（${commandAccess.reason}）`);
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: '你没有执行机器人命令的权限。',
+      });
+      return;
+    }
+    const command = await deps.commands?.handle?.({
+      text,
+      channelId: deps.channelId,
+      botId: bot.id,
+      key: conversationKeyForCommands,
+      conversationType,
+      senderId,
+      botLabel: bot.botName ?? bot.id,
+      channelLabel: '飞书',
+    }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] 命令处理失败：${error?.message ?? error}`);
+      return null;
+    });
+    if (command?.handled) {
+      if (command.reply) {
+        await gateway.replyText({ messageId: message.message_id, text: command.reply });
+      }
+      lastHandledAt = new Date().toISOString();
+      return;
+    }
 
     try {
       await deps.ready?.();

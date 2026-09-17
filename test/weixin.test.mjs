@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh-chat/shared/context-enhancement.mjs';
 import { createJsonStore } from '../packages/dsh-chat/host/json-store.mjs';
 import { createWeixinConfigStore } from '../packages/dsh-chat-weixin/host/config-store.mjs';
@@ -168,7 +169,7 @@ function createFakeClient(script = {}) {
 
 async function makeRuntime({
   owner = 'u@im.wechat',
-  accessPolicy = null,
+  policy = null,
   contextEnhancement = null,
   askResult = { text: '答案', reason: { kind: 'completed' } },
   onAsk = () => {},
@@ -195,10 +196,11 @@ async function makeRuntime({
     createJsonStore,
     storage: {
       read: () => ({
-        workspace: '/ws', contextEnhancement, accessPolicy, model: null, agentPreset: null,
+        workspace: '/ws', contextEnhancement, accessPolicy: policy, model: null, agentPreset: null,
       }),
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     sessions: {
       ask: async (options) => {
@@ -267,7 +269,7 @@ test('运行时：门禁——属主放行、访问策略 open 放行、陌生�
 
   const open = await makeRuntime({
     owner: 'someone-else',
-    accessPolicy: { direct: { mode: 'open' } },
+    policy: { direct: { mode: 'open' } },
   });
   try {
     await open.runtime.accept(inbound({ message_id: 'm_open' }), new AbortController().signal);
@@ -425,6 +427,7 @@ test('控制器：扫码确认后落盘账号、写入凭据并启动长轮询',
         createJsonStore,
         credentials,
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
         storage: { read: () => ({ workspace: '/ws', contextEnhancement: null, accessPolicy: null }) },
         ready: async () => {},
         sessions: {
@@ -495,6 +498,7 @@ test('控制器：凭据缺失时账号标记失败但不影响其他账号', as
         createJsonStore,
         credentials: { resolve: async (ref) => (ref === 'REF_OK' ? { value: 'tok' } : { configured: false }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
         storage: { read: () => ({ workspace: '/ws', contextEnhancement: null, accessPolicy: null }) },
         ready: async () => {},
         sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },

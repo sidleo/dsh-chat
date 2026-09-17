@@ -12,10 +12,14 @@
 
 import { resolve } from 'node:path';
 
-import { CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE } from '../shared/contract.mjs';
+import {
+  CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE, HUB_VERSION,
+} from '../shared/contract.mjs';
+import * as accessPolicy from '../shared/access-policy.mjs';
 import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
+import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
@@ -140,10 +144,29 @@ export function apply(ctx, config = {}) {
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
       contextEnhancement,
+      /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
+      accessPolicy: Object.freeze({ ...accessPolicy }),
       guidance,
       sessions,
     }),
   });
+
+  // 命令内核：命令操作的都是渠道无关的东西，因此 hub 实现一次、所有渠道复用。
+  // agentPresets 是可选服务（某些部署可能没装），用 ctx.get 取、缺失时命令给出提示。
+  const optionalAgentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined;
+  const commands = createCommandRegistry({
+    logger,
+    services: {
+      sessions,
+      bots: {
+        read: (channelId, botId) => settings.read(channelId, botId),
+        write: (channelId, botId, patch) => settings.write(channelId, botId, patch),
+      },
+      channels: { list: () => registry.list() },
+      agentPresets: optionalAgentPresets,
+    },
+  });
+  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION });
 
   /**
    * hub 控制端点：渠道无关、所有渠道共用，因此渠道包不必重复实现。
@@ -234,6 +257,12 @@ export function apply(ctx, config = {}) {
       list: (channelId) => settings.list(channelId),
       subscribe: (listener) => settings.subscribe(listener),
       storageFor,
+    }),
+
+    /** 机器人命令：渠道把入站文本交进来，拿回要回复的文本。 */
+    commands: Object.freeze({
+      handle: (options) => commands.handle(options),
+      list: () => commands.list(),
     }),
 
     contextEnhancement: Object.freeze({ ...contextEnhancement }),

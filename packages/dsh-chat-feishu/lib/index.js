@@ -126641,11 +126641,8 @@ function stripMentions(text, mentions) {
   }
   return result.trim();
 }
-function senderAllowed(bot, accessPolicy, conversationType, senderId) {
-  if (bot.ownerOpenIds.includes("*")) return true;
-  if (bot.ownerOpenIds.includes(senderId)) return true;
-  const scope = conversationType === "direct" ? "direct" : "group";
-  return accessPolicy?.[scope]?.mode === "open";
+function isOwner(bot, senderId) {
+  return bot.ownerOpenIds.includes("*") || bot.ownerOpenIds.includes(senderId);
 }
 function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   if (!bot?.id) throw new TypeError("\u98DE\u4E66\u6865\u9700\u8981\u673A\u5668\u4EBA\u914D\u7F6E\u3002");
@@ -126664,8 +126661,16 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (!senderId) return;
     await deps.ready?.();
     const accessPolicy = deps.storage.read(bot.id).accessPolicy;
-    if (!senderAllowed(bot, accessPolicy, conversationType, senderId)) {
-      logger.info?.(`[dsh-chat-feishu] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${bot.id} ${conversationType} sender=${senderId}`);
+    const messageAccess = deps.accessPolicy.evaluateAccess({
+      policy: accessPolicy,
+      conversationType,
+      senderIds: [senderId],
+      isOwner: isOwner(bot, senderId)
+    });
+    if (!messageAccess.allowed) {
+      logger.info?.(
+        `[dsh-chat-feishu] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${bot.id} ${conversationType} sender=${senderId}\uFF08${messageAccess.reason}\uFF09`
+      );
       return;
     }
     if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId)) {
@@ -126682,6 +126687,42 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     }
     const text = stripMentions(raw, message.mentions);
     if (!text) return;
+    const conversationKeyForCommands = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
+    const commandAccess = deps.accessPolicy.evaluateAccess({
+      policy: accessPolicy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: true,
+      isOwner: isOwner(bot, senderId)
+    });
+    if (!commandAccess.allowed && text.startsWith("/")) {
+      logger.info?.(`[dsh-chat-feishu] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${bot.id} sender=${senderId}\uFF08${commandAccess.reason}\uFF09`);
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002"
+      });
+      return;
+    }
+    const command = await deps.commands?.handle?.({
+      text,
+      channelId: deps.channelId,
+      botId: bot.id,
+      key: conversationKeyForCommands,
+      conversationType,
+      senderId,
+      botLabel: bot.botName ?? bot.id,
+      channelLabel: "\u98DE\u4E66"
+    }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return null;
+    });
+    if (command?.handled) {
+      if (command.reply) {
+        await gateway.replyText({ messageId: message.message_id, text: command.reply });
+      }
+      lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+      return;
+    }
     try {
       await deps.ready?.();
       const record = deps.storage.read(bot.id);

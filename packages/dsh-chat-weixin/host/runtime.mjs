@@ -109,11 +109,15 @@ export function createWeixinRuntime({
     await deps.ready?.();
     const record = deps.storage.read(account.botId);
 
-    // 放行规则（P2/P4 同款）：属主本人，或旧访问策略在该会话类型下是 open。
-    const allowed = sender === account.ownerUserId
-      || record.accessPolicy?.direct?.mode === 'open';
-    if (!allowed) {
-      logger.info?.(`[dsh-chat-weixin] 忽略未放行的消息：${account.botId} sender=${sender}`);
+    // 门禁：属主绕过，其余按访问策略（open / allowlist）判定。
+    const access = deps.accessPolicy.evaluateAccess({
+      policy: record.accessPolicy,
+      conversationType: 'direct',
+      senderIds: [sender],
+      isOwner: sender === account.ownerUserId,
+    });
+    if (!access.allowed) {
+      logger.info?.(`[dsh-chat-weixin] 忽略未放行的消息：${account.botId} sender=${sender}（${access.reason}）`);
       return;
     }
 
@@ -131,6 +135,44 @@ export function createWeixinRuntime({
     const contextToken = inboundToken ?? state.contextToken(sender);
 
     const key = `p2p:${sender}`;
+
+    // 命令权限单独判定（白名单用户可以被允许对话、但不允许执行命令）。
+    if (text.startsWith('/')) {
+      const commandAccess = deps.accessPolicy.evaluateAccess({
+        policy: record.accessPolicy,
+        conversationType: 'direct',
+        senderIds: [sender],
+        isCommand: true,
+        isOwner: sender === account.ownerUserId,
+      });
+      if (!commandAccess.allowed) {
+        logger.info?.(`[dsh-chat-weixin] 命令被拒绝：${account.botId} sender=${sender}（${commandAccess.reason}）`);
+        await reply(sender, '你没有执行机器人命令的权限。', contextToken, runId, signal);
+        return;
+      }
+    }
+
+    // 命令优先：命令不进入模型、也不做上下文增强。
+    const command = await deps.commands?.handle?.({
+      text,
+      channelId: deps.channelId,
+      botId: account.botId,
+      key,
+      conversationType: 'direct',
+      senderId: sender,
+      botLabel: account.botName ?? account.botId,
+      channelLabel: '微信',
+    }).catch((cause) => {
+      logger.warn?.(`[dsh-chat-weixin] 命令处理失败：${cause?.message ?? cause}`);
+      return null;
+    });
+    if (command?.handled) {
+      if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
+      handled += 1;
+      lastHandledAt = new Date().toISOString();
+      return;
+    }
+
     const identity = { senderId: sender, chatId: sender };
     const captured = deps.contextEnhancement.captureContextEnhancementSource(
       { botId: account.botId, channel: 'weixin', readConfig: () => record.contextEnhancement },

@@ -584,9 +584,14 @@ function createWeixinRuntime({
     lastMessageAt = (/* @__PURE__ */ new Date()).toISOString();
     await deps.ready?.();
     const record = deps.storage.read(account.botId);
-    const allowed = sender === account.ownerUserId || record.accessPolicy?.direct?.mode === "open";
-    if (!allowed) {
-      logger.info?.(`[dsh-chat-weixin] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${account.botId} sender=${sender}`);
+    const access = deps.accessPolicy.evaluateAccess({
+      policy: record.accessPolicy,
+      conversationType: "direct",
+      senderIds: [sender],
+      isOwner: sender === account.ownerUserId
+    });
+    if (!access.allowed) {
+      logger.info?.(`[dsh-chat-weixin] \u5FFD\u7565\u672A\u653E\u884C\u7684\u6D88\u606F\uFF1A${account.botId} sender=${sender}\uFF08${access.reason}\uFF09`);
       return;
     }
     const text = extractText(message);
@@ -605,6 +610,39 @@ function createWeixinRuntime({
     if (inboundToken) await state.rememberContextToken(sender, inboundToken);
     const contextToken = inboundToken ?? state.contextToken(sender);
     const key = `p2p:${sender}`;
+    if (text.startsWith("/")) {
+      const commandAccess = deps.accessPolicy.evaluateAccess({
+        policy: record.accessPolicy,
+        conversationType: "direct",
+        senderIds: [sender],
+        isCommand: true,
+        isOwner: sender === account.ownerUserId
+      });
+      if (!commandAccess.allowed) {
+        logger.info?.(`[dsh-chat-weixin] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${account.botId} sender=${sender}\uFF08${commandAccess.reason}\uFF09`);
+        await reply(sender, "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002", contextToken, runId, signal);
+        return;
+      }
+    }
+    const command = await deps.commands?.handle?.({
+      text,
+      channelId: deps.channelId,
+      botId: account.botId,
+      key,
+      conversationType: "direct",
+      senderId: sender,
+      botLabel: account.botName ?? account.botId,
+      channelLabel: "\u5FAE\u4FE1"
+    }).catch((cause) => {
+      logger.warn?.(`[dsh-chat-weixin] \u547D\u4EE4\u5904\u7406\u5931\u8D25\uFF1A${cause?.message ?? cause}`);
+      return null;
+    });
+    if (command?.handled) {
+      if (command.reply) await reply(sender, command.reply, contextToken, runId, signal);
+      handled += 1;
+      lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+      return;
+    }
     const identity = { senderId: sender, chatId: sender };
     const captured = deps.contextEnhancement.captureContextEnhancementSource(
       { botId: account.botId, channel: "weixin", readConfig: () => record.contextEnhancement },
