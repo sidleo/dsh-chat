@@ -471,8 +471,14 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       return interactions.has?.(located.channelId) ? located : null;
     };
 
+    // 必须**前置注册**：浏览器的应答器（api-remotes 转发器）注册得更早，一旦轮到它会
+    // 把提问扣在网页 UI 上等回答（forwardWaterfall 直到浏览器答复或拒绝才继续），
+    // 于是 IM 这条中继永远轮不到——真机上就是这样：日志里既没有"已发往 IM"也没有
+    // "回传失败"，问题只出现在网页里。
     const offApproval = ctx.on('approval/request', async (request, next) => {
       const target = locateFor(request);
+      logger.info?.(`[dsh-chat] 收到审批请求：会话=${request?.agent?.session?.id ?? '未知'}`
+        + ` 工具=${request?.toolName ?? '?'} 认领=${target ? '是' : '否'}`);
       if (!target) return next();
       try {
         const outcome = await interactions.handle({
@@ -487,10 +493,12 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
         logger.warn?.(`[dsh-chat] 审批回传失败，交由其他应答方：${error?.message ?? error}`);
         return next();
       }
-    });
+    }, { prepend: true });
 
     const offQuestions = ctx.on('user-questions/request', async (request, next) => {
       const target = locateFor(request);
+      logger.info?.(`[dsh-chat] 收到提问请求：会话=${request?.agent?.session?.id ?? '未知'}`
+        + ` 问题数=${request?.questions?.length ?? 0} 认领=${target ? '是' : '否'}`);
       if (!target) return next();
       try {
         const answers = await interactions.handle({
@@ -506,7 +514,7 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
         logger.warn?.(`[dsh-chat] 提问回传失败，交由其他应答方：${error?.message ?? error}`);
         return next();
       }
-    });
+    }, { prepend: true });
 
     return () => {
       try {

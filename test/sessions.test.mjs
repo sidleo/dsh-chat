@@ -322,6 +322,7 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
   const app = await makeBridge();
   try {
     const listeners = new Map();
+    const listenerOptions = new Map();
     const seen = [];
     /** 只有 feishu 接入了 IM 回传；weixin 没接入，一律让给浏览器。 */
     const interactions = {
@@ -336,8 +337,9 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
     const maybeBridge = createSessionBridge({
       ctx: {
         typertGateway: app.gateway,
-        on: (name, handler) => {
+        on: (name, handler, options) => {
           listeners.set(name, handler);
+          listenerOptions.set(name, options);
           return () => listeners.delete(name);
         },
       },
@@ -352,6 +354,9 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
     const dispose = maybeBridge.installInteractionRelays();
     assert.ok(listeners.has('approval/request'));
     assert.ok(listeners.has('user-questions/request'));
+    // 必须前置：否则浏览器的应答器会先把提问扣在网页 UI 上，IM 永远轮不到
+    assert.deepEqual(listenerOptions.get('approval/request'), { prepend: true });
+    assert.deepEqual(listenerOptions.get('user-questions/request'), { prepend: true });
 
     const approval = listeners.get('approval/request');
     const mine = await approval({ agent: { session: { id: 'session-bound' } }, toolName: 'bash' }, () => 'fallthrough');

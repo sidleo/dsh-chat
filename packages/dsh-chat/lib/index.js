@@ -2440,6 +2440,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     };
     const offApproval = ctx.on("approval/request", async (request, next) => {
       const target = locateFor(request);
+      logger.info?.(`[dsh-chat] \u6536\u5230\u5BA1\u6279\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${request?.agent?.session?.id ?? "\u672A\u77E5"} \u5DE5\u5177=${request?.toolName ?? "?"} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
       if (!target) return next();
       try {
         const outcome = await interactions.handle({
@@ -2454,9 +2455,10 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
         logger.warn?.(`[dsh-chat] \u5BA1\u6279\u56DE\u4F20\u5931\u8D25\uFF0C\u4EA4\u7531\u5176\u4ED6\u5E94\u7B54\u65B9\uFF1A${error?.message ?? error}`);
         return next();
       }
-    });
+    }, { prepend: true });
     const offQuestions = ctx.on("user-questions/request", async (request, next) => {
       const target = locateFor(request);
+      logger.info?.(`[dsh-chat] \u6536\u5230\u63D0\u95EE\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${request?.agent?.session?.id ?? "\u672A\u77E5"} \u95EE\u9898\u6570=${request?.questions?.length ?? 0} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
       if (!target) return next();
       try {
         const answers = await interactions.handle({
@@ -2472,7 +2474,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
         logger.warn?.(`[dsh-chat] \u63D0\u95EE\u56DE\u4F20\u5931\u8D25\uFF0C\u4EA4\u7531\u5176\u4ED6\u5E94\u7B54\u65B9\uFF1A${error?.message ?? error}`);
         return next();
       }
-    });
+    }, { prepend: true });
     return () => {
       try {
         offApproval?.();
