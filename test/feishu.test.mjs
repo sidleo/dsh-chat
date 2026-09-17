@@ -105,9 +105,11 @@ function createFakeGateway() {
       gatewayState.failures[method] = error;
     },
     /** 一批问题一张卡：messageId 有值即为就地更新。 */
-    async sendQuestionsCard({ chatId, openId, questions, answered, final, messageId }) {
+    async sendQuestionsCard({ chatId, openId, questions, answered, final, messageId, selection }) {
       if (gatewayState.failures.sendQuestionsCard) throw gatewayState.failures.sendQuestionsCard;
-      calls.questionCards.push({ chatId, openId, ids: questions?.map((q) => q.id), answered, final, messageId });
+      calls.questionCards.push({
+        chatId, openId, ids: questions?.map((q) => q.id), answered, final, messageId, selection,
+      });
       return { messageId: messageId ?? 'om_question_card' };
     },
     /** 提问/审批卡片（交互回传用）。 */
@@ -1216,6 +1218,64 @@ test('交互回传：多选/自由文本走表单提交，解析与按钮完全�
       action: { tag: 'button', value: { dsh: 'form', questionId: 'q_free', text_q_free: '越权试试' } },
     });
     assert.equal(app.offers.length, before2, '陌生人不能替答');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回传：多选改成"开关按钮 + 提交"（点选项只切换状态并就地重渲染，提交才算答完）', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimKey = 'p2p:ou_owner';
+    const attach = app.attached[0];
+    const questions = [
+      { id: 'multi', header: '多选', question: '选哪些？', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }, { label: 'Z' }] },
+    ];
+    await attach.sendQuestions({ key: 'p2p:ou_owner', questions, answered: {}, final: false });
+    assert.equal(app.gateway.calls.questionCards.length, 1);
+
+    // 点第一个选项：只切换状态 + 就地重渲染，不认领
+    const first = await app.bridge.handleCardAction({
+      messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'toggle', questionId: 'multi', label: 'X' } },
+    });
+    assert.match(first.toast.content, /已选：X/);
+    assert.equal(app.offers.length, 0, '切换阶段不能认领');
+    assert.equal(app.gateway.calls.questionCards.length, 2, '要就地重渲染同一张卡');
+    assert.equal(app.gateway.calls.questionCards[1].messageId, 'om_question_card');
+    assert.deepEqual(app.gateway.calls.questionCards[1].selection, { multi: ['X'] });
+
+    // 再点一次同一个：取消
+    const again = await app.bridge.handleCardAction({
+      messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'toggle', questionId: 'multi', label: 'X' } },
+    });
+    assert.match(again.toast.content, /取消：X/);
+    assert.deepEqual(app.gateway.calls.questionCards.at(-1).selection, {});
+
+    // 选两个后提交：一次认领，文本用「、」拼接（parseAnswer 会拆成多选）
+    for (const label of ['X', 'Z']) {
+      await app.bridge.handleCardAction({
+        messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { dsh: 'toggle', questionId: 'multi', label } },
+      });
+    }
+    const submitted = await app.bridge.handleCardAction({
+      messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'submit', questionId: 'multi' } },
+    });
+    assert.match(submitted.toast.content, /已提交：X、Z/);
+    assert.equal(app.offers.at(-1).text, 'X、Z');
+    assert.equal(app.offers.at(-1).questionId, 'multi');
+
+    // 空提交：只提示，不认领
+    const before = app.offers.length;
+    const empty = await app.bridge.handleCardAction({
+      messageId: 'om_card_multi', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'submit', questionId: 'multi' } },
+    });
+    assert.match(empty.toast.content, /还没有勾选/);
+    assert.equal(app.offers.length, before);
   } finally {
     await app.cleanup();
   }

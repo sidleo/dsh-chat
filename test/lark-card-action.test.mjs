@@ -94,7 +94,7 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.doesNotMatch(first, /选多个/, '后面的问题不该一次全抛出来');
   assert.doesNotMatch(first, /还有别的吗/);
 
-  // 第二页：多选 → 复选框 + 提交按钮（value 用选项原文）
+  // 第二页：多选 → 开关按钮 + 提交（不用表单：实测 checker 选项渲染不出来、值也不在回调里）
   await gateway.sendQuestionsCard({
     openId: 'ou_a', questions,
     answered: { single: { selected: ['A'] } }, final: false, messageId: 'om_1',
@@ -103,11 +103,23 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   card = JSON.parse(calls.at(-1).data.content);
   assert.match(card.header.title.content, /第 2\/3 题/);
   const second = JSON.stringify(card);
-  assert.match(second, /"tag":"checker"/);
-  assert.match(second, /"action_type":"form_submit"/);
-  assert.match(second, /"value":"X"/);
+  assert.match(second, /"dsh":"toggle"/);
+  assert.match(second, /"content":"☐ X"/);
+  assert.match(second, /"dsh":"submit"/);
+  assert.match(second, /提交（已选 0）/);
   assert.match(second, /✅ \*\*1\. 单选\*\* → A/, '已答的题在卡里留一行答案');
   assert.doesNotMatch(second, /还有别的吗/);
+
+  // 勾选状态要画回卡片（已选的选项用 ☑ + primary，提交按钮显示已选数量）
+  await gateway.sendQuestionsCard({
+    openId: 'ou_a', questions,
+    answered: { single: { selected: ['A'] } }, final: false, messageId: 'om_1',
+    selection: { multi: ['X'] },
+  });
+  const toggled = JSON.stringify(JSON.parse(calls.at(-1).data.content));
+  assert.match(toggled, /"content":"☑ X"/);
+  assert.match(toggled, /"content":"☐ Y"/);
+  assert.match(toggled, /提交（已选 1）/);
 
   // 第三页：自由文本 → 输入框 + 提交
   await gateway.sendQuestionsCard({

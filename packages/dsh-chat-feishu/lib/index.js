@@ -126716,6 +126716,19 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     return gateway.sendText({ openId: id, text });
   }
   const questionCards = /* @__PURE__ */ new Map();
+  const questionBatches = /* @__PURE__ */ new Map();
+  const multiSelections = /* @__PURE__ */ new Map();
+  const selectionKey = (key, questionId) => `${key}\0${questionId}`;
+  function selectionOf(key) {
+    const result = {};
+    for (const [id, labels] of multiSelections.entries()) {
+      const separator = id.indexOf("\0");
+      if (id.slice(0, separator) !== key) continue;
+      if (labels.size === 0) continue;
+      result[id.slice(separator + 1)] = [...labels];
+    }
+    return result;
+  }
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -126728,16 +126741,24 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     send: sendToConversation,
     // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
     sendQuestions: async ({ key, questions, answered, final }) => {
+      questionBatches.set(key, { questions, answered });
       const existing = questionCards.get(key) ?? null;
       const sent = await gateway.sendQuestionsCard({
         ...routeOf(key),
         questions,
         answered,
         final,
-        messageId: existing
+        messageId: existing,
+        selection: selectionOf(key)
       });
       if (sent?.messageId) questionCards.set(key, sent.messageId);
-      if (final) questionCards.delete(key);
+      if (final) {
+        questionCards.delete(key);
+        questionBatches.delete(key);
+        for (const id of [...multiSelections.keys()]) {
+          if (id.slice(0, id.indexOf("\0")) === key) multiSelections.delete(id);
+        }
+      }
     },
     sendApproval: async ({ key, request }) => {
       try {
@@ -127011,6 +127032,62 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       }
       await markAnswered(event, value.dsh, decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD");
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
+    }
+    if (value.dsh === "toggle") {
+      const label2 = typeof value.label === "string" ? value.label : "";
+      const questionId = typeof value.questionId === "string" ? value.questionId : "";
+      const key = `p2p:${operatorId}`;
+      const batchKey = questionBatches.has(key) ? key : `group:${chatId}`;
+      const batch = questionBatches.get(batchKey);
+      if (!label2 || !questionId || !batch) {
+        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u5F00\u5173\u6CA1\u6709\u5BF9\u5E94\u7684\u95EE\u9898\uFF08${bot.id} ${questionId || "\u672A\u77E5"}\uFF09`);
+        return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
+      }
+      const id = selectionKey(batchKey, questionId);
+      const chosen = new Set(multiSelections.get(id) ?? []);
+      if (chosen.has(label2)) chosen.delete(label2);
+      else chosen.add(label2);
+      multiSelections.set(id, chosen);
+      const messageId = questionCards.get(batchKey) ?? event.messageId;
+      await gateway.sendQuestionsCard({
+        ...routeOf(batchKey),
+        questions: batch.questions,
+        answered: batch.answered,
+        final: false,
+        messageId,
+        selection: selectionOf(batchKey)
+      });
+      return { toast: { type: "success", content: chosen.has(label2) ? `\u5DF2\u9009\uFF1A${label2}` : `\u53D6\u6D88\uFF1A${label2}` } };
+    }
+    if (value.dsh === "submit") {
+      const questionId = typeof value.questionId === "string" ? value.questionId : "";
+      const groupKey = `group:${chatId}`;
+      const directKey = `p2p:${operatorId}`;
+      const batchKey = questionBatches.has(groupKey) ? groupKey : questionBatches.has(directKey) ? directKey : null;
+      if (!batchKey) {
+        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u63D0\u4EA4\u6CA1\u6709\u5BF9\u5E94\u6279\u6B21\uFF08${bot.id} ${questionId || "\u672A\u77E5"}\uFF09`);
+        return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
+      }
+      const chosen = [...multiSelections.get(selectionKey(batchKey, questionId)) ?? []];
+      if (chosen.length === 0) {
+        return { toast: { type: "info", content: "\u8FD8\u6CA1\u6709\u52FE\u9009\u4EFB\u4F55\u9009\u9879\u3002" } };
+      }
+      multiSelections.delete(selectionKey(batchKey, questionId));
+      if (deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: batchKey,
+        text: chosen.join("\u3001"),
+        questionId: questionId || void 0
+      })) {
+        logger.info?.(`[dsh-chat-feishu] \u591A\u9009\u63D0\u4EA4\u5DF2\u8BA4\u9886\uFF1A${bot.id} ${batchKey} \u2192 ${chosen.join("\u3001")}`);
+        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+        return { toast: { type: "success", content: `\u5DF2\u63D0\u4EA4\uFF1A${chosen.join("\u3001")}` } };
+      }
+      return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
+    }
+    if (value.dsh === "hint-text") {
+      return { toast: { type: "info", content: "\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\u6587\u5B57\u5373\u53EF\uFF0C\u6211\u4F1A\u628A\u5B83\u5F53\u4F5C\u7B54\u6848\u3002" } };
     }
     const formFields = Object.entries(value).filter(([field]) => field.startsWith("multi_") || field.startsWith("text_"));
     let label = "";
@@ -127347,7 +127424,7 @@ function createLarkGateway({
             logger.warn?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\u4F46\u5B57\u6BB5\u8BA4\u4E0D\u51FA\uFF1A${JSON.stringify(event ?? null).slice(0, 300)}`);
             return void 0;
           }
-          logger.info?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\uFF1A\u4F1A\u8BDD=${normalized.chatId} \u64CD\u4F5C\u8005=${normalized.operator.openId} \u503C=${JSON.stringify(normalized.action.value)}`);
+          logger.info?.(`[dsh-chat-feishu] \u6536\u5230\u5361\u7247\u56DE\u8C03\uFF1A\u4F1A\u8BDD=${normalized.chatId} \u64CD\u4F5C\u8005=${normalized.operator.openId} \u503C=${JSON.stringify(normalized.action.value)} \u539F\u59CB=${JSON.stringify(event?.action ?? {}).slice(0, 400)}`);
           return Promise.resolve().then(() => onCardAction?.(normalized)).catch((error) => {
             logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u5361\u7247\u56DE\u8C03\u5931\u8D25\uFF1A${error?.message ?? error}`);
             return void 0;
@@ -127531,7 +127608,15 @@ function createLarkGateway({
      *   `messageId` 有值就原地更新（patch），没有就新建。
      * @returns { messageId }。
      */
-    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
+    async sendQuestionsCard({
+      chatId,
+      openId,
+      questions = [],
+      answered = {},
+      final = false,
+      messageId = null,
+      selection = {}
+    }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
       const total = questions.length;
@@ -127578,27 +127663,27 @@ function createLarkGateway({
             }))
           });
         } else if (options.length > 0) {
-          body.push("", "\u53EF\u591A\u9009\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
+          const chosen = new Set(Array.isArray(selection?.[current?.id]) ? selection[current.id] : []);
+          body.push("", "\u53EF\u591A\u9009\uFF1A\u70B9\u9009\u9879\u5207\u6362\u9009\u4E2D\uFF0C\u9009\u5B8C\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
           elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
           elements.push({
-            tag: "form",
-            name: `dsh_form_${current?.id ?? "q"}`,
-            elements: [
-              {
-                tag: "checker",
-                name: `multi_${current?.id ?? "q"}`,
-                options: options.slice(0, 8).map((option) => ({
-                  value: String(option.label).slice(0, 60),
-                  text: String(option.label).slice(0, 60)
-                }))
-              },
+            tag: "action",
+            actions: [
+              ...options.slice(0, 8).map((option) => {
+                const label = String(option.label).slice(0, 60);
+                const on = chosen.has(label);
+                return {
+                  tag: "button",
+                  type: on ? "primary" : "default",
+                  text: { tag: "plain_text", content: `${on ? "\u2611" : "\u2610"} ${label}` },
+                  value: { dsh: "toggle", questionId: String(current?.id ?? ""), label }
+                };
+              }),
               {
                 tag: "button",
-                name: "submit",
-                action_type: "form_submit",
                 type: "primary",
-                text: { tag: "plain_text", content: "\u63D0\u4EA4" },
-                value: { dsh: "form", questionId: String(current?.id ?? "") }
+                text: { tag: "plain_text", content: `\u63D0\u4EA4\uFF08\u5DF2\u9009 ${chosen.size}\uFF09` },
+                value: { dsh: "submit", questionId: String(current?.id ?? "") }
               }
             ]
           });
@@ -127621,6 +127706,13 @@ function createLarkGateway({
                 type: "primary",
                 text: { tag: "plain_text", content: "\u63D0\u4EA4" },
                 value: { dsh: "form", questionId: String(current?.id ?? "") }
+              },
+              {
+                // 兜底：万一表单值没随提交带回来，用户还能点这个用"最近一条聊天消息"当答案
+                tag: "button",
+                type: "default",
+                text: { tag: "plain_text", content: "\u6539\u7528\u804A\u5929\u56DE\u590D" },
+                value: { dsh: "hint-text", questionId: String(current?.id ?? "") }
               }
             ]
           });

@@ -132,6 +132,24 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
 
   /** 会话键 → 已经发出去的那张提问卡片（回答后就地更新，不再新发消息）。 */
   const questionCards = new Map();
+  /** 会话键 → 最近一次渲染用的批次（多选开关要就地重渲染，得知道原样数据）。 */
+  const questionBatches = new Map();
+  /** `${会话键}\u0000${问题id}` → 多选已勾选的选项原文。 */
+  const multiSelections = new Map();
+
+  const selectionKey = (key, questionId) => `${key}\u0000${questionId}`;
+
+  /** 取某会话当前的多选勾选状态（按问题 id 分组）。 */
+  function selectionOf(key) {
+    const result = {};
+    for (const [id, labels] of multiSelections.entries()) {
+      const separator = id.indexOf('\u0000');
+      if (id.slice(0, separator) !== key) continue;
+      if (labels.size === 0) continue; // 空集合不必带进渲染参数
+      result[id.slice(separator + 1)] = [...labels];
+    }
+    return result;
+  }
 
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
@@ -149,12 +167,24 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     send: sendToConversation,
     // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
     sendQuestions: async ({ key, questions, answered, final }) => {
+      questionBatches.set(key, { questions, answered });
       const existing = questionCards.get(key) ?? null;
       const sent = await gateway.sendQuestionsCard({
-        ...routeOf(key), questions, answered, final, messageId: existing,
+        ...routeOf(key),
+        questions,
+        answered,
+        final,
+        messageId: existing,
+        selection: selectionOf(key),
       });
       if (sent?.messageId) questionCards.set(key, sent.messageId);
-      if (final) questionCards.delete(key);
+      if (final) {
+        questionCards.delete(key);
+        questionBatches.delete(key);
+        for (const id of [...multiSelections.keys()]) {
+          if (id.slice(0, id.indexOf('\u0000')) === key) multiSelections.delete(id);
+        }
+      }
     },
     sendApproval: async ({ key, request }) => {
       try {
@@ -480,7 +510,67 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 
-    // 表单提交（多选复选框 / 文本输入框）：value 里既有按钮自带字段，也有 multi_* / text_* 表单字段。
+    // 多选：点选项只切换勾选状态并就地重渲染，点「提交」才算答完。
+    if (value.dsh === 'toggle') {
+      const label = typeof value.label === 'string' ? value.label : '';
+      const questionId = typeof value.questionId === 'string' ? value.questionId : '';
+      const key = `p2p:${operatorId}`;
+      const batchKey = questionBatches.has(key) ? key : `group:${chatId}`;
+      const batch = questionBatches.get(batchKey);
+      if (!label || !questionId || !batch) {
+        logger.info?.(`[dsh-chat-feishu] 多选开关没有对应的问题（${bot.id} ${questionId || '未知'}）`);
+        return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
+      }
+      const id = selectionKey(batchKey, questionId);
+      const chosen = new Set(multiSelections.get(id) ?? []);
+      if (chosen.has(label)) chosen.delete(label); else chosen.add(label);
+      multiSelections.set(id, chosen);
+      // 就地重渲染：把勾选状态画回同一张卡
+      const messageId = questionCards.get(batchKey) ?? event.messageId;
+      await gateway.sendQuestionsCard({
+        ...routeOf(batchKey),
+        questions: batch.questions,
+        answered: batch.answered,
+        final: false,
+        messageId,
+        selection: selectionOf(batchKey),
+      });
+      return { toast: { type: 'success', content: chosen.has(label) ? `已选：${label}` : `取消：${label}` } };
+    }
+
+    if (value.dsh === 'submit') {
+      const questionId = typeof value.questionId === 'string' ? value.questionId : '';
+      const groupKey = `group:${chatId}`;
+      const directKey = `p2p:${operatorId}`;
+      const batchKey = questionBatches.has(groupKey) ? groupKey : (questionBatches.has(directKey) ? directKey : null);
+      if (!batchKey) {
+        logger.info?.(`[dsh-chat-feishu] 多选提交没有对应批次（${bot.id} ${questionId || '未知'}）`);
+        return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
+      }
+      const chosen = [...(multiSelections.get(selectionKey(batchKey, questionId)) ?? [])];
+      if (chosen.length === 0) {
+        return { toast: { type: 'info', content: '还没有勾选任何选项。' } };
+      }
+      multiSelections.delete(selectionKey(batchKey, questionId));
+      if (deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: batchKey,
+        text: chosen.join('、'),
+        questionId: questionId || undefined,
+      })) {
+        logger.info?.(`[dsh-chat-feishu] 多选提交已认领：${bot.id} ${batchKey} → ${chosen.join('、')}`);
+        lastHandledAt = new Date().toISOString();
+        return { toast: { type: 'success', content: `已提交：${chosen.join('、')}` } };
+      }
+      return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
+    }
+
+    if (value.dsh === 'hint-text') {
+      return { toast: { type: 'info', content: '直接在聊天里回复文字即可，我会把它当作答案。' } };
+    }
+
+    // 表单提交（自由文本输入框）：value 里既有按钮自带字段，也有 text_* 表单字段。
     const formFields = Object.entries(value)
       .filter(([field]) => field.startsWith('multi_') || field.startsWith('text_'));
     let label = '';

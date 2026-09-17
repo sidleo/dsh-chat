@@ -178,7 +178,9 @@ export function createLarkGateway({
           }
           logger.info?.('[dsh-chat-feishu] 收到卡片回调：'
             + `会话=${normalized.chatId} 操作者=${normalized.operator.openId}`
-            + ` 值=${JSON.stringify(normalized.action.value)}`);
+            + ` 值=${JSON.stringify(normalized.action.value)}`
+            // 表单类控件的值不一定在 value 里，原始 action 一并记下（截断，避免刷屏）。
+            + ` 原始=${JSON.stringify(event?.action ?? {}).slice(0, 400)}`);
           return Promise.resolve()
           .then(() => onCardAction?.(normalized))
           .catch((error) => {
@@ -377,7 +379,9 @@ export function createLarkGateway({
      *   `messageId` 有值就原地更新（patch），没有就新建。
      * @returns { messageId }。
      */
-    async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
+    async sendQuestionsCard({
+      chatId, openId, questions = [], answered = {}, final = false, messageId = null, selection = {},
+    }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
       const total = questions.length;
@@ -432,28 +436,32 @@ export function createLarkGateway({
             })),
           });
         } else if (options.length > 0) {
-          // 多选：复选框 + 提交（value 用选项原文，回答解析与按钮完全一致）
-          body.push('', '可多选，选完点「提交」。');
+          // 多选：**开关按钮 + 提交**。
+          // 为什么不用表单里的复选框：实测 checker 的选项渲染不出来，提交上来的值也不在
+          // action.value 里（SDK 的类型甚至没有表单元素，形状无法从类型推断）。
+          // 按钮回调是已经验证可用的通道，因此用"点一下切换选中状态、点提交才算答完"，
+          // 状态由桥持有，每次点击就地重渲染这张卡。
+          const chosen = new Set(Array.isArray(selection?.[current?.id]) ? selection[current.id] : []);
+          body.push('', '可多选：点选项切换选中，选完点「提交」。');
           elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
           elements.push({
-            tag: 'form',
-            name: `dsh_form_${current?.id ?? 'q'}`,
-            elements: [
-              {
-                tag: 'checker',
-                name: `multi_${current?.id ?? 'q'}`,
-                options: options.slice(0, 8).map((option) => ({
-                  value: String(option.label).slice(0, 60),
-                  text: String(option.label).slice(0, 60),
-                })),
-              },
+            tag: 'action',
+            actions: [
+              ...options.slice(0, 8).map((option) => {
+                const label = String(option.label).slice(0, 60);
+                const on = chosen.has(label);
+                return {
+                  tag: 'button',
+                  type: on ? 'primary' : 'default',
+                  text: { tag: 'plain_text', content: `${on ? '☑' : '☐'} ${label}` },
+                  value: { dsh: 'toggle', questionId: String(current?.id ?? ''), label },
+                };
+              }),
               {
                 tag: 'button',
-                name: 'submit',
-                action_type: 'form_submit',
                 type: 'primary',
-                text: { tag: 'plain_text', content: '提交' },
-                value: { dsh: 'form', questionId: String(current?.id ?? '') },
+                text: { tag: 'plain_text', content: `提交（已选 ${chosen.size}）` },
+                value: { dsh: 'submit', questionId: String(current?.id ?? '') },
               },
             ],
           });
@@ -477,6 +485,13 @@ export function createLarkGateway({
                 type: 'primary',
                 text: { tag: 'plain_text', content: '提交' },
                 value: { dsh: 'form', questionId: String(current?.id ?? '') },
+              },
+              {
+                // 兜底：万一表单值没随提交带回来，用户还能点这个用"最近一条聊天消息"当答案
+                tag: 'button',
+                type: 'default',
+                text: { tag: 'plain_text', content: '改用聊天回复' },
+                value: { dsh: 'hint-text', questionId: String(current?.id ?? '') },
               },
             ],
           });
