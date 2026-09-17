@@ -155,10 +155,15 @@ export function createLarkGateway({
    * @param options - { questionId, placeholder }。
    * @returns 表单元素数组。
    */
-  function customInputElements({ questionId, placeholder = '也可以直接输入你的答案，点「提交」' }) {
+  function customInputElements({
+    questionId,
+    placeholder = '也可以直接输入你的答案，点「提交」',
+    formName = 'dsh_custom',
+    submitType = 'default',
+  }) {
     return [{
       tag: 'form',
-      name: `dsh_custom_${questionId}`,
+      name: `${formName}_${questionId}`,
       elements: [
         {
           tag: 'input',
@@ -174,12 +179,143 @@ export function createLarkGateway({
           tag: 'button',
           name: 'submit',
           form_action_type: 'submit',
-          type: 'default',
+          type: submitType,
           width: 'fill',
           text: { tag: 'plain_text', content: '提交' },
         },
       ],
     }];
+  }
+
+  /**
+   * 渲染"当前这一题"的卡片元素（纯函数，不发请求）。
+   *
+   * 两种用法：① 独立提问卡片的正文；② 内嵌进"正在处理"的进度卡（真机反馈：
+   * 独立卡片读起来割裂，希望提问长在同一张卡里、答完收起）。
+   *
+   * 组件依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0）：单选=按钮+输入框；
+   * 多选=form 内每个选项一个 checker 平铺 + 提交；自由文本=form 内 input + 提交。
+   * 表单值回调在 `action.form_value[组件name]`。
+   *
+   * @param options - { questions, answered, final }。
+   * @returns { elements, current }：元素数组与当前题目（全部答完为 null）。
+   */
+  function renderQuestionElements({ questions = [], answered = {}, final = false } = {}) {
+    const elements = [];
+    const answeredList = questions.filter((question) => answered[question?.id] !== undefined);
+    const current = final
+      ? null
+      : (questions.find((question) => answered[question?.id] === undefined) ?? null);
+
+    const answerText = (question) => {
+      const answer = answered[question?.id] ?? {};
+      const chosen = [...(answer.selected ?? [])];
+      if (answer.custom) chosen.push(answer.custom);
+      return chosen.join('、') || '（空）';
+    };
+
+    if (answeredList.length > 0) {
+      elements.push({
+        tag: 'markdown',
+        content: answeredList
+          .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
+          .join('\n'),
+      });
+    }
+    if (!current) return { elements, current: null };
+
+    const index = questions.indexOf(current) + 1;
+    const body = [`**${index}. ${current?.header || '需要确认'}**`, '', String(current?.question ?? '')];
+    if (current?.detail) body.push('', String(current.detail));
+    const options = Array.isArray(current?.options) ? current.options : [];
+    const questionId = String(current?.id ?? '');
+    elements.push({ tag: 'hr' });
+
+    if (options.length > 0 && current?.multiSelect !== true) {
+      elements.push({ tag: 'markdown', content: body.join('\n') });
+      options.slice(0, 8).forEach((option, optionIndex) => {
+        const label = String(option.label).slice(0, 60);
+        elements.push({
+          tag: 'button',
+          text: { tag: 'plain_text', content: option.description ? `${label} —— ${option.description}`.slice(0, 100) : label },
+          type: optionIndex === 0 ? 'primary_filled' : 'default',
+          width: 'fill',
+          behaviors: [{
+            type: 'callback',
+            value: { dsh: 'answer', questionId, label, index: String(optionIndex + 1) },
+          }],
+        });
+      });
+      elements.push(...customInputElements({ questionId, formName: 'dsh_custom' }));
+    } else if (options.length > 0) {
+      body.push('', '可多选：勾选后点「提交」。');
+      elements.push({ tag: 'markdown', content: body.join('\n') });
+      elements.push({
+        tag: 'form',
+        name: `dsh_form_${questionId}`,
+        elements: [
+          ...options.slice(0, 20).map((option, optionIndex) => ({
+            tag: 'checker',
+            name: `chk_${optionIndex}_${questionId}`,
+            checked: false,
+            text: { tag: 'plain_text', content: String(option.label).slice(0, 80) },
+          })),
+          {
+            tag: 'input',
+            name: `text_${questionId}`,
+            placeholder: { tag: 'plain_text', content: '也可以在补充框里写别的答案' },
+            input_type: 'multiline_text',
+            rows: 1,
+            width: 'fill',
+          },
+          {
+            tag: 'button',
+            name: 'submit',
+            form_action_type: 'submit',
+            type: 'primary_filled',
+            width: 'fill',
+            text: { tag: 'plain_text', content: '提交' },
+          },
+        ],
+      });
+    } else {
+      body.push('', '在下面输入后点「提交」（也可以直接在聊天里回复）。');
+      elements.push({ tag: 'markdown', content: body.join('\n') });
+      elements.push({
+        tag: 'form',
+        name: `dsh_form_${questionId}`,
+        elements: [
+          {
+            tag: 'input',
+            name: `text_${questionId}`,
+            placeholder: { tag: 'plain_text', content: '在这里输入' },
+            label: { tag: 'plain_text', content: '你的回答' },
+            input_type: 'multiline_text',
+            rows: 3,
+            auto_resize: true,
+            max_rows: 8,
+            width: 'fill',
+          },
+          {
+            tag: 'button',
+            name: 'submit',
+            form_action_type: 'submit',
+            type: 'primary_filled',
+            width: 'fill',
+            text: { tag: 'plain_text', content: '提交' },
+          },
+        ],
+      });
+    }
+    elements.push({
+      tag: 'div',
+      text: {
+        tag: 'plain_text',
+        content: '回答后会自动翻到下一题；也可以直接回复文字。',
+        text_size: 'notation',
+      },
+    });
+    return { elements, current };
   }
 
   return Object.freeze({
@@ -403,15 +539,9 @@ export function createLarkGateway({
     },
 
     /**
-     * 提问卡片：**一页一题**，答完就地翻到下一题。Card 2.0。
+     * 独立提问卡片（Card 2.0，一页一题）。
      *
-     * 组件选择有依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0 组件）：
-     * - 单选 → `button` + `behaviors:[{type:'callback'}]`；
-     * - 多选 → `form` 内的 **`multi_select_static`**（原生多选控件）+ `form_action_type:'submit'` 的提交按钮；
-     * - 自由文本 → `form` 内的 `input` + 提交按钮；
-     * - 表单值回调在 `action.form_value[组件name]`（不是 `action.value`）。
-     * 早前用 Card 1.0 的 `checker` 当"多选组"是错的：它是**任务勾选器**（单个），
-     * 且 1.0 里没有表单，所以既渲染不出选项、也拿不到提交值。
+     * 进度卡可用时提问会内嵌进那张卡（见 turn-presenter），这个独立卡片只是兜底。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
      * @returns { messageId }。
@@ -419,128 +549,10 @@ export function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError('sendQuestionsCard 需要 chatId/openId 或 messageId。');
-      const total = questions.length;
-      const answeredList = questions.filter((question) => answered[question?.id] !== undefined);
-      const current = questions.find((question) => answered[question?.id] === undefined) ?? null;
-      const elements = [];
-
-      const answerText = (question) => {
-        const answer = answered[question?.id] ?? {};
-        const chosen = [...(answer.selected ?? [])];
-        if (answer.custom) chosen.push(answer.custom);
-        return chosen.join('、') || '（空）';
-      };
-
-      if (answeredList.length > 0) {
-        elements.push({
-          tag: 'markdown',
-          content: answeredList
-            .map((question) => `✅ **${questions.indexOf(question) + 1}. ${question?.header || '问题'}** → ${answerText(question)}`)
-            .join('\n'),
-        });
-        elements.push({ tag: 'hr' });
-      }
-
-      if (current) {
-        const index = questions.indexOf(current) + 1;
-        const body = [`**${index}. ${current?.header || '需要确认'}**`, '', String(current?.question ?? '')];
-        if (current?.detail) body.push('', String(current.detail));
-        const options = Array.isArray(current?.options) ? current.options : [];
-        const questionId = String(current?.id ?? '');
-
-        if (options.length > 0 && current?.multiSelect !== true) {
-          // 单选：按钮点了即答；**另配一个输入框**，想写别的答案时也能直接写了提交。
-          elements.push({ tag: 'markdown', content: body.join('\n') });
-          options.slice(0, 8).forEach((option, optionIndex) => {
-            const label = String(option.label).slice(0, 60);
-            elements.push({
-              tag: 'button',
-              text: { tag: 'plain_text', content: option.description ? `${label} —— ${option.description}`.slice(0, 100) : label },
-              type: optionIndex === 0 ? 'primary_filled' : 'default',
-              width: 'fill',
-              behaviors: [{
-                type: 'callback',
-                value: { dsh: 'answer', questionId, label, index: String(optionIndex + 1) },
-              }],
-            });
-          });
-          elements.push(...customInputElements({ questionId }));
-        } else if (options.length > 0) {
-          // 多选：**每个选项一个勾选器（checker）平铺列出**，用户直接勾选，点「提交」一起回来。
-          // 不用 multi_select_static 是因为它是下拉控件（真机反馈：要能一眼看到所有选项）。
-          // checker 在 form 内不配 behaviors：勾选只在本地生效，提交时随 form_value 回来。
-          body.push('', '可多选：勾选后点「提交」。');
-          elements.push({ tag: 'markdown', content: body.join('\n') });
-          elements.push({
-            tag: 'form',
-            name: `dsh_form_${questionId}`,
-            elements: [
-              ...options.slice(0, 20).map((option, optionIndex) => ({
-                tag: 'checker',
-                name: `chk_${optionIndex}_${questionId}`,
-                checked: false,
-                text: { tag: 'plain_text', content: String(option.label).slice(0, 80) },
-              })),
-              {
-                tag: 'input',
-                name: `text_${questionId}`,
-                placeholder: { tag: 'plain_text', content: '也可以在补充框里写别的答案' },
-                input_type: 'multiline_text',
-                rows: 1,
-                width: 'fill',
-              },
-              {
-                tag: 'button',
-                name: 'submit',
-                form_action_type: 'submit',
-                type: 'primary_filled',
-                width: 'fill',
-                text: { tag: 'plain_text', content: '提交' },
-              },
-            ],
-          });
-        } else {
-          // 自由文本：原生输入框 + 提交
-          body.push('', '在下面输入后点「提交」（也可以直接在聊天里回复）。');
-          elements.push({ tag: 'markdown', content: body.join('\n') });
-          elements.push({
-            tag: 'form',
-            name: `dsh_form_${questionId}`,
-            elements: [
-              {
-                tag: 'input',
-                name: `text_${questionId}`,
-                placeholder: { tag: 'plain_text', content: '在这里输入' },
-                label: { tag: 'plain_text', content: '你的回答' },
-                input_type: 'multiline_text',
-                rows: 3,
-                auto_resize: true,
-                max_rows: 8,
-                width: 'fill',
-              },
-              {
-                tag: 'button',
-                name: 'submit',
-                form_action_type: 'submit',
-                type: 'primary_filled',
-                width: 'fill',
-                text: { tag: 'plain_text', content: '提交' },
-              },
-            ],
-          });
-        }
-        elements.push({
-          tag: 'div',
-          text: {
-            tag: 'plain_text',
-            content: '回答后这张卡片会自动翻到下一题；也可以直接回复文字。',
-            text_size: 'notation',
-          },
-        });
-      } else {
+      const { elements, current } = renderQuestionElements({ questions, answered, final });
+      if (elements.length === 0) {
         elements.push({ tag: 'markdown', content: '全部问题都已回答，正在继续处理…' });
       }
-
       const card = {
         schema: '2.0',
         config: { update_multi: true, width_mode: 'default' },
@@ -550,7 +562,7 @@ export function createLarkGateway({
             tag: 'plain_text',
             content: final || !current
               ? '✅ 已全部回答'
-              : `❓ 需要你确认（第 ${questions.indexOf(current) + 1}/${total} 题）`,
+              : `❓ 需要你确认（第 ${questions.indexOf(current) + 1}/${questions.length} 题）`,
           },
         },
         body: { direction: 'vertical', elements },
@@ -570,6 +582,9 @@ export function createLarkGateway({
       assertSuccess('飞书发送提问卡片', response);
       return { messageId: response?.data?.message_id };
     },
+
+    /** 供进度卡内嵌提问区使用（纯渲染）。 */
+    renderQuestionElements,
 
     /**
      * 把一个提问渲染成带按钮的卡片发出去。

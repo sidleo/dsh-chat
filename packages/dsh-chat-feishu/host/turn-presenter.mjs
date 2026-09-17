@@ -24,7 +24,7 @@ const MAX_CARD_CONTENT = 12_000;
  * @param options - { title, lines, answer, note }。
  * @returns 飞书交互卡片对象。
  */
-export function renderStepCard({ title, lines = [], answer = '', note = '' }) {
+export function renderStepCard({ title, lines = [], answer = '', note = '', question = null, template = 'blue' }) {
   const budget = { left: MAX_CARD_CONTENT };
   const clamp = (text) => {
     const value = typeof text === 'string' ? text : '';
@@ -36,26 +36,31 @@ export function renderStepCard({ title, lines = [], answer = '', note = '' }) {
 
   const elements = [];
   if (note) {
-    elements.push({ tag: 'div', text: { tag: 'lark_md', content: clamp(note) } });
+    elements.push({ tag: 'div', text: { tag: 'plain_text', content: clamp(note) } });
   }
   if (lines.length > 0) {
     const body = clamp(lines.map((line) => `· ${line}`).join('\n'));
-    if (body) elements.push({ tag: 'div', text: { tag: 'lark_md', content: body } });
+    if (body) elements.push({ tag: 'markdown', content: body });
+  }
+  // 提问区内嵌在同一张卡里（真机反馈：单独的提问卡读起来割裂；答完收起）。
+  if (Array.isArray(question?.elements) && question.elements.length > 0) {
+    elements.push(...question.elements);
   }
   if (answer && budget.left > 0) {
     elements.push({ tag: 'hr' });
-    elements.push({ tag: 'div', text: { tag: 'lark_md', content: clamp(answer) } });
+    elements.push({ tag: 'markdown', content: clamp(answer) });
   }
   if (elements.length === 0) {
-    elements.push({ tag: 'div', text: { tag: 'lark_md', content: '正在处理…' } });
+    elements.push({ tag: 'markdown', content: '正在处理…' });
   }
   return {
-    config: { wide_screen_mode: true, update_multi: true },
+    schema: '2.0',
+    config: { update_multi: true, width_mode: 'default' },
     header: {
-      template: 'blue',
+      template,
       title: { tag: 'plain_text', content: String(title).slice(0, 100) },
     },
-    elements,
+    body: { direction: 'vertical', elements },
   };
 }
 
@@ -85,6 +90,10 @@ export function createTurnPresenter({
   let lines = [];
   let cardId = null;
   let cardBroken = false;
+  /** 内嵌的提问区（{ elements, current }）：答完清空即"收起"。 */
+  let question = null;
+  /** 已产出的最终答案：提问区刷新时要把答案一起画回去，不能抹掉。 */
+  let lastAnswer = '';
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
   let lastFailure = null;
   /** 最终答案实际走了哪条路（card/text/failed），供桥记录"用户到底收到没有"。 */
@@ -102,12 +111,24 @@ export function createTurnPresenter({
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
 
+  /** 当前卡片的标题：有提问时显示"等你确认"，否则显示"正在处理"。 */
+  function currentTitle() {
+    if (!question?.current) return title;
+    return `❓ 等你确认（第 ${question.index}/${question.total} 题）`;
+  }
+
   async function ensureCard() {
     if (cardId || cardBroken) return cardId;
     try {
       const created = await gateway.replyCard({
         messageId,
-        card: renderStepCard({ title, lines, note }),
+        card: renderStepCard({
+          title: currentTitle(),
+          lines,
+          note,
+          question,
+          template: question?.current ? 'blue' : 'blue',
+        }),
         replyInThread,
       });
       cardId = created?.messageId ?? null;
@@ -147,7 +168,13 @@ export function createTurnPresenter({
     try {
       await gateway.patchCard({
         messageId: id,
-        card: renderStepCard({ title, lines: linesSnapshot, answer, note }),
+        card: renderStepCard({
+          title: currentTitle(),
+          lines: linesSnapshot,
+          answer,
+          note,
+          question,
+        }),
       });
       return true;
     } catch (error) {
@@ -158,6 +185,35 @@ export function createTurnPresenter({
   }
 
   return {
+    /**
+     * 把一批问题内嵌到这张进度卡里（提问区就在步骤下方，答完收起）。
+     *
+     * @param payload - { questions, answered, final }。
+     * @returns 是否成功内嵌（false 表示这张卡放不了提问，调用方应改用独立卡片）。
+     */
+    setQuestion(payload) {
+      if (mode !== 'streaming_card' || typeof gateway.renderQuestionElements !== 'function') {
+        return Promise.resolve(false);
+      }
+      return enqueue(async () => {
+        const rendered = gateway.renderQuestionElements({
+          questions: payload?.questions ?? [],
+          answered: payload?.answered ?? {},
+          final: payload?.final === true,
+        });
+        const questions = payload?.questions ?? [];
+        const current = rendered.current;
+        // final 或没有待答题 → 收起提问区（只保留已答摘要一行，答完就不再占地方）
+        question = current
+          ? { elements: rendered.elements, current, index: questions.indexOf(current) + 1, total: questions.length }
+          : (payload?.final === true || rendered.elements.length === 0
+            ? null
+            : { elements: rendered.elements, current: null, index: 0, total: questions.length });
+        const ok = await patch(lines, lastAnswer);
+        return ok;
+      });
+    },
+
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
@@ -202,6 +258,7 @@ export function createTurnPresenter({
           ? `任务未正常完成（${reason.kind}）。`
           : '（本轮没有文本输出）');
 
+        lastAnswer = body;
         if (mode === 'streaming_card') {
           // 卡片能刷就刷；刷不动（含建卡失败）就退化成普通消息，保证答案一定到得了。
           if (!cardBroken && await patch(lines, body)) {

@@ -126482,7 +126482,7 @@ import { join } from "node:path";
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
 var MAX_STEP_LINES = 24;
 var MAX_CARD_CONTENT = 12e3;
-function renderStepCard({ title, lines = [], answer = "", note = "" }) {
+function renderStepCard({ title, lines = [], answer = "", note = "", question = null, template = "blue" }) {
   const budget = { left: MAX_CARD_CONTENT };
   const clamp = (text) => {
     const value = typeof text === "string" ? text : "";
@@ -126493,26 +126493,30 @@ function renderStepCard({ title, lines = [], answer = "", note = "" }) {
   };
   const elements = [];
   if (note) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: clamp(note) } });
+    elements.push({ tag: "div", text: { tag: "plain_text", content: clamp(note) } });
   }
   if (lines.length > 0) {
     const body = clamp(lines.map((line) => `\xB7 ${line}`).join("\n"));
-    if (body) elements.push({ tag: "div", text: { tag: "lark_md", content: body } });
+    if (body) elements.push({ tag: "markdown", content: body });
+  }
+  if (Array.isArray(question?.elements) && question.elements.length > 0) {
+    elements.push(...question.elements);
   }
   if (answer && budget.left > 0) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "div", text: { tag: "lark_md", content: clamp(answer) } });
+    elements.push({ tag: "markdown", content: clamp(answer) });
   }
   if (elements.length === 0) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: "\u6B63\u5728\u5904\u7406\u2026" } });
+    elements.push({ tag: "markdown", content: "\u6B63\u5728\u5904\u7406\u2026" });
   }
   return {
-    config: { wide_screen_mode: true, update_multi: true },
+    schema: "2.0",
+    config: { update_multi: true, width_mode: "default" },
     header: {
-      template: "blue",
+      template,
       title: { tag: "plain_text", content: String(title).slice(0, 100) }
     },
-    elements
+    body: { direction: "vertical", elements }
   };
 }
 function createTurnPresenter({
@@ -126531,6 +126535,8 @@ function createTurnPresenter({
   let lines = [];
   let cardId = null;
   let cardBroken = false;
+  let question = null;
+  let lastAnswer = "";
   let lastFailure = null;
   let lastDelivery = null;
   let chain = Promise.resolve();
@@ -126542,12 +126548,22 @@ function createTurnPresenter({
     lastFailure = `${what}\uFF1A${error?.message ?? error}`;
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
+  function currentTitle() {
+    if (!question?.current) return title;
+    return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${question.index}/${question.total} \u9898\uFF09`;
+  }
   async function ensureCard() {
     if (cardId || cardBroken) return cardId;
     try {
       const created = await gateway.replyCard({
         messageId,
-        card: renderStepCard({ title, lines, note }),
+        card: renderStepCard({
+          title: currentTitle(),
+          lines,
+          note,
+          question,
+          template: question?.current ? "blue" : "blue"
+        }),
         replyInThread
       });
       cardId = created?.messageId ?? null;
@@ -126580,7 +126596,13 @@ function createTurnPresenter({
     try {
       await gateway.patchCard({
         messageId: id,
-        card: renderStepCard({ title, lines: linesSnapshot, answer, note })
+        card: renderStepCard({
+          title: currentTitle(),
+          lines: linesSnapshot,
+          answer,
+          note,
+          question
+        })
       });
       return true;
     } catch (error) {
@@ -126590,6 +126612,29 @@ function createTurnPresenter({
     }
   }
   return {
+    /**
+     * 把一批问题内嵌到这张进度卡里（提问区就在步骤下方，答完收起）。
+     *
+     * @param payload - { questions, answered, final }。
+     * @returns 是否成功内嵌（false 表示这张卡放不了提问，调用方应改用独立卡片）。
+     */
+    setQuestion(payload) {
+      if (mode !== "streaming_card" || typeof gateway.renderQuestionElements !== "function") {
+        return Promise.resolve(false);
+      }
+      return enqueue(async () => {
+        const rendered = gateway.renderQuestionElements({
+          questions: payload?.questions ?? [],
+          answered: payload?.answered ?? {},
+          final: payload?.final === true
+        });
+        const questions = payload?.questions ?? [];
+        const current = rendered.current;
+        question = current ? { elements: rendered.elements, current, index: questions.indexOf(current) + 1, total: questions.length } : payload?.final === true || rendered.elements.length === 0 ? null : { elements: rendered.elements, current: null, index: 0, total: questions.length };
+        const ok = await patch(lines, lastAnswer);
+        return ok;
+      });
+    },
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
@@ -126629,6 +126674,7 @@ function createTurnPresenter({
         const text = typeof answer === "string" ? answer.trim() : "";
         const failed = reason?.kind && reason.kind !== "completed";
         const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
+        lastAnswer = body;
         if (mode === "streaming_card") {
           if (!cardBroken && await patch(lines, body)) {
             lastDelivery = "card";
@@ -126717,6 +126763,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   }
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
+  const activePresenters = /* @__PURE__ */ new Map();
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -126730,6 +126777,18 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
     sendQuestions: async ({ key, questions, answered, final }) => {
       questionBatches.set(key, { questions, answered });
+      const presenter = activePresenters.get(key);
+      if (presenter) {
+        try {
+          const embedded = await presenter.setQuestion({ questions, answered, final });
+          if (embedded) {
+            if (final) questionBatches.delete(key);
+            return;
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat-feishu] \u63D0\u95EE\u5185\u5D4C\u8FDB\u5EA6\u5361\u5931\u8D25\uFF0C\u6539\u7528\u72EC\u7ACB\u5361\u7247\uFF1A${error?.message ?? error}`);
+        }
+      }
       const existing = questionCards.get(key) ?? null;
       const sent = await gateway.sendQuestionsCard({
         ...routeOf(key),
@@ -126952,6 +127011,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         logger,
         note: enhanced ? "\u{1F4CE} \u5DF2\u6CE8\u5165\u4F1A\u8BDD\u4E0A\u4E0B\u6587" : ""
       });
+      activePresenters.set(conversationKey, presenter);
       const result = await deps.sessions.ask({
         channelId: deps.channelId,
         botId: bot.id,
@@ -126971,6 +127031,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
           }
         }
       });
+      activePresenters.delete(conversationKey);
       logger.info?.(`[dsh-chat-feishu] \u56DE\u5408\u7ED3\u675F\uFF0C\u51C6\u5907\u56DE\u590D\uFF1A${bot.id} ${conversationKey} reason=${result?.reason?.kind ?? "unknown"} \u6587\u672C=${(result?.text ?? "").length}\u5B57`);
       await presenter.finish(result?.text, result?.reason);
       logger.info?.(`[dsh-chat-feishu] \u6700\u7EC8\u7B54\u6848\u6295\u9012\u65B9\u5F0F\uFF1A${presenter.delivery?.() ?? "unknown"}\uFF08${bot.id} ${conversationKey}\uFF09`);
@@ -126978,6 +127039,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
       lastError = presenter.lastError?.() ?? null;
     } catch (error) {
+      activePresenters.delete(conversationKey);
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u6D88\u606F\u5931\u8D25\uFF1A${lastError}`);
       try {
@@ -127344,10 +127406,15 @@ function createLarkGateway({
       logger.warn?.(`[dsh-chat-feishu] \u5173\u95ED\u957F\u8FDE\u63A5\u65F6\u62A5\u9519\uFF1A${error?.message ?? error}`);
     }
   }
-  function customInputElements({ questionId, placeholder = "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u8F93\u5165\u4F60\u7684\u7B54\u6848\uFF0C\u70B9\u300C\u63D0\u4EA4\u300D" }) {
+  function customInputElements({
+    questionId,
+    placeholder = "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u8F93\u5165\u4F60\u7684\u7B54\u6848\uFF0C\u70B9\u300C\u63D0\u4EA4\u300D",
+    formName = "dsh_custom",
+    submitType = "default"
+  }) {
     return [{
       tag: "form",
-      name: `dsh_custom_${questionId}`,
+      name: `${formName}_${questionId}`,
       elements: [
         {
           tag: "input",
@@ -127363,12 +127430,121 @@ function createLarkGateway({
           tag: "button",
           name: "submit",
           form_action_type: "submit",
-          type: "default",
+          type: submitType,
           width: "fill",
           text: { tag: "plain_text", content: "\u63D0\u4EA4" }
         }
       ]
     }];
+  }
+  function renderQuestionElements({ questions = [], answered = {}, final = false } = {}) {
+    const elements = [];
+    const answeredList = questions.filter((question) => answered[question?.id] !== void 0);
+    const current = final ? null : questions.find((question) => answered[question?.id] === void 0) ?? null;
+    const answerText = (question) => {
+      const answer = answered[question?.id] ?? {};
+      const chosen = [...answer.selected ?? []];
+      if (answer.custom) chosen.push(answer.custom);
+      return chosen.join("\u3001") || "\uFF08\u7A7A\uFF09";
+    };
+    if (answeredList.length > 0) {
+      elements.push({
+        tag: "markdown",
+        content: answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n")
+      });
+    }
+    if (!current) return { elements, current: null };
+    const index = questions.indexOf(current) + 1;
+    const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, "", String(current?.question ?? "")];
+    if (current?.detail) body.push("", String(current.detail));
+    const options = Array.isArray(current?.options) ? current.options : [];
+    const questionId = String(current?.id ?? "");
+    elements.push({ tag: "hr" });
+    if (options.length > 0 && current?.multiSelect !== true) {
+      elements.push({ tag: "markdown", content: body.join("\n") });
+      options.slice(0, 8).forEach((option, optionIndex) => {
+        const label = String(option.label).slice(0, 60);
+        elements.push({
+          tag: "button",
+          text: { tag: "plain_text", content: option.description ? `${label} \u2014\u2014 ${option.description}`.slice(0, 100) : label },
+          type: optionIndex === 0 ? "primary_filled" : "default",
+          width: "fill",
+          behaviors: [{
+            type: "callback",
+            value: { dsh: "answer", questionId, label, index: String(optionIndex + 1) }
+          }]
+        });
+      });
+      elements.push(...customInputElements({ questionId, formName: "dsh_custom" }));
+    } else if (options.length > 0) {
+      body.push("", "\u53EF\u591A\u9009\uFF1A\u52FE\u9009\u540E\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
+      elements.push({ tag: "markdown", content: body.join("\n") });
+      elements.push({
+        tag: "form",
+        name: `dsh_form_${questionId}`,
+        elements: [
+          ...options.slice(0, 20).map((option, optionIndex) => ({
+            tag: "checker",
+            name: `chk_${optionIndex}_${questionId}`,
+            checked: false,
+            text: { tag: "plain_text", content: String(option.label).slice(0, 80) }
+          })),
+          {
+            tag: "input",
+            name: `text_${questionId}`,
+            placeholder: { tag: "plain_text", content: "\u4E5F\u53EF\u4EE5\u5728\u8865\u5145\u6846\u91CC\u5199\u522B\u7684\u7B54\u6848" },
+            input_type: "multiline_text",
+            rows: 1,
+            width: "fill"
+          },
+          {
+            tag: "button",
+            name: "submit",
+            form_action_type: "submit",
+            type: "primary_filled",
+            width: "fill",
+            text: { tag: "plain_text", content: "\u63D0\u4EA4" }
+          }
+        ]
+      });
+    } else {
+      body.push("", "\u5728\u4E0B\u9762\u8F93\u5165\u540E\u70B9\u300C\u63D0\u4EA4\u300D\uFF08\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\uFF09\u3002");
+      elements.push({ tag: "markdown", content: body.join("\n") });
+      elements.push({
+        tag: "form",
+        name: `dsh_form_${questionId}`,
+        elements: [
+          {
+            tag: "input",
+            name: `text_${questionId}`,
+            placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" },
+            label: { tag: "plain_text", content: "\u4F60\u7684\u56DE\u7B54" },
+            input_type: "multiline_text",
+            rows: 3,
+            auto_resize: true,
+            max_rows: 8,
+            width: "fill"
+          },
+          {
+            tag: "button",
+            name: "submit",
+            form_action_type: "submit",
+            type: "primary_filled",
+            width: "fill",
+            text: { tag: "plain_text", content: "\u63D0\u4EA4" }
+          }
+        ]
+      });
+    }
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "plain_text",
+        content: "\u56DE\u7B54\u540E\u4F1A\u81EA\u52A8\u7FFB\u5230\u4E0B\u4E00\u9898\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002",
+        text_size: "notation"
+      }
+    });
+    return { elements, current };
   }
   return Object.freeze({
     appId,
@@ -127565,15 +127741,9 @@ function createLarkGateway({
       return { messageId: response?.data?.message_id, imageKey };
     },
     /**
-     * 提问卡片：**一页一题**，答完就地翻到下一题。Card 2.0。
+     * 独立提问卡片（Card 2.0，一页一题）。
      *
-     * 组件选择有依据（`lark-im` skill 的卡片组件文档，均为 Card 2.0 组件）：
-     * - 单选 → `button` + `behaviors:[{type:'callback'}]`；
-     * - 多选 → `form` 内的 **`multi_select_static`**（原生多选控件）+ `form_action_type:'submit'` 的提交按钮；
-     * - 自由文本 → `form` 内的 `input` + 提交按钮；
-     * - 表单值回调在 `action.form_value[组件name]`（不是 `action.value`）。
-     * 早前用 Card 1.0 的 `checker` 当"多选组"是错的：它是**任务勾选器**（单个），
-     * 且 1.0 里没有表单，所以既渲染不出选项、也拿不到提交值。
+     * 进度卡可用时提问会内嵌进那张卡（见 turn-presenter），这个独立卡片只是兜底。
      *
      * @param options - { chatId } 或 { openId }、{ questions, answered, final, messageId? }。
      * @returns { messageId }。
@@ -127581,114 +127751,8 @@ function createLarkGateway({
     async sendQuestionsCard({ chatId, openId, questions = [], answered = {}, final = false, messageId = null }) {
       const receiveId = chatId ?? openId;
       if (!messageId && !receiveId) throw new TypeError("sendQuestionsCard \u9700\u8981 chatId/openId \u6216 messageId\u3002");
-      const total = questions.length;
-      const answeredList = questions.filter((question) => answered[question?.id] !== void 0);
-      const current = questions.find((question) => answered[question?.id] === void 0) ?? null;
-      const elements = [];
-      const answerText = (question) => {
-        const answer = answered[question?.id] ?? {};
-        const chosen = [...answer.selected ?? []];
-        if (answer.custom) chosen.push(answer.custom);
-        return chosen.join("\u3001") || "\uFF08\u7A7A\uFF09";
-      };
-      if (answeredList.length > 0) {
-        elements.push({
-          tag: "markdown",
-          content: answeredList.map((question) => `\u2705 **${questions.indexOf(question) + 1}. ${question?.header || "\u95EE\u9898"}** \u2192 ${answerText(question)}`).join("\n")
-        });
-        elements.push({ tag: "hr" });
-      }
-      if (current) {
-        const index = questions.indexOf(current) + 1;
-        const body = [`**${index}. ${current?.header || "\u9700\u8981\u786E\u8BA4"}**`, "", String(current?.question ?? "")];
-        if (current?.detail) body.push("", String(current.detail));
-        const options = Array.isArray(current?.options) ? current.options : [];
-        const questionId = String(current?.id ?? "");
-        if (options.length > 0 && current?.multiSelect !== true) {
-          elements.push({ tag: "markdown", content: body.join("\n") });
-          options.slice(0, 8).forEach((option, optionIndex) => {
-            const label = String(option.label).slice(0, 60);
-            elements.push({
-              tag: "button",
-              text: { tag: "plain_text", content: option.description ? `${label} \u2014\u2014 ${option.description}`.slice(0, 100) : label },
-              type: optionIndex === 0 ? "primary_filled" : "default",
-              width: "fill",
-              behaviors: [{
-                type: "callback",
-                value: { dsh: "answer", questionId, label, index: String(optionIndex + 1) }
-              }]
-            });
-          });
-          elements.push(...customInputElements({ questionId }));
-        } else if (options.length > 0) {
-          body.push("", "\u53EF\u591A\u9009\uFF1A\u52FE\u9009\u540E\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
-          elements.push({ tag: "markdown", content: body.join("\n") });
-          elements.push({
-            tag: "form",
-            name: `dsh_form_${questionId}`,
-            elements: [
-              ...options.slice(0, 20).map((option, optionIndex) => ({
-                tag: "checker",
-                name: `chk_${optionIndex}_${questionId}`,
-                checked: false,
-                text: { tag: "plain_text", content: String(option.label).slice(0, 80) }
-              })),
-              {
-                tag: "input",
-                name: `text_${questionId}`,
-                placeholder: { tag: "plain_text", content: "\u4E5F\u53EF\u4EE5\u5728\u8865\u5145\u6846\u91CC\u5199\u522B\u7684\u7B54\u6848" },
-                input_type: "multiline_text",
-                rows: 1,
-                width: "fill"
-              },
-              {
-                tag: "button",
-                name: "submit",
-                form_action_type: "submit",
-                type: "primary_filled",
-                width: "fill",
-                text: { tag: "plain_text", content: "\u63D0\u4EA4" }
-              }
-            ]
-          });
-        } else {
-          body.push("", "\u5728\u4E0B\u9762\u8F93\u5165\u540E\u70B9\u300C\u63D0\u4EA4\u300D\uFF08\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u804A\u5929\u91CC\u56DE\u590D\uFF09\u3002");
-          elements.push({ tag: "markdown", content: body.join("\n") });
-          elements.push({
-            tag: "form",
-            name: `dsh_form_${questionId}`,
-            elements: [
-              {
-                tag: "input",
-                name: `text_${questionId}`,
-                placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" },
-                label: { tag: "plain_text", content: "\u4F60\u7684\u56DE\u7B54" },
-                input_type: "multiline_text",
-                rows: 3,
-                auto_resize: true,
-                max_rows: 8,
-                width: "fill"
-              },
-              {
-                tag: "button",
-                name: "submit",
-                form_action_type: "submit",
-                type: "primary_filled",
-                width: "fill",
-                text: { tag: "plain_text", content: "\u63D0\u4EA4" }
-              }
-            ]
-          });
-        }
-        elements.push({
-          tag: "div",
-          text: {
-            tag: "plain_text",
-            content: "\u56DE\u7B54\u540E\u8FD9\u5F20\u5361\u7247\u4F1A\u81EA\u52A8\u7FFB\u5230\u4E0B\u4E00\u9898\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002",
-            text_size: "notation"
-          }
-        });
-      } else {
+      const { elements, current } = renderQuestionElements({ questions, answered, final });
+      if (elements.length === 0) {
         elements.push({ tag: "markdown", content: "\u5168\u90E8\u95EE\u9898\u90FD\u5DF2\u56DE\u7B54\uFF0C\u6B63\u5728\u7EE7\u7EED\u5904\u7406\u2026" });
       }
       const card = {
@@ -127698,7 +127762,7 @@ function createLarkGateway({
           template: final || !current ? "green" : "blue",
           title: {
             tag: "plain_text",
-            content: final || !current ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u7B2C ${questions.indexOf(current) + 1}/${total} \u9898\uFF09`
+            content: final || !current ? "\u2705 \u5DF2\u5168\u90E8\u56DE\u7B54" : `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08\u7B2C ${questions.indexOf(current) + 1}/${questions.length} \u9898\uFF09`
           }
         },
         body: { direction: "vertical", elements }
@@ -127718,6 +127782,8 @@ function createLarkGateway({
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u63D0\u95EE\u5361\u7247", response);
       return { messageId: response?.data?.message_id };
     },
+    /** 供进度卡内嵌提问区使用（纯渲染）。 */
+    renderQuestionElements,
     /**
      * 把一个提问渲染成带按钮的卡片发出去。
      *

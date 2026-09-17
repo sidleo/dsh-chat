@@ -132,8 +132,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
 
   /** 会话键 → 已经发出去的那张提问卡片（回答后就地更新，不再新发消息）。 */
   const questionCards = new Map();
-  /** 会话键 → 最近一次渲染用的批次（多选开关要就地重渲染，得知道原样数据）。 */
+  /** 会话键 → 最近一次渲染用的批次（勾选器要把序号反查成选项原文，得知道原样数据）。 */
   const questionBatches = new Map();
+  /** 会话键 → 本轮"正在处理"那张卡（提问优先内嵌进它，答完收起）。 */
+  const activePresenters = new Map();
 
 
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
@@ -153,6 +155,20 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     // 一批问题一张卡：首次新建，之后按会话键找到那张卡就地更新（答完变绿）。
     sendQuestions: async ({ key, questions, answered, final }) => {
       questionBatches.set(key, { questions, answered });
+      // 优先内嵌进本轮"正在处理"那张进度卡：提问与过程共处一卡，答完收起。
+      const presenter = activePresenters.get(key);
+      if (presenter) {
+        try {
+          const embedded = await presenter.setQuestion({ questions, answered, final });
+          if (embedded) {
+            if (final) questionBatches.delete(key);
+            return;
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat-feishu] 提问内嵌进度卡失败，改用独立卡片：${error?.message ?? error}`);
+        }
+      }
+      // 兜底：没有进度卡（如过程展示为 off/post）时用独立卡片。
       const existing = questionCards.get(key) ?? null;
       const sent = await gateway.sendQuestionsCard({
         ...routeOf(key),
@@ -405,6 +421,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         note: enhanced ? '📎 已注入会话上下文' : '',
       });
 
+      activePresenters.set(conversationKey, presenter);
       const result = await deps.sessions.ask({
         channelId: deps.channelId,
         botId: bot.id,
@@ -425,6 +442,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         },
       });
 
+      activePresenters.delete(conversationKey);
       logger.info?.(`[dsh-chat-feishu] 回合结束，准备回复：${bot.id} ${conversationKey}`
         + ` reason=${result?.reason?.kind ?? 'unknown'} 文本=${(result?.text ?? '').length}字`);
       await presenter.finish(result?.text, result?.reason);
@@ -436,6 +454,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       // 否则用户"没收到回复"时只能靠终端日志。
       lastError = presenter.lastError?.() ?? null;
     } catch (error) {
+      activePresenters.delete(conversationKey);
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] 处理消息失败：${lastError}`);
       try {

@@ -513,9 +513,13 @@ test('过程卡内容在被截断时仍是合法卡片（不产出坏 JSON）', 
     lines: Array.from({ length: 40 }, (_, index) => `第 ${index} 步`),
     answer: '答'.repeat(20_000),
   });
-  assert.ok(Array.isArray(card.elements));
+  // Card 2.0：正文在 body.elements，文本元素是 markdown/div
+  assert.equal(card.schema, '2.0');
+  assert.ok(Array.isArray(card.body.elements));
   assert.ok(JSON.stringify(card).length < 14_000);
-  const body = card.elements.map((element) => element.text?.content ?? '').join('');
+  const body = card.body.elements
+    .map((element) => element.content ?? element.text?.content ?? '')
+    .join('');
   assert.ok(body.includes('答'));
 });
 
@@ -1227,4 +1231,78 @@ test('交互回传：多选/自由文本走表单值（action.form_value[组件�
   } finally {
     await app.cleanup();
   }
+});
+
+test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答完收起', async () => {
+  const patches = [];
+  const replies = [];
+  const gateway = {
+    async replyCard({ card, messageId }) {
+      replies.push({ card, messageId });
+      return { messageId: 'om_progress' };
+    },
+    async patchCard({ card, messageId }) {
+      patches.push({ card, messageId });
+      return { messageId };
+    },
+    renderQuestionElements({ questions, answered, final }) {
+      const elements = [];
+      // 真实现会把"已答摘要"先画出来（这里照抄这个行为，否则测不出收起后的样子）
+      for (const question of questions) {
+        if (answered[question.id] === undefined) continue;
+        const chosen = [...(answered[question.id].selected ?? [])];
+        elements.push({ tag: 'markdown', content: `✅ ${question.question} → ${chosen.join('、')}` });
+      }
+      const current = final ? null : questions.find((q) => answered[q.id] === undefined);
+      if (current) {
+        elements.push({ tag: 'markdown', content: `题目：${current.question}` });
+        elements.push({ tag: 'button', text: { tag: 'plain_text', content: 'A' } });
+      }
+      return { elements, current };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_msg', chat_id: 'oc_chat' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+
+  const questions = [{ id: 'q1', question: '选一个', options: [{ label: 'A' }] }];
+  await presenter.setQuestion({ questions, answered: {}, final: false });
+
+  const first = patches.at(-1)?.card ?? replies.at(-1)?.card;
+  assert.ok(first, '要创建/更新那张进度卡');
+  const firstBody = JSON.stringify(first);
+  assert.match(firstBody, /题目：选一个/, '题目要画进进度卡');
+  assert.match(firstBody, /等你确认/, '标题要提示在等确认');
+
+  // 答完一题 → 同一张卡翻到"已答摘要 + 下一题"（这里只有一题，收起到只剩摘要）
+  await presenter.setQuestion({
+    questions, answered: { q1: { selected: ['A'] } }, final: false,
+  });
+  const second = JSON.stringify(patches.at(-1).card);
+  assert.doesNotMatch(second, /题目：选一个/, '答过的题不再占位');
+  assert.match(second, /✅/);
+
+  // 收尾：提问区完全收起，卡里只剩进度/答案
+  await presenter.finish('最终答案', { kind: 'completed' });
+  const last = JSON.stringify(patches.at(-1).card);
+  assert.doesNotMatch(last, /题目：选一个/);
+  assert.doesNotMatch(last, /等你确认/);
+  assert.match(last, /最终答案/);
+});
+
+test('过程展示为 off 时，setQuestion 明确说不支持（桥据此退回独立卡片）', async () => {
+  const presenter = createTurnPresenter({
+    mode: 'off',
+    gateway: { renderQuestionElements: () => ({ elements: [], current: null }) },
+    message: { message_id: 'om_msg', chat_id: 'oc_chat' },
+    chatType: 'direct',
+    bot: { botName: 'x', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  assert.equal(await presenter.setQuestion({ questions: [], answered: {}, final: false }), false);
 });
