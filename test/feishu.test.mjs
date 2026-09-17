@@ -44,7 +44,7 @@ const TINY_PNG = Buffer.from(
 function createFakeGateway() {
   const calls = {
     replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
-    connects: 0, disconnects: 0,
+    questionCards: [], approvalCards: [], markedCards: [], connects: 0, disconnects: 0,
   };
   const gatewayState = {
     downloadBytes: TINY_PNG,
@@ -104,6 +104,21 @@ function createFakeGateway() {
     setFailure(method, error) {
       gatewayState.failures[method] = error;
     },
+    /** 提问/审批卡片（交互回传用）。 */
+    async sendQuestionCard({ chatId, openId, question, position, total }) {
+      if (gatewayState.failures.sendQuestionCard) throw gatewayState.failures.sendQuestionCard;
+      calls.questionCards.push({ chatId, openId, question, position, total });
+      return { messageId: 'om_question_card' };
+    },
+    async sendApprovalCard({ chatId, openId, request }) {
+      if (gatewayState.failures.sendApprovalCard) throw gatewayState.failures.sendApprovalCard;
+      calls.approvalCards.push({ chatId, openId, request });
+      return { messageId: 'om_approval_card' };
+    },
+    async markCardAnswered({ messageId, title, content }) {
+      calls.markedCards.push({ messageId, title, content });
+      return { messageId };
+    },
     /** 主动发文件/图片（投递用）。 */
     async sendFile({ chatId, openId, path, name }) {
       if (gatewayState.failures.sendFile) throw gatewayState.failures.sendFile;
@@ -160,13 +175,17 @@ async function makeBridge({
   const attached = [];
   const offers = [];
   const interactions = {
+    /** claimed=true：任何会话都认领；claimKey=xxx：只认领这个会话键（用于验证路由）。 */
     claimed: false,
+    claimKey: null,
+    attached,
     attach(options) {
       attached.push(options);
       return () => { options.detached = true; };
     },
     offer(request) {
       offers.push(request);
+      if (interactions.claimKey) return request.key === interactions.claimKey;
       return interactions.claimed;
     },
   };
@@ -1023,5 +1042,110 @@ test('入站文件：群聊未 @ 时连下载都不做', async () => {
     assert.equal(app.gateway.calls.replies.length, 0);
   } finally {
     await app.cleanup();
+  }
+});
+
+test('交互回传：单选提问发按钮卡片；点按钮即答案（与手打文字同一条认领路径）', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimKey = 'p2p:ou_owner';
+    const attach = app.attached[0];
+    assert.equal(typeof attach.sendQuestion, 'function', '桥要提供卡片渲染能力');
+    assert.equal(typeof attach.sendApproval, 'function');
+
+    await attach.sendQuestion({
+      key: 'p2p:ou_owner',
+      question: {
+        id: 'intent',
+        header: '确认需求',
+        question: '这份指标表你想怎么处理？',
+        options: [{ label: '映射到知识库口径' }, { label: '只做格式检查' }],
+      },
+      position: 1,
+      total: 1,
+    });
+    assert.equal(app.gateway.calls.questionCards.length, 1);
+    assert.equal(app.gateway.calls.questionCards[0].openId, 'ou_owner');
+    assert.equal(app.gateway.calls.questionCards[0].question.options.length, 2);
+
+    // 用户点了第一个按钮：operator/chatId 由飞书给出
+    const response = await app.bridge.handleCardAction({
+      messageId: 'om_card_1',
+      chatId: 'oc_chat',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'answer', questionId: 'intent', label: '映射到知识库口径', index: '1' } },
+    });
+    assert.equal(response.toast.type, 'success');
+    assert.match(response.toast.content, /映射到知识库口径/);
+    assert.equal(app.offers.at(-1).text, '映射到知识库口径');
+    assert.equal(app.offers.at(-1).key, 'p2p:ou_owner', '群聊键没等待者时回落到私聊键');
+    assert.equal(app.gateway.calls.markedCards.length, 1, '答过的卡片要变成静态卡片');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回传：卡片回调同样过身份门禁，且不越权回答别人的问题', async () => {
+  const app = await makeBridge();
+  try {
+    const attach = app.attached[0];
+    await attach.sendQuestion({
+      key: 'p2p:ou_owner',
+      question: { id: 'q', question: '选哪个？', options: [{ label: 'A' }] },
+      position: 1,
+      total: 1,
+    });
+
+    // 未被放行的人点按钮：不能认领
+    await app.bridge.handleCardAction({
+      messageId: 'om_card_2',
+      chatId: 'oc_chat',
+      operator: { openId: 'ou_stranger' },
+      action: { value: { dsh: 'answer', questionId: 'q', label: 'A' } },
+    });
+    assert.equal(app.offers.length, 0, '门禁在认领之前');
+
+    // 无关的卡片动作：不认领也不报错
+    await app.bridge.handleCardAction({
+      messageId: 'om_card_3', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { value: { dsh: 'other' } },
+    });
+    assert.equal(app.offers.length, 0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回传：审批卡片点「允许」→ allowed-once；卡片发不出去时退回文本', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimKey = 'p2p:ou_owner';
+    const attach = app.attached[0];
+    await attach.sendApproval({ key: 'p2p:ou_owner', request: { toolName: 'bash', reason: '删除临时目录' } });
+    assert.equal(app.gateway.calls.approvalCards.length, 1);
+
+    const response = await app.bridge.handleCardAction({
+      messageId: 'om_card_4', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+    assert.equal(response.toast.type, 'success');
+    assert.equal(app.offers.at(-1).text, '允许');
+  } finally {
+    await app.cleanup();
+  }
+
+  // 卡片发送失败 → 回退纯文本，用户仍然有办法回答
+  const fallback = await makeBridge();
+  try {
+    fallback.gateway.setFailure('sendQuestionCard', new Error('飞书拒绝卡片'));
+    await fallback.attached[0].sendQuestion({
+      key: 'p2p:ou_owner',
+      question: { id: 'q', question: '选哪个？', options: [{ label: 'A' }] },
+      position: 1, total: 1,
+    });
+    assert.equal(fallback.gateway.calls.texts.at(-1).text.includes('选哪个？'), true);
+    assert.equal(fallback.gateway.calls.texts.at(-1).openId, 'ou_owner');
+  } finally {
+    await fallback.cleanup();
   }
 });

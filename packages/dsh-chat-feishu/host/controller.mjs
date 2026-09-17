@@ -100,6 +100,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       record.bridge = bridge;
       await gateway.connect({
         onMessage: (event) => bridge.accept(event),
+        // 卡片按钮点击走这里：与文本回答共用同一条"认领"路径。
+        onCardAction: (event) => bridge.handleCardAction?.(event),
         signal: record.controller.signal,
       });
       record.phase = 'running';

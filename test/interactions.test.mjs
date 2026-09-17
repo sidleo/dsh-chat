@@ -205,3 +205,71 @@ test('审批回传：问出去、按回复给结论、认不出的回复按拒�
   service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '随你吧' });
   assert.equal(await rejected, 'rejected', '认不出来的审批回复要 fail closed');
 });
+
+test('渠道能渲染原生交互时优先用卡片；多选与不支持卡片的渠道走文本', async () => {
+  const service = createInteractionService({ logger: silentLogger, timeoutMs: 1_000 });
+  const cards = [];
+  const texts = [];
+  service.attach({
+    channelId: 'feishu',
+    botId: 'bot_1',
+    send: async ({ text }) => texts.push(text),
+    sendQuestion: async ({ question }) => cards.push(question.id),
+  });
+
+  // 单选 + 有选项 → 卡片
+  const single = service.handle({
+    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    request: {
+      questions: [{
+        id: 'env', question: '哪个环境？', options: [{ label: '生产' }, { label: '测试' }],
+      }],
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(cards, ['env']);
+  assert.deepEqual(texts, [], '能出卡片就不发文本');
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '生产' });
+  assert.deepEqual(await single, { answers: [{ id: 'env', selected: ['生产'] }] });
+
+  // 多选 → 文本（一个按钮表达不了多选）
+  cards.length = 0;
+  const multi = service.handle({
+    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    request: { questions: [{ id: 'm', question: '要哪些？', multiSelect: true, options: [{ label: 'A' }] }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(cards, [], '多选不发卡片');
+  assert.equal(texts.length, 1);
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'A' });
+  assert.deepEqual((await multi).answers[0].selected, ['A']);
+
+  // 没有选项的自由提问 → 文本
+  texts.length = 0;
+  const free = service.handle({
+    kind: 'question', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    request: { questions: [{ id: 'free', question: '库名？' }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(texts.length, 1);
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: 'yh_dm' });
+  assert.deepEqual((await free).answers[0].custom, 'yh_dm');
+});
+
+test('审批也能用原生交互（卡片按钮），认领路径与文本一致', async () => {
+  const service = createInteractionService({ logger: silentLogger, timeoutMs: 1_000 });
+  const cards = [];
+  service.attach({
+    channelId: 'feishu', botId: 'bot_1',
+    send: async () => {},
+    sendApproval: async ({ request }) => cards.push(request.toolName),
+  });
+  const pending = service.handle({
+    kind: 'approval', channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    request: { toolName: 'bash' },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(cards, ['bash']);
+  service.offer({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', text: '允许' });
+  assert.equal(await pending, 'allowed-once');
+});

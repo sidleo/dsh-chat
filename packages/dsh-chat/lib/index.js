@@ -1854,12 +1854,17 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
      * @param options - { channelId, botId, send({ key, text }) }。
      * @returns 注销函数。
      */
-    attach({ channelId, botId, send }) {
+    attach({ channelId, botId, send, sendQuestion, sendApproval }) {
       if (typeof send !== "function") throw new TypeError("\u4EA4\u4E92\u56DE\u4F20\u9700\u8981\u6E20\u9053\u63D0\u4F9B send\u3002");
       const id = `${channelId}\0${botId}`;
-      senders.set(id, send);
+      senders.set(id, {
+        send,
+        // 可选：渠道能把问题/审批渲染成平台原生交互（飞书的按钮卡片），比纯文本好用得多。
+        sendQuestion: typeof sendQuestion === "function" ? sendQuestion : null,
+        sendApproval: typeof sendApproval === "function" ? sendApproval : null
+      });
       return () => {
-        if (senders.get(id) === send) senders.delete(id);
+        if (senders.get(id)?.send === send) senders.delete(id);
       };
     },
     /** @returns 该渠道是否接入了 IM 回传（未接入则一律让给浏览器 UI）。 */
@@ -1883,10 +1888,14 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
      * @returns 提问返回 `{ answers }`，审批返回 outcome 字符串；无法应答时返回 null。
      */
     async handle({ kind, channelId, botId, key, request }) {
-      const send = senderFor(channelId, botId);
-      if (!send) return null;
+      const sender = senderFor(channelId, botId);
+      if (!sender) return null;
       if (kind === "approval") {
-        await send({ key, text: renderApproval(request) });
+        if (sender.sendApproval) {
+          await sender.sendApproval({ key, request });
+        } else {
+          await sender.send({ key, text: renderApproval(request) });
+        }
         const reply = await wait({ channelId, botId, key, kind: "\u5BA1\u6279", signal: request?.signal });
         if (reply === null) return null;
         const outcome = parseApproval(reply);
@@ -1900,10 +1909,20 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
       if (questions.length === 0) return null;
       const answers = [];
       for (const [index, question] of questions.entries()) {
-        await send({
-          key,
-          text: renderQuestion(question, { position: index + 1, total: questions.length })
-        });
+        const canRenderCard = sender.sendQuestion && question?.multiSelect !== true && Array.isArray(question?.options) && question.options.length > 0;
+        if (canRenderCard) {
+          await sender.sendQuestion({
+            key,
+            question,
+            position: index + 1,
+            total: questions.length
+          });
+        } else {
+          await sender.send({
+            key,
+            text: renderQuestion(question, { position: index + 1, total: questions.length })
+          });
+        }
         const reply = await wait({ channelId, botId, key, kind: "\u63D0\u95EE", signal: request?.signal });
         if (reply === null) return null;
         answers.push(parseAnswer(question, reply));

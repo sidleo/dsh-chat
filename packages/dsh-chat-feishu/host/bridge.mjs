@@ -130,11 +130,41 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     return gateway.sendText({ openId: id, text });
   }
 
+  /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
+  function routeOf(key) {
+    const separator = key.indexOf(':');
+    const kind = separator > 0 ? key.slice(0, separator) : '';
+    const id = separator > 0 ? key.slice(separator + 1) : key;
+    return kind === 'group' ? { chatId: id } : { openId: id };
+  }
+
   // 接入 IM 回传：agent 的提问/审批会发到会话里问，用户回复即答案。
+  // 能发卡片就发卡片（点按钮即可回答），发不出去再退回纯文本。
   const detachInteractions = deps.interactions?.attach?.({
     channelId: deps.channelId,
     botId: bot.id,
     send: sendToConversation,
+    sendQuestion: async ({ key, question, position, total }) => {
+      try {
+        await gateway.sendQuestionCard({
+          ...routeOf(key), question, position, total,
+        });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] 提问卡片发送失败，回退为文本：${error?.message ?? error}`);
+        await sendToConversation({
+          key,
+          text: `❓ ${question?.header ?? '需要你确认'}\n\n${question?.question ?? ''}`,
+        });
+      }
+    },
+    sendApproval: async ({ key, request }) => {
+      try {
+        await gateway.sendApprovalCard({ ...routeOf(key), request });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] 审批卡片发送失败，回退为文本：${error?.message ?? error}`);
+        await sendToConversation({ key, text: '⚠️ 需要授权：回复「允许」执行一次，或「拒绝」取消。' });
+      }
+    },
   });
 
   /**
@@ -409,8 +439,88 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
   }
 
+  /**
+   * 处理一次卡片点击：把按钮里的答案交给 hub 的交互服务认领。
+   *
+   * 与"用户手打文字"共用同一条认领路径（`offer`），所以按钮与文本不会有两套行为。
+   * 返回值直接作为飞书客户端的应答（toast），用户点完立刻有反馈。
+   *
+   * @param event - SDK 归一化后的 `card.action.trigger` 事件。
+   * @returns 飞书卡片回调应答。
+   */
+  async function handleCardAction(event) {
+    const value = event?.action?.value ?? {};
+    const operatorId = event?.operator?.openId;
+    const chatId = event?.chatId;
+    if (!operatorId || !chatId) return undefined;
+
+    // 审批卡片：直接按按钮里的结论回答
+    if (value.dsh === 'approval') {
+      const decision = value.decision === 'allowed-once' ? 'allowed-once' : 'rejected';
+      const claimed = deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: `p2p:${operatorId}`,
+        text: decision === 'allowed-once' ? '允许' : '拒绝',
+      }) || deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: `group:${chatId}`,
+        text: decision === 'allowed-once' ? '允许' : '拒绝',
+      });
+      if (!claimed) {
+        logger.info?.(`[dsh-chat-feishu] 卡片回调没有匹配的待审批（${bot.id} ${operatorId}）`);
+        return { toast: { type: 'info', content: '这次授权已经处理过了。' } };
+      }
+      await markAnswered(event, value.dsh, decision === 'allowed-once' ? '已允许' : '已拒绝');
+      return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
+    }
+
+    if (value.dsh !== 'answer') return undefined;
+    const label = typeof value.label === 'string' ? value.label : '';
+    if (!label) return undefined;
+
+    // 身份门禁与文本回答一致：不该由谁回答，就不认领。
+    await deps.ready?.();
+    const accessPolicy = deps.storage.read(bot.id).accessPolicy;
+    const keys = [
+      { key: `group:${chatId}`, conversationType: 'group' },
+      { key: `p2p:${operatorId}`, conversationType: 'direct' },
+    ];
+    for (const candidate of keys) {
+      const access = deps.accessPolicy.evaluateAccess({
+        policy: accessPolicy,
+        conversationType: candidate.conversationType,
+        senderIds: [operatorId],
+        isOwner: isOwner(bot, operatorId),
+      });
+      if (!access.allowed) continue;
+      if (deps.interactions?.offer?.({
+        channelId: deps.channelId, botId: bot.id, key: candidate.key, text: label,
+      })) {
+        logger.info?.(`[dsh-chat-feishu] 卡片回答已认领：${bot.id} ${candidate.key} → ${label}`);
+        lastHandledAt = new Date().toISOString();
+        await markAnswered(event, '已收到你的选择', label);
+        return { toast: { type: 'success', content: `已选择：${label}` } };
+      }
+    }
+    logger.info?.(`[dsh-chat-feishu] 卡片回调没有匹配的待回答问题（${bot.id} ${operatorId}）`);
+    return { toast: { type: 'info', content: '这个问题已经处理过了。' } };
+  }
+
+  /** 把已答的卡片替换成静态卡片：视觉上明确"已处理"，也避免重复点。 */
+  async function markAnswered(event, title, content) {
+    if (!event?.messageId || typeof gateway.markCardAnswered !== 'function') return;
+    try {
+      await gateway.markCardAnswered({ messageId: event.messageId, title, content });
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] 更新提问卡片失败：${error?.message ?? error}`);
+    }
+  }
+
   return {
     accept,
+    handleCardAction,
     status: () => Object.freeze({ handled, lastError, lastHandledAt }),
     /** 停止时把 IM 回传的发送器摘掉：不能让停掉的机器人继续"接单"。 */
     dispose: () => detachInteractions?.(),

@@ -128,12 +128,14 @@ export function createLarkGateway({
             .catch((error) => logger.error?.(`[dsh-chat-feishu] 处理入站消息失败：${error?.message ?? error}`));
           return undefined;
         },
-        'card.action.trigger': (event) => {
-          void Promise.resolve()
-            .then(() => onCardAction?.(event))
-            .catch((error) => logger.error?.(`[dsh-chat-feishu] 处理卡片回调失败：${error?.message ?? error}`));
-          return undefined;
-        },
+        // 注意：卡片回调的返回值就是飞书客户端的应答（toast / 替换卡片），
+        // 必须把处理结果返回给 SDK，否则用户点了按钮只会看到一个失败提示。
+        'card.action.trigger': (event) => Promise.resolve()
+          .then(() => onCardAction?.(event))
+          .catch((error) => {
+            logger.error?.(`[dsh-chat-feishu] 处理卡片回调失败：${error?.message ?? error}`);
+            return undefined;
+          }),
       });
 
       let settleReady;
@@ -308,6 +310,127 @@ export function createLarkGateway({
       });
       assertSuccess('飞书发送图片', response);
       return { messageId: response?.data?.message_id, imageKey };
+    },
+
+    /**
+     * 把一个提问渲染成带按钮的卡片发出去。
+     *
+     * 按钮 `value` 里带的是**答案原文**（选项 label），点击后由桥交给 hub 的交互服务
+     * 认领——与"用户手打选项文字"走完全相同的解析路径，因此两条路不会出现行为差异。
+     *
+     * @param options - { chatId } 或 { openId }、{ question, position, total, note? }。
+     * @returns { messageId }。
+     */
+    async sendQuestionCard({ chatId, openId, question, position = 1, total = 1, note = '' }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendQuestionCard 需要 chatId 或 openId。');
+      const options = Array.isArray(question?.options) ? question.options : [];
+      const elements = [];
+      const body = [String(question?.question ?? '')];
+      if (question?.detail) body.push('', String(question.detail));
+      elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
+      if (options.length > 0) {
+        elements.push({
+          tag: 'action',
+          actions: options.slice(0, 8).map((option, index) => ({
+            tag: 'button',
+            type: 'default',
+            text: { tag: 'plain_text', content: String(option.label).slice(0, 60) },
+            value: {
+              dsh: 'answer',
+              questionId: String(question?.id ?? ''),
+              label: String(option.label),
+              index: String(index + 1),
+            },
+          })),
+        });
+      }
+      elements.push({
+        tag: 'note',
+        elements: [{ tag: 'plain_text', content: '点按钮即可；也可以直接回复文字。' }],
+      });
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: {
+          receive_id: receiveId,
+          msg_type: 'interactive',
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: {
+              template: 'blue',
+              title: {
+                tag: 'plain_text',
+                content: total > 1 ? `❓ 需要你确认（${position}/${total}）` : '❓ 需要你确认',
+              },
+            },
+            elements,
+          }),
+        },
+      });
+      assertSuccess('飞书发送提问卡片', response);
+      return { messageId: response?.data?.message_id };
+    },
+
+    /**
+     * 把一次审批渲染成「允许 / 拒绝」按钮卡片。
+     *
+     * @param options - { chatId } 或 { openId }、{ request }。
+     * @returns { messageId }。
+     */
+    async sendApprovalCard({ chatId, openId, request }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendApprovalCard 需要 chatId 或 openId。');
+      const lines = ['需要授权', '', `工具：${request?.toolName ?? '未知'}`];
+      if (request?.reason) lines.push(`原因：${request.reason}`);
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: {
+          receive_id: receiveId,
+          msg_type: 'interactive',
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: { template: 'orange', title: { tag: 'plain_text', content: '⚠️ 需要授权' } },
+            elements: [
+              { tag: 'div', text: { tag: 'lark_md', content: lines.join('\n') } },
+              {
+                tag: 'action',
+                actions: [
+                  {
+                    tag: 'button',
+                    type: 'primary',
+                    text: { tag: 'plain_text', content: '允许一次' },
+                    value: { dsh: 'approval', decision: 'allowed-once' },
+                  },
+                  {
+                    tag: 'button',
+                    type: 'danger',
+                    text: { tag: 'plain_text', content: '拒绝' },
+                    value: { dsh: 'approval', decision: 'rejected' },
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      });
+      assertSuccess('飞书发送审批卡片', response);
+      return { messageId: response?.data?.message_id };
+    },
+
+    /** 把卡片替换成"已处理"的静态卡片（点击后再也点不动，避免重复回答）。 */
+    async markCardAnswered({ messageId, title, content }) {
+      const response = await client.im.v1.message.patch({
+        path: { message_id: messageId },
+        data: {
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: { template: 'green', title: { tag: 'plain_text', content: String(title).slice(0, 100) } },
+            elements: [{ tag: 'div', text: { tag: 'lark_md', content: String(content) } }],
+          }),
+        },
+      });
+      assertSuccess('飞书更新提问卡片', response);
+      return { messageId };
     },
 
     /** 发一张交互卡片。 */

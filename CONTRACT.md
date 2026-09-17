@@ -276,6 +276,10 @@ const detach = deps.interactions.attach({
   channelId: deps.channelId,
   botId: bot.id,
   send: async ({ key, text }) => { /* 发到 key 对应的会话 */ },
+  // 可选：能把问题/审批渲染成平台原生交互（如飞书按钮卡片）就提供，用户点一下即可回答。
+  // 缺席、多选提问、或渲染失败时 hub 会自动退回上面的纯文本。
+  sendQuestion: async ({ key, question, position, total }) => {},
+  sendApproval: async ({ key, request }) => {},
 });
 
 // 2) 入站文本在"门禁之后、@ 检查之前"先让交互服务认领
@@ -290,6 +294,9 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
 - 10 分钟没人回答就**交回其他应答方**（浏览器 UI），不会把这一轮卡死；
 - 审批回复认不出来时 fail closed（按拒绝）；
 - 渠道没 `attach` 时 hub 一律不认领——能力缺失只退化成旧行为，不会静默丢消息。
+- **原生交互（按钮）与文本回答必须走同一条认领路径**：按钮 `value` 里带的就是选项原文，
+  点击后由渠道调用同一个 `offer({ key, text })`——两条路共用解析与门禁，不许各写一套。
+  渠道侧的卡片回调也要过身份门禁（谁能回答，谁能打字回答，二者必须一致）。
 
 ### 入站内容（文本与图片）
 

@@ -126715,10 +126715,42 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (kind === "group") return gateway.sendText({ chatId: id, text });
     return gateway.sendText({ openId: id, text });
   }
+  function routeOf(key) {
+    const separator = key.indexOf(":");
+    const kind = separator > 0 ? key.slice(0, separator) : "";
+    const id = separator > 0 ? key.slice(separator + 1) : key;
+    return kind === "group" ? { chatId: id } : { openId: id };
+  }
   const detachInteractions = deps.interactions?.attach?.({
     channelId: deps.channelId,
     botId: bot.id,
-    send: sendToConversation
+    send: sendToConversation,
+    sendQuestion: async ({ key, question, position, total }) => {
+      try {
+        await gateway.sendQuestionCard({
+          ...routeOf(key),
+          question,
+          position,
+          total
+        });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] \u63D0\u95EE\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
+        await sendToConversation({
+          key,
+          text: `\u2753 ${question?.header ?? "\u9700\u8981\u4F60\u786E\u8BA4"}
+
+${question?.question ?? ""}`
+        });
+      }
+    },
+    sendApproval: async ({ key, request }) => {
+      try {
+        await gateway.sendApprovalCard({ ...routeOf(key), request });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] \u5BA1\u6279\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
+        await sendToConversation({ key, text: "\u26A0\uFE0F \u9700\u8981\u6388\u6743\uFF1A\u56DE\u590D\u300C\u5141\u8BB8\u300D\u6267\u884C\u4E00\u6B21\uFF0C\u6216\u300C\u62D2\u7EDD\u300D\u53D6\u6D88\u3002" });
+      }
+    }
   });
   async function accept(event) {
     const message = event?.message;
@@ -126956,8 +126988,74 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       }
     }
   }
+  async function handleCardAction(event) {
+    const value = event?.action?.value ?? {};
+    const operatorId = event?.operator?.openId;
+    const chatId = event?.chatId;
+    if (!operatorId || !chatId) return void 0;
+    if (value.dsh === "approval") {
+      const decision = value.decision === "allowed-once" ? "allowed-once" : "rejected";
+      const claimed = deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: `p2p:${operatorId}`,
+        text: decision === "allowed-once" ? "\u5141\u8BB8" : "\u62D2\u7EDD"
+      }) || deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: `group:${chatId}`,
+        text: decision === "allowed-once" ? "\u5141\u8BB8" : "\u62D2\u7EDD"
+      });
+      if (!claimed) {
+        logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u6CA1\u6709\u5339\u914D\u7684\u5F85\u5BA1\u6279\uFF08${bot.id} ${operatorId}\uFF09`);
+        return { toast: { type: "info", content: "\u8FD9\u6B21\u6388\u6743\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
+      }
+      await markAnswered(event, value.dsh, decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD");
+      return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
+    }
+    if (value.dsh !== "answer") return void 0;
+    const label = typeof value.label === "string" ? value.label : "";
+    if (!label) return void 0;
+    await deps.ready?.();
+    const accessPolicy = deps.storage.read(bot.id).accessPolicy;
+    const keys = [
+      { key: `group:${chatId}`, conversationType: "group" },
+      { key: `p2p:${operatorId}`, conversationType: "direct" }
+    ];
+    for (const candidate of keys) {
+      const access = deps.accessPolicy.evaluateAccess({
+        policy: accessPolicy,
+        conversationType: candidate.conversationType,
+        senderIds: [operatorId],
+        isOwner: isOwner(bot, operatorId)
+      });
+      if (!access.allowed) continue;
+      if (deps.interactions?.offer?.({
+        channelId: deps.channelId,
+        botId: bot.id,
+        key: candidate.key,
+        text: label
+      })) {
+        logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u7B54\u5DF2\u8BA4\u9886\uFF1A${bot.id} ${candidate.key} \u2192 ${label}`);
+        lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+        await markAnswered(event, "\u5DF2\u6536\u5230\u4F60\u7684\u9009\u62E9", label);
+        return { toast: { type: "success", content: `\u5DF2\u9009\u62E9\uFF1A${label}` } };
+      }
+    }
+    logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u6CA1\u6709\u5339\u914D\u7684\u5F85\u56DE\u7B54\u95EE\u9898\uFF08${bot.id} ${operatorId}\uFF09`);
+    return { toast: { type: "info", content: "\u8FD9\u4E2A\u95EE\u9898\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
+  }
+  async function markAnswered(event, title, content) {
+    if (!event?.messageId || typeof gateway.markCardAnswered !== "function") return;
+    try {
+      await gateway.markCardAnswered({ messageId: event.messageId, title, content });
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u66F4\u65B0\u63D0\u95EE\u5361\u7247\u5931\u8D25\uFF1A${error?.message ?? error}`);
+    }
+  }
   return {
     accept,
+    handleCardAction,
     status: () => Object.freeze({ handled, lastError, lastHandledAt }),
     /** 停止时把 IM 回传的发送器摘掉：不能让停掉的机器人继续"接单"。 */
     dispose: () => detachInteractions?.()
@@ -127197,10 +127295,12 @@ function createLarkGateway({
           void Promise.resolve().then(() => onMessage?.(event)).catch((error) => logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u5165\u7AD9\u6D88\u606F\u5931\u8D25\uFF1A${error?.message ?? error}`));
           return void 0;
         },
-        "card.action.trigger": (event) => {
-          void Promise.resolve().then(() => onCardAction?.(event)).catch((error) => logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u5361\u7247\u56DE\u8C03\u5931\u8D25\uFF1A${error?.message ?? error}`));
+        // 注意：卡片回调的返回值就是飞书客户端的应答（toast / 替换卡片），
+        // 必须把处理结果返回给 SDK，否则用户点了按钮只会看到一个失败提示。
+        "card.action.trigger": (event) => Promise.resolve().then(() => onCardAction?.(event)).catch((error) => {
+          logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u5361\u7247\u56DE\u8C03\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return void 0;
-        }
+        })
       });
       let settleReady;
       let settleFail;
@@ -127363,6 +127463,124 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u56FE\u7247", response);
       return { messageId: response?.data?.message_id, imageKey };
+    },
+    /**
+     * 把一个提问渲染成带按钮的卡片发出去。
+     *
+     * 按钮 `value` 里带的是**答案原文**（选项 label），点击后由桥交给 hub 的交互服务
+     * 认领——与"用户手打选项文字"走完全相同的解析路径，因此两条路不会出现行为差异。
+     *
+     * @param options - { chatId } 或 { openId }、{ question, position, total, note? }。
+     * @returns { messageId }。
+     */
+    async sendQuestionCard({ chatId, openId, question, position = 1, total = 1, note = "" }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendQuestionCard \u9700\u8981 chatId \u6216 openId\u3002");
+      const options = Array.isArray(question?.options) ? question.options : [];
+      const elements = [];
+      const body = [String(question?.question ?? "")];
+      if (question?.detail) body.push("", String(question.detail));
+      elements.push({ tag: "div", text: { tag: "lark_md", content: body.join("\n") } });
+      if (options.length > 0) {
+        elements.push({
+          tag: "action",
+          actions: options.slice(0, 8).map((option, index) => ({
+            tag: "button",
+            type: "default",
+            text: { tag: "plain_text", content: String(option.label).slice(0, 60) },
+            value: {
+              dsh: "answer",
+              questionId: String(question?.id ?? ""),
+              label: String(option.label),
+              index: String(index + 1)
+            }
+          }))
+        });
+      }
+      elements.push({
+        tag: "note",
+        elements: [{ tag: "plain_text", content: "\u70B9\u6309\u94AE\u5373\u53EF\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u56DE\u590D\u6587\u5B57\u3002" }]
+      });
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: {
+          receive_id: receiveId,
+          msg_type: "interactive",
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: {
+              template: "blue",
+              title: {
+                tag: "plain_text",
+                content: total > 1 ? `\u2753 \u9700\u8981\u4F60\u786E\u8BA4\uFF08${position}/${total}\uFF09` : "\u2753 \u9700\u8981\u4F60\u786E\u8BA4"
+              }
+            },
+            elements
+          })
+        }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u63D0\u95EE\u5361\u7247", response);
+      return { messageId: response?.data?.message_id };
+    },
+    /**
+     * 把一次审批渲染成「允许 / 拒绝」按钮卡片。
+     *
+     * @param options - { chatId } 或 { openId }、{ request }。
+     * @returns { messageId }。
+     */
+    async sendApprovalCard({ chatId, openId, request }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendApprovalCard \u9700\u8981 chatId \u6216 openId\u3002");
+      const lines = ["\u9700\u8981\u6388\u6743", "", `\u5DE5\u5177\uFF1A${request?.toolName ?? "\u672A\u77E5"}`];
+      if (request?.reason) lines.push(`\u539F\u56E0\uFF1A${request.reason}`);
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: {
+          receive_id: receiveId,
+          msg_type: "interactive",
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: { template: "orange", title: { tag: "plain_text", content: "\u26A0\uFE0F \u9700\u8981\u6388\u6743" } },
+            elements: [
+              { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+              {
+                tag: "action",
+                actions: [
+                  {
+                    tag: "button",
+                    type: "primary",
+                    text: { tag: "plain_text", content: "\u5141\u8BB8\u4E00\u6B21" },
+                    value: { dsh: "approval", decision: "allowed-once" }
+                  },
+                  {
+                    tag: "button",
+                    type: "danger",
+                    text: { tag: "plain_text", content: "\u62D2\u7EDD" },
+                    value: { dsh: "approval", decision: "rejected" }
+                  }
+                ]
+              }
+            ]
+          })
+        }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u5BA1\u6279\u5361\u7247", response);
+      return { messageId: response?.data?.message_id };
+    },
+    /** 把卡片替换成"已处理"的静态卡片（点击后再也点不动，避免重复回答）。 */
+    async markCardAnswered({ messageId, title, content }) {
+      const response = await client.im.v1.message.patch({
+        path: { message_id: messageId },
+        data: {
+          content: JSON.stringify({
+            config: { wide_screen_mode: true, update_multi: true },
+            header: { template: "green", title: { tag: "plain_text", content: String(title).slice(0, 100) } },
+            elements: [{ tag: "div", text: { tag: "lark_md", content: String(content) } }]
+          })
+        }
+      });
+      assertSuccess("\u98DE\u4E66\u66F4\u65B0\u63D0\u95EE\u5361\u7247", response);
+      return { messageId };
     },
     /** 发一张交互卡片。 */
     async sendCard({ chatId, card }) {
@@ -127614,6 +127832,8 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       record.bridge = bridge;
       await gateway.connect({
         onMessage: (event) => bridge.accept(event),
+        // 卡片按钮点击走这里：与文本回答共用同一条"认领"路径。
+        onCardAction: (event) => bridge.handleCardAction?.(event),
         signal: record.controller.signal
       });
       record.phase = "running";
