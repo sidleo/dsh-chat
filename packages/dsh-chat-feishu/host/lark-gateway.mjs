@@ -645,7 +645,9 @@ export function createLarkGateway({
     async sendDeliverables({ chatId, openId, items = [] }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError('sendDeliverables 需要 chatId 或 openId。');
-      const paragraphs = [[{ tag: 'text', text: '📎 交付文件' }]];
+      // 真机反馈：交付文件不要任何文字描述，直接给文件。post 允许正文为空数组，
+      // 只靠顶层 `files` 附件区承载文件；图片作为正文里的 img 行。
+      const paragraphs = [];
       const attachments = [];
       const sent = [];
       const failed = [];
@@ -657,16 +659,11 @@ export function createLarkGateway({
           if (isImagePath(path)) {
             const imageKey = await uploadImageKey(path);
             paragraphs.push([{ tag: 'img', image_key: imageKey }]);
-            if (item.description) paragraphs.push([{ tag: 'text', text: String(item.description) }]);
             sent.push({ name, kind: 'image' });
             continue;
           }
           const fileKey = await uploadFileKey(path, name);
           attachments.push({ key: fileKey });
-          paragraphs.push([{
-            tag: 'text',
-            text: `· ${name}${item.description ? ` —— ${item.description}` : ''}`,
-          }]);
           sent.push({ name, kind: 'file' });
         } catch (error) {
           failed.push({ name, reason: error?.message ?? String(error) });
@@ -674,7 +671,7 @@ export function createLarkGateway({
       }
       if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
       const content = {
-        zh_cn: { title: '交付文件', content: paragraphs },
+        zh_cn: { content: paragraphs },
         ...(attachments.length > 0 ? { files: attachments } : {}),
       };
       const response = await client.im.v1.message.create({
@@ -688,6 +685,31 @@ export function createLarkGateway({
         images: sent.filter((entry) => entry.kind === 'image').map((entry) => entry.name),
         failed,
       };
+    },
+
+    /**
+     * 只上传交付物里的图片，返回 `[{ name, imageKey }]`（给进度卡内嵌用）。
+     *
+     * 飞书的卡片组件里**没有文件/附件组件**，只有 `img`（图片）——所以图片能直接进卡片、
+     * 普通文件只能走 post 消息的附件区。
+     *
+     * @param items - `[{ path, name? }]`。
+     * @returns { uploaded, failed }。
+     */
+    async uploadDeliverableImages(items = []) {
+      const uploaded = [];
+      const failed = [];
+      for (const item of items) {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path || !isImagePath(path)) continue;
+        const name = item.name || path.split('/').pop() || '图片';
+        try {
+          uploaded.push({ name, imageKey: await uploadImageKey(path) });
+        } catch (error) {
+          failed.push({ name, reason: error?.message ?? String(error) });
+        }
+      }
+      return { uploaded, failed };
     },
 
     /** 供进度卡内嵌提问区使用（纯渲染）。 */

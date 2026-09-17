@@ -46,7 +46,7 @@ const TINY_PNG = Buffer.from(
 function createFakeGateway() {
   const calls = {
     replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
-    deliverables: [],
+    deliverables: [], deliverableImages: [],
     questionCards: [], approvalCards: [], markedCards: [], reactions: [], removedReactions: [],
     connects: 0, disconnects: 0,
   };
@@ -151,7 +151,7 @@ function createFakeGateway() {
       calls.images.push({ chatId, openId, path });
       return { messageId: 'om_image', imageKey: 'image_key_1' };
     },
-    /** 交付文件：一条消息带多个附件（真实网关用 post 的 files 附件区）。 */
+    /** 交付文件：一条消息带多个附件（真实网关用 post 的 files 附件区，正文不带文字）。 */
     async sendDeliverables({ chatId, openId, items }) {
       if (gatewayState.failures.sendDeliverables) throw gatewayState.failures.sendDeliverables;
       calls.deliverables.push({ chatId, openId, items });
@@ -161,6 +161,13 @@ function createFakeGateway() {
         images: items.filter((item) => item.path.endsWith('.png')).map((item) => item.name),
         failed: [],
       };
+    },
+    /** 交付图片：只上传，给卡片内嵌用（真实网关调 image.create 拿 img_key）。 */
+    async uploadDeliverableImages(items) {
+      if (gatewayState.failures.uploadDeliverableImages) throw gatewayState.failures.uploadDeliverableImages;
+      const uploaded = items.map((item) => ({ name: item.name, imageKey: `img_key_${item.name}` }));
+      calls.deliverableImages.push(...uploaded);
+      return { uploaded, failed: [] };
     },
   };
 }
@@ -488,6 +495,7 @@ test('交付文件：多个成品合成一条消息（post 附件区），本地
     await writeFile(empty, '');
 
     const app = await makeBridge({
+      bot: { ...BOT, stepPushDirect: 'streaming_card' },
       askResult: {
         text: '做好了',
         reason: { kind: 'completed' },
@@ -502,13 +510,24 @@ test('交付文件：多个成品合成一条消息（post 附件区），本地
     });
     try {
       await app.bridge.accept(messageEvent({ messageId: 'om_files' }));
-      assert.equal(app.gateway.calls.deliverables.length, 1, '多个成品只发一条消息');
+      // 图片进卡片，其余文件合成一条消息
+      assert.deepEqual(
+        app.gateway.calls.deliverableImages.map((image) => image.name),
+        ['chart.png'],
+        '图片只上传（内嵌进卡片）',
+      );
+      assert.equal(app.gateway.calls.deliverables.length, 1, '其余文件只发一条消息');
       assert.deepEqual(
         app.gateway.calls.deliverables[0].items.map((item) => item.name),
-        ['永辉销售日报_20260916.md', 'chart.png'],
-        '校验通过的两个一起发',
+        ['永辉销售日报_20260916.md'],
+        '图片已进卡片，不再重复放进附件区',
       );
       assert.deepEqual(app.gateway.calls.files, [], '不再一条一个文件地刷屏');
+      const card = app.gateway.calls.patches.at(-1).card;
+      const img = card.body.elements.find((element) => element.tag === 'img');
+      assert.ok(img, '交付图片要内嵌进那张过程卡');
+      assert.equal(img.img_key, 'img_key_chart.png');
+      assert.equal(img.title.content, 'chart.png');
       const failures = app.gateway.calls.replies.filter((reply) => reply.text.includes('没能发出去'));
       assert.equal(failures.length, 1, '本地校验失败的合并成一条说明');
       assert.match(failures[0].text, /empty\.csv/);
@@ -517,8 +536,30 @@ test('交付文件：多个成品合成一条消息（post 附件区），本地
       await app.cleanup();
     }
 
+    // 过程展示关掉（没有卡片可嵌）时，图片也退回那条附件消息
+    const noCard = await makeBridge({
+      askResult: {
+        text: '好了',
+        reason: { kind: 'completed' },
+        tools: [],
+        files: [{ path: chart }],
+      },
+    });
+    try {
+      await noCard.bridge.accept(messageEvent({ messageId: 'om_files_nocard' }));
+      assert.deepEqual(noCard.gateway.calls.deliverableImages, [], '卡片模式关掉就不上传图片');
+      assert.deepEqual(
+        noCard.gateway.calls.deliverables[0].items.map((item) => item.name),
+        ['chart.png'],
+        '图片退回附件消息，不能丢',
+      );
+    } finally {
+      await noCard.cleanup();
+    }
+
     // 发送接口失败：也要回一句可读原因，并写进状态
     const failing = await makeBridge({
+      bot: { ...BOT, stepPushDirect: 'streaming_card' },
       askResult: {
         text: '做好了',
         reason: { kind: 'completed' },

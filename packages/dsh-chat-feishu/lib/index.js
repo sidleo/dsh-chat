@@ -126622,6 +126622,7 @@ function renderStepCard({
   panelTitle = "",
   currentQuestion = [],
   todos = null,
+  images = [],
   template = "blue"
 }) {
   const budget = { left: MAX_CARD_CONTENT };
@@ -126704,6 +126705,17 @@ function renderStepCard({
     elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: clampBudget(answer) });
   }
+  for (const image of Array.isArray(images) ? images.slice(0, 8) : []) {
+    if (!image?.imageKey) continue;
+    elements.push({
+      tag: "img",
+      img_key: image.imageKey,
+      alt: { tag: "plain_text", content: image.name ?? "" },
+      ...image.name ? { title: { tag: "plain_text", content: String(image.name).slice(0, 60) } } : {},
+      scale_type: "fit_horizontal",
+      margin: "4px 0px 4px 0px"
+    });
+  }
   if (elements.length === 0) {
     elements.push({ tag: "markdown", content: "\u6B63\u5728\u5904\u7406\u2026" });
   }
@@ -126735,6 +126747,7 @@ function createTurnPresenter({
   let questionProgress = null;
   const askBatches = /* @__PURE__ */ new Map();
   let todos = null;
+  let delivered = [];
   let lastAnswer = "";
   let state = "running";
   let cardId = null;
@@ -126807,6 +126820,7 @@ function createTurnPresenter({
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === "running" } : null,
+      images: delivered,
       template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
     });
   }
@@ -126961,6 +126975,27 @@ function createTurnPresenter({
         }
         return patchNow();
       });
+    },
+    /**
+     * @returns 这张卡现在能不能内嵌交付图片（调用方据此决定要不要白上传一次）。
+     */
+    canDeliverImages() {
+      return mode === "streaming_card" && !cardBroken;
+    },
+    /**
+     * 把交付的图片内嵌进这张卡（排在最终答案后面）。
+     *
+     * 图片能进卡片，普通文件不能（飞书卡片没有文件组件）——所以文件仍然走单独一条消息。
+     * 卡片已经建不出来时返回 false，调用方据此退回"连图片也一起单发"。
+     *
+     * @param payload - { images }，`images` = `[{ name, imageKey }]`。
+     * @returns 是否成功画进卡片。
+     */
+    deliverImages(payload) {
+      const images = Array.isArray(payload?.images) ? payload.images : [];
+      if (mode !== "streaming_card" || images.length === 0) return Promise.resolve(false);
+      delivered = [...delivered, ...images];
+      return enqueue(() => patch(lastAnswer));
     },
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
@@ -127368,7 +127403,8 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await presenter.finish(result?.text, result?.reason);
       logger.info?.(`[dsh-chat-feishu] \u6700\u7EC8\u7B54\u6848\u6295\u9012\u65B9\u5F0F\uFF1A${presenter.delivery?.() ?? "unknown"}\uFF08${bot.id} ${conversationKey}\uFF09`);
       await sendDeliverables(result?.files, message, {
-        replyInThread: conversationType === "group" && bot.groupTopicReply === true
+        replyInThread: conversationType === "group" && bot.groupTopicReply === true,
+        presenter
       });
       handled += 1;
       lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -127388,7 +127424,12 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       await clearWorking(message, workingReaction);
     }
   }
-  async function sendDeliverables(files, message, { replyInThread = false } = {}) {
+  function isImageName(name2) {
+    const lower = String(name2).toLowerCase();
+    const dot = lower.lastIndexOf(".");
+    return dot >= 0 && (/* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"])).has(lower.slice(dot));
+  }
+  async function sendDeliverables(files, message, { replyInThread = false, presenter = null } = {}) {
     if (!Array.isArray(files) || files.length === 0) return;
     const items = [];
     const failed = [];
@@ -127407,14 +127448,27 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         failed.push({ name: name2, reason: error?.message ?? String(error) });
       }
     }
-    if (items.length > 0) {
+    let rest = items;
+    if (presenter?.canDeliverImages?.() === true && typeof gateway.uploadDeliverableImages === "function") {
+      const images = items.filter((item) => isImageName(item.name));
+      if (images.length > 0) {
+        const uploaded = await gateway.uploadDeliverableImages(images);
+        failed.push(...uploaded?.failed ?? []);
+        if (uploaded?.uploaded?.length > 0 && await presenter.deliverImages({ images: uploaded.uploaded })) {
+          const embedded = new Set(uploaded.uploaded.map((image) => image.name));
+          rest = items.filter((item) => !embedded.has(item.name));
+          logger.info?.(`[dsh-chat-feishu] \u4EA4\u4ED8\u56FE\u7247\u5DF2\u5185\u5D4C\u8FDB\u5361\u7247\uFF08${bot.id}\uFF09\uFF1A` + uploaded.uploaded.map((image) => image.name).join("\u3001"));
+        }
+      }
+    }
+    if (rest.length > 0) {
       try {
-        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items });
+        const sent = await gateway.sendDeliverables({ chatId: message.chat_id, items: rest });
         failed.push(...sent?.failed ?? []);
         logger.info?.(`[dsh-chat-feishu] \u4EA4\u4ED8\u6587\u4EF6\u5DF2\u53D1\u51FA\uFF08${bot.id}\uFF09\uFF1A${(sent?.files ?? []).join("\u3001")}${sent?.images?.length ? ` + ${sent.images.length} \u5F20\u56FE` : ""}`);
       } catch (error) {
         const reason = error?.message ?? String(error);
-        for (const item of items) failed.push({ name: item.name, reason });
+        for (const item of rest) failed.push({ name: item.name, reason });
       }
     }
     if (failed.length === 0) return;
@@ -128224,7 +128278,7 @@ function createLarkGateway({
     async sendDeliverables({ chatId, openId, items = [] }) {
       const receiveId = chatId ?? openId;
       if (!receiveId) throw new TypeError("sendDeliverables \u9700\u8981 chatId \u6216 openId\u3002");
-      const paragraphs = [[{ tag: "text", text: "\u{1F4CE} \u4EA4\u4ED8\u6587\u4EF6" }]];
+      const paragraphs = [];
       const attachments = [];
       const sent = [];
       const failed = [];
@@ -128236,16 +128290,11 @@ function createLarkGateway({
           if (isImagePath(path2)) {
             const imageKey = await uploadImageKey(path2);
             paragraphs.push([{ tag: "img", image_key: imageKey }]);
-            if (item.description) paragraphs.push([{ tag: "text", text: String(item.description) }]);
             sent.push({ name: name2, kind: "image" });
             continue;
           }
           const fileKey = await uploadFileKey(path2, name2);
           attachments.push({ key: fileKey });
-          paragraphs.push([{
-            tag: "text",
-            text: `\xB7 ${name2}${item.description ? ` \u2014\u2014 ${item.description}` : ""}`
-          }]);
           sent.push({ name: name2, kind: "file" });
         } catch (error) {
           failed.push({ name: name2, reason: error?.message ?? String(error) });
@@ -128253,7 +128302,7 @@ function createLarkGateway({
       }
       if (sent.length === 0) return { files: [], images: [], failed, messageId: null };
       const content = {
-        zh_cn: { title: "\u4EA4\u4ED8\u6587\u4EF6", content: paragraphs },
+        zh_cn: { content: paragraphs },
         ...attachments.length > 0 ? { files: attachments } : {}
       };
       const response = await client.im.v1.message.create({
@@ -128267,6 +128316,30 @@ function createLarkGateway({
         images: sent.filter((entry) => entry.kind === "image").map((entry) => entry.name),
         failed
       };
+    },
+    /**
+     * 只上传交付物里的图片，返回 `[{ name, imageKey }]`（给进度卡内嵌用）。
+     *
+     * 飞书的卡片组件里**没有文件/附件组件**，只有 `img`（图片）——所以图片能直接进卡片、
+     * 普通文件只能走 post 消息的附件区。
+     *
+     * @param items - `[{ path, name? }]`。
+     * @returns { uploaded, failed }。
+     */
+    async uploadDeliverableImages(items = []) {
+      const uploaded = [];
+      const failed = [];
+      for (const item of items) {
+        const path2 = typeof item?.path === "string" ? item.path : "";
+        if (!path2 || !isImagePath(path2)) continue;
+        const name2 = item.name || path2.split("/").pop() || "\u56FE\u7247";
+        try {
+          uploaded.push({ name: name2, imageKey: await uploadImageKey(path2) });
+        } catch (error) {
+          failed.push({ name: name2, reason: error?.message ?? String(error) });
+        }
+      }
+      return { uploaded, failed };
     },
     /** 供进度卡内嵌提问区使用（纯渲染）。 */
     renderQuestionElements,
