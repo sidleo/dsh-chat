@@ -24,7 +24,7 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | 内容 | 阶段 | 原因 |
 |---|---|---|
 | 微信 iLink 协议客户端（扫码登录、长轮询、发消息、AES 图片加解密、CDN 上传） | P3 | 协议无公开文档，只能按参考实现的协议行为重写客户端；将收窄接口面并注明出处 |
-| `@larksuiteoapi/node-sdk@1.73.0` WSClient 生命周期构建期补丁 | P2 | 修复握手中无法关闭、超时摘除 error 监听、close 后僵尸重连；精确匹配替换，SDK 源码变动即构建失败 |
+| ~~`@larksuiteoapi/node-sdk@1.73.0` WSClient 生命周期构建期补丁~~ | — | **不移植**：改为让 SDK 永远不走那条有缺陷的路径——网关显式传 `handshakeTimeoutMs: 0`（该超时路径会先摘掉 socket 的全部 error 监听再 terminate，随后任何 error 都会变成未捕获异常），握手超时与重连由 `lark-gateway.mjs` 自己用 Promise.race + 丢弃旧 WSClient 实现。少一处需要跟着 SDK 版本维护的源码补丁 |
 
 移植进来的文件必须在文件头写明来源与 MIT 许可，并在 `THIRD_PARTY_NOTICES.md` 登记。
 

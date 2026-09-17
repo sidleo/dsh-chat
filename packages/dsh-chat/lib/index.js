@@ -10,6 +10,9 @@ var __export = (target, all) => {
     __defProp(target, name2, { get: all[name2], enumerable: true });
 };
 
+// packages/dsh-chat/host/plugin.mjs
+import { resolve as resolve2 } from "node:path";
+
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
 var HOST_SERVICE = "dshChat";
@@ -1265,8 +1268,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance }) {
     const tools = [];
     let settled = false;
     let settle;
-    const finished = new Promise((resolve2) => {
-      settle = resolve2;
+    const finished = new Promise((resolve3) => {
+      settle = resolve3;
     });
     const pump = (async () => {
       try {
@@ -1466,6 +1469,10 @@ var name = "dsh-chat-host";
 var inject = ["connection", "credentials", "typertGateway"];
 var CHANNEL_ID = /^[a-z][a-z0-9-]{1,31}$/;
 var BOT_ID = /^[A-Za-z0-9_@.:+-]{1,256}$/;
+function channelDataDirOverride(config, channelId) {
+  const value = config?.channelDataDirs?.[channelId];
+  return typeof value === "string" && value.trim() ? resolve2(value.trim()) : null;
+}
 function resolveLogger(ctx, scope) {
   const logger = ctx?.logger;
   if (typeof logger === "function") {
@@ -1515,6 +1522,11 @@ function apply(ctx, config = {}) {
      * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
      */
     onRegistered: (channelId, legacy) => {
+      const overridden = channelDataDirOverride(config, channelId);
+      if (overridden) {
+        legacyDirs.set(channelId, overridden);
+        return;
+      }
       if (!legacy?.dir) return;
       const dir = channelDataDir(legacy.dir, integrations);
       legacyDirs.set(channelId, dir);
@@ -1526,8 +1538,11 @@ function apply(ctx, config = {}) {
       channelId,
       logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
       credentials: ctx.credentials,
-      /** 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）；未声明时返回 hub 数据目录。 */
-      dataDir: definition.legacy?.dir ? channelDataDir(definition.legacy.dir, integrations) : hubDataDir(config.dataDir),
+      /**
+       * 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）。
+       * `config.channelDataDirs[channelId]` 可显式覆盖——隔离调试或想同时跑两份时用。
+       */
+      dataDir: channelDataDirOverride(config, channelId) ?? (definition.legacy?.dir ? channelDataDir(definition.legacy.dir, integrations) : hubDataDir(config.dataDir)),
       resolveDataDir: (name2) => channelDataDir(name2, integrations),
       storage: storageFor(channelId),
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */

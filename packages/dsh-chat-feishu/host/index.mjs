@@ -1,17 +1,12 @@
 /**
  * dsh-chat-feishu（host 侧）：把飞书渠道注册进 hub。
  *
- * 本包**不 import hub 包**，只依赖运行期契约：
- * - 服务名 `dshChat`、契约版本 `dsh-chat.contractVersion`（见仓库 CONTRACT.md）；
- * - `deps` 提供 logger / credentials / dataDir / storage / contextEnhancement /
- *   guidance / sessions，与 `reportStatus`；
- * - 实例的 `endpoints` 表即 `/api/dsh-chat/feishu` 的方法表，返回值用
- *   `{ ok:true, value }` / `{ ok:false, error }`。
- *
- * P0 只有骨架（注册 + 状态端点）；凭据、配置、长连接、桥接见 P2。
+ * 本包**不 import hub 包**，只依赖运行期契约（见仓库 CONTRACT.md）。
  *
  * @module dsh-chat-feishu/host
  */
+
+import { createFeishuController } from './controller.mjs';
 
 export const name = 'dsh-chat-feishu-host';
 
@@ -44,23 +39,17 @@ export function apply(ctx) {
     order: 20,
     legacy: { dir: 'dsh-feishu' },
     async createChannel(deps) {
-      deps.logger.info?.('[dsh-chat-feishu] 渠道已注册（P0 骨架，协议实现在 P2）');
+      const controller = createFeishuController({ deps, logger: deps.logger });
+      // 启动放到后台：一个机器人连不上不该拖住整个 Host 启动。
+      void controller.start().catch((error) => {
+        deps.reportStatus('failed', error);
+        deps.logger.error?.(`[dsh-chat-feishu] 启动失败：${error?.message ?? error}`);
+      });
       return {
-        async start() {},
-        async stop() {},
-        endpoints: {
-          'connection.status': async () => ({
-            ok: true,
-            value: {
-              channel: CHANNEL_ID,
-              phase: 'skeleton',
-              contractVersion: EXPECTED_CONTRACT,
-              dataDir: deps.dataDir,
-              bots: [],
-              note: '飞书协议实现将在 P2 提供。',
-            },
-          }),
+        async stop() {
+          await controller.stop();
         },
+        endpoints: controller.endpoints,
       };
     },
   }), 'dsh-chat-feishu: 注册渠道');

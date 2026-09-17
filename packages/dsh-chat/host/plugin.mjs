@@ -10,6 +10,8 @@
  * @module dsh-chat/host/plugin
  */
 
+import { resolve } from 'node:path';
+
 import { CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE } from '../shared/contract.mjs';
 import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
@@ -27,6 +29,18 @@ export const inject = ['connection', 'credentials', 'typertGateway'];
 
 const CHANNEL_ID = /^[a-z][a-z0-9-]{1,31}$/;
 const BOT_ID = /^[A-Za-z0-9_@.:+-]{1,256}$/;
+
+/**
+ * 显式的渠道数据目录覆盖（`config.channelDataDirs`）。
+ *
+ * @param config - 插件配置。
+ * @param channelId - 渠道 id。
+ * @returns 绝对路径，或 null。
+ */
+function channelDataDirOverride(config, channelId) {
+  const value = config?.channelDataDirs?.[channelId];
+  return typeof value === 'string' && value.trim() ? resolve(value.trim()) : null;
+}
 
 function resolveLogger(ctx, scope) {
   const logger = ctx?.logger;
@@ -46,8 +60,7 @@ function provideService(ctx, serviceName, value) {
   throw new TypeError('dsh-chat 需要 Cordis 的 provide 能力来发布 dshChat 服务。');
 }
 
-function validBotPayload(payload, { withConfig = false } = {}) {
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
+function validBotPayload(payload, { withConfig = false } = {}) {  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
   const allowed = withConfig ? ['channelId', 'botId', 'config'] : ['channelId', 'botId'];
   if (Object.keys(payload).length !== allowed.length) return false;
   if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
@@ -90,6 +103,13 @@ export function apply(ctx, config = {}) {
      * 旧数据目录沿用 dsh-im 的命名，因此用户现有绑定与设置零迁移。
      */
     onRegistered: (channelId, legacy) => {
+      const overridden = channelDataDirOverride(config, channelId);
+      if (overridden) {
+        // 隔离调试/双实例：既不做真实目录的旧设置导入，也不写导入标记，
+        // 否则会把真实来源记成"已导入"，等真正迁移时反而跳过。
+        legacyDirs.set(channelId, overridden);
+        return;
+      }
       if (!legacy?.dir) return;
       const dir = channelDataDir(legacy.dir, integrations);
       legacyDirs.set(channelId, dir);
@@ -101,10 +121,14 @@ export function apply(ctx, config = {}) {
       channelId,
       logger: resolveLogger(ctx, `dsh-chat:${channelId}`),
       credentials: ctx.credentials,
-      /** 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）；未声明时返回 hub 数据目录。 */
-      dataDir: definition.legacy?.dir
-        ? channelDataDir(definition.legacy.dir, integrations)
-        : hubDataDir(config.dataDir),
+      /**
+       * 渠道历史数据目录（沿用 dsh-im 命名，保证零重绑）。
+       * `config.channelDataDirs[channelId]` 可显式覆盖——隔离调试或想同时跑两份时用。
+       */
+      dataDir: channelDataDirOverride(config, channelId)
+        ?? (definition.legacy?.dir
+          ? channelDataDir(definition.legacy.dir, integrations)
+          : hubDataDir(config.dataDir)),
       resolveDataDir: (name) => channelDataDir(name, integrations),
       storage: storageFor(channelId),
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
