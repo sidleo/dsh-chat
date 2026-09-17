@@ -92,6 +92,9 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   const first = JSON.stringify(card);
   assert.match(first, /"behaviors":\[\{"type":"callback"/);
   assert.match(first, /"label":"A"/);
+  // 单选页也要有"直接写答案"的输入框（真机反馈：只有按钮时自定义答案没地方写）
+  assert.match(first, /"name":"text_single"/);
+  assert.match(first, /"width":"fill"/, '输入框要拉满卡片宽度');
   assert.doesNotMatch(first, /选多个/, '后面的问题不该一次全抛出来');
   assert.doesNotMatch(first, /还有别的吗/);
 
@@ -124,6 +127,7 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.match(third, /"tag":"input"/);
   assert.match(third, /"name":"text_free"/);
   assert.match(third, /"form_action_type":"submit"/);
+  assert.match(third, /"width":"fill"/);
 
   // 收尾：绿色 + 全部答案
   await gateway.sendQuestionsCard({

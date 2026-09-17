@@ -146,6 +146,42 @@ export function createLarkGateway({
     }
   }
 
+  /**
+   * 单选/多选页共用的"自定义文字答案"表单：输入框宽度拉满 + 提交。
+   *
+   * 为什么要它（真机反馈）：卡片上只有按钮时，用户想写"以上都不是，我想要…"这种
+   * 自定义答案就没有地方写，只能切回聊天框。多给一个输入框，选项与自由文本就都能用。
+   *
+   * @param options - { questionId, placeholder }。
+   * @returns 表单元素数组。
+   */
+  function customInputElements({ questionId, placeholder = '也可以直接输入你的答案，点「提交」' }) {
+    return [{
+      tag: 'form',
+      name: `dsh_custom_${questionId}`,
+      elements: [
+        {
+          tag: 'input',
+          name: `text_${questionId}`,
+          placeholder: { tag: 'plain_text', content: placeholder },
+          input_type: 'multiline_text',
+          rows: 1,
+          auto_resize: true,
+          max_rows: 6,
+          width: 'fill',
+        },
+        {
+          tag: 'button',
+          name: 'submit',
+          form_action_type: 'submit',
+          type: 'default',
+          width: 'fill',
+          text: { tag: 'plain_text', content: '提交' },
+        },
+      ],
+    }];
+  }
+
   return Object.freeze({
     appId,
 
@@ -413,7 +449,7 @@ export function createLarkGateway({
         const questionId = String(current?.id ?? '');
 
         if (options.length > 0 && current?.multiSelect !== true) {
-          // 单选：直接给按钮（点了即答，无需提交）
+          // 单选：按钮点了即答；**另配一个输入框**，想写别的答案时也能直接写了提交。
           elements.push({ tag: 'markdown', content: body.join('\n') });
           options.slice(0, 8).forEach((option, optionIndex) => {
             const label = String(option.label).slice(0, 60);
@@ -428,6 +464,7 @@ export function createLarkGateway({
               }],
             });
           });
+          elements.push(...customInputElements({ questionId }));
         } else if (options.length > 0) {
           // 多选：**每个选项一个勾选器（checker）平铺列出**，用户直接勾选，点「提交」一起回来。
           // 不用 multi_select_static 是因为它是下拉控件（真机反馈：要能一眼看到所有选项）。
@@ -444,6 +481,14 @@ export function createLarkGateway({
                 checked: false,
                 text: { tag: 'plain_text', content: String(option.label).slice(0, 80) },
               })),
+              {
+                tag: 'input',
+                name: `text_${questionId}`,
+                placeholder: { tag: 'plain_text', content: '也可以在补充框里写别的答案' },
+                input_type: 'multiline_text',
+                rows: 1,
+                width: 'fill',
+              },
               {
                 tag: 'button',
                 name: 'submit',
@@ -468,7 +513,10 @@ export function createLarkGateway({
                 placeholder: { tag: 'plain_text', content: '在这里输入' },
                 label: { tag: 'plain_text', content: '你的回答' },
                 input_type: 'multiline_text',
-                rows: 2,
+                rows: 3,
+                auto_resize: true,
+                max_rows: 8,
+                width: 'fill',
               },
               {
                 tag: 'button',

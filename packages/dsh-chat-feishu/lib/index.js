@@ -127344,6 +127344,32 @@ function createLarkGateway({
       logger.warn?.(`[dsh-chat-feishu] \u5173\u95ED\u957F\u8FDE\u63A5\u65F6\u62A5\u9519\uFF1A${error?.message ?? error}`);
     }
   }
+  function customInputElements({ questionId, placeholder = "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u8F93\u5165\u4F60\u7684\u7B54\u6848\uFF0C\u70B9\u300C\u63D0\u4EA4\u300D" }) {
+    return [{
+      tag: "form",
+      name: `dsh_custom_${questionId}`,
+      elements: [
+        {
+          tag: "input",
+          name: `text_${questionId}`,
+          placeholder: { tag: "plain_text", content: placeholder },
+          input_type: "multiline_text",
+          rows: 1,
+          auto_resize: true,
+          max_rows: 6,
+          width: "fill"
+        },
+        {
+          tag: "button",
+          name: "submit",
+          form_action_type: "submit",
+          type: "default",
+          width: "fill",
+          text: { tag: "plain_text", content: "\u63D0\u4EA4" }
+        }
+      ]
+    }];
+  }
   return Object.freeze({
     appId,
     /** @returns 长连接是否就绪。 */
@@ -127593,6 +127619,7 @@ function createLarkGateway({
               }]
             });
           });
+          elements.push(...customInputElements({ questionId }));
         } else if (options.length > 0) {
           body.push("", "\u53EF\u591A\u9009\uFF1A\u52FE\u9009\u540E\u70B9\u300C\u63D0\u4EA4\u300D\u3002");
           elements.push({ tag: "markdown", content: body.join("\n") });
@@ -127606,6 +127633,14 @@ function createLarkGateway({
                 checked: false,
                 text: { tag: "plain_text", content: String(option.label).slice(0, 80) }
               })),
+              {
+                tag: "input",
+                name: `text_${questionId}`,
+                placeholder: { tag: "plain_text", content: "\u4E5F\u53EF\u4EE5\u5728\u8865\u5145\u6846\u91CC\u5199\u522B\u7684\u7B54\u6848" },
+                input_type: "multiline_text",
+                rows: 1,
+                width: "fill"
+              },
               {
                 tag: "button",
                 name: "submit",
@@ -127629,7 +127664,10 @@ function createLarkGateway({
                 placeholder: { tag: "plain_text", content: "\u5728\u8FD9\u91CC\u8F93\u5165" },
                 label: { tag: "plain_text", content: "\u4F60\u7684\u56DE\u7B54" },
                 input_type: "multiline_text",
-                rows: 2
+                rows: 3,
+                auto_resize: true,
+                max_rows: 8,
+                width: "fill"
               },
               {
                 tag: "button",
