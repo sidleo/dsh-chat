@@ -133,6 +133,20 @@ function turnFrames({ turn = 1, text = '你好', deltas = [] } = {}) {
   ];
 }
 
+/** 在 turnFrames 里插一次 `present` 工具调用（不含 deliverables 事件，用于验证兜底）。 */
+function withPresentCall(frames, args) {
+  const call = {
+    type: 'event',
+    event: {
+      type: 'tool/call',
+      seq: 5.5,
+      data: { turn: 1, step: 1, callId: 'call-present', name: 'present', arguments: JSON.stringify(args) },
+    },
+  };
+  const at = frames.findIndex((frame) => frame.event?.type === 'turn/end');
+  return [...frames.slice(0, at), call, ...frames.slice(at)];
+}
+
 /** 在 turnFrames 里插一条 `deliverables/presented`（agent 用 present 声明交付文件）。 */
 function withDeliverables(frames, files) {
   const presented = {
@@ -285,6 +299,30 @@ test('回合里 present 交付的文件要带回给渠道（渠道据此当附�
       { path: '/ws/永辉销售日报_20260916.md', description: '销售日报' },
       { path: '/ws/报表.xlsx' },
     ], '空路径要丢掉，描述要有就带上');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('事件流不带 deliverables 时，退回 present 的工具参数（交付文件不能静默丢）', async () => {
+  const app = await makeBridge({
+    script: [withPresentCall(turnFrames({ text: '写好了' }), {
+      files: [
+        { path: '/ws/永辉销售日报_20260916.md', description: '销售日报' },
+        { path: '/ws/报表.xlsx' },
+      ],
+    })],
+  });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1',
+      workspacePath: '/ws',
+      content: [{ type: 'text', text: '做份日报' }],
+    });
+    assert.deepEqual(result.files.map((file) => file.path), [
+      '/ws/永辉销售日报_20260916.md',
+      '/ws/报表.xlsx',
+    ]);
   } finally {
     await app.cleanup();
   }

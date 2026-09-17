@@ -74,6 +74,33 @@ function deltaTextOf(chunk) {
  *   `store` 为 `session-store`；`guidance` 为每会话来源提示词登记表。
  * @returns 契约规定的 sessions 面。
  */
+/** 从 `present` 的参数里解出文件清单（解析失败就当没有，绝不抛）。 */
+function filesOfPresentArgs(args) {
+  let parsed = args;
+  if (typeof args === 'string') {
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return [];
+    }
+  }
+  const files = Array.isArray(parsed?.files) ? parsed.files : [];
+  return files
+    .filter((file) => typeof file?.path === 'string' && file.path)
+    .map((file) => ({
+      path: file.path,
+      ...(typeof file.description === 'string' && file.description
+        ? { description: file.description }
+        : {}),
+    }));
+}
+
+/**
+ * 组装会话桥服务。
+ *
+ * @param options - { ctx, logger, store, guidance, interactions }。
+ * @returns 会话桥。
+ */
 export function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== 'function') {
@@ -279,6 +306,11 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
      * 渠道拿它把成品当附件发出去——只写在回复文字里，用户拿不到文件。
      */
     const presented = [];
+    /**
+     * 兜底：从 `present` 工具调用的参数里记下的文件。
+     * 万一某个版本的事件流不带 `deliverables/presented`，也不能让交付文件静默丢掉。
+     */
+    const presentCalls = [];
     let settled = false;
     let settle;
     const finished = new Promise((resolve) => {
@@ -292,9 +324,12 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       if (settled) return;
       settled = true;
       const reason = value?.reason?.kind ?? 'unknown';
+      // 事件没来就退回工具参数（两者都按 path 去重，绝不把同一个文件发两遍）。
+      const files = presented.length > 0 ? presented : presentCalls;
       logger.info?.(`[dsh-chat] 回合结束：${turnKey} turn=${currentTurn} reason=${reason}`
-        + ` 文本=${(value?.text ?? '').length}字 工具=${value?.tools?.length ?? 0}`);
-      settle(value);
+        + ` 文本=${(value?.text ?? '').length}字 工具=${value?.tools?.length ?? 0}`
+        + ` 交付文件=${files.length}`);
+      settle({ ...value, files: [...files] });
     };
 
     // 回合超时：流断了/回合卡住时不能永远挂着——那样用户只会看到"发了没反应"。
@@ -307,7 +342,6 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
         text: '',
         reason: { kind: 'timeout', timeoutMs: effectiveTurnTimeoutMs },
         tools: [...tools],
-        files: [...presented],
         aborted: true,
       });
     }, effectiveTurnTimeoutMs);
@@ -355,6 +389,11 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
             }
             case 'tool/call':
               tools.push({ name: event.data?.name, arguments: event.data?.arguments });
+              if (event.data?.name === 'present') {
+                for (const file of filesOfPresentArgs(event.data?.arguments)) {
+                  if (!presentCalls.some((seen) => seen.path === file.path)) presentCalls.push(file);
+                }
+              }
               handlers.onToolCall?.(event);
               break;
             case 'tool/result':
@@ -388,7 +427,6 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
-                  files: [...presented],
                   aborted: false,
                 });
               } else {

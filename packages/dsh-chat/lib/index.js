@@ -2170,6 +2170,21 @@ function deltaTextOf(chunk) {
   if (typeof chunk?.delta === "string") return chunk.delta;
   return "";
 }
+function filesOfPresentArgs(args) {
+  let parsed = args;
+  if (typeof args === "string") {
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return [];
+    }
+  }
+  const files = Array.isArray(parsed?.files) ? parsed.files : [];
+  return files.filter((file) => typeof file?.path === "string" && file.path).map((file) => ({
+    path: file.path,
+    ...typeof file.description === "string" && file.description ? { description: file.description } : {}
+  }));
+}
 function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== "function") {
@@ -2310,6 +2325,7 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     const assistantText = /* @__PURE__ */ new Map();
     const tools = [];
     const presented = [];
+    const presentCalls = [];
     let settled = false;
     let settle;
     const finished = new Promise((resolve4) => {
@@ -2319,8 +2335,9 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       if (settled) return;
       settled = true;
       const reason = value?.reason?.kind ?? "unknown";
-      logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0}`);
-      settle(value);
+      const files = presented.length > 0 ? presented : presentCalls;
+      logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0} \u4EA4\u4ED8\u6587\u4EF6=${files.length}`);
+      settle({ ...value, files: [...files] });
     };
     const effectiveTurnTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : 10 * 6e4;
     const timeoutTimer = setTimeout(() => {
@@ -2329,7 +2346,6 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
         text: "",
         reason: { kind: "timeout", timeoutMs: effectiveTurnTimeoutMs },
         tools: [...tools],
-        files: [...presented],
         aborted: true
       });
     }, effectiveTurnTimeoutMs);
@@ -2376,6 +2392,11 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
             }
             case "tool/call":
               tools.push({ name: event.data?.name, arguments: event.data?.arguments });
+              if (event.data?.name === "present") {
+                for (const file of filesOfPresentArgs(event.data?.arguments)) {
+                  if (!presentCalls.some((seen) => seen.path === file.path)) presentCalls.push(file);
+                }
+              }
               handlers.onToolCall?.(event);
               break;
             case "tool/result":
@@ -2407,7 +2428,6 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
                   text,
                   reason: event.data?.reason ?? null,
                   tools: [...tools],
-                  files: [...presented],
                   aborted: false
                 });
               } else {
