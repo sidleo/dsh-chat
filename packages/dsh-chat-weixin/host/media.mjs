@@ -6,8 +6,8 @@
  * 的 `src/channels/weixin/weixin-api.mjs`（`parseWeixinImageAesKey` /
  * `decryptWeixinImage` / `weixinImageDownloadUrl` / `extractWeixinImages` /
  * `extractWeixinFiles`）与 `src/channels/shared/image-prompt.mjs`（`fetchImageBuffer`）。
- * 本文件是按本项目接口**重写**的收窄版：只保留"入站下载并解密成 Buffer"，
- * 去掉上游的 i18n、artifact 错误分类、惰性图片引用包装与出站上传。许可与出处见
+ * 本文件是按本项目接口**重写**的收窄版：入站"下载并解密成 Buffer"，出站
+ * "加密并上传 CDN"；去掉上游的 i18n 与 artifact 错误分类。许可与出处见
  * 仓库 `THIRD_PARTY_NOTICES.md`。
  *
  * 安全约定：下载地址必须落在 `novac2c.cdn.weixin.qq.com` 且为 https——服务端返回的
@@ -16,7 +16,7 @@
  * @module dsh-chat-weixin/media
  */
 
-import { createDecipheriv } from 'node:crypto';
+import { createCipheriv, createDecipheriv } from 'node:crypto';
 
 /** 微信 CDN（媒体文件的中转站）。 */
 export const MEDIA_CDN_HOST = 'novac2c.cdn.weixin.qq.com';
@@ -30,6 +30,14 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
 
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+
+/** 上传：分片与"长时间没有进展"的超时（与上游一致：64KB 一片，60s 无进展即判死）。 */
+const UPLOAD_CHUNK_BYTES = 64 * 1024;
+const UPLOAD_IDLE_TIMEOUT_MS = 60_000;
+const UPLOAD_RETRIES = 3;
+
+/** CDN 上传路径（服务端返回的 upload_full_url 也必须落在这里）。 */
+const MEDIA_CDN_UPLOAD_PATH = '/c2c/upload';
 
 /** 媒体错误：带稳定 code，便于上层给出可读回复。 */
 export class WeixinMediaError extends Error {
@@ -246,4 +254,155 @@ export function extractInboundMedia(message) {
     }
   }
   return { images, files };
+}
+
+// ── 出站：加密并上传到 CDN ───────────────────────────────────────────────────
+
+/**
+ * AES-128-ECB 的 PKCS#7 填充后长度（服务端要按它校验 `filesize`）。
+ *
+ * @param size - 原始字节数。
+ * @returns 填充后的字节数。
+ */
+export function aesEcbPaddedSize(size) {
+  return Math.ceil((size + 1) / 16) * 16;
+}
+
+/**
+ * 校验服务端返回的 CDN 上传地址。
+ *
+ * @param value - 地址字符串。
+ * @returns URL 对象。
+ */
+export function trustedUploadUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new WeixinMediaError('invalid-upload-url', '微信服务返回了无效的文件上传地址。');
+  }
+  if (url.protocol !== 'https:' || url.hostname !== MEDIA_CDN_HOST
+    || (url.port && url.port !== '443') || url.pathname !== MEDIA_CDN_UPLOAD_PATH
+    || url.username || url.password) {
+    throw new WeixinMediaError('untrusted-upload-url', '微信服务返回了不受信任的文件上传地址。');
+  }
+  url.hash = '';
+  return url;
+}
+
+/**
+ * 由 `getuploadurl` 的响应拼出上传地址。
+ *
+ * 优先用服务端给的 `upload_full_url`（仍要过 `trustedUploadUrl`），否则用
+ * `upload_param` 自己拼——两条路都不允许指向别的主机。
+ *
+ * @param response - `ilink/bot/getuploadurl` 的响应。
+ * @param fileKey - 本次上传的 filekey。
+ * @returns URL 对象。
+ */
+export function mediaUploadUrl(response, fileKey) {
+  const fullUrl = nonEmptyString(response?.upload_full_url);
+  if (fullUrl) return trustedUploadUrl(fullUrl);
+  const uploadParam = nonEmptyString(response?.upload_param);
+  if (!uploadParam) throw new WeixinMediaError('missing-upload-url', '微信服务没有返回文件上传地址。');
+  const url = new URL(`${MEDIA_CDN_BASE_URL}/upload`);
+  url.searchParams.set('encrypted_query_param', uploadParam);
+  url.searchParams.set('filekey', fileKey);
+  return trustedUploadUrl(url.toString());
+}
+
+/** 分片加密（不让密文再整份复制一遍）。 */
+async function* encryptChunks(bytes, key, { signal, onProgress }) {
+  const cipher = createCipheriv('aes-128-ecb', key, null);
+  for (let offset = 0; offset < bytes.byteLength; offset += UPLOAD_CHUNK_BYTES) {
+    signal?.throwIfAborted();
+    const chunk = cipher.update(bytes.subarray(offset, offset + UPLOAD_CHUNK_BYTES));
+    onProgress();
+    if (chunk.byteLength) yield chunk;
+  }
+  signal?.throwIfAborted();
+  onProgress();
+  yield cipher.final();
+}
+
+/**
+ * 加密并上传到微信 CDN，返回写进消息里的 `encrypt_query_param`。
+ *
+ * 上传是"边加密边推流"，服务端按 `content-length`（填充后长度）收；成功时下载参数
+ * 在响应头 `x-encrypted-param` 上。可重试：4xx 与被拒是确定性失败，直接抛。
+ *
+ * 实测：CDN 会拒绝**极小**的图片（79 字节的 2×2 PNG 稳定返回 HTTP 500，同样字节按
+ * `media_type=3` 当文件上传却成功），所以图片上传拿到 500 不一定是网络问题——
+ * 先确认图片本身是不是过小。
+ *
+ * @param options - { url, bytes, key, signal, fetchImpl }。
+ * @returns 下载参数（写进 `media.encrypt_query_param`）。
+ */
+export async function uploadMediaToCdn({
+  url, bytes, key, signal, fetchImpl = fetch,
+}) {
+  if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl 必须是函数。');
+  const target = url instanceof URL ? url : trustedUploadUrl(url);
+  let lastError;
+  for (let attempt = 1; attempt <= UPLOAD_RETRIES; attempt += 1) {
+    signal?.throwIfAborted();
+    const idle = new AbortController();
+    const uploadSignal = signal ? AbortSignal.any([signal, idle.signal]) : idle.signal;
+    let timer;
+    let active = true;
+    // "长时间没有进展"就判死：每产出一片就重置计时器。
+    const onProgress = () => {
+      if (!active) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => idle.abort(new WeixinMediaError(
+        'upload-timeout', '微信文件上传长时间没有进展，已超时。',
+      )), UPLOAD_IDLE_TIMEOUT_MS);
+    };
+    const body = encryptChunks(bytes, key, { signal: uploadSignal, onProgress });
+    let response;
+    onProgress();
+    try {
+      response = await fetchImpl(target, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': String(aesEcbPaddedSize(bytes.byteLength)),
+        },
+        body,
+        duplex: 'half',
+        redirect: 'error',
+        signal: uploadSignal,
+      });
+      uploadSignal.throwIfAborted();
+      if (response.status >= 400 && response.status < 500) {
+        throw new WeixinMediaError('upload-rejected', `微信文件上传被拒绝（HTTP ${response.status}）。`);
+      }
+      if (response.status !== 200) {
+        throw new WeixinMediaError('upload-failed', `微信文件上传失败（HTTP ${response.status}）。`);
+      }
+      const downloadParam = nonEmptyString(response.headers?.get?.('x-encrypted-param'));
+      if (!downloadParam) {
+        throw new WeixinMediaError('invalid-upload-response', '微信文件上传响应缺少下载参数。');
+      }
+      return downloadParam;
+    } catch (cause) {
+      if (signal?.aborted) signal.throwIfAborted();
+      const failure = idle.signal.aborted ? idle.signal.reason : cause;
+      lastError = failure;
+      // 4xx / 被拒 = 确定性失败，重试没有意义。
+      if (failure instanceof WeixinMediaError
+        && (failure.code === 'upload-rejected' || failure.code === 'upload-timeout'
+          || failure.code === 'invalid-upload-response')) {
+        throw failure;
+      }
+    } finally {
+      active = false;
+      clearTimeout(timer);
+      await body.return?.();
+      await response?.body?.cancel?.().catch?.(() => undefined);
+    }
+  }
+  throw lastError instanceof WeixinMediaError
+    ? lastError
+    : new WeixinMediaError('upload-failed', '微信文件上传失败。', { cause: lastError });
 }

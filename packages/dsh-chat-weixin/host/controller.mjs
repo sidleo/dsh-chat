@@ -217,6 +217,33 @@ export function createWeixinController({ deps, logger = console, config = {}, in
       return record.runtime.sendProactive({ userId, text });
     },
 
+    /**
+     * 主动发一个文件或图片（`delivery.sendFile`）。
+     *
+     * 与文本同一条安全边界：只能发给**已保存**的目标（hub 已校验），这里只确认账号在线、
+     * 目标带得上 userId，然后把"路径 + 显示名 + kind"交给运行时去读字节并发送。
+     */
+    async sendFile({ botId, target, file }) {
+      const record = runtimes.get(botId);
+      if (!record?.runtime || record.phase !== 'running') {
+        const error = new Error(`账号 ${botId} 当前不在线，无法投递。`);
+        error.code = 'weixin/account-offline';
+        throw error;
+      }
+      const userId = target.route?.userId;
+      if (!userId) {
+        const error = new Error('投递目标的 route 缺少 userId。');
+        error.code = 'chat/bad-target';
+        throw error;
+      }
+      return record.runtime.sendFileProactive({
+        userId,
+        path: file.path,
+        name: file.name,
+        kind: file.kind,
+      });
+    },
+
     /** 从该账号的会话记录里发现候选目标。 */
     async discover({ botId }) {
       const record = runtimes.get(botId);

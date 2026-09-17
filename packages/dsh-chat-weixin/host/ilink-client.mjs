@@ -1,18 +1,22 @@
 /**
- * 微信 iLink 协议客户端（仅私聊文本链路）。
+ * 微信 iLink 协议客户端（私聊文本 + 出站图片/文件）。
  *
  * **出处**：本文件是 `xmanrui/dsh-im`（MIT）`src/channels/weixin/weixin-api.mjs`
  * 协议行为的移植版本——iLink 没有公开文档，只能按上游实测出来的协议重写客户端。
- * 原始许可与出处见仓库 THIRD_PARTY_NOTICES.md。本移植只保留 P3 需要的部分：
- * 扫码登录、长轮询收消息、输入状态、发文本；图片/文件的 CDN 与 AES 加解密留到 P5。
+ * 原始许可与出处见仓库 THIRD_PARTY_NOTICES.md。本移植覆盖：扫码登录、长轮询收消息、
+ * 输入状态、发文本，以及出站媒体（`getuploadurl` → 加密上传 CDN → `sendmessage`
+ * 带 `file_item`/`image_item`）；加解密与 CDN 传输在 `./media.mjs`。
  *
  * 安全约定：baseUrl 与二维码地址都必须落在 `*.weixin.qq.com` / `*.wechat.com`
- * 且为 https——服务端返回的地址不能让我们去连任意主机。
+ * 且为 https；CDN 上传地址只信任 `novac2c.cdn.weixin.qq.com/c2c/upload`
+ * ——服务端返回的地址不能让我们去连任意主机。
  *
  * @module dsh-chat-weixin/ilink-client
  */
 
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+
+import { aesEcbPaddedSize, mediaUploadUrl, uploadMediaToCdn } from './media.mjs';
 
 /** 扫码登录与默认 API 基址。 */
 export const DEFAULT_QR_BASE_URL = 'https://ilinkai.weixin.qq.com/';
@@ -256,6 +260,97 @@ export function splitText(text, maxChars = MAX_MESSAGE_CHARS) {
 }
 
 /**
+ * 发送一项媒体（图片或文件）。
+ *
+ * 三步：① `ilink/bot/getuploadurl` 拿上传地址（顺带把原始大小、MD5、填充后大小、
+ * AES 密钥报备给服务端）→ ② 加密上传到 CDN，拿回 `encrypt_query_param`
+ * → ③ `ilink/bot/sendmessage` 发一条引用该媒体的消息。
+ *
+ * @param fetchImpl - 注入的 fetch。
+ * @param request - { baseUrl, token, toUserId, bytes, contextToken, runId, signal }。
+ * @param options - { mediaType, buildItem }。
+ * @returns { providerMessageIds }。
+ */
+async function sendArtifact(fetchImpl, {
+  baseUrl, token, toUserId, bytes, contextToken, runId, signal,
+}, { mediaType, buildItem }) {
+  const recipient = nonEmptyString(toUserId);
+  if (!recipient || !bytes?.byteLength) {
+    throw new TypeError('发送媒体需要 toUserId 与非空字节。');
+  }
+  signal?.throwIfAborted();
+
+  const fileKey = randomBytes(16).toString('hex');
+  const aesKey = randomBytes(16);
+  const ciphertextSize = aesEcbPaddedSize(bytes.byteLength);
+  const upload = await requestJson(fetchImpl, {
+    method: 'POST',
+    baseUrl,
+    endpoint: 'ilink/bot/getuploadurl',
+    token,
+    signal,
+    body: {
+      filekey: fileKey,
+      media_type: mediaType,
+      to_user_id: recipient,
+      rawsize: bytes.byteLength,
+      rawfilemd5: createHash('md5').update(bytes).digest('hex'),
+      filesize: ciphertextSize,
+      no_need_thumb: true,
+      aeskey: aesKey.toString('hex'),
+      base_info: baseInfo(),
+    },
+  });
+  const uploadRejection = rejectedResponse(upload);
+  if (uploadRejection) {
+    throw new IlinkError('upload-url-rejected', '微信服务拒绝了文件上传请求。', {
+      providerCode: uploadRejection,
+    });
+  }
+
+  const downloadParam = await uploadMediaToCdn({
+    url: mediaUploadUrl(upload, fileKey),
+    bytes,
+    key: aesKey,
+    signal,
+    fetchImpl,
+  });
+  const media = {
+    encrypt_query_param: downloadParam,
+    // 服务端要的是"十六进制字符串再做 base64"，与入站解析保持一致。
+    aes_key: Buffer.from(aesKey.toString('hex'), 'utf8').toString('base64'),
+    encrypt_type: 1,
+  };
+
+  const clientId = `dsh-chat-weixin-${randomUUID()}`;
+  const response = await requestJson(fetchImpl, {
+    method: 'POST',
+    baseUrl,
+    endpoint: 'ilink/bot/sendmessage',
+    token,
+    signal,
+    body: {
+      msg: {
+        from_user_id: '',
+        to_user_id: recipient,
+        client_id: clientId,
+        message_type: 2,
+        message_state: 2,
+        item_list: [buildItem({ media, ciphertextSize })],
+        ...(nonEmptyString(contextToken) ? { context_token: contextToken } : {}),
+        ...(nonEmptyString(runId) ? { run_id: runId } : {}),
+      },
+      base_info: baseInfo(),
+    },
+  });
+  const sendRejection = rejectedResponse(response);
+  if (sendRejection) {
+    throw new IlinkError('send-rejected', '微信服务拒绝了文件消息。', { providerCode: sendRejection });
+  }
+  return { providerMessageIds: [clientId] };
+}
+
+/**
  * 创建 iLink 客户端。
  *
  * @param options - { fetchImpl }，测试可注入假 fetch。
@@ -441,6 +536,48 @@ export function createIlinkClient({ fetchImpl = fetch } = {}) {
         throw new IlinkError('send-rejected', '微信服务拒绝了回复消息。', { providerCode: rejection });
       }
       return { providerMessageIds: [clientId] };
+    },
+
+    /**
+     * 发送一个文件（`file_item`）。
+     *
+     * @param options - { baseUrl, token, toUserId, fileName, bytes, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendFile({
+      baseUrl, token, toUserId, fileName, bytes, contextToken, runId, signal,
+    }) {
+      const name = nonEmptyString(fileName);
+      if (!name) throw new TypeError('sendFile 需要 fileName。');
+      return sendArtifact(fetchImpl, {
+        baseUrl, token, toUserId, bytes, contextToken, runId, signal,
+      }, {
+        mediaType: 3,
+        buildItem: ({ media }) => ({
+          type: 4,
+          file_item: { media, file_name: name, len: String(bytes.byteLength) },
+        }),
+      });
+    },
+
+    /**
+     * 发送一张图片（`image_item`，聊天里显示为图片气泡）。
+     *
+     * @param options - { baseUrl, token, toUserId, bytes, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendImage({
+      baseUrl, token, toUserId, bytes, contextToken, runId, signal,
+    }) {
+      return sendArtifact(fetchImpl, {
+        baseUrl, token, toUserId, bytes, contextToken, runId, signal,
+      }, {
+        mediaType: 1,
+        buildItem: ({ media, ciphertextSize }) => ({
+          type: 2,
+          image_item: { media, mid_size: ciphertextSize },
+        }),
+      });
     },
 
     /** 告诉服务端本机器人开始工作（连接建立时调用）。 */

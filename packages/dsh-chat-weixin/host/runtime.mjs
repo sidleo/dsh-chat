@@ -8,6 +8,9 @@
  * @module dsh-chat-weixin/runtime
  */
 
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+
 import {
   extractText,
   messageId,
@@ -448,6 +451,33 @@ export function createWeixinRuntime({
       if (!recipient) throw new TypeError('sendProactive 需要 userId。');
       const chunks = await reply(recipient, String(text ?? ''), state.contextToken(recipient), undefined, signal);
       return { chunks };
+    },
+
+    /**
+     * 主动发一个文件或图片（agent 的 `chat_send_file` 与定时任务用）。
+     *
+     * 由调用方给"绝对路径 + 显示名 + kind"（hub 的投递层已经校验过存在、非空、不超限），
+     * 这里只负责读字节、加密上传、发送。kind 为 image 时走图片气泡，否则走文件消息。
+     *
+     * @param options - { userId, path, name, kind, signal }。
+     * @returns { kind, name, size, providerMessageIds }。
+     */
+    async sendFileProactive({ userId, path, name, kind, signal }) {
+      const recipient = typeof userId === 'string' ? userId.trim() : '';
+      if (!recipient) throw new TypeError('sendFileProactive 需要 userId。');
+      if (typeof path !== 'string' || !path) throw new TypeError('sendFileProactive 需要 path。');
+      const bytes = await readFile(path);
+      if (bytes.byteLength === 0) throw new Error('要发送的文件是空的。');
+      const fileName = typeof name === 'string' && name.trim() ? name.trim() : basename(path);
+      const contextToken = state.contextToken(recipient);
+      const sent = kind === 'image'
+        ? await client.sendImage({ baseUrl, token, toUserId: recipient, bytes, contextToken, signal })
+        : await client.sendFile({
+          baseUrl, token, toUserId: recipient, fileName, bytes, contextToken, signal,
+        });
+      logger.info?.(`[dsh-chat-weixin] 已发送${kind === 'image' ? '图片' : '文件'}：${fileName}`
+        + `（${bytes.byteLength} 字节，${account.botId}）`);
+      return { ...sent, kind: kind === 'image' ? 'image' : 'file', name: fileName, size: bytes.byteLength };
     },
 
     status: () => Object.freeze({

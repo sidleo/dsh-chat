@@ -231,7 +231,7 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |
 | `delivery.save` / `delivery.remove` | `{ channelId, botId, target }` / `{ …, targetId }` | 目标增删 |
 | `delivery.send` | `{ channelId, botId, targetId, text }` | 主动发一条文本 |
-| `delivery.sendFile` | `{ channelId, botId, targetId, path, name? }` | 主动发文件/图片（≤30MB） |
+| `delivery.sendFile` | `{ channelId, botId, targetId, path, name? }` | 主动发文件/图片（≤30MB）；渠道没实现 `sendFile` 时明确报 `chat/delivery-unsupported` |
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
 
@@ -241,6 +241,7 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 delivery: {
   async send({ botId, target, text }) {},                       // 必选
   async sendFile({ botId, target, file }) {},                   // 可选：file = { path, name, size, kind: 'file'|'image' }
+                                                                // kind 由扩展名判定：image 走图片气泡，file 走文件消息
   async discover({ botId }) { return [ /* 候选目标 */ ]; },
 }
 ```

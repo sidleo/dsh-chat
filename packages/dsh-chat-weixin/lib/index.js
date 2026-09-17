@@ -6,7 +6,7 @@ const __filename = __dshFileURLToPath(import.meta.url);
 const __dirname = __dshDirname(__filename);
 
 // packages/dsh-chat-weixin/host/controller.mjs
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { join } from "node:path";
 
 // packages/dsh-chat-weixin/host/config-store.mjs
@@ -96,415 +96,19 @@ function createWeixinConfigStore({ path, createJsonStore }) {
 }
 
 // packages/dsh-chat-weixin/host/ilink-client.mjs
-import { randomBytes, randomUUID } from "node:crypto";
-var DEFAULT_QR_BASE_URL = "https://ilinkai.weixin.qq.com/";
-var PROTOCOL_VERSION = "2.4.6";
-var DEFAULT_BOT_TYPE = "3";
-var MAX_MESSAGE_CHARS = 1800;
-var ILINK_APP_ID = "bot";
-var ILINK_CLIENT_VERSION = 2 << 16 | 4 << 8 | 6;
-var DEFAULT_TIMEOUT_MS = 15e3;
-var LONG_POLL_TIMEOUT_MS = 35e3;
-var LOGIN_STATUSES = Object.freeze([
-  "wait",
-  "scaned",
-  "confirmed",
-  "expired",
-  "scaned_but_redirect",
-  "need_verifycode",
-  "verify_code_blocked",
-  "binded_redirect"
-]);
-var IlinkError = class extends Error {
-  constructor(code, message, options = {}) {
-    super(message, options);
-    this.name = "IlinkError";
-    this.code = code;
-    this.status = options.status;
-    this.providerCode = options.providerCode;
-    this.timeoutMs = options.timeoutMs;
-  }
-};
-function nonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-function abortError(signal) {
-  if (signal?.reason instanceof Error) return signal.reason;
-  const error = new Error("\u64CD\u4F5C\u5DF2\u53D6\u6D88");
-  error.name = "AbortError";
-  return error;
-}
-function rejectedResponse(value, fields = ["ret", "errcode"]) {
-  if (!value || typeof value !== "object") return null;
-  for (const field of fields) {
-    const raw = value[field];
-    if (raw === void 0 || raw === 0 || raw === "0") continue;
-    return typeof raw === "string" || typeof raw === "number" ? String(raw) : "rejected";
-  }
-  return null;
-}
-function isWeixinHost(hostname) {
-  const normalized = hostname.toLowerCase().replace(/\.$/, "");
-  return normalized === "weixin.qq.com" || normalized.endsWith(".weixin.qq.com") || normalized === "wechat.com" || normalized.endsWith(".wechat.com");
-}
-function normalizeBaseUrl(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new IlinkError("invalid-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u8FDE\u63A5\u5730\u5740\u3002");
-  }
-  if (url.protocol !== "https:" || !isWeixinHost(url.hostname) || url.port !== "" && url.port !== "443") {
-    throw new IlinkError("untrusted-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u8FDE\u63A5\u5730\u5740\u3002");
-  }
-  url.username = "";
-  url.password = "";
-  url.search = "";
-  url.hash = "";
-  if (!url.pathname.endsWith("/")) url.pathname += "/";
-  return url.toString();
-}
-function normalizeQrUrl(value) {
-  const text = nonEmptyString(value);
-  if (!text) return null;
-  let url;
-  try {
-    url = new URL(text);
-  } catch {
-    throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u626B\u7801\u5730\u5740\u3002");
-  }
-  if (url.protocol !== "https:" || !isWeixinHost(url.hostname)) {
-    throw new IlinkError("untrusted-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u626B\u7801\u5730\u5740\u3002");
-  }
-  return url.toString();
-}
-function commonHeaders() {
-  return {
-    "iLink-App-Id": ILINK_APP_ID,
-    "iLink-App-ClientVersion": String(ILINK_CLIENT_VERSION)
-  };
-}
-function authenticatedHeaders(token) {
-  const headers = {
-    ...commonHeaders(),
-    "content-type": "application/json",
-    AuthorizationType: "ilink_bot_token",
-    "X-WECHAT-UIN": Buffer.from(String(randomBytes(4).readUInt32BE(0)), "utf8").toString("base64")
-  };
-  const value = nonEmptyString(token);
-  if (value) headers.Authorization = `Bearer ${value}`;
-  return headers;
-}
-function baseInfo() {
-  return { channel_version: PROTOCOL_VERSION, bot_agent: "dsh-chat/0.0.1" };
-}
-async function requestJson(fetchImpl, {
-  method,
-  baseUrl,
-  endpoint,
-  body,
-  token,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  signal,
-  authenticated = true
-}) {
-  const trustedBase = normalizeBaseUrl(baseUrl);
-  const url = new URL(endpoint, trustedBase);
-  if (!isWeixinHost(url.hostname)) {
-    throw new IlinkError("untrusted-endpoint", "\u62D2\u7EDD\u8BBF\u95EE\u4E0D\u53D7\u4FE1\u4EFB\u7684\u5FAE\u4FE1\u670D\u52A1\u5730\u5740\u3002");
-  }
-  if (signal?.aborted) throw abortError(signal);
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(signal?.reason);
-  signal?.addEventListener("abort", onAbort, { once: true });
-  let timedOut = false;
-  const timer = timeoutMs > 0 ? setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs) : null;
-  try {
-    const response = await fetchImpl(url, {
-      method,
-      headers: authenticated ? authenticatedHeaders(token) : commonHeaders(),
-      ...body === void 0 ? {} : { body: JSON.stringify(body) },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      throw new IlinkError("http-error", `\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u5931\u8D25\uFF08HTTP ${response.status}\uFF09\u3002`, {
-        status: response.status
-      });
-    }
-    try {
-      return await response.json();
-    } catch (error) {
-      throw new IlinkError("invalid-response", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u54CD\u5E94\u3002", { cause: error });
-    }
-  } catch (error) {
-    if (signal?.aborted) throw abortError(signal);
-    if (timedOut) {
-      throw new IlinkError("timeout", "\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u8D85\u65F6\u3002", { cause: error, timeoutMs });
-    }
-    throw error instanceof IlinkError ? error : new IlinkError("network-error", "\u6682\u65F6\u65E0\u6CD5\u8BBF\u95EE\u5FAE\u4FE1\u670D\u52A1\u3002", { cause: error });
-  } finally {
-    if (timer) clearTimeout(timer);
-    signal?.removeEventListener?.("abort", onAbort);
-  }
-}
-function extractText(message) {
-  for (const item of message?.item_list ?? []) {
-    if (item?.type === 1 && typeof item.text_item?.text === "string") {
-      const text = item.text_item.text.trim();
-      if (text) return text;
-    }
-    if (item?.type === 3 && typeof item.voice_item?.text === "string") {
-      const text = item.voice_item.text.trim();
-      if (text) return text;
-    }
-  }
-  return null;
-}
-function messageId(message) {
-  if (message?.message_id !== void 0 && message.message_id !== null) {
-    return String(message.message_id);
-  }
-  return nonEmptyString(message?.client_id);
-}
-function splitText(text, maxChars = MAX_MESSAGE_CHARS) {
-  if (text.length <= maxChars) return [text];
-  const chunks = [];
-  let remaining = text;
-  while (remaining.length > maxChars) {
-    let splitAt = remaining.lastIndexOf("\n", maxChars);
-    if (splitAt < Math.floor(maxChars * 0.6)) splitAt = maxChars;
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
-  }
-  if (remaining) chunks.push(remaining);
-  return chunks;
-}
-function createIlinkClient({ fetchImpl = fetch } = {}) {
-  if (typeof fetchImpl !== "function") throw new TypeError("ilink \u5BA2\u6237\u7AEF\u9700\u8981 fetch\u3002");
-  return Object.freeze({
-    /**
-     * 申请登录二维码。
-     *
-     * @param options - { localTokens, botType, signal }。
-     * @returns { qrcode, qrcodeUrl }。
-     */
-    async beginLogin({ localTokens = [], botType = DEFAULT_BOT_TYPE, signal } = {}) {
-      const tokens = [...new Set(localTokens.map(nonEmptyString).filter(Boolean))].slice(-10);
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl: DEFAULT_QR_BASE_URL,
-        endpoint: `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(botType)}`,
-        body: { local_token_list: tokens },
-        timeoutMs: 1e4,
-        signal
-      });
-      const rejection = rejectedResponse(response, ["errcode", "ret"]);
-      if (rejection) {
-        throw new IlinkError("qr-request-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u4E8C\u7EF4\u7801\u7533\u8BF7\u3002", {
-          providerCode: rejection
-        });
-      }
-      const qrcode = nonEmptyString(response?.qrcode);
-      if (!qrcode) throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u4E8C\u7EF4\u7801\u4EE4\u724C\u3002");
-      return { qrcode, qrcodeUrl: normalizeQrUrl(response?.qrcode_img_content) };
-    },
-    /**
-     * 轮询扫码状态。
-     *
-     * @param options - { qrcode, baseUrl, verifyCode, signal }。
-     * @returns 服务端状态对象。
-     */
-    async pollLogin({ qrcode, baseUrl = DEFAULT_QR_BASE_URL, verifyCode, signal }) {
-      const qr = nonEmptyString(qrcode);
-      if (!qr) throw new TypeError("pollLogin \u9700\u8981 qrcode\u3002");
-      let endpoint = `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qr)}`;
-      const code = nonEmptyString(verifyCode);
-      if (code) endpoint += `&verify_code=${encodeURIComponent(code)}`;
-      const response = await requestJson(fetchImpl, {
-        method: "GET",
-        baseUrl,
-        endpoint,
-        timeoutMs: LONG_POLL_TIMEOUT_MS,
-        signal,
-        authenticated: false
-      });
-      if (!response || typeof response !== "object" || !LOGIN_STATUSES.includes(response.status)) {
-        throw new IlinkError("invalid-login-status", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u8BC6\u522B\u7684\u626B\u7801\u72B6\u6001\u3002");
-      }
-      return response;
-    },
-    /**
-     * 长轮询收取消息；超时视为"这一轮没有新消息"。
-     *
-     * @param options - { baseUrl, token, getUpdatesBuf, timeoutMs, signal }。
-     * @returns { ret, msgs, get_updates_buf }。
-     */
-    async getUpdates({ baseUrl, token, getUpdatesBuf = "", timeoutMs, signal }) {
-      try {
-        return await requestJson(fetchImpl, {
-          method: "POST",
-          baseUrl,
-          endpoint: "ilink/bot/getupdates",
-          body: { get_updates_buf: getUpdatesBuf, base_info: baseInfo() },
-          token,
-          timeoutMs: timeoutMs ?? LONG_POLL_TIMEOUT_MS,
-          signal
-        });
-      } catch (error) {
-        if (error instanceof IlinkError && error.code === "timeout") {
-          return { ret: 0, msgs: [], get_updates_buf: getUpdatesBuf };
-        }
-        throw error;
-      }
-    },
-    /**
-     * 取该用户的机器人配置（主要是 typing_ticket）。
-     *
-     * @param options - { baseUrl, token, toUserId, contextToken, signal }。
-     * @returns { typingTicket }。
-     */
-    async getConfig({ baseUrl, token, toUserId, contextToken, signal }) {
-      const recipient = nonEmptyString(toUserId);
-      if (!recipient) throw new TypeError("getConfig \u9700\u8981 toUserId\u3002");
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl,
-        endpoint: "ilink/bot/getconfig",
-        token,
-        signal,
-        timeoutMs: 1e4,
-        body: {
-          ilink_user_id: recipient,
-          ...nonEmptyString(contextToken) ? { context_token: contextToken } : {},
-          base_info: baseInfo()
-        }
-      });
-      if (response?.ret !== void 0 && response.ret !== 0) {
-        throw new IlinkError("config-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u673A\u5668\u4EBA\u914D\u7F6E\u8BF7\u6C42\u3002", {
-          providerCode: String(response.ret)
-        });
-      }
-      return { typingTicket: nonEmptyString(response?.typing_ticket) };
-    },
-    /**
-     * 发送/结束"正在输入"。
-     *
-     * @param options - { baseUrl, token, toUserId, typingTicket, status }，status 1=开始 2=结束。
-     */
-    async sendTyping({ baseUrl, token, toUserId, typingTicket, status, signal }) {
-      const recipient = nonEmptyString(toUserId);
-      const ticket = nonEmptyString(typingTicket);
-      if (!recipient || !ticket) throw new TypeError("sendTyping \u9700\u8981 toUserId \u4E0E typingTicket\u3002");
-      if (status !== 1 && status !== 2) throw new TypeError("typing status \u53EA\u80FD\u662F 1 \u6216 2\u3002");
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl,
-        endpoint: "ilink/bot/sendtyping",
-        token,
-        signal,
-        timeoutMs: 1e4,
-        body: {
-          ilink_user_id: recipient,
-          typing_ticket: ticket,
-          status,
-          base_info: baseInfo()
-        }
-      });
-      if (response?.ret !== void 0 && response.ret !== 0) {
-        throw new IlinkError("typing-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u8F93\u5165\u72B6\u6001\u8BF7\u6C42\u3002", {
-          providerCode: String(response.ret)
-        });
-      }
-      return true;
-    },
-    /**
-     * 发送一条文本消息。
-     *
-     * @param options - { baseUrl, token, toUserId, text, contextToken, runId, signal }。
-     * @returns { providerMessageIds }。
-     */
-    async sendText({ baseUrl, token, toUserId, text, contextToken, runId, signal }) {
-      const recipient = nonEmptyString(toUserId);
-      const content = nonEmptyString(text);
-      if (!recipient || !content) throw new TypeError("sendText \u9700\u8981 toUserId \u4E0E text\u3002");
-      const clientId = `dsh-chat-weixin-${randomUUID()}`;
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl,
-        endpoint: "ilink/bot/sendmessage",
-        token,
-        signal,
-        body: {
-          msg: {
-            from_user_id: "",
-            to_user_id: recipient,
-            client_id: clientId,
-            message_type: 2,
-            message_state: 2,
-            item_list: [{ type: 1, text_item: { text: content } }],
-            ...nonEmptyString(contextToken) ? { context_token: contextToken } : {},
-            ...nonEmptyString(runId) ? { run_id: runId } : {}
-          },
-          base_info: baseInfo()
-        }
-      });
-      const rejection = rejectedResponse(response);
-      if (rejection) {
-        throw new IlinkError("send-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u56DE\u590D\u6D88\u606F\u3002", { providerCode: rejection });
-      }
-      return { providerMessageIds: [clientId] };
-    },
-    /** 告诉服务端本机器人开始工作（连接建立时调用）。 */
-    async notifyStart({ baseUrl, token, signal }) {
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl,
-        endpoint: "ilink/bot/msg/notifystart",
-        token,
-        signal,
-        timeoutMs: 1e4,
-        body: { base_info: baseInfo() }
-      });
-      const rejection = rejectedResponse(response, ["errcode", "ret"]);
-      if (rejection) {
-        throw new IlinkError(
-          rejection === "-14" ? "stale-token" : "start-rejected",
-          rejection === "-14" ? "\u5FAE\u4FE1\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801\u3002" : "\u5FAE\u4FE1\u8D26\u53F7\u8FDE\u63A5\u542F\u52A8\u5931\u8D25\u3002",
-          { providerCode: rejection }
-        );
-      }
-      return response;
-    },
-    /** 告诉服务端本机器人停止工作。 */
-    async notifyStop({ baseUrl, token, signal }) {
-      const response = await requestJson(fetchImpl, {
-        method: "POST",
-        baseUrl,
-        endpoint: "ilink/bot/msg/notifystop",
-        token,
-        signal,
-        timeoutMs: 1e4,
-        body: { base_info: baseInfo() }
-      });
-      const rejection = rejectedResponse(response, ["errcode", "ret"]);
-      if (rejection) {
-        throw new IlinkError("stop-rejected", "\u5FAE\u4FE1\u670D\u52A1\u672A\u786E\u8BA4\u505C\u6B62\u901A\u77E5\u3002", { providerCode: rejection });
-      }
-      return response;
-    }
-  });
-}
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 // packages/dsh-chat-weixin/host/media.mjs
-import { createDecipheriv } from "node:crypto";
+import { createCipheriv, createDecipheriv } from "node:crypto";
 var MEDIA_CDN_HOST = "novac2c.cdn.weixin.qq.com";
 var MEDIA_CDN_BASE_URL = `https://${MEDIA_CDN_HOST}/c2c`;
 var MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 var MAX_FILE_BYTES = 30 * 1024 * 1024;
 var DOWNLOAD_TIMEOUT_MS = 3e4;
+var UPLOAD_CHUNK_BYTES = 64 * 1024;
+var UPLOAD_IDLE_TIMEOUT_MS = 6e4;
+var UPLOAD_RETRIES = 3;
+var MEDIA_CDN_UPLOAD_PATH = "/c2c/upload";
 var WeixinMediaError = class extends Error {
   constructor(code, message, options = {}) {
     super(message, options);
@@ -512,16 +116,16 @@ var WeixinMediaError = class extends Error {
     this.code = code;
   }
 };
-function nonEmptyString2(value) {
+function nonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function strictBase64(value) {
-  const text = nonEmptyString2(value);
+  const text = nonEmptyString(value);
   if (!text || text.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return null;
   return Buffer.from(text, "base64");
 }
 function parseMediaAesKey(item) {
-  const directHex = nonEmptyString2(item?.aeskey);
+  const directHex = nonEmptyString(item?.aeskey);
   if (directHex) {
     if (!/^[0-9a-fA-F]{32}$/.test(directHex)) {
       throw new WeixinMediaError("invalid-media-key", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u7684\u52A0\u5BC6\u5BC6\u94A5\u65E0\u6548\u3002");
@@ -549,11 +153,11 @@ function decryptMedia(ciphertext, key) {
   }
 }
 function mediaDownloadUrl(media) {
-  const query = nonEmptyString2(media?.encrypt_query_param);
+  const query = nonEmptyString(media?.encrypt_query_param);
   if (query) {
     return `${MEDIA_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(query)}`;
   }
-  const fullUrl = nonEmptyString2(media?.full_url);
+  const fullUrl = nonEmptyString(media?.full_url);
   if (!fullUrl) throw new WeixinMediaError("missing-media-url", "\u8FD9\u6761\u5FAE\u4FE1\u6D88\u606F\u6CA1\u6709\u53EF\u7528\u7684\u4E0B\u8F7D\u5730\u5740\u3002");
   let url;
   try {
@@ -653,7 +257,7 @@ function extractInboundMedia(message) {
     if (item?.file_item && typeof item.file_item === "object") {
       const declaredSize = Number(item.file_item.len);
       files.push({
-        name: nonEmptyString2(item.file_item.file_name) ?? (files.length === 0 ? "weixin-file" : `weixin-file-${files.length + 1}`),
+        name: nonEmptyString(item.file_item.file_name) ?? (files.length === 0 ? "weixin-file" : `weixin-file-${files.length + 1}`),
         ...Number.isFinite(declaredSize) && declaredSize >= 0 ? { size: declaredSize } : {},
         item: item.file_item
       });
@@ -661,8 +265,663 @@ function extractInboundMedia(message) {
   }
   return { images, files };
 }
+function aesEcbPaddedSize(size) {
+  return Math.ceil((size + 1) / 16) * 16;
+}
+function trustedUploadUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new WeixinMediaError("invalid-upload-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u6587\u4EF6\u4E0A\u4F20\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || url.hostname !== MEDIA_CDN_HOST || url.port && url.port !== "443" || url.pathname !== MEDIA_CDN_UPLOAD_PATH || url.username || url.password) {
+    throw new WeixinMediaError("untrusted-upload-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u6587\u4EF6\u4E0A\u4F20\u5730\u5740\u3002");
+  }
+  url.hash = "";
+  return url;
+}
+function mediaUploadUrl(response, fileKey) {
+  const fullUrl = nonEmptyString(response?.upload_full_url);
+  if (fullUrl) return trustedUploadUrl(fullUrl);
+  const uploadParam = nonEmptyString(response?.upload_param);
+  if (!uploadParam) throw new WeixinMediaError("missing-upload-url", "\u5FAE\u4FE1\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u6587\u4EF6\u4E0A\u4F20\u5730\u5740\u3002");
+  const url = new URL(`${MEDIA_CDN_BASE_URL}/upload`);
+  url.searchParams.set("encrypted_query_param", uploadParam);
+  url.searchParams.set("filekey", fileKey);
+  return trustedUploadUrl(url.toString());
+}
+async function* encryptChunks(bytes, key, { signal, onProgress }) {
+  const cipher = createCipheriv("aes-128-ecb", key, null);
+  for (let offset = 0; offset < bytes.byteLength; offset += UPLOAD_CHUNK_BYTES) {
+    signal?.throwIfAborted();
+    const chunk = cipher.update(bytes.subarray(offset, offset + UPLOAD_CHUNK_BYTES));
+    onProgress();
+    if (chunk.byteLength) yield chunk;
+  }
+  signal?.throwIfAborted();
+  onProgress();
+  yield cipher.final();
+}
+async function uploadMediaToCdn({
+  url,
+  bytes,
+  key,
+  signal,
+  fetchImpl = fetch
+}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl \u5FC5\u987B\u662F\u51FD\u6570\u3002");
+  const target = url instanceof URL ? url : trustedUploadUrl(url);
+  let lastError;
+  for (let attempt = 1; attempt <= UPLOAD_RETRIES; attempt += 1) {
+    signal?.throwIfAborted();
+    const idle = new AbortController();
+    const uploadSignal = signal ? AbortSignal.any([signal, idle.signal]) : idle.signal;
+    let timer;
+    let active = true;
+    const onProgress = () => {
+      if (!active) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => idle.abort(new WeixinMediaError(
+        "upload-timeout",
+        "\u5FAE\u4FE1\u6587\u4EF6\u4E0A\u4F20\u957F\u65F6\u95F4\u6CA1\u6709\u8FDB\u5C55\uFF0C\u5DF2\u8D85\u65F6\u3002"
+      )), UPLOAD_IDLE_TIMEOUT_MS);
+    };
+    const body = encryptChunks(bytes, key, { signal: uploadSignal, onProgress });
+    let response;
+    onProgress();
+    try {
+      response = await fetchImpl(target, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(aesEcbPaddedSize(bytes.byteLength))
+        },
+        body,
+        duplex: "half",
+        redirect: "error",
+        signal: uploadSignal
+      });
+      uploadSignal.throwIfAborted();
+      if (response.status >= 400 && response.status < 500) {
+        throw new WeixinMediaError("upload-rejected", `\u5FAE\u4FE1\u6587\u4EF6\u4E0A\u4F20\u88AB\u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09\u3002`);
+      }
+      if (response.status !== 200) {
+        throw new WeixinMediaError("upload-failed", `\u5FAE\u4FE1\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF08HTTP ${response.status}\uFF09\u3002`);
+      }
+      const downloadParam = nonEmptyString(response.headers?.get?.("x-encrypted-param"));
+      if (!downloadParam) {
+        throw new WeixinMediaError("invalid-upload-response", "\u5FAE\u4FE1\u6587\u4EF6\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u4E0B\u8F7D\u53C2\u6570\u3002");
+      }
+      return downloadParam;
+    } catch (cause) {
+      if (signal?.aborted) signal.throwIfAborted();
+      const failure = idle.signal.aborted ? idle.signal.reason : cause;
+      lastError = failure;
+      if (failure instanceof WeixinMediaError && (failure.code === "upload-rejected" || failure.code === "upload-timeout" || failure.code === "invalid-upload-response")) {
+        throw failure;
+      }
+    } finally {
+      active = false;
+      clearTimeout(timer);
+      await body.return?.();
+      await response?.body?.cancel?.().catch?.(() => void 0);
+    }
+  }
+  throw lastError instanceof WeixinMediaError ? lastError : new WeixinMediaError("upload-failed", "\u5FAE\u4FE1\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\u3002", { cause: lastError });
+}
+
+// packages/dsh-chat-weixin/host/ilink-client.mjs
+var DEFAULT_QR_BASE_URL = "https://ilinkai.weixin.qq.com/";
+var PROTOCOL_VERSION = "2.4.6";
+var DEFAULT_BOT_TYPE = "3";
+var MAX_MESSAGE_CHARS = 1800;
+var ILINK_APP_ID = "bot";
+var ILINK_CLIENT_VERSION = 2 << 16 | 4 << 8 | 6;
+var DEFAULT_TIMEOUT_MS = 15e3;
+var LONG_POLL_TIMEOUT_MS = 35e3;
+var LOGIN_STATUSES = Object.freeze([
+  "wait",
+  "scaned",
+  "confirmed",
+  "expired",
+  "scaned_but_redirect",
+  "need_verifycode",
+  "verify_code_blocked",
+  "binded_redirect"
+]);
+var IlinkError = class extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "IlinkError";
+    this.code = code;
+    this.status = options.status;
+    this.providerCode = options.providerCode;
+    this.timeoutMs = options.timeoutMs;
+  }
+};
+function nonEmptyString2(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function abortError(signal) {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error("\u64CD\u4F5C\u5DF2\u53D6\u6D88");
+  error.name = "AbortError";
+  return error;
+}
+function rejectedResponse(value, fields = ["ret", "errcode"]) {
+  if (!value || typeof value !== "object") return null;
+  for (const field of fields) {
+    const raw = value[field];
+    if (raw === void 0 || raw === 0 || raw === "0") continue;
+    return typeof raw === "string" || typeof raw === "number" ? String(raw) : "rejected";
+  }
+  return null;
+}
+function isWeixinHost(hostname) {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return normalized === "weixin.qq.com" || normalized.endsWith(".weixin.qq.com") || normalized === "wechat.com" || normalized.endsWith(".wechat.com");
+}
+function normalizeBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new IlinkError("invalid-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u8FDE\u63A5\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || !isWeixinHost(url.hostname) || url.port !== "" && url.port !== "443") {
+    throw new IlinkError("untrusted-base-url", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u8FDE\u63A5\u5730\u5740\u3002");
+  }
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url.toString();
+}
+function normalizeQrUrl(value) {
+  const text = nonEmptyString2(value);
+  if (!text) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u626B\u7801\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || !isWeixinHost(url.hostname)) {
+    throw new IlinkError("untrusted-qr", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u4E0D\u53D7\u4FE1\u4EFB\u7684\u626B\u7801\u5730\u5740\u3002");
+  }
+  return url.toString();
+}
+function commonHeaders() {
+  return {
+    "iLink-App-Id": ILINK_APP_ID,
+    "iLink-App-ClientVersion": String(ILINK_CLIENT_VERSION)
+  };
+}
+function authenticatedHeaders(token) {
+  const headers = {
+    ...commonHeaders(),
+    "content-type": "application/json",
+    AuthorizationType: "ilink_bot_token",
+    "X-WECHAT-UIN": Buffer.from(String(randomBytes(4).readUInt32BE(0)), "utf8").toString("base64")
+  };
+  const value = nonEmptyString2(token);
+  if (value) headers.Authorization = `Bearer ${value}`;
+  return headers;
+}
+function baseInfo() {
+  return { channel_version: PROTOCOL_VERSION, bot_agent: "dsh-chat/0.0.1" };
+}
+async function requestJson(fetchImpl, {
+  method,
+  baseUrl,
+  endpoint,
+  body,
+  token,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal,
+  authenticated = true
+}) {
+  const trustedBase = normalizeBaseUrl(baseUrl);
+  const url = new URL(endpoint, trustedBase);
+  if (!isWeixinHost(url.hostname)) {
+    throw new IlinkError("untrusted-endpoint", "\u62D2\u7EDD\u8BBF\u95EE\u4E0D\u53D7\u4FE1\u4EFB\u7684\u5FAE\u4FE1\u670D\u52A1\u5730\u5740\u3002");
+  }
+  if (signal?.aborted) throw abortError(signal);
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let timedOut = false;
+  const timer = timeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : null;
+  try {
+    const response = await fetchImpl(url, {
+      method,
+      headers: authenticated ? authenticatedHeaders(token) : commonHeaders(),
+      ...body === void 0 ? {} : { body: JSON.stringify(body) },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new IlinkError("http-error", `\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u5931\u8D25\uFF08HTTP ${response.status}\uFF09\u3002`, {
+        status: response.status
+      });
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new IlinkError("invalid-response", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u54CD\u5E94\u3002", { cause: error });
+    }
+  } catch (error) {
+    if (signal?.aborted) throw abortError(signal);
+    if (timedOut) {
+      throw new IlinkError("timeout", "\u5FAE\u4FE1\u670D\u52A1\u8BF7\u6C42\u8D85\u65F6\u3002", { cause: error, timeoutMs });
+    }
+    throw error instanceof IlinkError ? error : new IlinkError("network-error", "\u6682\u65F6\u65E0\u6CD5\u8BBF\u95EE\u5FAE\u4FE1\u670D\u52A1\u3002", { cause: error });
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener?.("abort", onAbort);
+  }
+}
+function extractText(message) {
+  for (const item of message?.item_list ?? []) {
+    if (item?.type === 1 && typeof item.text_item?.text === "string") {
+      const text = item.text_item.text.trim();
+      if (text) return text;
+    }
+    if (item?.type === 3 && typeof item.voice_item?.text === "string") {
+      const text = item.voice_item.text.trim();
+      if (text) return text;
+    }
+  }
+  return null;
+}
+function messageId(message) {
+  if (message?.message_id !== void 0 && message.message_id !== null) {
+    return String(message.message_id);
+  }
+  return nonEmptyString2(message?.client_id);
+}
+function splitText(text, maxChars = MAX_MESSAGE_CHARS) {
+  if (text.length <= maxChars) return [text];
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf("\n", maxChars);
+    if (splitAt < Math.floor(maxChars * 0.6)) splitAt = maxChars;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+async function sendArtifact(fetchImpl, {
+  baseUrl,
+  token,
+  toUserId,
+  bytes,
+  contextToken,
+  runId,
+  signal
+}, { mediaType, buildItem }) {
+  const recipient = nonEmptyString2(toUserId);
+  if (!recipient || !bytes?.byteLength) {
+    throw new TypeError("\u53D1\u9001\u5A92\u4F53\u9700\u8981 toUserId \u4E0E\u975E\u7A7A\u5B57\u8282\u3002");
+  }
+  signal?.throwIfAborted();
+  const fileKey = randomBytes(16).toString("hex");
+  const aesKey = randomBytes(16);
+  const ciphertextSize = aesEcbPaddedSize(bytes.byteLength);
+  const upload = await requestJson(fetchImpl, {
+    method: "POST",
+    baseUrl,
+    endpoint: "ilink/bot/getuploadurl",
+    token,
+    signal,
+    body: {
+      filekey: fileKey,
+      media_type: mediaType,
+      to_user_id: recipient,
+      rawsize: bytes.byteLength,
+      rawfilemd5: createHash("md5").update(bytes).digest("hex"),
+      filesize: ciphertextSize,
+      no_need_thumb: true,
+      aeskey: aesKey.toString("hex"),
+      base_info: baseInfo()
+    }
+  });
+  const uploadRejection = rejectedResponse(upload);
+  if (uploadRejection) {
+    throw new IlinkError("upload-url-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u6587\u4EF6\u4E0A\u4F20\u8BF7\u6C42\u3002", {
+      providerCode: uploadRejection
+    });
+  }
+  const downloadParam = await uploadMediaToCdn({
+    url: mediaUploadUrl(upload, fileKey),
+    bytes,
+    key: aesKey,
+    signal,
+    fetchImpl
+  });
+  const media = {
+    encrypt_query_param: downloadParam,
+    // 服务端要的是"十六进制字符串再做 base64"，与入站解析保持一致。
+    aes_key: Buffer.from(aesKey.toString("hex"), "utf8").toString("base64"),
+    encrypt_type: 1
+  };
+  const clientId = `dsh-chat-weixin-${randomUUID()}`;
+  const response = await requestJson(fetchImpl, {
+    method: "POST",
+    baseUrl,
+    endpoint: "ilink/bot/sendmessage",
+    token,
+    signal,
+    body: {
+      msg: {
+        from_user_id: "",
+        to_user_id: recipient,
+        client_id: clientId,
+        message_type: 2,
+        message_state: 2,
+        item_list: [buildItem({ media, ciphertextSize })],
+        ...nonEmptyString2(contextToken) ? { context_token: contextToken } : {},
+        ...nonEmptyString2(runId) ? { run_id: runId } : {}
+      },
+      base_info: baseInfo()
+    }
+  });
+  const sendRejection = rejectedResponse(response);
+  if (sendRejection) {
+    throw new IlinkError("send-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u6587\u4EF6\u6D88\u606F\u3002", { providerCode: sendRejection });
+  }
+  return { providerMessageIds: [clientId] };
+}
+function createIlinkClient({ fetchImpl = fetch } = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("ilink \u5BA2\u6237\u7AEF\u9700\u8981 fetch\u3002");
+  return Object.freeze({
+    /**
+     * 申请登录二维码。
+     *
+     * @param options - { localTokens, botType, signal }。
+     * @returns { qrcode, qrcodeUrl }。
+     */
+    async beginLogin({ localTokens = [], botType = DEFAULT_BOT_TYPE, signal } = {}) {
+      const tokens = [...new Set(localTokens.map(nonEmptyString2).filter(Boolean))].slice(-10);
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl: DEFAULT_QR_BASE_URL,
+        endpoint: `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(botType)}`,
+        body: { local_token_list: tokens },
+        timeoutMs: 1e4,
+        signal
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError("qr-request-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u4E8C\u7EF4\u7801\u7533\u8BF7\u3002", {
+          providerCode: rejection
+        });
+      }
+      const qrcode = nonEmptyString2(response?.qrcode);
+      if (!qrcode) throw new IlinkError("invalid-qr", "\u5FAE\u4FE1\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u4E8C\u7EF4\u7801\u4EE4\u724C\u3002");
+      return { qrcode, qrcodeUrl: normalizeQrUrl(response?.qrcode_img_content) };
+    },
+    /**
+     * 轮询扫码状态。
+     *
+     * @param options - { qrcode, baseUrl, verifyCode, signal }。
+     * @returns 服务端状态对象。
+     */
+    async pollLogin({ qrcode, baseUrl = DEFAULT_QR_BASE_URL, verifyCode, signal }) {
+      const qr = nonEmptyString2(qrcode);
+      if (!qr) throw new TypeError("pollLogin \u9700\u8981 qrcode\u3002");
+      let endpoint = `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qr)}`;
+      const code = nonEmptyString2(verifyCode);
+      if (code) endpoint += `&verify_code=${encodeURIComponent(code)}`;
+      const response = await requestJson(fetchImpl, {
+        method: "GET",
+        baseUrl,
+        endpoint,
+        timeoutMs: LONG_POLL_TIMEOUT_MS,
+        signal,
+        authenticated: false
+      });
+      if (!response || typeof response !== "object" || !LOGIN_STATUSES.includes(response.status)) {
+        throw new IlinkError("invalid-login-status", "\u5FAE\u4FE1\u670D\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u8BC6\u522B\u7684\u626B\u7801\u72B6\u6001\u3002");
+      }
+      return response;
+    },
+    /**
+     * 长轮询收取消息；超时视为"这一轮没有新消息"。
+     *
+     * @param options - { baseUrl, token, getUpdatesBuf, timeoutMs, signal }。
+     * @returns { ret, msgs, get_updates_buf }。
+     */
+    async getUpdates({ baseUrl, token, getUpdatesBuf = "", timeoutMs, signal }) {
+      try {
+        return await requestJson(fetchImpl, {
+          method: "POST",
+          baseUrl,
+          endpoint: "ilink/bot/getupdates",
+          body: { get_updates_buf: getUpdatesBuf, base_info: baseInfo() },
+          token,
+          timeoutMs: timeoutMs ?? LONG_POLL_TIMEOUT_MS,
+          signal
+        });
+      } catch (error) {
+        if (error instanceof IlinkError && error.code === "timeout") {
+          return { ret: 0, msgs: [], get_updates_buf: getUpdatesBuf };
+        }
+        throw error;
+      }
+    },
+    /**
+     * 取该用户的机器人配置（主要是 typing_ticket）。
+     *
+     * @param options - { baseUrl, token, toUserId, contextToken, signal }。
+     * @returns { typingTicket }。
+     */
+    async getConfig({ baseUrl, token, toUserId, contextToken, signal }) {
+      const recipient = nonEmptyString2(toUserId);
+      if (!recipient) throw new TypeError("getConfig \u9700\u8981 toUserId\u3002");
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/getconfig",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: {
+          ilink_user_id: recipient,
+          ...nonEmptyString2(contextToken) ? { context_token: contextToken } : {},
+          base_info: baseInfo()
+        }
+      });
+      if (response?.ret !== void 0 && response.ret !== 0) {
+        throw new IlinkError("config-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u673A\u5668\u4EBA\u914D\u7F6E\u8BF7\u6C42\u3002", {
+          providerCode: String(response.ret)
+        });
+      }
+      return { typingTicket: nonEmptyString2(response?.typing_ticket) };
+    },
+    /**
+     * 发送/结束"正在输入"。
+     *
+     * @param options - { baseUrl, token, toUserId, typingTicket, status }，status 1=开始 2=结束。
+     */
+    async sendTyping({ baseUrl, token, toUserId, typingTicket, status, signal }) {
+      const recipient = nonEmptyString2(toUserId);
+      const ticket = nonEmptyString2(typingTicket);
+      if (!recipient || !ticket) throw new TypeError("sendTyping \u9700\u8981 toUserId \u4E0E typingTicket\u3002");
+      if (status !== 1 && status !== 2) throw new TypeError("typing status \u53EA\u80FD\u662F 1 \u6216 2\u3002");
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/sendtyping",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: {
+          ilink_user_id: recipient,
+          typing_ticket: ticket,
+          status,
+          base_info: baseInfo()
+        }
+      });
+      if (response?.ret !== void 0 && response.ret !== 0) {
+        throw new IlinkError("typing-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u8F93\u5165\u72B6\u6001\u8BF7\u6C42\u3002", {
+          providerCode: String(response.ret)
+        });
+      }
+      return true;
+    },
+    /**
+     * 发送一条文本消息。
+     *
+     * @param options - { baseUrl, token, toUserId, text, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendText({ baseUrl, token, toUserId, text, contextToken, runId, signal }) {
+      const recipient = nonEmptyString2(toUserId);
+      const content = nonEmptyString2(text);
+      if (!recipient || !content) throw new TypeError("sendText \u9700\u8981 toUserId \u4E0E text\u3002");
+      const clientId = `dsh-chat-weixin-${randomUUID()}`;
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/sendmessage",
+        token,
+        signal,
+        body: {
+          msg: {
+            from_user_id: "",
+            to_user_id: recipient,
+            client_id: clientId,
+            message_type: 2,
+            message_state: 2,
+            item_list: [{ type: 1, text_item: { text: content } }],
+            ...nonEmptyString2(contextToken) ? { context_token: contextToken } : {},
+            ...nonEmptyString2(runId) ? { run_id: runId } : {}
+          },
+          base_info: baseInfo()
+        }
+      });
+      const rejection = rejectedResponse(response);
+      if (rejection) {
+        throw new IlinkError("send-rejected", "\u5FAE\u4FE1\u670D\u52A1\u62D2\u7EDD\u4E86\u56DE\u590D\u6D88\u606F\u3002", { providerCode: rejection });
+      }
+      return { providerMessageIds: [clientId] };
+    },
+    /**
+     * 发送一个文件（`file_item`）。
+     *
+     * @param options - { baseUrl, token, toUserId, fileName, bytes, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendFile({
+      baseUrl,
+      token,
+      toUserId,
+      fileName,
+      bytes,
+      contextToken,
+      runId,
+      signal
+    }) {
+      const name2 = nonEmptyString2(fileName);
+      if (!name2) throw new TypeError("sendFile \u9700\u8981 fileName\u3002");
+      return sendArtifact(fetchImpl, {
+        baseUrl,
+        token,
+        toUserId,
+        bytes,
+        contextToken,
+        runId,
+        signal
+      }, {
+        mediaType: 3,
+        buildItem: ({ media }) => ({
+          type: 4,
+          file_item: { media, file_name: name2, len: String(bytes.byteLength) }
+        })
+      });
+    },
+    /**
+     * 发送一张图片（`image_item`，聊天里显示为图片气泡）。
+     *
+     * @param options - { baseUrl, token, toUserId, bytes, contextToken, runId, signal }。
+     * @returns { providerMessageIds }。
+     */
+    async sendImage({
+      baseUrl,
+      token,
+      toUserId,
+      bytes,
+      contextToken,
+      runId,
+      signal
+    }) {
+      return sendArtifact(fetchImpl, {
+        baseUrl,
+        token,
+        toUserId,
+        bytes,
+        contextToken,
+        runId,
+        signal
+      }, {
+        mediaType: 1,
+        buildItem: ({ media, ciphertextSize }) => ({
+          type: 2,
+          image_item: { media, mid_size: ciphertextSize }
+        })
+      });
+    },
+    /** 告诉服务端本机器人开始工作（连接建立时调用）。 */
+    async notifyStart({ baseUrl, token, signal }) {
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/msg/notifystart",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: { base_info: baseInfo() }
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError(
+          rejection === "-14" ? "stale-token" : "start-rejected",
+          rejection === "-14" ? "\u5FAE\u4FE1\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801\u3002" : "\u5FAE\u4FE1\u8D26\u53F7\u8FDE\u63A5\u542F\u52A8\u5931\u8D25\u3002",
+          { providerCode: rejection }
+        );
+      }
+      return response;
+    },
+    /** 告诉服务端本机器人停止工作。 */
+    async notifyStop({ baseUrl, token, signal }) {
+      const response = await requestJson(fetchImpl, {
+        method: "POST",
+        baseUrl,
+        endpoint: "ilink/bot/msg/notifystop",
+        token,
+        signal,
+        timeoutMs: 1e4,
+        body: { base_info: baseInfo() }
+      });
+      const rejection = rejectedResponse(response, ["errcode", "ret"]);
+      if (rejection) {
+        throw new IlinkError("stop-rejected", "\u5FAE\u4FE1\u670D\u52A1\u672A\u786E\u8BA4\u505C\u6B62\u901A\u77E5\u3002", { providerCode: rejection });
+      }
+      return response;
+    }
+  });
+}
 
 // packages/dsh-chat-weixin/host/runtime.mjs
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 function createWeixinRuntime({
   account,
   token,
@@ -1030,6 +1289,35 @@ function createWeixinRuntime({
       const chunks = await reply(recipient, String(text ?? ""), state.contextToken(recipient), void 0, signal);
       return { chunks };
     },
+    /**
+     * 主动发一个文件或图片（agent 的 `chat_send_file` 与定时任务用）。
+     *
+     * 由调用方给"绝对路径 + 显示名 + kind"（hub 的投递层已经校验过存在、非空、不超限），
+     * 这里只负责读字节、加密上传、发送。kind 为 image 时走图片气泡，否则走文件消息。
+     *
+     * @param options - { userId, path, name, kind, signal }。
+     * @returns { kind, name, size, providerMessageIds }。
+     */
+    async sendFileProactive({ userId, path, name: name2, kind, signal }) {
+      const recipient = typeof userId === "string" ? userId.trim() : "";
+      if (!recipient) throw new TypeError("sendFileProactive \u9700\u8981 userId\u3002");
+      if (typeof path !== "string" || !path) throw new TypeError("sendFileProactive \u9700\u8981 path\u3002");
+      const bytes = await readFile(path);
+      if (bytes.byteLength === 0) throw new Error("\u8981\u53D1\u9001\u7684\u6587\u4EF6\u662F\u7A7A\u7684\u3002");
+      const fileName = typeof name2 === "string" && name2.trim() ? name2.trim() : basename(path);
+      const contextToken = state.contextToken(recipient);
+      const sent = kind === "image" ? await client.sendImage({ baseUrl, token, toUserId: recipient, bytes, contextToken, signal }) : await client.sendFile({
+        baseUrl,
+        token,
+        toUserId: recipient,
+        fileName,
+        bytes,
+        contextToken,
+        signal
+      });
+      logger.info?.(`[dsh-chat-weixin] \u5DF2\u53D1\u9001${kind === "image" ? "\u56FE\u7247" : "\u6587\u4EF6"}\uFF1A${fileName}\uFF08${bytes.byteLength} \u5B57\u8282\uFF0C${account.botId}\uFF09`);
+      return { ...sent, kind: kind === "image" ? "image" : "file", name: fileName, size: bytes.byteLength };
+    },
     status: () => Object.freeze({
       botId: account.botId,
       phase,
@@ -1167,7 +1455,7 @@ var LOGIN_TTL_MS = 5 * 6e4;
 function deriveIdentity(accountId) {
   const raw = typeof accountId === "string" ? accountId.trim() : "";
   if (!raw) throw new TypeError("deriveIdentity \u9700\u8981 accountId\u3002");
-  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
+  const digest = createHash2("sha256").update(raw).digest("hex").slice(0, 24);
   return { botId: `wx_${digest}`, tokenRef: `DSH_WEIXIN_BOT_TOKEN_${digest.toUpperCase()}` };
 }
 function maskAccountId(accountId) {
@@ -1336,6 +1624,32 @@ function createWeixinController({ deps, logger = console, config = {}, internals
         throw error;
       }
       return record.runtime.sendProactive({ userId, text });
+    },
+    /**
+     * 主动发一个文件或图片（`delivery.sendFile`）。
+     *
+     * 与文本同一条安全边界：只能发给**已保存**的目标（hub 已校验），这里只确认账号在线、
+     * 目标带得上 userId，然后把"路径 + 显示名 + kind"交给运行时去读字节并发送。
+     */
+    async sendFile({ botId, target, file }) {
+      const record = runtimes.get(botId);
+      if (!record?.runtime || record.phase !== "running") {
+        const error = new Error(`\u8D26\u53F7 ${botId} \u5F53\u524D\u4E0D\u5728\u7EBF\uFF0C\u65E0\u6CD5\u6295\u9012\u3002`);
+        error.code = "weixin/account-offline";
+        throw error;
+      }
+      const userId = target.route?.userId;
+      if (!userId) {
+        const error = new Error("\u6295\u9012\u76EE\u6807\u7684 route \u7F3A\u5C11 userId\u3002");
+        error.code = "chat/bad-target";
+        throw error;
+      }
+      return record.runtime.sendFileProactive({
+        userId,
+        path: file.path,
+        name: file.name,
+        kind: file.kind
+      });
     },
     /** 从该账号的会话记录里发现候选目标。 */
     async discover({ botId }) {

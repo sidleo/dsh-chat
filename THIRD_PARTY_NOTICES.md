@@ -16,7 +16,7 @@
      | 本仓库文件 | 上游来源 | 移植范围 |
      |---|---|---|
      | `packages/dsh-chat-weixin/host/ilink-client.mjs` | `src/channels/weixin/weixin-api.mjs` | 扫码登录、长轮询、发文本 |
-     | `packages/dsh-chat-weixin/host/media.mjs` | 同上 + `src/channels/shared/image-prompt.mjs` | 入站图片/文件的 AES-128-ECB 解密与 CDN 下载（收窄为"下载并解密成 Buffer"，去掉上游 i18n、artifact 错误分类、惰性引用包装与出站上传） |
+     | `packages/dsh-chat-weixin/host/media.mjs` | 同上 + `src/channels/shared/image-prompt.mjs` | 入站图片/文件的 AES-128-ECB 解密与 CDN 下载、出站加密与 CDN 上传（收窄为"下载解密"与"加密上传"两组纯函数，去掉上游 i18n、artifact 错误分类与惰性引用包装） |
 - 上游许可原文：
 
 ```

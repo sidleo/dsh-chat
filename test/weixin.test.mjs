@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { createCipheriv } from 'node:crypto';
+import { createCipheriv, createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,10 +24,14 @@ import {
 } from '../packages/dsh-chat-weixin/host/ilink-client.mjs';
 import { createWeixinRuntime } from '../packages/dsh-chat-weixin/host/runtime.mjs';
 import {
+  aesEcbPaddedSize,
   decryptMedia,
   mediaDownloadUrl,
+  mediaUploadUrl,
   parseMediaAesKey,
   sniffImageMediaType,
+  trustedUploadUrl,
+  uploadMediaToCdn,
 } from '../packages/dsh-chat-weixin/host/media.mjs';
 import { createWeixinStateStore } from '../packages/dsh-chat-weixin/host/state-store.mjs';
 
@@ -136,7 +140,9 @@ test('文本提取与分段', () => {
 });
 
 function createFakeClient(script = {}) {
-  const calls = { updates: [], texts: [], typing: [], config: [], starts: 0, stops: 0 };
+  const calls = {
+    updates: [], texts: [], typing: [], config: [], files: [], images: [], starts: 0, stops: 0,
+  };
   let queue = [...(script.updates ?? [])];
   return {
     calls,
@@ -162,6 +168,14 @@ function createFakeClient(script = {}) {
     async sendText(options) {
       calls.texts.push(options);
       return { providerMessageIds: ['id'] };
+    },
+    async sendFile(options) {
+      calls.files.push(options);
+      return { providerMessageIds: ['file-id'] };
+    },
+    async sendImage(options) {
+      calls.images.push(options);
+      return { providerMessageIds: ['image-id'] };
     },
     async notifyStart() {
       calls.starts += 1;
@@ -800,6 +814,325 @@ test('控制器：凭据缺失时账号标记失败但不影响其他账号', as
     await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('控制器：delivery.sendFile 只发给在线账号的 p2p 目标，账号离线/目标缺 userId 都明确报错', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-ctl3-'));
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-ctl3-out-'));
+  const client = createFakeClient();
+  const controller = createWeixinController({
+    deps: {
+      channelId: 'weixin',
+      dataDir,
+      logger: silentLogger,
+      createJsonStore,
+      credentials: { resolve: async () => ({ value: 'tok' }) },
+      contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+      accessPolicy,
+      storage: { read: () => ({ workspace: dir, contextEnhancement: null, accessPolicy: null }) },
+      ready: async () => {},
+      sessions: {
+        ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+        ensure: async () => ({ sessionId: 's' }),
+        uploadFile: async () => ({ receiptId: 'r' }),
+        bindings: { adopt: async () => 0 },
+      },
+    },
+    logger: silentLogger,
+    internals: { createClient: () => client },
+  });
+
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 1,
+      accounts: [{
+        botId: 'wx_delivery', accountId: 'a@im.bot', tokenRef: 'REF',
+        ownerUserId: 'u@im.wechat', baseUrl: 'https://ilinkai.weixin.qq.com/',
+      }],
+    }), 'utf8');
+
+    const file = join(dir, '报表.csv');
+    await writeFile(file, 'a,b\n1,2\n', 'utf8');
+
+    // 未启动 → 明确的离线错误，不发任何东西
+    await assert.rejects(
+      () => controller.delivery.sendFile({
+        botId: 'wx_delivery',
+        target: { route: { userId: 'u@im.wechat' } },
+        file: { path: file, name: '报表.csv', kind: 'file' },
+      }),
+      (error) => error.code === 'weixin/account-offline',
+    );
+
+    await controller.start();
+    const sent = await controller.delivery.sendFile({
+      botId: 'wx_delivery',
+      target: { route: { userId: 'u@im.wechat' } },
+      file: { path: file, name: '报表.csv', kind: 'file' },
+    });
+    assert.equal(sent.kind, 'file');
+    assert.equal(sent.size, 8);
+    assert.equal(client.calls.files.length, 1);
+
+    await assert.rejects(
+      () => controller.delivery.sendFile({
+        botId: 'wx_delivery', target: { route: {} }, file: { path: file, kind: 'file' },
+      }),
+      (error) => error.code === 'chat/bad-target',
+    );
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('媒体：上传前按 AES 填充算长度，上传地址只信任 CDN 的 /c2c/upload', () => {
+  assert.equal(aesEcbPaddedSize(0), 16);
+  assert.equal(aesEcbPaddedSize(15), 16);
+  assert.equal(aesEcbPaddedSize(16), 32);
+  assert.equal(aesEcbPaddedSize(1_000), 1_008);
+
+  const ok = trustedUploadUrl('https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=x');
+  assert.equal(ok.pathname, '/c2c/upload');
+  for (const bad of [
+    'http://novac2c.cdn.weixin.qq.com/c2c/upload',
+    'https://evil.example.com/c2c/upload',
+    'https://novac2c.cdn.weixin.qq.com/c2c/download',
+    'https://novac2c.cdn.weixin.qq.com:8443/c2c/upload',
+  ]) {
+    assert.throws(() => trustedUploadUrl(bad), /不受信任|无效/, bad);
+  }
+
+  // upload_full_url 优先但要过校验；只有 upload_param 时自己拼
+  assert.equal(
+    mediaUploadUrl({ upload_full_url: 'https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=abc' }, 'abc').toString(),
+    'https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=abc',
+  );
+  const built = mediaUploadUrl({ upload_param: 'p q' }, 'fk/1');
+  assert.match(
+    built.toString(),
+    /^https:\/\/novac2c\.cdn\.weixin\.qq\.com\/c2c\/upload\?encrypted_query_param=p\+q&filekey=fk%2F1$/,
+  );
+  assert.throws(() => mediaUploadUrl({}, 'fk'), (error) => error.code === 'missing-upload-url');
+});
+
+test('媒体：加密上传是流式推送，长度按填充后算，下载参数取响应头', async () => {
+  const key = Buffer.from('0123456789abcdef', 'utf8');
+  const plaintext = Buffer.alloc(200, 7);
+  let seen = null;
+  const fetchImpl = async (url, init) => {
+    const chunks = [];
+    for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+    seen = {
+      url: String(url),
+      method: init.method,
+      duplex: init.duplex,
+      contentLength: Number(init.headers['content-length']),
+      ciphertext: Buffer.concat(chunks),
+    };
+    return {
+      status: 200,
+      headers: { get: (name) => (name === 'x-encrypted-param' ? 'download-param-1' : null) },
+    };
+  };
+
+  const param = await uploadMediaToCdn({
+    url: 'https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=k',
+    bytes: plaintext,
+    key,
+    fetchImpl,
+  });
+
+  assert.equal(param, 'download-param-1');
+  assert.equal(seen.method, 'POST');
+  assert.equal(seen.duplex, 'half', '要边加密边推流');
+  assert.equal(seen.contentLength, aesEcbPaddedSize(plaintext.byteLength));
+  assert.equal(seen.ciphertext.byteLength, seen.contentLength);
+  assert.deepEqual(decryptMedia(seen.ciphertext, key), plaintext, '上传的密文要能被同一把钥匙解开');
+});
+
+test('媒体：上传响应缺参数 / 被拒 / 5xx 重试后仍失败，都要抛出可读错误', async () => {
+  const key = Buffer.from('0123456789abcdef', 'utf8');
+  const url = 'https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=k';
+  const bytes = Buffer.alloc(32, 1);
+
+  await assert.rejects(
+    () => uploadMediaToCdn({
+      url, bytes, key,
+      fetchImpl: async () => ({ status: 200, headers: { get: () => null } }),
+    }),
+    (error) => error.code === 'invalid-upload-response',
+  );
+
+  await assert.rejects(
+    () => uploadMediaToCdn({
+      url, bytes, key,
+      fetchImpl: async () => ({ status: 403, headers: { get: () => null } }),
+    }),
+    (error) => error.code === 'upload-rejected',
+  );
+
+  let attempts = 0;
+  await assert.rejects(
+    () => uploadMediaToCdn({
+      url, bytes, key,
+      fetchImpl: async () => { attempts += 1; return { status: 500, headers: { get: () => null } }; },
+    }),
+    (error) => error.code === 'upload-failed',
+  );
+  assert.equal(attempts, 3, '5xx 要重试 3 次');
+});
+
+test('协议客户端：发文件的请求形状（getuploadurl → CDN → sendmessage）', async () => {
+  const calls = [];
+  const uploads = [];
+  const fetchImpl = async (url, init) => {
+    const target = String(url);
+    if (target.includes('/c2c/upload')) {
+      const chunks = [];
+      for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+      uploads.push({ target, ciphertext: Buffer.concat(chunks), contentLength: Number(init.headers['content-length']) });
+      return { status: 200, headers: { get: (name) => (name === 'x-encrypted-param' ? 'dl-param' : null) } };
+    }
+    calls.push({ url: target, body: init.body ? JSON.parse(init.body) : null });
+    if (target.endsWith('ilink/bot/getuploadurl')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ret: 0, upload_full_url: 'https://novac2c.cdn.weixin.qq.com/c2c/upload?filekey=x' }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ ret: 0 }) };
+  };
+  const client = createIlinkClient({ fetchImpl });
+  const bytes = Buffer.from('指标,数值\n销售额,100\n', 'utf8');
+
+  const sent = await client.sendFile({
+    baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'tok', toUserId: 'u@im.wechat',
+    fileName: '指标.csv', bytes, contextToken: 'ctx', runId: 'run',
+  });
+
+  // ① getuploadurl：报备原始大小/MD5/填充后大小与 AES 密钥
+  const uploadRequest = calls[0].body;
+  const aesKeyHex = uploadRequest.aeskey;
+  assert.match(aesKeyHex, /^[0-9a-f]{32}$/);
+  assert.equal(uploadRequest.media_type, 3, '文件用 media_type 3');
+  assert.equal(uploadRequest.to_user_id, 'u@im.wechat');
+  assert.equal(uploadRequest.rawsize, bytes.byteLength);
+  assert.equal(uploadRequest.filesize, aesEcbPaddedSize(bytes.byteLength));
+  assert.equal(uploadRequest.rawfilemd5, createHash('md5').update(bytes).digest('hex'));
+  assert.equal(uploadRequest.no_need_thumb, true);
+  assert.equal(typeof uploadRequest.filekey, 'string');
+
+  // ② 上传到 CDN：密文用报备过的那把钥匙能解开
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(
+    decryptMedia(uploads[0].ciphertext, Buffer.from(aesKeyHex, 'hex')),
+    bytes,
+  );
+
+  // ③ sendmessage：file_item 引用 CDN 上的密文
+  const msg = calls.at(-1).body.msg;
+  assert.equal(msg.message_type, 2);
+  assert.equal(msg.to_user_id, 'u@im.wechat');
+  assert.equal(msg.context_token, 'ctx');
+  assert.equal(msg.run_id, 'run');
+  assert.equal(msg.item_list.length, 1);
+  const item = msg.item_list[0];
+  assert.equal(item.type, 4);
+  assert.equal(item.file_item.file_name, '指标.csv');
+  assert.equal(item.file_item.len, String(bytes.byteLength));
+  assert.equal(item.file_item.media.encrypt_query_param, 'dl-param');
+  assert.equal(item.file_item.media.encrypt_type, 1);
+  // 发出去的 aes_key 用**我们自己的入站解析器**能读回来（收发两个方向必须自洽）
+  assert.deepEqual(
+    parseMediaAesKey({ media: item.file_item.media }),
+    Buffer.from(aesKeyHex, 'hex'),
+  );
+  assert.deepEqual(sent.providerMessageIds, [msg.client_id]);
+});
+
+test('协议客户端：发图片走 image_item，缺少接收人/文件名时明确报错', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/c2c/upload')) {
+      if (init.body?.[Symbol.asyncIterator]) {
+        for await (const _chunk of init.body) { /* 消费掉推流 */ }
+      }
+      return { status: 200, headers: { get: () => 'dl-img' } };
+    }
+    calls.push({ url: String(url), body: JSON.parse(init.body) });
+    if (String(url).endsWith('getuploadurl')) {
+      return { ok: true, status: 200, json: async () => ({ upload_param: 'up-param' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ret: 0 }) };
+  };
+  const client = createIlinkClient({ fetchImpl });
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  await client.sendImage({
+    baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'tok', toUserId: 'u@im.wechat', bytes: png,
+  });
+  assert.equal(calls[0].body.media_type, 1, '图片用 media_type 1');
+  const item = calls.at(-1).body.msg.item_list[0];
+  assert.equal(item.type, 2);
+  assert.equal(item.image_item.mid_size, aesEcbPaddedSize(png.byteLength));
+  assert.equal(item.image_item.media.encrypt_query_param, 'dl-img');
+
+  await assert.rejects(
+    () => client.sendFile({
+      baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'tok', toUserId: 'u@im.wechat', fileName: '  ', bytes: png,
+    }),
+    /fileName/,
+  );
+  await assert.rejects(
+    () => client.sendImage({
+      baseUrl: 'https://ilinkai.weixin.qq.com/', token: 'tok', toUserId: '', bytes: png,
+    }),
+    /toUserId/,
+  );
+});
+
+test('运行时：主动发文件/图片读字节后交给客户端，空文件明确报错', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-out-'));
+  const app = await makeRuntime();
+  try {
+    // 先让用户说过一句话：主动投递要复用他最近一次的 context_token。
+    await app.runtime.accept(inbound({ message_id: 'm_ctx' }), new AbortController().signal);
+
+    const csv = join(dir, '报表.csv');
+    await writeFile(csv, 'a,b\n1,2\n', 'utf8');
+    const asFile = await app.runtime.sendFileProactive({
+      userId: 'u@im.wechat', path: csv, name: '报表.csv', kind: 'file',
+    });
+    assert.equal(asFile.kind, 'file');
+    assert.equal(asFile.name, '报表.csv');
+    assert.equal(app.client.calls.files.length, 1);
+    assert.equal(app.client.calls.files[0].fileName, '报表.csv');
+    assert.equal(app.client.calls.files[0].contextToken, 'ctx-1', '主动投递也要带该用户的 context_token');
+    assert.equal(Buffer.from(app.client.calls.files[0].bytes).toString('utf8'), 'a,b\n1,2\n');
+
+    const png = join(dir, '图.png');
+    await writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const asImage = await app.runtime.sendFileProactive({
+      userId: 'u@im.wechat', path: png, kind: 'image',
+    });
+    assert.equal(asImage.kind, 'image');
+    assert.equal(asImage.name, '图.png', '没给显示名时用文件名');
+    assert.equal(app.client.calls.images.length, 1);
+
+    const empty = join(dir, 'empty.txt');
+    await writeFile(empty, '');
+    await assert.rejects(
+      () => app.runtime.sendFileProactive({ userId: 'u@im.wechat', path: empty, kind: 'file' }),
+      /空的/,
+    );
+    await assert.rejects(() => app.runtime.sendFileProactive({ userId: '', path: csv }), /userId/);
+  } finally {
+    await app.cleanup();
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
