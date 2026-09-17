@@ -18,7 +18,7 @@ packages/dsh-chat-fixture    契约验证用假渠道（不发布）
 |---|---|---|
 | P0 | 三包骨架、契约与 RPC 闭环、设置页入口、契约测试 | ✅ 已完成 |
 | P1 | 共享内核：会话桥（follow 流式回合/审批提问回传）、旧 `workspaces.json` 一次性导入、会话绑定表、上下文增强完整 UI、共享组件库 | ✅ 已完成 |
-| P2 | 飞书渠道：长连接、私聊/群聊、**任务过程展示分私聊/群聊**、飞书设置页 | ✅ 代码与测试完成（真实机器人上线待切换 profile） |
+| P2 | 飞书渠道：长连接、私聊/群聊、**任务过程展示分私聊/群聊**、飞书设置页 | ✅ 已上线并用真实机器人验证（私聊 + 群 @ 均正常，沿用原 DSH 会话） |
 | P3 | 微信渠道：移植 iLink 协议客户端、扫码登录、私聊收发 | 待开始 |
 | P4–P6 | 命令/权限/菜单、富媒体与主动投递、平台化（会话标识、更新面板、i18n…） | 待开始 |
 
@@ -46,6 +46,19 @@ dsh plugin --profile web add /绝对路径/packages/dsh-chat-weixin
 > ⚠️ `@xmanrui/dsh-im` 与本插件会绑定同一批机器人凭据并各自消费消息，**不能同时启用**：
 > 启用 dsh-chat 前请先 `dsh plugin --profile web remove @xmanrui/dsh-im`。
 > `npm run check` 可用 `DSH_CHAT_PROFILE_MANIFEST=<profile 的 package.json>` 检查这一点。
+
+## 已知踩坑
+
+- **不能与 `@xmanrui/dsh-im` 同时启用**：两者会绑定同一批凭据、各自消费消息，
+  表现为双份回复或消息被随机分流。切换时先从 profile 移除上游插件。
+- **`ownerOpenIds` 可能是 `['*']`**：上游在绑定时没有记录单一属主时写通配。
+  按精确匹配做门禁会把该机器人的**所有**消息静默丢掉（"发了没反应"）。
+  渠道实现必须同时看 `ownerOpenIds` 与 `accessPolicy`（`mode: 'open'` 表示放行）。
+- **静默丢弃必须留日志**：门禁挡下的消息如果不打日志，线上几乎无法定位。
+- **飞书事件的 `open_id` 是应用维度的**：同一个用户在不同飞书应用里 id 不同，
+  属主/白名单要按"该应用的 id"存，不能跨应用复用。
+- 飞书 SDK 的 `receive events or callbacks through persistent connection…` 是
+  **每次 `start()` 都无条件打印的提示**，不是错误；`ws client ready` 才代表握手成功。
 
 ## 数据位置
 
