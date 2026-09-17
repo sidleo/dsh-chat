@@ -43,7 +43,8 @@ const TINY_PNG = Buffer.from(
 
 function createFakeGateway() {
   const calls = {
-    replies: [], texts: [], cards: [], patches: [], resources: [], connects: 0, disconnects: 0,
+    replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
+    connects: 0, disconnects: 0,
   };
   const gatewayState = {
     downloadBytes: TINY_PNG,
@@ -102,6 +103,17 @@ function createFakeGateway() {
     /** 注入某个方法的下一次失败（传 null 清除）。 */
     setFailure(method, error) {
       gatewayState.failures[method] = error;
+    },
+    /** 主动发文件/图片（投递用）。 */
+    async sendFile({ chatId, openId, path, name }) {
+      if (gatewayState.failures.sendFile) throw gatewayState.failures.sendFile;
+      calls.files.push({ chatId, openId, path, name });
+      return { messageId: 'om_file', fileKey: 'file_key_1', name, size: 2048 };
+    },
+    async sendImage({ chatId, openId, path }) {
+      if (gatewayState.failures.sendImage) throw gatewayState.failures.sendImage;
+      calls.images.push({ chatId, openId, path });
+      return { messageId: 'om_image', imageKey: 'image_key_1' };
     },
   };
 }
@@ -867,5 +879,78 @@ test('收尾报告投递方式：卡片 / 文本 / 失败三种都要说清楚',
     assert.match(broken.bridge.status().lastError, /回退发送失败/);
   } finally {
     await broken.cleanup();
+  }
+});
+
+test('控制器投递：文件走 file 消息、图片走 image 消息，机器人离线时拒绝', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-ctl-'));
+  try {
+    await mkdir(join(dataDir, 'bots'), { recursive: true });
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_ctl_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '控制器机器人',
+        stepPushDirect: 'off',
+        stepPushGroup: 'off',
+      }],
+    }), 'utf8');
+
+    const gateway = createFakeGateway();
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
+        sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+
+    await controller.start();
+
+    const target = { id: 'ou_1', kind: 'direct', route: { openId: 'ou_1' } };
+    const file = await controller.delivery.sendFile({
+      botId: 'bot_ctl',
+      target,
+      file: { path: '/tmp/报表.xlsx', name: '报表.xlsx', size: 2048, kind: 'file' },
+    });
+    assert.equal(file.messageId, 'om_file');
+    assert.equal(file.kind, 'file');
+    assert.deepEqual(gateway.calls.files, [
+      { chatId: undefined, openId: 'ou_1', path: '/tmp/报表.xlsx', name: '报表.xlsx' },
+    ]);
+
+    const image = await controller.delivery.sendFile({
+      botId: 'bot_ctl',
+      target,
+      file: { path: '/tmp/图表.png', name: '图表.png', size: 512, kind: 'image' },
+    });
+    assert.equal(image.messageId, 'om_image');
+    assert.equal(image.kind, 'image');
+    assert.equal(image.name, '图表.png');
+    assert.deepEqual(gateway.calls.images, [{ chatId: undefined, openId: 'ou_1', path: '/tmp/图表.png' }]);
+
+    // 机器人不在线（这里用未知 id 走同一条判断）：稳定错误码，而不是静默失败
+    await assert.rejects(
+      () => controller.delivery.sendFile({
+        botId: 'bot_not_running',
+        target,
+        file: { path: '/tmp/报表.xlsx', name: '报表.xlsx', size: 1, kind: 'file' },
+      }),
+      (error) => error.code === 'feishu/bot-offline',
+    );
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
   }
 });

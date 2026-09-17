@@ -231,6 +231,34 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       return record.gateway.sendText({ chatId, openId, text });
     },
 
+    /**
+     * 主动发文件/图片：图片走 image 消息（有预览），其余走 file 消息。
+     *
+     * @param options - { botId, target, file: { path, name, size, kind } }。
+     */
+    async sendFile({ botId, target, file }) {
+      const record = runtimes.get(botId);
+      if (!record?.gateway || record.phase !== 'running') {
+        const error = new Error(`机器人 ${botId} 当前不在线，无法投递。`);
+        error.code = 'feishu/bot-offline';
+        throw error;
+      }
+      const { chatId, openId } = target.route ?? {};
+      if (!chatId && !openId) {
+        const error = new Error('投递目标的 route 既没有 chatId 也没有 openId。');
+        error.code = 'chat/bad-target';
+        throw error;
+      }
+      if (file?.kind === 'image') {
+        const sent = await record.gateway.sendImage({ chatId, openId, path: file.path });
+        return { ...sent, name: file.name, size: file.size, kind: 'image' };
+      }
+      const sent = await record.gateway.sendFile({
+        chatId, openId, path: file.path, name: file.name,
+      });
+      return { ...sent, kind: 'file' };
+    },
+
     /** 从该机器人的会话记录里发现候选目标。 */
     async discover({ botId }) {
       const record = runtimes.get(botId);

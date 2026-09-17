@@ -231,8 +231,22 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |
 | `delivery.save` / `delivery.remove` | `{ channelId, botId, target }` / `{ …, targetId }` | 目标增删 |
 | `delivery.send` | `{ channelId, botId, targetId, text }` | 主动发一条文本 |
+| `delivery.sendFile` | `{ channelId, botId, targetId, path, name? }` | 主动发文件/图片（≤30MB） |
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
+
+渠道的投递实现（`instance.delivery`）有三块，后两块可选、缺席要能被查出来（`supportsFile`）：
+
+```js
+delivery: {
+  async send({ botId, target, text }) {},                       // 必选
+  async sendFile({ botId, target, file }) {},                   // 可选：file = { path, name, size, kind: 'file'|'image' }
+  async discover({ botId }) { return [ /* 候选目标 */ ]; },
+}
+```
+
+`kind` 由 hub 按扩展名给出（png/jpg/jpeg/gif/webp/bmp → `image`）：能当图片发就发图片（有预览），
+否则按普通文件发。路径解析、存在性、非空与 30MB 上限都在 hub 校验，渠道直接吃 `file.path`。
 
 ### agent 可调用的聊天工具（hub 注册，渠道无需实现）
 
@@ -242,6 +256,7 @@ hub 把投递能力暴露成三个模型工具，会话里的 agent 因此能自
 |---|---|---|
 | `chat_targets` | `{ channel_id?, bot_id? }` | 只读发现：不给参数列渠道，只给渠道列机器人与目标，给全了列目标（已保存 + 候选） |
 | `chat_send` | `{ channel_id, bot_id, target_id, text }` | **只能发已保存目标**，候选一律拒绝 |
+| `chat_send_file` | `{ channel_id, bot_id, target_id, path, name? }` | 发本地文件/图片（≤30MB）；相对路径按该机器人的工作区解析；同样只发已保存目标 |
 | `chat_save_target` | `{ channel_id, bot_id, target_id, name? }` | 只收编 `chat_targets` 里标记为候选的目标 |
 
 发现顺序（agent 不需要提前知道任何 id）：`chat_targets {}` → `{ channel_id }` → `{ channel_id, bot_id }`

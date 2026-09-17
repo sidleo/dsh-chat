@@ -87,8 +87,15 @@ function validBotPayload(payload, options = {}) {
   const allowed = options.withConfig
     ? ['channelId', 'botId', 'config']
     : ['channelId', 'botId', ...(options.extra ?? [])];
-  if (Object.keys(payload).length !== allowed.length) return false;
-  if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
+  const keys = Object.keys(payload);
+  // 可选字段（如 sendFile 的 name）允许缺席，但绝不允许出现没声明的键。
+  if (keys.length < allowed.length - (options.optional?.length ?? 0) || keys.length > allowed.length) {
+    return false;
+  }
+  if (!keys.every((key) => allowed.includes(key))) return false;
+  if (!allowed.filter((key) => !options.optional?.includes(key)).every((key) => Object.hasOwn(payload, key))) {
+    return false;
+  }
   if (typeof payload.channelId !== 'string' || !CHANNEL_ID.test(payload.channelId)) return false;
   if (typeof payload.botId !== 'string' || !BOT_ID.test(payload.botId)) return false;
   if (!options.withConfig) return true;
@@ -291,6 +298,25 @@ export function apply(ctx, config = {}) {
         channelId: payload.channelId, botId: payload.botId, targetId: payload.targetId,
       }) });
     }
+    if (method === 'delivery.sendFile') {
+      if (!validBotPayload(payload, { extra: ['targetId', 'path', 'name'], optional: ['name'] })
+        || typeof payload.targetId !== 'string'
+        || typeof payload.path !== 'string'
+        || (payload.name !== undefined && typeof payload.name !== 'string')) {
+        return fail('chat/bad-request', 'delivery.sendFile 需要 { channelId, botId, targetId, path, name? }。');
+      }
+      try {
+        return ok(await delivery.sendFile({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          targetId: payload.targetId,
+          path: payload.path,
+          name: payload.name,
+        }));
+      } catch (error) {
+        return failFrom(error, 'chat/delivery-failed');
+      }
+    }
     if (method === 'delivery.send') {
       if (!validBotPayload(payload, { extra: ['targetId', 'text'] })
         || typeof payload.targetId !== 'string'
@@ -358,10 +384,12 @@ export function apply(ctx, config = {}) {
     /** 主动投递：定时任务/脚本用 `send` 把结果推到指定会话。 */
     delivery: Object.freeze({
       send: (options) => delivery.send(options),
+      sendFile: (options) => delivery.sendFile(options),
       list: (options) => delivery.list(options),
       save: (options) => delivery.save(options),
       remove: (options) => delivery.remove(options),
       supports: (channelId) => delivery.supports(channelId),
+      supportsFile: (channelId) => delivery.supportsFile(channelId),
     }),
 
     contextEnhancement: Object.freeze({ ...contextEnhancement }),

@@ -516,7 +516,8 @@ test('渠道 createChannel 抛错时状态为 failed 且 RPC 返回可读错误'
 });
 
 /** 注册一个"具备主动投递能力"的假聊天渠道（delivery 经注册表挂到 hub）。 */
-async function registerDeliveryChannel(service, { id = 'fakechat', sent = [] } = {}) {
+async function registerDeliveryChannel(service, { id = 'fakechat', sent = [], withFile = false } = {}) {
+  const files = [];
   service.registerChannel({
     id,
     label: '假聊天',
@@ -531,6 +532,12 @@ async function registerDeliveryChannel(service, { id = 'fakechat', sent = [] } =
             sent.push({ channelId: id, botId, targetId: target.id, text });
             return { messageId: 'msg-1' };
           },
+          ...(withFile ? {
+            async sendFile({ botId, target, file }) {
+              files.push({ botId, targetId: target.id, ...file });
+              return { messageId: 'om_file', name: file.name, size: file.size };
+            },
+          } : {}),
           async discover() {
             return [{ id: 'oc_team', kind: 'group', name: '项目群', route: { chatId: 'oc_team' } }];
           },
@@ -539,7 +546,7 @@ async function registerDeliveryChannel(service, { id = 'fakechat', sent = [] } =
     },
   });
   await waitForStatus(service, id, 'running');
-  return sent;
+  return { sent, files };
 }
 
 /** 调一次模型工具，返回它给模型看的文本。 */
@@ -556,7 +563,7 @@ test('hub 把聊天工具注册成模型可调用的工具（输出契约完整�
   const app = await bootstrap();
   try {
     assert.deepEqual([...app.tools.definitions.keys()].sort(),
-      ['chat_save_target', 'chat_send', 'chat_targets']);
+      ['chat_save_target', 'chat_send', 'chat_send_file', 'chat_targets']);
 
     for (const definition of app.tools.definitions.values()) {
       // 参数必须是"对象根 + 支持的 JSON Schema 子集"，否则注册会在真实 Host 上抛错。
@@ -581,7 +588,7 @@ test('hub 把聊天工具注册成模型可调用的工具（输出契约完整�
 test('chat_targets 列出候选；chat_send 只能发已保存目标；chat_save_target 收编候选', async () => {
   const app = await bootstrap();
   try {
-    const sent = await registerDeliveryChannel(app.service);
+    const { sent } = await registerDeliveryChannel(app.service);
 
     const listed = await callTool(app, 'chat_targets', { channel_id: 'fakechat', bot_id: 'bot_1' });
     assert.match(listed, /oc_team/);
@@ -677,7 +684,7 @@ test('插件卸载后聊天工具一并注销（可逆副作用）', async () =>
   const app = await bootstrap();
   const dataDir = app.dataDir;
   try {
-    assert.equal(app.tools.definitions.size, 3);
+    assert.equal(app.tools.definitions.size, 4);
   } finally {
     app.dispose();
   }
@@ -691,7 +698,7 @@ test('插件卸载后聊天工具一并注销（可逆副作用）', async () =>
 test('delivery 控制端点：存 / 列 / 发 / 删（含载荷校验）', async () => {
   const app = await bootstrap();
   try {
-    const sent = await registerDeliveryChannel(app.service);
+    const { sent } = await registerDeliveryChannel(app.service);
 
     // 少传参数必须被拒（而不是被默默忽略）。
     const bad = await callRoute(app.routes, HUB_PATH, 'delivery.send', {
@@ -735,6 +742,52 @@ test('delivery 控制端点：存 / 列 / 发 / 删（含载荷校验）', async
       channelId: 'fakechat', botId: 'bot_1', targetId: 'ou_alice',
     });
     assert.equal(afterRemove.result.value.removed, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('chat_send_file：只发已保存目标，失败给可执行的下一步', async () => {
+  const app = await bootstrap();
+  try {
+    const { sent, files } = await registerDeliveryChannel(app.service, { withFile: true });
+    await app.service.bots.write('fakechat', 'bot_1', { workspace: '/ws' });
+    app.files = files;
+
+    // 未保存 → 提示先用 chat_targets / chat_save_target
+    const refused = await callTool(app, 'chat_send_file', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', path: '/tmp/不存在.xlsx',
+    });
+    assert.match(refused, /还没有保存/);
+    assert.match(refused, /chat_save_target/);
+    assert.deepEqual(sent, []);
+
+    await callTool(app, 'chat_save_target', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team',
+    });
+
+    // 文件不存在 → 说明相对路径按工作区解析
+    const missing = await callTool(app, 'chat_send_file', {
+      channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', path: '报表.xlsx',
+    });
+    assert.match(missing, /找不到文件/);
+    assert.match(missing, /工作区/);
+
+    // 真实文件 → 发出去，并把字节数告诉模型
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-tool-'));
+    const file = join(dir, '日报.xlsx');
+    await writeFile(file, Buffer.alloc(4096, 3));
+    try {
+      const ok = await callTool(app, 'chat_send_file', {
+        channel_id: 'fakechat', bot_id: 'bot_1', target_id: 'oc_team', path: file,
+      });
+      assert.match(ok, /已发送文件 日报\.xlsx（4\.0KB）/);
+      assert.match(ok, /om_file/);
+      assert.equal(files.at(-1).size, 4096);
+      assert.equal(files.at(-1).kind, 'file');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   } finally {
     await app.cleanup();
   }

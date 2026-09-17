@@ -11250,12 +11250,12 @@ var require_form_data = __commonJS({
         if (value.end != void 0 && value.end != Infinity && value.start != void 0) {
           callback(null, value.end + 1 - (value.start ? value.start : 0));
         } else {
-          fs2.stat(value.path, function(err, stat) {
+          fs2.stat(value.path, function(err, stat2) {
             if (err) {
               callback(err);
               return;
             }
-            var fileSize = stat.size - (value.start ? value.start : 0);
+            var fileSize = stat2.size - (value.start ? value.start : 0);
             callback(null, fileSize);
           });
         }
@@ -127078,7 +127078,24 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
 }
 
 // packages/dsh-chat-feishu/host/lark-gateway.mjs
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 var DEFAULT_CONNECT_TIMEOUT_MS = 15e3;
+var FILE_TYPES = new Map(Object.entries({
+  opus: "opus",
+  mp4: "mp4",
+  pdf: "pdf",
+  doc: "doc",
+  docx: "doc",
+  xls: "xls",
+  xlsx: "xls",
+  ppt: "ppt",
+  pptx: "ppt"
+}));
+function fileTypeFor(name2) {
+  const ext = String(name2 ?? "").split(".").pop()?.toLowerCase() ?? "";
+  return FILE_TYPES.get(ext) ?? "stream";
+}
 var DEFAULT_MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
 function loggerLevelFor(sdk, level) {
   const table = sdk?.LoggerLevel ?? {};
@@ -127250,6 +127267,67 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u6D88\u606F", response);
       return { messageId: response?.data?.message_id };
+    },
+    /**
+     * 发一个文件（先上传拿 file_key，再作为 file 消息发出去）。
+     *
+     * @param options - { chatId } 或 { openId }、{ path, name }。
+     * @returns { messageId, fileKey, name, size }。
+     */
+    async sendFile({ chatId, openId, path: path2, name: name2 }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendFile \u9700\u8981 chatId \u6216 openId\u3002");
+      if (!path2) throw new TypeError("sendFile \u9700\u8981 path\u3002");
+      const fileName = name2 || path2.split("/").pop();
+      const info = await stat(path2);
+      const uploaded = await client.im.v1.file.create({
+        data: {
+          file_type: fileTypeFor(fileName),
+          file_name: fileName,
+          file: createReadStream(path2)
+        }
+      });
+      const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+      if (!fileKey) {
+        const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE file_key\u3002");
+        error.code = "feishu/upload-failed";
+        throw error;
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "file", content: JSON.stringify({ file_key: fileKey }) }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u6587\u4EF6", response);
+      return {
+        messageId: response?.data?.message_id,
+        fileKey,
+        name: fileName,
+        size: info.size
+      };
+    },
+    /**
+     * 发一张图片（走 im/v1/images 上传，再作为 image 消息发出）。
+     *
+     * @param options - { chatId } 或 { openId }、{ path }。
+     */
+    async sendImage({ chatId, openId, path: path2 }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError("sendImage \u9700\u8981 chatId \u6216 openId\u3002");
+      const uploaded = await client.im.v1.image.create({
+        data: { image_type: "message", image: createReadStream(path2) }
+      });
+      const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
+      if (!imageKey) {
+        const error = new Error("\u98DE\u4E66\u4E0A\u4F20\u56FE\u7247\u5931\u8D25\uFF1A\u6CA1\u6709\u8FD4\u56DE image_key\u3002");
+        error.code = "feishu/upload-failed";
+        throw error;
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "image", content: JSON.stringify({ image_key: imageKey }) }
+      });
+      assertSuccess("\u98DE\u4E66\u53D1\u9001\u56FE\u7247", response);
+      return { messageId: response?.data?.message_id, imageKey };
     },
     /** 发一张交互卡片。 */
     async sendCard({ chatId, card }) {
@@ -127620,6 +127698,36 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         throw error;
       }
       return record.gateway.sendText({ chatId, openId, text });
+    },
+    /**
+     * 主动发文件/图片：图片走 image 消息（有预览），其余走 file 消息。
+     *
+     * @param options - { botId, target, file: { path, name, size, kind } }。
+     */
+    async sendFile({ botId, target, file }) {
+      const record = runtimes.get(botId);
+      if (!record?.gateway || record.phase !== "running") {
+        const error = new Error(`\u673A\u5668\u4EBA ${botId} \u5F53\u524D\u4E0D\u5728\u7EBF\uFF0C\u65E0\u6CD5\u6295\u9012\u3002`);
+        error.code = "feishu/bot-offline";
+        throw error;
+      }
+      const { chatId, openId } = target.route ?? {};
+      if (!chatId && !openId) {
+        const error = new Error("\u6295\u9012\u76EE\u6807\u7684 route \u65E2\u6CA1\u6709 chatId \u4E5F\u6CA1\u6709 openId\u3002");
+        error.code = "chat/bad-target";
+        throw error;
+      }
+      if (file?.kind === "image") {
+        const sent2 = await record.gateway.sendImage({ chatId, openId, path: file.path });
+        return { ...sent2, name: file.name, size: file.size, kind: "image" };
+      }
+      const sent = await record.gateway.sendFile({
+        chatId,
+        openId,
+        path: file.path,
+        name: file.name
+      });
+      return { ...sent, kind: "file" };
     },
     /** 从该机器人的会话记录里发现候选目标。 */
     async discover({ botId }) {

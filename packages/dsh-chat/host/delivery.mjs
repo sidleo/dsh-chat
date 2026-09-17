@@ -13,8 +13,16 @@
  * @module dsh-chat/host/delivery
  */
 
+import { stat } from 'node:fs/promises';
+import { basename, isAbsolute, resolve } from 'node:path';
+
 /** 目标 id 语法（与渠道 id 同款安全字符集）。 */
 const TARGET_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** 出站文件上限：飞书 im/v1/files 的硬限制就是 30MB，超过它没有任何渠道能发出去。 */
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const FILE_NAME_MAX = 120;
+/** 按图片发出去会得到预览与缩略图，比当附件更好用（渠道按 kind 自己决定消息类型）。 */
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
 const TARGET_NAME_MAX = 80;
 const ROUTE_MAX_KEYS = 8;
 const ROUTE_VALUE_MAX = 256;
@@ -76,6 +84,39 @@ export function normalizeTarget(input) {
 }
 
 /**
+ * 把一次"要发的文件"归一化：解析路径、校验存在与大小、收敛文件名。
+ *
+ * 相对路径按**该机器人的工作区**解析——agent 生成报表时用的就是会话工作目录，
+ * 让它写 `报表.xlsx` 而不是绝对路径才是顺手的。
+ *
+ * @param options - { path, name, workspace }。
+ * @returns 冻结的 { path, name, size }。
+ */
+async function resolveOutboundFile({ path: inputPath, name, workspace }) {
+  const raw = typeof inputPath === 'string' ? inputPath.trim() : '';
+  if (!raw) throw deliveryError('chat/bad-file', '发送文件需要 path。');
+  const absolute = isAbsolute(raw) ? raw : resolve(workspace ?? process.cwd(), raw);
+  let stats;
+  try {
+    stats = await stat(absolute);
+  } catch {
+    throw deliveryError('chat/file-not-found', `找不到文件：${absolute}`);
+  }
+  if (!stats.isFile()) throw deliveryError('chat/bad-file', `不是普通文件：${absolute}`);
+  if (stats.size === 0) throw deliveryError('chat/bad-file', `文件是空的，无法发送：${absolute}`);
+  if (stats.size > MAX_FILE_BYTES) {
+    const mb = (stats.size / 1024 / 1024).toFixed(1);
+    throw deliveryError('chat/file-too-large',
+      `文件 ${mb}MB 超过 ${MAX_FILE_BYTES / 1024 / 1024}MB 上限：${absolute}`);
+  }
+  const label = typeof name === 'string' ? name.replace(CONTROL_CHARACTERS, '').trim() : '';
+  const finalName = (label || basename(absolute)).slice(0, FILE_NAME_MAX);
+  const ext = finalName.split('.').pop()?.toLowerCase() ?? '';
+  const kind = IMAGE_EXTENSIONS.has(ext) ? 'image' : 'file';
+  return Object.freeze({ path: absolute, name: finalName, size: stats.size, kind });
+}
+
+/**
  * 会话身份键：同一会话可能以不同 id 出现（旧数据 `tgt_xxx` vs 渠道派生的 `group_xxx`），
  * 因此判重按"类型 + 路由"而不是 id。
  *
@@ -131,6 +172,9 @@ export function createDeliveryService({ settings, logger = console }) {
         if (providers.get(channelId) === provider) providers.delete(channelId);
       };
     },
+
+    /** @returns 该渠道是否支持发送文件（`sendFile` 可选，能力缺席要能被查出来）。 */
+    supportsFile: (channelId) => typeof providers.get(channelId)?.sendFile === 'function',
 
     /** @returns 该渠道是否具备主动投递能力。 */
     supports: (channelId) => providers.has(channelId),
@@ -212,6 +256,36 @@ export function createDeliveryService({ settings, logger = console }) {
         throw deliveryError('chat/unknown-target', `找不到投递目标 ${targetId}（先在设置页保存或改用候选目标）。`);
       }
       return provider.send({ botId, target, text: content });
+    },
+
+    /**
+     * 发一个文件。
+     *
+     * 与文本同样的安全边界：**只能发给已保存的目标**；文件本身必须是存在、非空、
+     * 不超过上限的普通文件。
+     *
+     * @param options - { channelId, botId, targetId, path, name? }。
+     * @returns 渠道返回的发送结果。
+     */
+    async sendFile({ channelId, botId, targetId, path, name }) {
+      const provider = providers.get(channelId);
+      if (!provider) {
+        throw deliveryError('chat/delivery-unavailable', `渠道 ${channelId} 不支持主动投递。`);
+      }
+      if (typeof provider.sendFile !== 'function') {
+        throw deliveryError('chat/delivery-unsupported', `渠道 ${channelId} 暂不支持发送文件。`);
+      }
+      const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const target = saved[targetId];
+      if (!target) {
+        throw deliveryError('chat/unknown-target', `找不到投递目标 ${targetId}（先在设置页保存或改用候选目标）。`);
+      }
+      const file = await resolveOutboundFile({
+        path,
+        name,
+        workspace: settings.read(channelId, botId).workspace,
+      });
+      return provider.sendFile({ botId, target, file });
     },
   });
 }

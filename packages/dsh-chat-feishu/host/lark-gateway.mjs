@@ -11,7 +11,31 @@
  * @module dsh-chat-feishu/lark-gateway
  */
 
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+
+/**
+ * 按扩展名给出飞书要的 `file_type`（它决定文件在客户端的图标与打开方式；
+ * 不在表里的一律 `stream`，飞书会当普通附件处理）。
+ */
+const FILE_TYPES = new Map(Object.entries({
+  opus: 'opus',
+  mp4: 'mp4',
+  pdf: 'pdf',
+  doc: 'doc',
+  docx: 'doc',
+  xls: 'xls',
+  xlsx: 'xls',
+  ppt: 'ppt',
+  pptx: 'ppt',
+}));
+
+function fileTypeFor(name) {
+  const ext = String(name ?? '').split('.').pop()?.toLowerCase() ?? '';
+  return FILE_TYPES.get(ext) ?? 'stream';
+}
 
 /** 入站资源（图片/文件）大小上限：超过就报错，不把内存撑爆。 */
 const DEFAULT_MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
@@ -219,6 +243,71 @@ export function createLarkGateway({
       });
       assertSuccess('飞书发送消息', response);
       return { messageId: response?.data?.message_id };
+    },
+
+    /**
+     * 发一个文件（先上传拿 file_key，再作为 file 消息发出去）。
+     *
+     * @param options - { chatId } 或 { openId }、{ path, name }。
+     * @returns { messageId, fileKey, name, size }。
+     */
+    async sendFile({ chatId, openId, path, name }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendFile 需要 chatId 或 openId。');
+      if (!path) throw new TypeError('sendFile 需要 path。');
+      const fileName = name || path.split('/').pop();
+      const info = await stat(path);
+      const uploaded = await client.im.v1.file.create({
+        data: {
+          file_type: fileTypeFor(fileName),
+          file_name: fileName,
+          file: createReadStream(path),
+        },
+      });
+      // 注意：im.v1.file.create / image.create 直接返回 data（`{ file_key }`），
+      // 不像 message.create 那样包一层 `{ code, msg, data }`。两种都认，免得跟着 SDK 版本翻车。
+      const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+      if (!fileKey) {
+        const error = new Error('飞书上传文件失败：没有返回 file_key。');
+        error.code = 'feishu/upload-failed';
+        throw error;
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'file', content: JSON.stringify({ file_key: fileKey }) },
+      });
+      assertSuccess('飞书发送文件', response);
+      return {
+        messageId: response?.data?.message_id,
+        fileKey,
+        name: fileName,
+        size: info.size,
+      };
+    },
+
+    /**
+     * 发一张图片（走 im/v1/images 上传，再作为 image 消息发出）。
+     *
+     * @param options - { chatId } 或 { openId }、{ path }。
+     */
+    async sendImage({ chatId, openId, path }) {
+      const receiveId = chatId ?? openId;
+      if (!receiveId) throw new TypeError('sendImage 需要 chatId 或 openId。');
+      const uploaded = await client.im.v1.image.create({
+        data: { image_type: 'message', image: createReadStream(path) },
+      });
+      const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
+      if (!imageKey) {
+        const error = new Error('飞书上传图片失败：没有返回 image_key。');
+        error.code = 'feishu/upload-failed';
+        throw error;
+      }
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'image', content: JSON.stringify({ image_key: imageKey }) },
+      });
+      assertSuccess('飞书发送图片', response);
+      return { messageId: response?.data?.message_id, imageKey };
     },
 
     /** 发一张交互卡片。 */

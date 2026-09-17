@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -26,6 +26,14 @@ async function makeService() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     },
   };
+}
+
+/** 一个装着真实文件的工作区：用来验证"相对路径按工作区解析"。 */
+async function makeWorkspace() {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-chat-ws-'));
+  await writeFile(join(dir, '报表.xlsx'), Buffer.alloc(2048, 7));
+  await writeFile(join(dir, '图表.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]));
+  return dir;
 }
 
 const target = (overrides = {}) => ({
@@ -210,5 +218,112 @@ test('发送前的兜底：空文本、未知渠道、渠道实现抛错都给�
     );
   } finally {
     await app.cleanup();
+  }
+});
+
+test('发文件：相对路径按机器人工作区解析；未保存目标不能发', async () => {
+  const app = await makeService();
+  const workspace = await makeWorkspace();
+  try {
+    await app.settings.write('feishu', 'bot_1', { workspace });
+    const sent = [];
+    app.service.attach('feishu', {
+      async send() { return { messageId: 'x' }; },
+      async sendFile({ botId, target: item, file }) {
+        sent.push({ botId, targetId: item.id, ...file });
+        return { messageId: 'om_file', name: file.name, size: file.size };
+      },
+    });
+
+    // 未保存的目标：先拦住（不能临时指定任意会话）
+    await assert.rejects(
+      () => app.service.sendFile({
+        channelId: 'feishu', botId: 'bot_1', targetId: 'ou_1', path: '报表.xlsx',
+      }),
+      (error) => error.code === 'chat/unknown-target',
+    );
+
+    await app.service.save({
+      channelId: 'feishu', botId: 'bot_1',
+      target: { id: 'ou_1', kind: 'direct', route: { openId: 'ou_1' } },
+    });
+
+    const result = await app.service.sendFile({
+      channelId: 'feishu', botId: 'bot_1', targetId: 'ou_1', path: '报表.xlsx',
+    });
+    assert.equal(result.messageId, 'om_file');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].path, join(workspace, '报表.xlsx'));
+    assert.equal(sent[0].name, '报表.xlsx');
+    assert.equal(sent[0].kind, 'file');
+    assert.equal(sent[0].size, 2048, '要带上真实字节数');
+  } finally {
+    await app.cleanup();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('发文件：图片按 image 分类、可改名；缺文件/渠道不支持都有稳定错误码', async () => {
+  const app = await makeService();
+  const workspace = await makeWorkspace();
+  try {
+    await app.settings.write('feishu', 'bot_1', { workspace });
+    const sent = [];
+    app.service.attach('feishu', {
+      async send() { return {}; },
+      async sendFile({ file }) {
+        sent.push(file);
+        return { messageId: 'm', name: file.name, size: file.size };
+      },
+    });
+    await app.service.save({
+      channelId: 'feishu', botId: 'bot_1',
+      target: { id: 'ou_1', kind: 'direct', route: { openId: 'ou_1' } },
+    });
+
+    const png = await app.service.sendFile({
+      channelId: 'feishu', botId: 'bot_1', targetId: 'ou_1',
+      path: '图表.png', name: '月度趋势.png',
+    });
+    assert.equal(png.name, '月度趋势.png');
+    assert.equal(sent.at(-1).kind, 'image', '图片要有预览，不能当附件发');
+
+    await assert.rejects(
+      () => app.service.sendFile({
+        channelId: 'feishu', botId: 'bot_1', targetId: 'ou_1', path: '不存在.xlsx',
+      }),
+      (error) => {
+        assert.equal(error.code, 'chat/file-not-found');
+        assert.match(error.message, /找不到文件/);
+        return true;
+      },
+    );
+
+    const empty = join(workspace, '空文件.txt');
+    await writeFile(empty, '');
+    await assert.rejects(
+      () => app.service.sendFile({
+        channelId: 'feishu', botId: 'bot_1', targetId: 'ou_1', path: '空文件.txt',
+      }),
+      (error) => error.code === 'chat/bad-file',
+    );
+
+    // 渠道只实现了 send：能力缺席要说清楚，而不是静默失败
+    app.service.attach('fixture', { async send() { return {}; } });
+    await app.service.save({
+      channelId: 'fixture', botId: 'bot_1',
+      target: { id: 'ou_2', kind: 'direct', route: { openId: 'ou_2' } },
+    });
+    await assert.rejects(
+      () => app.service.sendFile({
+        channelId: 'fixture', botId: 'bot_1', targetId: 'ou_2', path: '报表.xlsx',
+      }),
+      (error) => error.code === 'chat/delivery-unsupported',
+    );
+    assert.equal(app.service.supportsFile('fixture'), false);
+    assert.equal(app.service.supportsFile('feishu'), true);
+  } finally {
+    await app.cleanup();
+    await rm(workspace, { recursive: true, force: true });
   }
 });

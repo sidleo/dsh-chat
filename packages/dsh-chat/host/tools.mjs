@@ -29,6 +29,33 @@ const BOT_FIELD = {
     + '省略时列出该渠道下的机器人及其可投递目标。',
 };
 
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** 发文件失败时给出"下一步能做什么"，而不是甩一个错误码。 */
+function describeFileFailure(error, args) {
+  const code = error?.code ?? '';
+  const message = error?.message ?? String(error);
+  if (code === 'chat/unknown-target') {
+    return `目标 ${args.target_id} 还没有保存，无法发送。`
+      + '先用 chat_targets 查看候选，再用 chat_save_target 保存，或请用户到设置页保存。';
+  }
+  if (code === 'chat/file-not-found') {
+    return `${message}。请确认路径（相对路径按该机器人的工作区解析），或先自己生成这个文件。`;
+  }
+  if (code === 'chat/file-too-large') {
+    return `${message}。可以把内容拆小、压缩，或改成生成后分多次发送。`;
+  }
+  if (code === 'chat/delivery-unsupported') {
+    return `${message}（该渠道还没实现发送文件，可以先把结果作为文本发出去）。`;
+  }
+  return `发送文件失败：${code} ${message}`.trim();
+}
+
 /** 渲染一行目标。 */
 function targetLine(target) {
   const route = Object.entries(target.route).map(([key, value]) => `${key}=${value}`).join(', ');
@@ -157,6 +184,49 @@ export function registerChatTools(toolCtx, { delivery, channels, bots, logger = 
             + '先用 chat_targets 查看候选，再用 chat_save_target 保存，或请用户到设置页保存。';
         }
         return `发送失败：${error?.code ?? ''} ${error?.message ?? String(error)}`.trim();
+      }
+    },
+  }));
+
+  disposers.push(toolCtx.tools.register({
+    name: 'chat_send_file',
+    description: '把一个本地文件（报表、Excel、图片等，≤30MB）发到指定聊天机器人的指定会话。'
+      + '目标必须已在设置里保存；相对路径按该机器人的工作区解析。'
+      + '适合把生成好的结果文件直接推给用户。',
+    parameters: {
+      type: 'object',
+      properties: {
+        channel_id: CHANNEL_FIELD,
+        bot_id: BOT_FIELD,
+        target_id: {
+          type: 'string',
+          description: 'chat_targets 列出的目标 id（只能是已保存的目标，不能是候选）。',
+        },
+        path: {
+          type: 'string',
+          description: '要发送的文件路径（绝对路径，或相对该机器人工作区的路径）。',
+        },
+        name: { type: 'string', description: '对方看到的文件名（可选，默认取文件名）。' },
+      },
+      required: ['channel_id', 'bot_id', 'target_id', 'path'],
+      additionalProperties: false,
+    },
+    output: OUTPUT_TEXT,
+    async execute(args) {
+      try {
+        const result = await delivery.sendFile({
+          channelId: args.channel_id,
+          botId: args.bot_id,
+          targetId: args.target_id,
+          path: args.path,
+          name: args.name,
+        });
+        const size = result?.size ? `（${formatBytes(result.size)}）` : '';
+        const messageId = result?.messageId ?? null;
+        return `已发送文件 ${result?.name ?? args.path}${size} 到 ${args.target_id}`
+          + `${messageId ? `（消息 id ${messageId}）` : ''}。`;
+      } catch (error) {
+        return describeFileFailure(error, args);
       }
     },
   }));

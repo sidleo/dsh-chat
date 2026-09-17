@@ -11,7 +11,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-chat/host/plugin.mjs
-import { join as join5, resolve as resolve2 } from "node:path";
+import { join as join5, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
@@ -1422,7 +1422,12 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
 }
 
 // packages/dsh-chat/host/delivery.mjs
+import { stat } from "node:fs/promises";
+import { basename, isAbsolute, resolve } from "node:path";
 var TARGET_ID = /^[A-Za-z0-9_-]{1,64}$/;
+var MAX_FILE_BYTES = 30 * 1024 * 1024;
+var FILE_NAME_MAX = 120;
+var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
 var TARGET_NAME_MAX = 80;
 var ROUTE_MAX_KEYS = 8;
 var ROUTE_VALUE_MAX = 256;
@@ -1470,6 +1475,31 @@ function normalizeTarget(input) {
   }
   return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
 }
+async function resolveOutboundFile({ path: inputPath, name: name2, workspace }) {
+  const raw = typeof inputPath === "string" ? inputPath.trim() : "";
+  if (!raw) throw deliveryError("chat/bad-file", "\u53D1\u9001\u6587\u4EF6\u9700\u8981 path\u3002");
+  const absolute = isAbsolute(raw) ? raw : resolve(workspace ?? process.cwd(), raw);
+  let stats;
+  try {
+    stats = await stat(absolute);
+  } catch {
+    throw deliveryError("chat/file-not-found", `\u627E\u4E0D\u5230\u6587\u4EF6\uFF1A${absolute}`);
+  }
+  if (!stats.isFile()) throw deliveryError("chat/bad-file", `\u4E0D\u662F\u666E\u901A\u6587\u4EF6\uFF1A${absolute}`);
+  if (stats.size === 0) throw deliveryError("chat/bad-file", `\u6587\u4EF6\u662F\u7A7A\u7684\uFF0C\u65E0\u6CD5\u53D1\u9001\uFF1A${absolute}`);
+  if (stats.size > MAX_FILE_BYTES) {
+    const mb = (stats.size / 1024 / 1024).toFixed(1);
+    throw deliveryError(
+      "chat/file-too-large",
+      `\u6587\u4EF6 ${mb}MB \u8D85\u8FC7 ${MAX_FILE_BYTES / 1024 / 1024}MB \u4E0A\u9650\uFF1A${absolute}`
+    );
+  }
+  const label = typeof name2 === "string" ? name2.replace(CONTROL_CHARACTERS3, "").trim() : "";
+  const finalName = (label || basename(absolute)).slice(0, FILE_NAME_MAX);
+  const ext = finalName.split(".").pop()?.toLowerCase() ?? "";
+  const kind = IMAGE_EXTENSIONS.has(ext) ? "image" : "file";
+  return Object.freeze({ path: absolute, name: finalName, size: stats.size, kind });
+}
 function routeKey(target) {
   const route = Object.entries(target.route).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("");
   return `${target.kind}\0${route}`;
@@ -1505,6 +1535,8 @@ function createDeliveryService({ settings, logger = console }) {
         if (providers.get(channelId) === provider) providers.delete(channelId);
       };
     },
+    /** @returns 该渠道是否支持发送文件（`sendFile` 可选，能力缺席要能被查出来）。 */
+    supportsFile: (channelId) => typeof providers.get(channelId)?.sendFile === "function",
     /** @returns 该渠道是否具备主动投递能力。 */
     supports: (channelId) => providers.has(channelId),
     /** @returns 已保存的投递目标（含渠道发现的候选，候选不落盘）。 */
@@ -1578,12 +1610,41 @@ function createDeliveryService({ settings, logger = console }) {
         throw deliveryError("chat/unknown-target", `\u627E\u4E0D\u5230\u6295\u9012\u76EE\u6807 ${targetId}\uFF08\u5148\u5728\u8BBE\u7F6E\u9875\u4FDD\u5B58\u6216\u6539\u7528\u5019\u9009\u76EE\u6807\uFF09\u3002`);
       }
       return provider.send({ botId, target, text: content });
+    },
+    /**
+     * 发一个文件。
+     *
+     * 与文本同样的安全边界：**只能发给已保存的目标**；文件本身必须是存在、非空、
+     * 不超过上限的普通文件。
+     *
+     * @param options - { channelId, botId, targetId, path, name? }。
+     * @returns 渠道返回的发送结果。
+     */
+    async sendFile({ channelId, botId, targetId, path, name: name2 }) {
+      const provider = providers.get(channelId);
+      if (!provider) {
+        throw deliveryError("chat/delivery-unavailable", `\u6E20\u9053 ${channelId} \u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002`);
+      }
+      if (typeof provider.sendFile !== "function") {
+        throw deliveryError("chat/delivery-unsupported", `\u6E20\u9053 ${channelId} \u6682\u4E0D\u652F\u6301\u53D1\u9001\u6587\u4EF6\u3002`);
+      }
+      const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const target = saved[targetId];
+      if (!target) {
+        throw deliveryError("chat/unknown-target", `\u627E\u4E0D\u5230\u6295\u9012\u76EE\u6807 ${targetId}\uFF08\u5148\u5728\u8BBE\u7F6E\u9875\u4FDD\u5B58\u6216\u6539\u7528\u5019\u9009\u76EE\u6807\uFF09\u3002`);
+      }
+      const file = await resolveOutboundFile({
+        path,
+        name: name2,
+        workspace: settings.read(channelId, botId).workspace
+      });
+      return provider.sendFile({ botId, target, file });
     }
   });
 }
 
 // packages/dsh-chat/host/file-log.mjs
-import { appendFile, mkdir as mkdir2, rename as rename2, stat } from "node:fs/promises";
+import { appendFile, mkdir as mkdir2, rename as rename2, stat as stat2 } from "node:fs/promises";
 import { dirname as dirname2, join as join2 } from "node:path";
 var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 var LEVELS = ["debug", "info", "warn", "error"];
@@ -1598,7 +1659,7 @@ function createLogFileSink({ path, maxBytes = DEFAULT_MAX_BYTES } = {}) {
   async function rotateIfNeeded(nextLength) {
     if (size === null) {
       try {
-        size = (await stat(path)).size;
+        size = (await stat2(path)).size;
       } catch {
         size = 0;
       }
@@ -1765,7 +1826,7 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
     return senders.get(`${channelId}\0${botId}`) ?? null;
   }
   function wait({ channelId, botId, key, kind, signal }) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const id = waiterKey(channelId, botId, key);
       let settled = false;
       const finish = (value) => {
@@ -1777,7 +1838,7 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
         if (value === null) {
           logger.warn?.(`[dsh-chat] ${kind} \u5728 IM \u91CC\u6CA1\u6709\u5F97\u5230\u56DE\u7B54\uFF0C\u4EA4\u56DE\u5176\u4ED6\u5E94\u7B54\u65B9\uFF08${channelId}/${botId}/${key}\uFF09`);
         }
-        resolve3(value);
+        resolve4(value);
       };
       const entry = { resolve: (text) => finish(text) };
       const timer = setTimeout(() => finish(null), timeoutMs);
@@ -1854,19 +1915,19 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
 
 // packages/dsh-chat/host/paths.mjs
 import { homedir } from "node:os";
-import { join as join3, resolve } from "node:path";
+import { join as join3, resolve as resolve2 } from "node:path";
 function dshHome() {
   const configured = process.env.DSH_HOME;
-  return configured && configured.trim() ? resolve(configured.trim()) : join3(homedir(), ".dsh");
+  return configured && configured.trim() ? resolve2(configured.trim()) : join3(homedir(), ".dsh");
 }
 function hubDataDir(configured) {
-  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join3(dshHome(), "integrations", "dsh-chat");
+  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join3(dshHome(), "integrations", "dsh-chat");
 }
 function channelDataDir(name2, integrationRoot2) {
   return join3(integrationRoot2 ?? join3(dshHome(), "integrations"), name2);
 }
 function integrationRoot(configured) {
-  return configured && String(configured).trim() ? resolve(String(configured).trim()) : join3(dshHome(), "integrations");
+  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join3(dshHome(), "integrations");
 }
 
 // packages/dsh-chat/host/session-store.mjs
@@ -2186,8 +2247,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
     const tools = [];
     let settled = false;
     let settle;
-    const finished = new Promise((resolve3) => {
-      settle = resolve3;
+    const finished = new Promise((resolve4) => {
+      settle = resolve4;
     });
     const finishTurn = (value) => {
       if (settled) return;
@@ -2326,8 +2387,8 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
             Promise.resolve(closing0).catch(() => {
             }),
             // 故意不 unref：这是"让调用方拿到结果"的兜底时限，必须真的会到点。
-            new Promise((resolve3) => {
-              graceTimer = setTimeout(resolve3, STREAM_CLOSE_GRACE_MS);
+            new Promise((resolve4) => {
+              graceTimer = setTimeout(resolve4, STREAM_CLOSE_GRACE_MS);
             })
           ]);
         } finally {
@@ -2427,6 +2488,29 @@ var BOT_FIELD = {
   type: "string",
   description: "\u673A\u5668\u4EBA/\u8D26\u53F7 id\uFF08\u5728\u8BBE\u7F6E\u9875\u7684\u673A\u5668\u4EBA\u5361\u7247\u4E0A\u53EF\u89C1\uFF0C\u4F8B\u5982 bot_1f4c\u2026 / wx_0f2d\u2026\uFF09\u3002\u7701\u7565\u65F6\u5217\u51FA\u8BE5\u6E20\u9053\u4E0B\u7684\u673A\u5668\u4EBA\u53CA\u5176\u53EF\u6295\u9012\u76EE\u6807\u3002"
 };
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "";
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+function describeFileFailure(error, args) {
+  const code = error?.code ?? "";
+  const message = error?.message ?? String(error);
+  if (code === "chat/unknown-target") {
+    return `\u76EE\u6807 ${args.target_id} \u8FD8\u6CA1\u6709\u4FDD\u5B58\uFF0C\u65E0\u6CD5\u53D1\u9001\u3002\u5148\u7528 chat_targets \u67E5\u770B\u5019\u9009\uFF0C\u518D\u7528 chat_save_target \u4FDD\u5B58\uFF0C\u6216\u8BF7\u7528\u6237\u5230\u8BBE\u7F6E\u9875\u4FDD\u5B58\u3002`;
+  }
+  if (code === "chat/file-not-found") {
+    return `${message}\u3002\u8BF7\u786E\u8BA4\u8DEF\u5F84\uFF08\u76F8\u5BF9\u8DEF\u5F84\u6309\u8BE5\u673A\u5668\u4EBA\u7684\u5DE5\u4F5C\u533A\u89E3\u6790\uFF09\uFF0C\u6216\u5148\u81EA\u5DF1\u751F\u6210\u8FD9\u4E2A\u6587\u4EF6\u3002`;
+  }
+  if (code === "chat/file-too-large") {
+    return `${message}\u3002\u53EF\u4EE5\u628A\u5185\u5BB9\u62C6\u5C0F\u3001\u538B\u7F29\uFF0C\u6216\u6539\u6210\u751F\u6210\u540E\u5206\u591A\u6B21\u53D1\u9001\u3002`;
+  }
+  if (code === "chat/delivery-unsupported") {
+    return `${message}\uFF08\u8BE5\u6E20\u9053\u8FD8\u6CA1\u5B9E\u73B0\u53D1\u9001\u6587\u4EF6\uFF0C\u53EF\u4EE5\u5148\u628A\u7ED3\u679C\u4F5C\u4E3A\u6587\u672C\u53D1\u51FA\u53BB\uFF09\u3002`;
+  }
+  return `\u53D1\u9001\u6587\u4EF6\u5931\u8D25\uFF1A${code} ${message}`.trim();
+}
 function targetLine(target) {
   const route = Object.entries(target.route).map(([key, value]) => `${key}=${value}`).join(", ");
   return `${target.id}	${target.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}	${target.name || "\uFF08\u672A\u547D\u540D\uFF09"}	${route}${target.discovered ? "	\u5019\u9009\uFF08\u9700\u5148\u4FDD\u5B58\u624D\u80FD\u53D1\uFF09" : ""}`;
@@ -2532,6 +2616,45 @@ function registerChatTools(toolCtx, { delivery, channels, bots, logger = console
     }
   }));
   disposers.push(toolCtx.tools.register({
+    name: "chat_send_file",
+    description: "\u628A\u4E00\u4E2A\u672C\u5730\u6587\u4EF6\uFF08\u62A5\u8868\u3001Excel\u3001\u56FE\u7247\u7B49\uFF0C\u226430MB\uFF09\u53D1\u5230\u6307\u5B9A\u804A\u5929\u673A\u5668\u4EBA\u7684\u6307\u5B9A\u4F1A\u8BDD\u3002\u76EE\u6807\u5FC5\u987B\u5DF2\u5728\u8BBE\u7F6E\u91CC\u4FDD\u5B58\uFF1B\u76F8\u5BF9\u8DEF\u5F84\u6309\u8BE5\u673A\u5668\u4EBA\u7684\u5DE5\u4F5C\u533A\u89E3\u6790\u3002\u9002\u5408\u628A\u751F\u6210\u597D\u7684\u7ED3\u679C\u6587\u4EF6\u76F4\u63A5\u63A8\u7ED9\u7528\u6237\u3002",
+    parameters: {
+      type: "object",
+      properties: {
+        channel_id: CHANNEL_FIELD,
+        bot_id: BOT_FIELD,
+        target_id: {
+          type: "string",
+          description: "chat_targets \u5217\u51FA\u7684\u76EE\u6807 id\uFF08\u53EA\u80FD\u662F\u5DF2\u4FDD\u5B58\u7684\u76EE\u6807\uFF0C\u4E0D\u80FD\u662F\u5019\u9009\uFF09\u3002"
+        },
+        path: {
+          type: "string",
+          description: "\u8981\u53D1\u9001\u7684\u6587\u4EF6\u8DEF\u5F84\uFF08\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u6216\u76F8\u5BF9\u8BE5\u673A\u5668\u4EBA\u5DE5\u4F5C\u533A\u7684\u8DEF\u5F84\uFF09\u3002"
+        },
+        name: { type: "string", description: "\u5BF9\u65B9\u770B\u5230\u7684\u6587\u4EF6\u540D\uFF08\u53EF\u9009\uFF0C\u9ED8\u8BA4\u53D6\u6587\u4EF6\u540D\uFF09\u3002" }
+      },
+      required: ["channel_id", "bot_id", "target_id", "path"],
+      additionalProperties: false
+    },
+    output: OUTPUT_TEXT,
+    async execute(args) {
+      try {
+        const result = await delivery.sendFile({
+          channelId: args.channel_id,
+          botId: args.bot_id,
+          targetId: args.target_id,
+          path: args.path,
+          name: args.name
+        });
+        const size = result?.size ? `\uFF08${formatBytes(result.size)}\uFF09` : "";
+        const messageId = result?.messageId ?? null;
+        return `\u5DF2\u53D1\u9001\u6587\u4EF6 ${result?.name ?? args.path}${size} \u5230 ${args.target_id}${messageId ? `\uFF08\u6D88\u606F id ${messageId}\uFF09` : ""}\u3002`;
+      } catch (error) {
+        return describeFileFailure(error, args);
+      }
+    }
+  }));
+  disposers.push(toolCtx.tools.register({
     name: "chat_save_target",
     description: '\u628A\u4E00\u4E2A"\u5019\u9009"\u4F1A\u8BDD\u4FDD\u5B58\u4E3A\u53EF\u6295\u9012\u76EE\u6807\uFF08\u53EA\u80FD\u4FDD\u5B58 chat_targets \u91CC\u6807\u8BB0\u4E3A\u5019\u9009\u7684\u76EE\u6807\uFF0C\u5373\u8BE5\u673A\u5668\u4EBA\u5386\u53F2\u4E0A\u771F\u5B9E\u5BF9\u8BDD\u8FC7\u7684\u4F1A\u8BDD\uFF09\u3002\u4FDD\u5B58\u540E\u5373\u53EF\u7528 chat_send \u53D1\u9001\u3002',
     parameters: {
@@ -2587,7 +2710,7 @@ var CHANNEL_ID = /^[a-z][a-z0-9-]{1,31}$/;
 var BOT_ID = /^[A-Za-z0-9_@.:+-]{1,256}$/;
 function channelDataDirOverride(config, channelId) {
   const value = config?.channelDataDirs?.[channelId];
-  return typeof value === "string" && value.trim() ? resolve2(value.trim()) : null;
+  return typeof value === "string" && value.trim() ? resolve3(value.trim()) : null;
 }
 function resolveLogger(ctx, scope) {
   const logger = ctx?.logger;
@@ -2610,8 +2733,14 @@ function isPlainRecord(value) {
 function validBotPayload(payload, options = {}) {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
   const allowed = options.withConfig ? ["channelId", "botId", "config"] : ["channelId", "botId", ...options.extra ?? []];
-  if (Object.keys(payload).length !== allowed.length) return false;
-  if (!allowed.every((key) => Object.hasOwn(payload, key))) return false;
+  const keys = Object.keys(payload);
+  if (keys.length < allowed.length - (options.optional?.length ?? 0) || keys.length > allowed.length) {
+    return false;
+  }
+  if (!keys.every((key) => allowed.includes(key))) return false;
+  if (!allowed.filter((key) => !options.optional?.includes(key)).every((key) => Object.hasOwn(payload, key))) {
+    return false;
+  }
   if (typeof payload.channelId !== "string" || !CHANNEL_ID.test(payload.channelId)) return false;
   if (typeof payload.botId !== "string" || !BOT_ID.test(payload.botId)) return false;
   if (!options.withConfig) return true;
@@ -2788,6 +2917,22 @@ function apply(ctx, config = {}) {
         targetId: payload.targetId
       }) });
     }
+    if (method === "delivery.sendFile") {
+      if (!validBotPayload(payload, { extra: ["targetId", "path", "name"], optional: ["name"] }) || typeof payload.targetId !== "string" || typeof payload.path !== "string" || payload.name !== void 0 && typeof payload.name !== "string") {
+        return fail("chat/bad-request", "delivery.sendFile \u9700\u8981 { channelId, botId, targetId, path, name? }\u3002");
+      }
+      try {
+        return ok(await delivery.sendFile({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          targetId: payload.targetId,
+          path: payload.path,
+          name: payload.name
+        }));
+      } catch (error) {
+        return failFrom(error, "chat/delivery-failed");
+      }
+    }
     if (method === "delivery.send") {
       if (!validBotPayload(payload, { extra: ["targetId", "text"] }) || typeof payload.targetId !== "string" || typeof payload.text !== "string") {
         return fail("chat/bad-request", "delivery.send \u9700\u8981 { channelId, botId, targetId, text }\u3002");
@@ -2848,10 +2993,12 @@ function apply(ctx, config = {}) {
     /** 主动投递：定时任务/脚本用 `send` 把结果推到指定会话。 */
     delivery: Object.freeze({
       send: (options) => delivery.send(options),
+      sendFile: (options) => delivery.sendFile(options),
       list: (options) => delivery.list(options),
       save: (options) => delivery.save(options),
       remove: (options) => delivery.remove(options),
-      supports: (channelId) => delivery.supports(channelId)
+      supports: (channelId) => delivery.supports(channelId),
+      supportsFile: (channelId) => delivery.supportsFile(channelId)
     }),
     contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
     guidance: Object.freeze({
