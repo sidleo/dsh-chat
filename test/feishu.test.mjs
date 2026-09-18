@@ -207,6 +207,7 @@ async function makeBridge({
   policy = null,
   askResult = { text: '最终答案', reason: { kind: 'completed' }, tools: [] },
   onAsk = () => {},
+  commands = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -248,6 +249,7 @@ async function makeBridge({
     interactions,
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
+    ...(commands ? { commands } : {}),
     sessions: {
       ensure: async ({ key }) => ({ sessionId: `session-${key}`, created: false }),
       uploadFile: async (options) => {
@@ -1849,5 +1851,63 @@ test('名字解析：并发查询合并成一次、缺权限长退避、「重�
     await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('菜单卡片：点按钮就地更新同一张卡（显示点了什么 + 输出，按钮保留）', async () => {
+  const menu = [{ label: '帮助', command: '/help' }, { label: '状态', command: '/status' }];
+  const calls = [];
+  const commands = {
+    async handle(request) {
+      calls.push(request.text);
+      if (request.text === '/menu') return { handled: true, reply: '可用命令见下', menu };
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ commands });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_menu',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_menu: '/status' } },
+    });
+
+    assert.deepEqual(calls, ['/status', '/menu'], '执行被点的命令，并重取一次菜单');
+    assert.equal(answer.toast.type, 'success');
+    assert.match(answer.toast.content, /\/status/);
+
+    const patch = app.gateway.calls.patches.at(-1);
+    assert.equal(patch.messageId, 'om_menu', '要更新的是被点的那张卡片');
+    const json = JSON.stringify(patch.card);
+    assert.match(json, /"\*\*\/status\*\*/, '卡片上要写明点了哪个命令');
+    assert.match(json, /输出：\/status/, '命令输出要落回卡片');
+    assert.match(json, /"dsh_menu":"\/help"/, '按钮要留着，可以接着点');
+    assert.equal(app.gateway.calls.cards.length, 0, '就地更新，不该另发一张新卡');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('菜单卡片：就地更新失败时退回回文字，用户不会什么都收不到', async () => {
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') return { handled: true, reply: '菜单', menu: [{ label: '状态', command: '/status' }] };
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ commands });
+  try {
+    app.gateway.setFailure('patchCard', new Error('卡片被删了'));
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_menu',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_menu: '/status' } },
+    });
+    assert.equal(answer.toast.type, 'success');
+    assert.equal(app.gateway.calls.replies.at(-1)?.text, '输出：/status', '退回"回复文字"这条路');
+  } finally {
+    await app.cleanup();
   }
 });

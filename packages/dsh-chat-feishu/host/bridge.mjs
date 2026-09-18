@@ -616,24 +616,53 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    *
    * 按钮里带的是**命令行**，点击后走与"用户手打"完全同一条命令路径，
    * 因此按钮与文本不会出现两套行为。
+   *
+   * `last`（`{ command, reply }`）是"上一次点了什么、结果是什么"：点完就地更新时把它
+   * 渲染进卡片正文——否则点一下只多了条新消息，用户看不出自己点到了没有（真机反馈过）。
    */
-  function menuCard(items) {
+  function menuCard(items, last = null) {
+    const actions = items.slice(0, 12).map((item) => ({
+      tag: 'button',
+      type: 'default',
+      text: { tag: 'plain_text', content: item.label },
+      value: { dsh_menu: item.command },
+    }));
+    const elements = [
+      { tag: 'div', text: { tag: 'lark_md', content: '点按钮执行，也可以直接发文字命令。' } },
+    ];
+    if (last?.command) {
+      // 输出可能很长（/status 之类）：截断，免得一张卡片刷满整屏。
+      const reply = String(last.reply ?? '').trim();
+      const shown = reply.length > 800 ? `${reply.slice(0, 800)}…` : reply;
+      elements.push({ tag: 'hr' });
+      elements.push({
+        tag: 'div',
+        text: {
+          tag: 'lark_md',
+          content: `**${last.command}**\n${shown || '（没有输出）'}`,
+        },
+      });
+    }
+    elements.push({ tag: 'action', actions });
     return {
       config: { wide_screen_mode: true },
       header: { template: 'blue', title: { tag: 'plain_text', content: '机器人菜单' } },
-      elements: [
-        { tag: 'div', text: { tag: 'lark_md', content: '点按钮执行，也可以直接发文字命令。' } },
-        {
-          tag: 'action',
-          actions: items.slice(0, 12).map((item) => ({
-            tag: 'button',
-            type: 'default',
-            text: { tag: 'plain_text', content: item.label },
-            value: { dsh_menu: item.command },
-          })),
-        },
-      ],
+      elements,
     };
+  }
+
+  /**
+   * 取一份当前的菜单项（点完按钮后要就地重画按钮，得知道按钮原来有哪些）。
+   *
+   * 重新问一次命令内核，而不是把菜单塞进按钮的 value 里：按钮值只带命令行，
+   * 菜单本身就是 `/menu` 的输出，重问一次永远是最新的（且没有副作用）。
+   */
+  async function menuItemsFor(context) {
+    const result = await deps.commands?.handle?.({ ...context, text: '/menu' }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] 重取菜单失败：${error?.message ?? error}`);
+      return null;
+    });
+    return result?.menu?.length ? result.menu : [];
   }
 
   /**
@@ -663,8 +692,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey)
         ? 'group' : 'direct';
       const key = conversationType === 'group' ? groupKey : `p2p:${operatorId}`;
-      const command = await deps.commands?.handle?.({
-        text: value.dsh_menu,
+      const commandContext = {
         channelId: deps.channelId,
         botId: bot.id,
         key,
@@ -673,14 +701,25 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         isOwner: isOwner(deps.accessPolicy, bot, operatorId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: '飞书',
-      }).catch((error) => {
-        logger.warn?.(`[dsh-chat-feishu] 菜单命令失败：${error?.message ?? error}`);
-        return null;
-      });
+      };
+      const command = await deps.commands?.handle?.({ ...commandContext, text: value.dsh_menu })
+        .catch((error) => {
+          logger.warn?.(`[dsh-chat-feishu] 菜单命令失败：${error?.message ?? error}`);
+          return null;
+        });
       if (!command?.handled) return { toast: { type: 'error', content: '命令没有执行。' } };
-      if (command.menu?.length) {
-        await gateway.sendCard({ chatId, card: menuCard(command.menu) });
-        return { toast: { type: 'info', content: '菜单已更新' } };
+      // 就地更新：把"点了哪个命令 + 输出"画回同一张卡片，按钮保持可用。
+      // 取不到卡片 messageId 时退回原路（回文字），行为不变。
+      const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
+      if (items.length > 0 && event.messageId) {
+        const patched = await gateway.patchCard({
+          messageId: event.messageId,
+          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? '' }),
+        }).then(() => true).catch((error) => {
+          logger.warn?.(`[dsh-chat-feishu] 菜单卡片就地更新失败，回退为回文字：${error?.message ?? error}`);
+          return false;
+        });
+        if (patched) return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
       }
       if (command.reply) {
         if (event.messageId) {

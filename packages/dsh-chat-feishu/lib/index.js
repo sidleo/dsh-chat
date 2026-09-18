@@ -127470,23 +127470,42 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       logger.info?.(`[dsh-chat-feishu] \u64A4\u9500\u8868\u60C5\u56DE\u590D\u5931\u8D25\uFF1A${error?.message ?? error}`);
     }
   }
-  function menuCard(items) {
+  function menuCard(items, last = null) {
+    const actions = items.slice(0, 12).map((item) => ({
+      tag: "button",
+      type: "default",
+      text: { tag: "plain_text", content: item.label },
+      value: { dsh_menu: item.command }
+    }));
+    const elements = [
+      { tag: "div", text: { tag: "lark_md", content: "\u70B9\u6309\u94AE\u6267\u884C\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002" } }
+    ];
+    if (last?.command) {
+      const reply = String(last.reply ?? "").trim();
+      const shown = reply.length > 800 ? `${reply.slice(0, 800)}\u2026` : reply;
+      elements.push({ tag: "hr" });
+      elements.push({
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: `**${last.command}**
+${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
+        }
+      });
+    }
+    elements.push({ tag: "action", actions });
     return {
       config: { wide_screen_mode: true },
       header: { template: "blue", title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u83DC\u5355" } },
-      elements: [
-        { tag: "div", text: { tag: "lark_md", content: "\u70B9\u6309\u94AE\u6267\u884C\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002" } },
-        {
-          tag: "action",
-          actions: items.slice(0, 12).map((item) => ({
-            tag: "button",
-            type: "default",
-            text: { tag: "plain_text", content: item.label },
-            value: { dsh_menu: item.command }
-          }))
-        }
-      ]
+      elements
     };
+  }
+  async function menuItemsFor(context) {
+    const result = await deps.commands?.handle?.({ ...context, text: "/menu" }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] \u91CD\u53D6\u83DC\u5355\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return null;
+    });
+    return result?.menu?.length ? result.menu : [];
   }
   async function handleCardAction(event) {
     const value = event?.action?.value ?? {};
@@ -127500,8 +127519,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       const groupKey = `group:${chatId}`;
       const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey) ? "group" : "direct";
       const key = conversationType === "group" ? groupKey : `p2p:${operatorId}`;
-      const command = await deps.commands?.handle?.({
-        text: value.dsh_menu,
+      const commandContext = {
         channelId: deps.channelId,
         botId: bot.id,
         key,
@@ -127510,14 +127528,22 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         isOwner: isOwner(deps.accessPolicy, bot, operatorId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: "\u98DE\u4E66"
-      }).catch((error) => {
+      };
+      const command = await deps.commands?.handle?.({ ...commandContext, text: value.dsh_menu }).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u547D\u4EE4\u5931\u8D25\uFF1A${error?.message ?? error}`);
         return null;
       });
       if (!command?.handled) return { toast: { type: "error", content: "\u547D\u4EE4\u6CA1\u6709\u6267\u884C\u3002" } };
-      if (command.menu?.length) {
-        await gateway.sendCard({ chatId, card: menuCard(command.menu) });
-        return { toast: { type: "info", content: "\u83DC\u5355\u5DF2\u66F4\u65B0" } };
+      const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
+      if (items.length > 0 && event.messageId) {
+        const patched = await gateway.patchCard({
+          messageId: event.messageId,
+          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? "" })
+        }).then(() => true).catch((error) => {
+          logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u56DE\u6587\u5B57\uFF1A${error?.message ?? error}`);
+          return false;
+        });
+        if (patched) return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
       }
       if (command.reply) {
         if (event.messageId) {
