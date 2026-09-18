@@ -21,9 +21,15 @@ import {
   AccessPolicyEditor, OwnerEditor, PresetEditor, WorkspaceEditor,
 } from '../packages/dsh-chat/client/bot-shared-settings.js';
 import { ScopedModeEditor } from '../packages/dsh-chat/client/scoped-mode-editor.js';
-// 用真的 Panel（不是手写复刻）：投递列表靠它渲染卡片外壳，复刻会跟着组件漂移。
-import { Panel, StatusPill } from '../packages/dsh-chat/client/chat-ui.js';
+// 用真的 Panel / chatUi 工厂（不是手写复刻）：投递列表与整张渠道卡都靠它渲染外壳，
+// 复刻会跟着组件漂移。
+import { Panel, StatusPill, createChatUi } from '../packages/dsh-chat/client/chat-ui.js';
+import { ChatSettingsSection } from '../packages/dsh-chat/client/section.js';
+import { createChannelRail } from '../packages/dsh-chat/shared/channel-rail.mjs';
 import { installChatStyles } from '../packages/dsh-chat/client/styles.js';
+// 整张渠道卡：真机上"卡片头逐字竖排"就是它们炸的，而单测与构建都发现不了。
+import { BotCard as FeishuBotCard } from '../packages/dsh-chat-feishu/client/index.js';
+import { AccountCard as WeixinAccountCard } from '../packages/dsh-chat-weixin/client/index.js';
 
 const h = React.createElement;
 
@@ -42,106 +48,211 @@ installChatStyles(document);
 
 const t = (key) => key;
 
-/** 极简 chatUi 桩：只提供被渲染组件用到的那几个面。 */
-const chatUi = {
-  components: { Panel, StatusPill },
-  hooks: {},
-  translate: t,
-  unwrapRpc: (result) => {
-    if (result?.ok === true) return result.value;
-    throw new Error(result?.error?.message ?? 'rpc failed');
-  },
-  callControlRpc: async (connection, method) => {
-    if (method === 'delivery.list') {
-      return {
-        ok: true,
-        value: {
-          canSend: true,
-          targets: [
-            { id: 'group_oc_saved', name: '日报临时推送群', kind: 'group', route: { chatId: 'oc_saved' } },
-            ...Array.from({ length: 8 }, (_, index) => ({
-              id: `group_oc_${index}`,
-              name: `很长的群名字第${index}号用于测试换行与省略`,
-              kind: 'group',
-              route: { chatId: `oc_${index}` },
-              discovered: true,
-            })),
-          ],
-        },
-      };
-    }
-    // 诊断面板：真实形态的数据（含失败行、权限提示、超长日志行）。
-    if (method === 'diagnostics.read') {
-      return {
-        ok: true,
-        value: {
-          dataDir: '/Users/zhang3/.dsh/integrations/dsh-chat',
-          logDir: '/Users/zhang3/.dsh/integrations/dsh-chat/logs',
-          channels: [
-            {
-              id: 'feishu',
-              label: '飞书',
-              version: '0.0.1',
-              status: 'running',
-              error: null,
-              statusError: null,
-              bots: [
-                {
-                  id: 'bot_1f4c7a9e2b5d83406a1c3e5f7b9d0a2c',
-                  state: 'running',
-                  connected: true,
-                  handled: 128,
-                  lastHandledAt: '2026-09-19T02:21:57.000Z',
-                  errorMessage: null,
-                  lastError: null,
-                  nameHint: {
-                    code: 'feishu/scope-missing',
-                    message: '读不到群名：飞书应用还没开通对应权限，所以只能显示 id。开通后点「重新连接」立刻生效。',
-                    url: 'https://open.feishu.cn/app/cli_7b9d1a2c4e6f8035/auth?q=im:chat:readonly',
-                  },
-                },
-                {
-                  id: 'bot_6d2b8f1a4c7e9350b2d4f6a8c0e1b3d5',
-                  state: 'running',
-                  connected: true,
-                  handled: 7,
-                  lastHandledAt: null,
-                  errorMessage: '呈现层发不出去：卡片被删了',
-                  lastError: '回复超时：15 分钟没有任何事件',
-                  nameHint: null,
-                },
-              ],
-            },
-            {
-              id: 'weixin', label: '微信', version: '0.0.1', status: 'stopped', error: null,
-              statusError: null, bots: [],
-            },
-          ],
-          logs: [
-            {
-              path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/feishu.log',
-              exists: true,
-              size: 128970,
-              modifiedAt: '2026-09-19T02:21:57.000Z',
-              lines: [
-                '2026-09-19T02:21:57.601Z WARN  [dsh-chat-feishu] 读取群列表失败，群名将退回 id：读取群列表失败：Access denied. One of the following scopes is required: [im:chat:readonly, im:chat, im:chat.group_info:readonly, im:chat:read]（code 99991672）',
-                '2026-09-19T02:22:03.114Z INFO  [dsh-chat-feishu] 张三 长连接已就绪',
-              ],
-            },
-            {
-              path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/hub.log',
-              exists: true,
-              size: 36181,
-              modifiedAt: '2026-09-19T02:37:36.000Z',
-              lines: ['2026-09-19T02:37:36.661Z INFO  [dsh-chat] 收到提问请求：会话=session-cc4e3ab1-dbe4-4170-b4bf-90cb34e5aa72 问题数=1 认领=否'],
-            },
-          ],
-        },
-      };
-    }
-    return { ok: true, value: {} };
+/** 真实形态的机器人状态（取自 connection.status）：整张渠道卡与诊断面板共用。 */
+const FEISHU_STATUS = {
+  id: 'bot_1f4c7a9e2b5d83406a1c3e5f7b9d0a2c',
+  appIdMasked: 'cli_7b9d1a****',
+  domain: 'feishu',
+  state: 'running',
+  error: null,
+  errorMessage: null,
+  connected: true,
+  ownerCount: 1,
+  ownersWildcard: false,
+  ownerOpenIds: ['ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5'],
+  groupResponseMode: 'mention',
+  groupTopicReply: false,
+  stepPush: { direct: 'card', group: 'card' },
+  handled: 128,
+  lastHandledAt: '2026-09-19T02:21:57.000Z',
+  lastError: null,
+  nameHint: {
+    code: 'feishu/scope-missing',
+    message: '读不到群名：飞书应用还没开通对应权限，所以只能显示 id。开通后点「重新连接」立刻生效。',
+    url: 'https://open.feishu.cn/app/cli_7b9d1a2c4e6f8035/auth?q=im:chat:readonly',
   },
 };
+const SECOND_BOT_STATUS = {
+  ...FEISHU_STATUS,
+  id: 'bot_6d2b8f1a4c7e9350b2d4f6a8c0e1b3d5',
+  appIdMasked: 'cli_a9fa3a****',
+  handled: 7,
+  lastHandledAt: null,
+  errorMessage: '呈现层发不出去：卡片被删了',
+  lastError: '回复超时：15 分钟没有任何事件',
+  nameHint: null,
+};
+const WEIXIN_STATUS = {
+  id: 'wx_0f2d168cd6b0883e2ab7a445',
+  state: 'running',
+  connected: true,
+  handled: 12,
+  lastHandledAt: '2026-09-19T01:10:00.000Z',
+  errorMessage: null,
+  lastError: null,
+  nameHint: null,
+  loggedIn: true,
+};
+
+/** 渠道卡要的原始配置项（不是 status —— 卡片同时用这两个）。 */
+const FEISHU_BOT = { id: FEISHU_STATUS.id, name: '张三-DSH', appIdMasked: FEISHU_STATUS.appIdMasked };
+const WEIXIN_ACCOUNT = {
+  botId: WEIXIN_STATUS.id,
+  botName: '张三（微信）',
+  accountIdMasked: 'wx_0f2d****',
+  state: 'running',
+  loggedIn: true,
+};
+
+/**
+ * 假的 RPC 传输层。
+ *
+ * 为什么不做成"stub 掉 chatUi.callControlRpc"：hooks 是直接 `import { callControlRpc }`
+ * 的，只有把 `connection.rpc.call` 换掉，真实 hook（useBotSettings/useConversations）
+ * 与整张渠道卡才会走完整链路渲染——这正是"真机才炸"的那一层。
+ */
+const RPC_FIXTURES = {
+  'bot.settings.get': () => ({
+    settings: {
+      workspace: '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat',
+      agentPreset: 'standard',
+      accessPolicy: {
+        direct: {
+          mode: 'allowlist',
+          open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+          allowlist: { users: [{ id: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5', canExecuteCommands: true }] },
+        },
+        group: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+      },
+      contextEnhancement: null,
+    },
+  }),
+  'bot.settings.options': () => ({
+    workspacePaths: ['/Users/zhang3', '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat'],
+    presets: [{ id: 'standard' }, { id: 'yh-olap' }],
+  }),
+  'bot.conversations': () => ({
+    conversations: [
+      {
+        id: 'p2p_ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5',
+        kind: 'direct',
+        name: '赵六',
+        // 两个平台的字段名各来一份：飞书读 openId、微信读 userId，同一份 fixture 两边都能用。
+        route: { openId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5', userId: 'wx_user_1' },
+      },
+      {
+        id: 'group_oc_5086a1b2c3d4e5f60718293a4b5c6d7e',
+        kind: 'group',
+        name: '日报临时推送群',
+        route: { chatId: 'oc_5086a1b2c3d4e5f60718293a4b5c6d7e' },
+      },
+    ],
+  }),
+  'delivery.list': () => ({
+    canSend: true,
+    targets: [
+      { id: 'group_oc_saved', name: '日报临时推送群', kind: 'group', route: { chatId: 'oc_saved' } },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `group_oc_${index}`,
+        name: `很长的群名字第${index}号用于测试换行与省略`,
+        kind: 'group',
+        route: { chatId: `oc_${index}` },
+        discovered: true,
+      })),
+    ],
+  }),
+  'channel.list': () => ({
+    contractVersion: 1,
+    hubVersion: '0.1.0',
+    hubPackage: 'dsh-chat',
+    dataDir: '/Users/zhang3/.dsh/integrations/dsh-chat',
+    logDir: '/Users/zhang3/.dsh/integrations/dsh-chat/logs',
+    channels: [
+      { id: 'feishu', label: '飞书', order: 1, version: '0.0.1', status: 'running', error: null, startedAt: null },
+      { id: 'weixin', label: '微信', order: 2, version: '0.0.1', status: 'stopped', error: null, startedAt: null },
+    ],
+  }),
+  // 渠道自己的端点（整张渠道卡会读它）。
+  'connection.status': (payload) => ({
+    channel: payload?.__channelId ?? 'feishu',
+    bots: [FEISHU_STATUS],
+  }),
+  // 诊断面板：真实形态的数据（含失败行、权限提示、超长日志行）。
+  'diagnostics.read': () => ({
+    dataDir: '/Users/zhang3/.dsh/integrations/dsh-chat',
+    logDir: '/Users/zhang3/.dsh/integrations/dsh-chat/logs',
+    channels: [
+      {
+        id: 'feishu',
+        label: '飞书',
+        version: '0.0.1',
+        status: 'running',
+        error: null,
+        statusError: null,
+        bots: [FEISHU_STATUS, SECOND_BOT_STATUS],
+      },
+      { id: 'weixin', label: '微信', version: '0.0.1', status: 'stopped', error: null, statusError: null, bots: [] },
+    ],
+    logs: [
+      {
+        path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/feishu.log',
+        exists: true,
+        size: 128970,
+        modifiedAt: '2026-09-19T02:21:57.000Z',
+        lines: [
+          '2026-09-19T02:21:57.601Z WARN  [dsh-chat-feishu] 读取群列表失败，群名将退回 id：读取群列表失败：Access denied. One of the following scopes is required: [im:chat:readonly, im:chat, im:chat.group_info:readonly, im:chat:read]（code 99991672）',
+          '2026-09-19T02:22:03.114Z INFO  [dsh-chat-feishu] 张三 长连接已就绪',
+        ],
+      },
+      {
+        path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/hub.log',
+        exists: true,
+        size: 36181,
+        modifiedAt: '2026-09-19T02:37:36.000Z',
+        lines: ['2026-09-19T02:37:36.661Z INFO  [dsh-chat] 收到提问请求：会话=session-cc4e3ab1-dbe4-4170-b4bf-90cb34e5aa72 问题数=1 认领=否'],
+      },
+    ],
+  }),
+};
+
+const connection = {
+  rpc: {
+    async call(_prefix, endpoint, request) {
+      const method = request?.method;
+      const build = RPC_FIXTURES[method];
+      if (!build) return { ok: false, error: { code: 'chat/unknown-method', message: `fixture 未提供 ${method}` } };
+      // 端点名形如 `dsh-chat/<channelId>`：按渠道给出对应的机器人，左栏切换才像真的。
+      const channelId = String(endpoint ?? '').split('/').pop();
+      return { ok: true, value: build({ ...(request?.payload ?? {}), __channelId: channelId }) };
+    },
+  },
+};
+
+/** chatUi 用真工厂：组件与 hook 都是产品代码，只有传输层是假的。 */
+const chatUi = createChatUi({ translate: t });
+
+/** 渠道 rail：真实现 + 两条注册（顺序与能力说明照产品形态来）。 */
+const channels = createChannelRail();
+channels.register({ id: 'feishu', order: 1, label: '飞书', capabilities: { note: '支持私聊与群聊' } });
+channels.register({ id: 'weixin', order: 2, label: '微信', capabilities: { note: '仅私聊' } });
+
+const feishuCard = () => h(FeishuBotCard, {
+  bot: FEISHU_BOT, status: FEISHU_STATUS, chatUi, connection, translate: t, onChanged: async () => {},
+});
+const weixinCard = () => h(WeixinAccountCard, {
+  account: WEIXIN_ACCOUNT, status: WEIXIN_STATUS, chatUi, connection, translate: t, onChanged: async () => {},
+});
+
+/** hub 设置页整页：页头（诊断 / 版本与更新）+ 左栏渠道 + 右栏机器人列表（真实 section）。 */
+function HubPage() {
+  return h(ChatSettingsSection, {
+    channels,
+    chatUi,
+    translate: t,
+    connection,
+    renderSlot: (_name, params) => (params?.channelId === 'weixin' ? weixinCard() : feishuCard()),
+  });
+}
 
 const TARGETS = [
   { id: '#/properties/status', name: '运行正常' },
@@ -149,15 +260,21 @@ const TARGETS = [
 
 const FRAGMENTS = {
   delivery: () => h(DeliveryTargetsEditor, {
-    chatUi, connection: {}, channelId: 'feishu', botId: 'bot_1', translate: t,
+    chatUi, connection, channelId: 'feishu', botId: FEISHU_STATUS.id, translate: t,
   }),
   // 改名态：输入框 + 两个按钮同排，窄栏最容易挤爆。
   deliveryRename: () => h(DeliveryTargetsEditor, {
-    chatUi, connection: {}, channelId: 'feishu', botId: 'bot_1', translate: t,
+    chatUi, connection, channelId: 'feishu', botId: FEISHU_STATUS.id, translate: t,
   }),
   // 诊断面板：收起态与"展开日志尾部"态各测一遍（超长日志行的溢出风险在展开后）。
-  diagnostics: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
-  diagnosticsOpen: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
+  diagnostics: () => h(DiagnosticsPanel, { chatUi, connection, translate: t }),
+  diagnosticsOpen: () => h(DiagnosticsPanel, { chatUi, connection, translate: t }),
+  // 整张渠道卡：数据全部由上面的假传输层供给，组件与 hook 都是产品代码。
+  feishuCard,
+  weixinCard,
+  // hub 页头 + 左栏 + 机器人列表：右上角两个入口（诊断 / 版本与更新）在窄栏下也得排得下。
+  hubPage: () => h(HubPage),
+  hubPageOpen: () => h(HubPage),
   shared: () => h(React.Fragment, null,
     h(WorkspaceEditor, {
       value: '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat',
@@ -283,11 +400,20 @@ let measured = 0;
 async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
   // 展开态（日志尾部 / 改名输入框）都由按钮控制：点一次再量，否则这些帧等于没测。
-  const clicks = { diagnosticsOpen: '看最后 40 行', deliveryRename: '重命名' };
-  for (const [scenario, label] of Object.entries(clicks)) {
+  const clicks = {
+    diagnosticsOpen: ['看最后 40 行'],
+    deliveryRename: ['重命名'],
+    // hub 页头两个入口都展开：诊断面板 + 版本面板都得在窄栏里排得下。
+    hubPageOpen: ['诊断', '版本与更新'],
+  };
+  for (const [scenario, labels] of Object.entries(clicks)) {
     for (const frame of document.querySelectorAll(`[data-scenario="${scenario}"]`)) {
       for (const button of frame.querySelectorAll('button')) {
-        if ((button.textContent ?? '').includes(label)) button.click();
+        // 只"展开"不"收起"：settle 会跑两轮（立即 + 50ms 兜底），
+        // 无脑点会把上一轮已经展开的面板又关掉，等于没测（踩过：版本面板计数为 0）。
+        const expanded = button.getAttribute('aria-expanded');
+        if (expanded === 'true') continue;
+        if (labels.some((label) => (button.textContent ?? '').includes(label))) button.click();
       }
     }
   }

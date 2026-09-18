@@ -220,7 +220,8 @@ const STEP_PUSH_OPTIONS = [
   },
 ];
 
-function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
+// 导出给布局守门用：整张渠道卡在窄栏下的真实渲染（真机炸过「卡片头逐字竖排」）。
+export function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor,
     DeliveryTargetsEditor, WorkspaceEditor, PresetEditor,

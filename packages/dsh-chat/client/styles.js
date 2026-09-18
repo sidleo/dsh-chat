@@ -427,8 +427,12 @@ const CSS = `
   display: flex;
   gap: 8px;
   align-items: center;
-  /* 操作块自身不压缩（折行后靠下面那条 margin 保持右对齐）。 */
-  flex: none;
+  /* 操作块可以缩到"最宽的那个按钮"，这样下面那条 flex-wrap 才会真的生效。
+     曾经写的是 flex: none：内容再宽也不缩，于是窄栏里（320px 的 hub 页头）
+     整块直接顶出容器 15px —— 正是布局守门量出来的那一条。
+     按钮自身仍是 flex: none，不会出现"逐字竖排"。 */
+  flex: 0 1 auto;
+  min-width: 0;
   /* 放不下时按钮自己换行，而不是把整块顶出容器（窄栏里"下拉+两个按钮"就会溢出）。 */
   flex-wrap: wrap;
 }

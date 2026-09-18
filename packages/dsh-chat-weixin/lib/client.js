@@ -34,6 +34,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // packages/dsh-chat-weixin/client/index.js
 var index_exports = {};
 __export(index_exports, {
+  AccountCard: () => AccountCard,
   apply: () => apply,
   inject: () => inject,
   name: () => name

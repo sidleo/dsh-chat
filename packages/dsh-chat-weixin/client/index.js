@@ -318,7 +318,8 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
   expired(state.status) ? h('p', { className: 'dchat-error' }, t('二维码已失效，请重新生成')) : null);
 }
 
-function AccountCard({ account, chatUi, connection, translate, onChanged }) {
+// 导出给布局守门用：整张渠道卡在窄栏下的真实渲染（真机炸过「卡片头逐字竖排」）。
+export function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor,
     WorkspaceEditor, PresetEditor, AccessPolicyEditor } = chatUi.components;

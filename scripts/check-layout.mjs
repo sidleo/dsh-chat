@@ -9,6 +9,10 @@
  * 这两类问题语法与单测都发现不了（构建通过、测试全绿、真机上才炸），只能真的渲染。
  * 页面入口是 `scripts/layout-fixture.mjs`，断言在 Node 侧做。
  *
+ * 覆盖范围：hub 共享组件 + **整张飞书/微信渠道卡** + hub 整页（页头两个入口、左栏、机器人列表）。
+ * 交互态（改名输入、展开日志尾部、展开诊断/版本面板）由 fixture 点一次按钮后再量，
+ * 且只"展开"不"收起"——settle 跑两轮，无脑点会把上一轮展开的面板又关掉（等于没测）。
+ *
  * 用法：node scripts/check-layout.mjs
  *
  * @module dsh-chat/check-layout

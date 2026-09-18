@@ -27,7 +27,9 @@ packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
 scripts/check-layout.mjs       布局守门：真实组件在 549/360/320px 下渲染并断言不溢出、不逐字竖排
-scripts/layout-fixture.mjs     上面那个守门的页面入口（headless Chrome 里跑，用 flushSync 同步提交）
+scripts/layout-fixture.mjs     上面那个守门的页面入口（headless Chrome 里跑，用 flushSync 同步提交）：
+                               共享组件 + **整张飞书/微信渠道卡** + hub 整页（页头两个入口、左栏、机器人列表），
+                               交互态（改名输入、展开日志尾部、展开诊断/版本面板）靠 aria-expanded 只展开不收起
 CONTRACT.md                    **新渠道作者唯一需要读的文档**
 UPSTREAM.md                    与上游 dsh-im 的对照关系、移植范围与出处
 ```
@@ -49,7 +51,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
 - **界面样式改完**：跑 `npm run check`（含布局守门）。窄栏下的两类问题是"构建通过、单测全绿、
   真机才炸"——① 中文被 flex 压成一字一行（`min-content` 只有一个字）；② `flex: none` 打在
-  `width: 100%` 的下拉框上，把同排按钮挤出容器、整页横向滚动。守门失败会指出是哪个元素伸出去的。
+  `width: 100%` 的下拉框上、或打在操作块上（内容再宽也不缩），把同排按钮挤出容器、整页横向滚动。
+  守门失败会指出是哪个元素伸出去的，**并且覆盖整张渠道卡与 hub 页头**——"只测共享组件"曾经
+  漏掉 hub 页头在 320px 下溢出 15px 这种问题。
 - **隔离调试**：`config.channelDataDirs` 可把渠道数据目录指到临时目录，避免用真实凭据建长连接；覆盖时**不做**旧设置导入。
 - **飞书卡片按钮没反应**：按"事件到没到"分三步查——
   ① 重启时带 `DSH_CHAT_FEISHU_SDK_LOG=debug`（SDK 日志会进 `logs/feishu.log`），点一次按钮后看日志：
