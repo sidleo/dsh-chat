@@ -166,6 +166,16 @@ const CSS = `
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-primary);
 }
+.dchat-solo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 进了机器人设置就占满整宽：左栏渠道列表此时没有意义。 */
+  width: 100%;
+}
 .dchat-panelBar {
   display: flex;
   align-items: center;

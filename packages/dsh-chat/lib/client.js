@@ -1294,6 +1294,16 @@ var CSS = `
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-primary);
 }
+.dchat-solo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* \u8FDB\u4E86\u673A\u5668\u4EBA\u8BBE\u7F6E\u5C31\u5360\u6EE1\u6574\u5BBD\uFF1A\u5DE6\u680F\u6E20\u9053\u5217\u8868\u6B64\u65F6\u6CA1\u6709\u610F\u4E49\u3002 */
+  width: 100%;
+}
 .dchat-panelBar {
   display: flex;
   align-items: center;
@@ -2368,20 +2378,22 @@ function ChatSettingsSection(props) {
     return h7(
       React8.Fragment,
       null,
-      h7(
-        "div",
-        { className: "dchat-panelBar" },
-        h7("button", {
-          type: "button",
-          className: "dchat-button",
-          onClick: backToBots
-        }, t("\u2190 \u673A\u5668\u4EBA\u5217\u8868"))
-      ),
       typeof renderSlot === "function" ? renderSlot(
         CHANNEL_PAGE_SLOT,
         { channelId: activeId, botId: view.botId },
         { entryKey: activeId }
       ) : h7("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
+    );
+  }
+  function backBar() {
+    return h7(
+      "div",
+      { className: "dchat-panelBar" },
+      h7("button", {
+        type: "button",
+        className: "dchat-button",
+        onClick: backToBots
+      }, t("\u2190 \u673A\u5668\u4EBA\u5217\u8868"))
     );
   }
   let body = null;
@@ -2398,6 +2410,8 @@ function ChatSettingsSection(props) {
         className: "dchat-listItem"
       }, h7("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
     )) : null;
+  } else if (view.kind !== "bots") {
+    body = h7("div", { className: "dchat-solo" }, backBar(), channelView());
   } else {
     body = h7(
       "div",
@@ -2434,7 +2448,7 @@ function ChatSettingsSection(props) {
         role: "tabpanel",
         id: `dchat-panel-${activeId}`,
         "aria-labelledby": `dchat-tab-${activeId}`
-      }, view.kind === "bots" ? botListView() : channelView())
+      }, botListView())
     );
   }
   return h7(

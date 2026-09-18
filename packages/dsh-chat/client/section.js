@@ -86,13 +86,9 @@ export function ChatSettingsSection(props) {
     });
   }
 
-  /** 二级视图：机器人（或整个渠道）的设置页。 */
+  /** 二级视图：机器人（或整个渠道）的设置页（返回条由外层给）。 */
   function channelView() {
     return h(React.Fragment, null,
-      h('div', { className: 'dchat-panelBar' },
-        h('button', {
-          type: 'button', className: 'dchat-button', onClick: backToBots,
-        }, t('← 机器人列表'))),
       typeof renderSlot === 'function'
         ? renderSlot(
           CHANNEL_PAGE_SLOT,
@@ -100,6 +96,14 @@ export function ChatSettingsSection(props) {
           { entryKey: activeId },
         )
         : h('p', { className: 'dchat-cardDescription' }, t('当前页面不支持渠道子槽。')));
+  }
+
+  /** 二级视图的返回条。 */
+  function backBar() {
+    return h('div', { className: 'dchat-panelBar' },
+      h('button', {
+        type: 'button', className: 'dchat-button', onClick: backToBots,
+      }, t('← 机器人列表')));
   }
 
   let body = null;
@@ -114,6 +118,9 @@ export function ChatSettingsSection(props) {
           key: name, className: 'dchat-listItem',
         }, h('code', { className: 'dchat-code' }, `dsh plugin --profile web add ${name}`)))))
       : null;
+  } else if (view.kind !== 'bots') {
+    // 进了机器人设置：不再保留左栏渠道列表——这时它没用，还占掉一半宽度。
+    body = h('div', { className: 'dchat-solo' }, backBar(), channelView());
   } else {
     body = h('div', { className: 'dchat-layout' },
       h('nav', { className: 'dchat-rail', role: 'tablist', 'aria-label': t('渠道导航') },
@@ -139,7 +146,7 @@ export function ChatSettingsSection(props) {
         role: 'tabpanel',
         id: `dchat-panel-${activeId}`,
         'aria-labelledby': `dchat-tab-${activeId}`,
-      }, view.kind === 'bots' ? botListView() : channelView()));
+      }, botListView()));
   }
 
   return h('section', { className: 'dchat-page', 'aria-label': t('Chat机器人设置') },
