@@ -29,7 +29,7 @@ export function Panel({ title, description, actions, children }) {
   return h('section', { className: 'dchat-card' },
     title || description || actions
       ? h('div', { className: 'dchat-cardHeader' },
-        h('div', null,
+        h('div', { className: 'dchat-cardHeading' },
           title ? h('h3', { className: 'dchat-cardTitle' }, title) : null,
           description ? h('p', { className: 'dchat-cardDescription' }, description) : null),
         actions ? h('div', { className: 'dchat-actions' }, actions) : null)

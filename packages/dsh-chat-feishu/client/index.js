@@ -40,7 +40,6 @@ const zh = {
   '逐步直播（每一步单独发一条消息）': '逐步直播（每一步单独发一条消息）',
   '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息':
     '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息',
-  '机器人与 DeepSeek Harness 的连接状态': '机器人与 DeepSeek Harness 的连接状态',
   '已处理消息': '已处理消息',
   '没有已接入的飞书机器人': '没有已接入的飞书机器人',
   '本机还没有飞书机器人配置。': '本机还没有飞书机器人配置。',
@@ -82,8 +81,6 @@ const en = {
   '逐步直播（每一步单独发一条消息）': 'Step-by-step feed (one message per step)',
   '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息':
     'Every step is its own message; long tasks send many messages',
-  '机器人与 DeepSeek Harness 的连接状态':
-    'Connection state between the bot and DeepSeek Harness',
   '已处理消息': 'Messages handled',
   '没有已接入的飞书机器人': 'No Feishu bot connected',
   '本机还没有飞书机器人配置。': 'This Host has no Feishu bot configured yet.',
@@ -156,7 +153,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
 
   return h(Panel, {
     title: bot.name ?? bot.id,
-    description: `${bot.appIdMasked} · ${t('机器人与 DeepSeek Harness 的连接状态')}`,
+    description: bot.appIdMasked,
     actions: h('div', { className: 'dchat-actions' },
       h(StatusPill, { status: status.state, label: t(STATE_TEXT[status.state] ?? '状态') }),
       h('button', {

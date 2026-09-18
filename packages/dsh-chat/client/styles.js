@@ -129,11 +129,21 @@ const CSS = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 12px;
+  /* 放不下时把操作整块折到下一行，而不是把标题/描述压到一字一行：
+     中文的 min-content 只有 1 个字，flex 一旦压缩就会逐字竖排（见 .dchat-botRow 同款处理）。 */
+  flex-wrap: wrap;
+}
+.dchat-cardHeading {
+  /* 长标题靠省略号收，不抢操作的宽度。 */
+  min-width: 0;
 }
 .dchat-cardTitle {
   font-size: 14px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dchat-cardDescription {
   margin: 0;
@@ -286,6 +296,13 @@ const CSS = `
   display: flex;
   gap: 8px;
   align-items: center;
+  /* 操作永不压缩；折行后靠 margin 保持右对齐。 */
+  flex: none;
+  margin-left: auto;
+}
+.dchat-actions > * {
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-button {
   border: 1px solid var(--dsw-alias-border-l2);
@@ -324,6 +341,9 @@ const CSS = `
   gap: 5px;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
+  /* 状态点自己永远不折行也不压缩（窄栏里曾被压成「运行正/常」）。 */
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-status::before {
   content: '';

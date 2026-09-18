@@ -1101,7 +1101,7 @@ function ScopedModeEditor({
       { className: "dchat-cardHeader" },
       h3(
         "div",
-        null,
+        { className: "dchat-cardHeading" },
         h3("h3", { className: "dchat-cardTitle" }, title),
         description ? h3("p", { className: "dchat-cardDescription" }, description) : null
       ),
@@ -1271,11 +1271,21 @@ var CSS = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 12px;
+  /* \u653E\u4E0D\u4E0B\u65F6\u628A\u64CD\u4F5C\u6574\u5757\u6298\u5230\u4E0B\u4E00\u884C\uFF0C\u800C\u4E0D\u662F\u628A\u6807\u9898/\u63CF\u8FF0\u538B\u5230\u4E00\u5B57\u4E00\u884C\uFF1A
+     \u4E2D\u6587\u7684 min-content \u53EA\u6709 1 \u4E2A\u5B57\uFF0Cflex \u4E00\u65E6\u538B\u7F29\u5C31\u4F1A\u9010\u5B57\u7AD6\u6392\uFF08\u89C1 .dchat-botRow \u540C\u6B3E\u5904\u7406\uFF09\u3002 */
+  flex-wrap: wrap;
+}
+.dchat-cardHeading {
+  /* \u957F\u6807\u9898\u9760\u7701\u7565\u53F7\u6536\uFF0C\u4E0D\u62A2\u64CD\u4F5C\u7684\u5BBD\u5EA6\u3002 */
+  min-width: 0;
 }
 .dchat-cardTitle {
   font-size: 14px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dchat-cardDescription {
   margin: 0;
@@ -1428,6 +1438,13 @@ var CSS = `
   display: flex;
   gap: 8px;
   align-items: center;
+  /* \u64CD\u4F5C\u6C38\u4E0D\u538B\u7F29\uFF1B\u6298\u884C\u540E\u9760 margin \u4FDD\u6301\u53F3\u5BF9\u9F50\u3002 */
+  flex: none;
+  margin-left: auto;
+}
+.dchat-actions > * {
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-button {
   border: 1px solid var(--dsw-alias-border-l2);
@@ -1466,6 +1483,9 @@ var CSS = `
   gap: 5px;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
+  /* \u72B6\u6001\u70B9\u81EA\u5DF1\u6C38\u8FDC\u4E0D\u6298\u884C\u4E5F\u4E0D\u538B\u7F29\uFF08\u7A84\u680F\u91CC\u66FE\u88AB\u538B\u6210\u300C\u8FD0\u884C\u6B63/\u5E38\u300D\uFF09\u3002 */
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-status::before {
   content: '';
@@ -1774,7 +1794,7 @@ function Panel({ title, description, actions, children }) {
       { className: "dchat-cardHeader" },
       h4(
         "div",
-        null,
+        { className: "dchat-cardHeading" },
         title ? h4("h3", { className: "dchat-cardTitle" }, title) : null,
         description ? h4("p", { className: "dchat-cardDescription" }, description) : null
       ),

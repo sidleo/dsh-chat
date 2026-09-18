@@ -56,7 +56,7 @@ export function ScopedModeEditor({
 
   return h('section', { className: 'dchat-card' },
     h('div', { className: 'dchat-cardHeader' },
-      h('div', null,
+      h('div', { className: 'dchat-cardHeading' },
         h('h3', { className: 'dchat-cardTitle' }, title),
         description ? h('p', { className: 'dchat-cardDescription' }, description) : null),
       h('div', { className: 'dchat-actions' },
