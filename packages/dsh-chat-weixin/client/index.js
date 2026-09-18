@@ -267,7 +267,7 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
       confirming
         ? h(React.Fragment, null,
           h('button', {
-            type: 'button', className: 'dchat-button', disabled: busy,
+            type: 'button', className: 'dchat-button dchat-buttonDangerSolid', disabled: busy,
             onClick: async () => {
               try {
                 await run('account.delete', { botId: account.botId, confirm: true });
@@ -281,7 +281,7 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
             onClick: () => setConfirming(false),
           }, t('取消')))
         : h('button', {
-          type: 'button', className: 'dchat-button', disabled: busy,
+          type: 'button', className: 'dchat-button dchat-buttonDanger', disabled: busy,
           onClick: () => setConfirming(true),
         }, t('移除接入'))),
   },

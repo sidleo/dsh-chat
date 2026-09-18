@@ -38,7 +38,7 @@ function TargetRow({ target, busy, confirming, translate, onSave, onAskRemove, o
         h('button', {
           key: 'confirm',
           type: 'button',
-          className: 'dchat-button',
+          className: 'dchat-button dchat-buttonDangerSolid',
           disabled: busy,
           onClick: () => onRemove(target),
         }, t('确认删除')),
@@ -53,7 +53,7 @@ function TargetRow({ target, busy, confirming, translate, onSave, onAskRemove, o
       : [h('button', {
         key: 'remove',
         type: 'button',
-        className: 'dchat-button',
+        className: 'dchat-button dchat-buttonDanger',
         disabled: busy,
         onClick: onAskRemove,
       }, t('删除'))]);
@@ -61,8 +61,9 @@ function TargetRow({ target, busy, confirming, translate, onSave, onAskRemove, o
   return h('div', { className: 'dchat-listItem dchat-deliveryRow' },
     h('div', { className: 'dchat-deliveryMeta' },
       h('strong', null, target.name || target.id),
-      h('small', null, `${target.kind === 'group' ? t('群聊') : t('私聊')} · ${route}`),
-      h('code', { className: 'dchat-code' }, target.id)),
+      // 只留一行身份：`route` 里已经带了 openId/chatId，再挂一个 `p2p_…` 原始 id
+      // 就是同一个东西的第二种写法，只会让人怀疑"这是两个不同的目标"。
+      h('small', null, `${target.kind === 'group' ? t('群聊') : t('私聊')} · ${route}`)),
     h('div', { className: 'dchat-actions' },
       target.discovered ? h('span', { className: 'dchat-status' }, t('候选')) : null,
       ...actions));

@@ -303,7 +303,7 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
           null,
           h("button", {
             type: "button",
-            className: "dchat-button",
+            className: "dchat-button dchat-buttonDangerSolid",
             disabled: busy,
             onClick: async () => {
               try {
@@ -322,7 +322,7 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
           }, t("\u53D6\u6D88"))
         ) : h("button", {
           type: "button",
-          className: "dchat-button",
+          className: "dchat-button dchat-buttonDanger",
           disabled: busy,
           onClick: () => setConfirming(true)
         }, t("\u79FB\u9664\u63A5\u5165"))

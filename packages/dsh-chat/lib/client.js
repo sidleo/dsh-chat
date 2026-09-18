@@ -888,7 +888,7 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
     h2("button", {
       key: "confirm",
       type: "button",
-      className: "dchat-button",
+      className: "dchat-button dchat-buttonDangerSolid",
       disabled: busy,
       onClick: () => onRemove(target)
     }, t("\u786E\u8BA4\u5220\u9664")),
@@ -902,7 +902,7 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
   ] : [h2("button", {
     key: "remove",
     type: "button",
-    className: "dchat-button",
+    className: "dchat-button dchat-buttonDanger",
     disabled: busy,
     onClick: onAskRemove
   }, t("\u5220\u9664"))];
@@ -913,8 +913,9 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
       "div",
       { className: "dchat-deliveryMeta" },
       h2("strong", null, target.name || target.id),
-      h2("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`),
-      h2("code", { className: "dchat-code" }, target.id)
+      // 只留一行身份：`route` 里已经带了 openId/chatId，再挂一个 `p2p_…` 原始 id
+      // 就是同一个东西的第二种写法，只会让人怀疑"这是两个不同的目标"。
+      h2("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`)
     ),
     h2(
       "div",
@@ -1069,7 +1070,7 @@ function ScopedModeEditor({
   description,
   scopes,
   options,
-  value,
+  value = {},
   disabled = false,
   saving = false,
   error = null,
@@ -1078,21 +1079,32 @@ function ScopedModeEditor({
 }) {
   const t = typeof translate === "function" ? translate : (key) => key;
   const [draft, setDraft] = React4.useState(() => ({ ...value }));
-  const [busy, setBusy] = React4.useState(false);
+  const [pending, setPending] = React4.useState(null);
+  const [failed, setFailed] = React4.useState(null);
+  const [helpFor, setHelpFor] = React4.useState(scopes[0]?.key ?? null);
+  const same = (a, b) => scopes.every((scope) => (a[scope.key] ?? null) === (b[scope.key] ?? null));
+  const locked = disabled || saving || pending !== null;
   React4.useEffect(() => {
-    if (!busy) setDraft({ ...value });
-  }, [value, busy]);
-  const dirty = scopes.some((scope) => (draft[scope.key] ?? null) !== (value[scope.key] ?? null));
-  const locked = disabled || busy || saving;
-  const save = async () => {
-    if (locked || !dirty) return;
-    setBusy(true);
+    if (pending !== null) return;
+    setDraft((current) => same(current, value) ? current : { ...value });
+  }, [value, pending]);
+  const choose = async (scopeKey, nextValue) => {
+    if (locked) return;
+    const next = { ...draft, [scopeKey]: nextValue };
+    setDraft(next);
+    setFailed(null);
+    setPending(scopeKey);
     try {
-      await onSave({ ...draft });
+      await onSave({ ...next });
+    } catch (cause) {
+      setDraft({ ...value });
+      setFailed(cause?.message ?? String(cause));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
+  const savingHint = pending !== null ? h3("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null;
+  const help = options.find((option) => option.value === (draft[helpFor] ?? options[0]?.value))?.help;
   return h3(
     "section",
     { className: "dchat-card" },
@@ -1105,22 +1117,10 @@ function ScopedModeEditor({
         h3("h3", { className: "dchat-cardTitle" }, title),
         description ? h3("p", { className: "dchat-cardDescription" }, description) : null
       ),
-      h3(
-        "div",
-        { className: "dchat-actions" },
-        h3("button", {
-          type: "button",
-          className: "dchat-button",
-          disabled: locked || !dirty,
-          onClick: () => {
-            void save();
-          }
-        }, busy ? t("\u4FDD\u5B58\u4E2D\u2026") : t("\u4FDD\u5B58"))
-      )
+      savingHint ? h3("div", { className: "dchat-actions" }, savingHint) : null
     ),
     h3("div", { className: "dchat-scopeGrid" }, scopes.map((scope) => {
       const selected = draft[scope.key] ?? options[0]?.value;
-      const help = options.find((option) => option.value === selected)?.help;
       const selectId = `dchat-mode-${scope.key}`;
       return h3(
         "div",
@@ -1132,18 +1132,19 @@ function ScopedModeEditor({
           value: selected,
           disabled: locked,
           "aria-label": `${title} \xB7 ${scope.label}`,
-          onChange: (event) => setDraft((current) => ({
-            ...current,
-            [scope.key]: event.target.value
-          }))
+          onFocus: () => setHelpFor(scope.key),
+          onChange: (event) => {
+            setHelpFor(scope.key);
+            void choose(scope.key, event.target.value);
+          }
         }, options.map((option) => h3("option", {
           key: option.value,
           value: option.value
         }, option.label))),
-        help ? h3("p", { className: "dchat-cardDescription" }, help) : null
+        scope.key === helpFor && help ? h3("p", { className: "dchat-cardDescription" }, help) : null
       );
     })),
-    error ? h3("p", { className: "dchat-error", role: "alert" }, error) : null
+    failed || error ? h3("p", { className: "dchat-error", role: "alert" }, failed ?? error) : null
   );
 }
 
@@ -1266,6 +1267,15 @@ var CSS = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* \u5361\u7247\u5957\u5361\u7247\uFF08\u673A\u5668\u4EBA\u5361\u91CC\u653E\u6E20\u9053/\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\u5757\uFF09\u65F6\uFF0C\u5185\u5C42\u53BB\u8FB9\u6846\u3001\u6539\u6210\u5206\u9694\u7EBF\uFF1A
+   \u4E24\u5C42\u8FB9\u6846 + \u4E24\u5C42 padding \u4F1A\u8BA9\u7F29\u8FDB\u548C\u89C6\u89C9\u91CD\u91CF\u90FD\u4E71\u6389\u3002 */
+.dchat-card .dchat-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--dsw-alias-separator-primary);
 }
 .dchat-cardHeader {
   display: flex;
@@ -1477,6 +1487,19 @@ var CSS = `
   background: transparent;
   text-decoration: underline;
 }
+/* \u4E0D\u53EF\u9006\u64CD\u4F5C\uFF1A\u89E6\u53D1\u6309\u94AE\u53EA\u67D3\u6587\u5B57\uFF0C\u786E\u8BA4\u6309\u94AE\u624D\u7528\u5B9E\u5E95\uFF0C\u907F\u514D\u4E24\u4E2A\u540C\u7EA7\u7070\u6309\u94AE\u91CC\u85CF\u7740\u5220\u9664\u3002 */
+.dchat-buttonDanger {
+  color: var(--dsw-alias-state-error-primary);
+}
+.dchat-buttonDangerSolid {
+  background: var(--dsw-alias-state-error-primary);
+  border-color: transparent;
+  color: #fff;
+}
+.dchat-buttonDangerSolid:hover:not(:disabled) {
+  background: var(--dsw-alias-state-error-primary);
+  opacity: 0.88;
+}
 .dchat-status {
   display: inline-flex;
   align-items: center;
@@ -1541,6 +1564,20 @@ var CSS = `
 }
 .dchat-entryArrow {
   color: var(--dsw-alias-label-tertiary);
+}
+/* \u6298\u53E0\u6001\u7684\u5165\u53E3\u884C\u653E\u5728\u5361\u7247\u91CC\u65F6\uFF0C\u8DDF\u5185\u5C42\u8BBE\u7F6E\u5757\u7528\u540C\u4E00\u79CD\u5F62\u6001\uFF08\u5206\u9694\u7EBF + \u6574\u5BBD + \u540C\u5B57\u53F7\u6807\u9898\uFF09\uFF0C
+   \u5426\u5219\u5B83 40px \u9AD8\u7684\u5706\u89D2\u5C0F\u76D2\u5B50\u5939\u5728\u4E24\u5F20\u5C55\u5F00\u5361\u7247\u4E2D\u95F4\uFF0C\u770B\u8D77\u6765\u50CF\u6839\u5206\u9694\u7EBF\u3002 */
+.dchat-card .dchat-entry {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0 0;
+}
+.dchat-card .dchat-entry .dchat-entryLabel {
+  font-size: 14px;
+  font-weight: 600;
 }
 .dchat-backdrop {
   position: fixed;
@@ -1749,7 +1786,8 @@ var CSS = `
 .dchat-deliveryMeta small {
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-  word-break: break-all;
+  /* anywhere \u800C\u4E0D\u662F break-all\uFF1A\u53EA\u5728\u771F\u7684\u653E\u4E0D\u4E0B\u65F6\u624D\u65AD\u957F\u4E32\uFF0C\u4E0D\u4F1A\u628A\u666E\u901A\u8BCD\u4E5F\u5207\u788E\u3002 */
+  overflow-wrap: anywhere;
 }
 .dchat-deliverySend {
   display: flex;

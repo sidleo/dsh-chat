@@ -171,7 +171,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
         ? h(React.Fragment, null,
           h('button', {
             type: 'button',
-            className: 'dchat-button',
+            className: 'dchat-button dchat-buttonDangerSolid',
             disabled: busy,
             onClick: async () => {
               try {
@@ -189,7 +189,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
           }, t('取消')))
         : h('button', {
           type: 'button',
-          className: 'dchat-button',
+          className: 'dchat-button dchat-buttonDanger',
           disabled: busy,
           onClick: () => setConfirming(true),
         }, t('移除接入'))),
@@ -216,7 +216,12 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     value: status.stepPush,
     translate: t,
     onSave: async (next) => {
-      await run('bot.step-push.set', { botId: bot.id, stepPush: next });
+      // 不走 run()：那样失败会同时落到卡片级 error 和编辑器内部，
+      // 同一个错误在这张卡上显示两遍。编辑器自己会回滚并就地提示。
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.step-push.set', {
+        botId: bot.id, stepPush: next,
+      });
+      chatUi.unwrapRpc(result);
       await onChanged?.();
     },
   }),

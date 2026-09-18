@@ -125,6 +125,15 @@ const CSS = `
   flex-direction: column;
   gap: 10px;
 }
+/* 卡片套卡片（机器人卡里放渠道/机器人级设置块）时，内层去边框、改成分隔线：
+   两层边框 + 两层 padding 会让缩进和视觉重量都乱掉。 */
+.dchat-card .dchat-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+}
 .dchat-cardHeader {
   display: flex;
   align-items: center;
@@ -335,6 +344,19 @@ const CSS = `
   background: transparent;
   text-decoration: underline;
 }
+/* 不可逆操作：触发按钮只染文字，确认按钮才用实底，避免两个同级灰按钮里藏着删除。 */
+.dchat-buttonDanger {
+  color: var(--dsw-alias-state-error-primary);
+}
+.dchat-buttonDangerSolid {
+  background: var(--dsw-alias-state-error-primary);
+  border-color: transparent;
+  color: #fff;
+}
+.dchat-buttonDangerSolid:hover:not(:disabled) {
+  background: var(--dsw-alias-state-error-primary);
+  opacity: 0.88;
+}
 .dchat-status {
   display: inline-flex;
   align-items: center;
@@ -399,6 +421,20 @@ const CSS = `
 }
 .dchat-entryArrow {
   color: var(--dsw-alias-label-tertiary);
+}
+/* 折叠态的入口行放在卡片里时，跟内层设置块用同一种形态（分隔线 + 整宽 + 同字号标题），
+   否则它 40px 高的圆角小盒子夹在两张展开卡片中间，看起来像根分隔线。 */
+.dchat-card .dchat-entry {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0 0;
+}
+.dchat-card .dchat-entry .dchat-entryLabel {
+  font-size: 14px;
+  font-weight: 600;
 }
 .dchat-backdrop {
   position: fixed;
@@ -607,7 +643,8 @@ const CSS = `
 .dchat-deliveryMeta small {
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-  word-break: break-all;
+  /* anywhere 而不是 break-all：只在真的放不下时才断长串，不会把普通词也切碎。 */
+  overflow-wrap: anywhere;
 }
 .dchat-deliverySend {
   display: flex;

@@ -195,7 +195,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
           null,
           h("button", {
             type: "button",
-            className: "dchat-button",
+            className: "dchat-button dchat-buttonDangerSolid",
             disabled: busy,
             onClick: async () => {
               try {
@@ -214,7 +214,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
           }, t("\u53D6\u6D88"))
         ) : h("button", {
           type: "button",
-          className: "dchat-button",
+          className: "dchat-button dchat-buttonDanger",
           disabled: busy,
           onClick: () => setConfirming(true)
         }, t("\u79FB\u9664\u63A5\u5165"))
@@ -246,7 +246,11 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       value: status.stepPush,
       translate: t,
       onSave: async (next) => {
-        await run("bot.step-push.set", { botId: bot.id, stepPush: next });
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.step-push.set", {
+          botId: bot.id,
+          stepPush: next
+        });
+        chatUi.unwrapRpc(result);
         await onChanged?.();
       }
     }),
