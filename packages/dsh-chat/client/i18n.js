@@ -64,6 +64,7 @@ export const zh = {
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。',
   '上下文增强范围': '上下文增强范围',
   '已开启': '已开启',
+  '从会话里选…': '从会话里选…',
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   '工作区': '工作区',
   '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。': '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。',
@@ -185,6 +186,7 @@ export const en = {
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': 'Source fields are sent only when the incoming message already carries them; no extra platform calls are made.',
   '上下文增强范围': 'Context enhancement scope',
   '已开启': 'On',
+  '从会话里选…': 'Pick a conversation…',
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   '工作区': 'Workspace',
   '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。':

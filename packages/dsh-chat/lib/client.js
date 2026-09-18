@@ -288,6 +288,33 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     saveAccessPolicy
   };
 }
+function useConversations({ connection, channelId, botId, enabled = true }) {
+  const [state, setState] = React.useState({ phase: "idle", conversations: [], error: null });
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  const load = React.useCallback(async () => {
+    if (!enabled || !connection || !channelId || !botId) return;
+    setState((current) => ({ ...current, phase: "loading" }));
+    try {
+      const result = await callControlRpc(connection, "bot.conversations", { channelId, botId });
+      const value = unwrapRpc(result);
+      if (aliveRef.current) {
+        setState({ phase: "ready", conversations: value.conversations ?? [], error: null });
+      }
+    } catch (error) {
+      if (aliveRef.current) setState({ phase: "error", conversations: [], error });
+    }
+  }, [connection, channelId, botId, enabled]);
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+  return { ...state, reload: load };
+}
 
 // packages/dsh-chat/client/bot-shared-settings.js
 var React2 = __toESM(require("react"), 1);
@@ -1013,7 +1040,7 @@ function GlobalScopePanel({ kind, scope, disabled, onChange, t }) {
 function targetKindOf(scope) {
   return scope === "direct" ? "user" : "group";
 }
-function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
+function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conversations }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
   return h2(
@@ -1049,6 +1076,22 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
         "label",
         { className: "dchat-targetField" },
         h2("span", null, text.idLabel),
+        // 能选就别让人填 id：下拉里是这台机器人聊过的会话（带群名/人名），
+        // 手填输入框仍然保留，兼容还没聊过的会话与直接粘贴 id 的场合。
+        (conversations ?? []).length > 0 ? h2(
+          "select",
+          {
+            className: "dchat-select",
+            value: (conversations ?? []).some((item) => item.id === target.id) ? target.id : "",
+            disabled,
+            "aria-label": text.idLabel,
+            onChange: (event) => {
+              if (event.target.value) onChange({ ...target, id: event.target.value });
+            }
+          },
+          h2("option", { value: "" }, t("\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026")),
+          (conversations ?? []).map((item) => h2("option", { key: item.id, value: item.id }, item.name))
+        ) : null,
         h2("input", {
           type: "text",
           value: target.id,
@@ -1104,7 +1147,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
     )
   );
 }
-function TargetPanel({ scope, targets, disabled, onChange, t }) {
+function TargetPanel({ scope, targets, disabled, onChange, t, conversations }) {
   const kind = targetKindOf(scope);
   const text = SCOPE_TEXT[scope];
   const rows = targets.map((target, index) => ({ target, index })).filter((entry) => entry.target.kind === kind);
@@ -1146,12 +1189,14 @@ function TargetPanel({ scope, targets, disabled, onChange, t }) {
       disabled,
       onChange: (next) => replace(index, next),
       onRemove: () => remove(index),
-      t
+      t,
+      // 只给这一类作用域挑：私聊给"人"，群聊给"群"。
+      conversations: (conversations ?? []).filter((item) => kind === "group" ? item.kind === "group" : item.kind === "direct")
     })))
   );
   ;
 }
-function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose }) {
+function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose, conversations }) {
   const t = t_of(translate);
   const [draft, setDraft] = React3.useState(() => normalizeContextConfig(config));
   const [activeScope, setActiveScope] = React3.useState("direct");
@@ -1249,6 +1294,7 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         targets: draft.targets,
         disabled: busy,
         t,
+        conversations,
         onChange: (targets) => setDraft((current) => ({ ...current, targets }))
       })
     )),
@@ -1274,10 +1320,20 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
   ));
   return globalThis.document?.body ? (0, import_react_dom.createPortal)(content, globalThis.document.body) : content;
 }
-function ContextEnhancementEditor({ config, disabled = false, translate, onSave }) {
+function ContextEnhancementEditor({
+  config,
+  disabled = false,
+  translate,
+  onSave,
+  chatUi,
+  connection,
+  channelId,
+  botId
+}) {
   const t = t_of(translate);
   const [open, setOpen] = React3.useState(false);
   const status = contextStatusLabel(config);
+  const conversations = typeof chatUi?.hooks?.useConversations === "function" ? chatUi.hooks.useConversations({ connection, channelId, botId }).conversations : [];
   return h2(
     React3.Fragment,
     null,
@@ -1300,6 +1356,7 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
       disabled,
       translate: t,
       onSave,
+      conversations,
       onClose: () => setOpen(false)
     }) : null
   );
@@ -2431,7 +2488,9 @@ function createChatUi({ ctx, translate } = {}) {
     }),
     hooks: Object.freeze({
       /** 读取/保存 hub 持有的每机器人共享设置。 */
-      useBotSettings
+      useBotSettings,
+      /** 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用。 */
+      useConversations
     }),
     installStyles: () => installChatStyles(),
     /** 调用本渠道自己的 RPC。 */
@@ -2508,6 +2567,7 @@ var zh = {
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002",
   "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4",
   "\u5DF2\u5F00\u542F": "\u5DF2\u5F00\u542F",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
@@ -2618,6 +2678,7 @@ var en = {
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "Source fields are sent only when the incoming message already carries them; no extra platform calls are made.",
   "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "Context enhancement scope",
   "\u5DF2\u5F00\u542F": "On",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "Pick a conversation\u2026",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "Workspace",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",

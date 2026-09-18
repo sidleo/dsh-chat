@@ -121,3 +121,45 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     saveAccessPolicy,
   };
 }
+
+/**
+ * 该机器人聊过的会话（带人能认出的名字）。
+ *
+ * 供"指定用户 / 指定群"这类需要填平台 id 的地方做选择器——用户不该被要求记住 `ou_xxx`。
+ * 数据与投递列表同源（hub 的持久绑定 + 渠道发现 + 渠道解析的名字）。
+ *
+ * @param options - { connection, channelId, botId, enabled }。
+ * @returns { conversations, phase, error }。
+ */
+export function useConversations({ connection, channelId, botId, enabled = true }) {
+  const [state, setState] = React.useState({ phase: 'idle', conversations: [], error: null });
+  const aliveRef = React.useRef(true);
+
+  React.useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const load = React.useCallback(async () => {
+    if (!enabled || !connection || !channelId || !botId) return;
+    setState((current) => ({ ...current, phase: 'loading' }));
+    try {
+      const result = await callControlRpc(connection, 'bot.conversations', { channelId, botId });
+      const value = unwrapRpc(result);
+      if (aliveRef.current) {
+        setState({ phase: 'ready', conversations: value.conversations ?? [], error: null });
+      }
+    } catch (error) {
+      // 选择器只是方便：取不到就退回手填 id，不打扰用户。
+      if (aliveRef.current) setState({ phase: 'error', conversations: [], error });
+    }
+  }, [connection, channelId, botId, enabled]);
+
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  return { ...state, reload: load };
+}

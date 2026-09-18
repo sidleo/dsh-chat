@@ -10,7 +10,7 @@
 import * as React from 'react';
 
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
-import { useBotSettings } from './bot-settings.js';
+import { useBotSettings, useConversations } from './bot-settings.js';
 import { AccessPolicyEditor, PresetEditor, WorkspaceEditor } from './bot-shared-settings.js';
 import { ContextEnhancementEditor } from './context-enhancement.js';
 import { DeliveryTargetsEditor } from './delivery-targets.js';
@@ -102,6 +102,8 @@ export function createChatUi({ ctx, translate } = {}) {
     hooks: Object.freeze({
       /** 读取/保存 hub 持有的每机器人共享设置。 */
       useBotSettings,
+      /** 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用。 */
+      useConversations,
     }),
     installStyles: () => installChatStyles(),
     /** 调用本渠道自己的 RPC。 */

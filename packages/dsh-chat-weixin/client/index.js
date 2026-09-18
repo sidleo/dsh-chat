@@ -33,6 +33,7 @@ const zh = {
   '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。': '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。',
   '增强提示词': '增强提示词',
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。',
+  '从会话里选…': '从会话里选…',
   '微信': '微信',
   '找不到这个机器人': '找不到这个机器人',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
@@ -91,6 +92,7 @@ const en = {
   '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。': 'Tell the model how to use the source fields. Write the body only — the plugin wraps it into a source block.',
   '增强提示词': 'Prepended prompt',
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': 'Source fields are sent only when the incoming message already carries them; no extra platform calls are made.',
+  '从会话里选…': 'Pick a conversation…',
   '微信': 'WeChat',
   '找不到这个机器人': 'Bot not found',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
@@ -360,6 +362,11 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
     disabled: settings.phase !== 'ready',
     translate: t,
     onSave: settings.saveContextEnhancement,
+    // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
+    chatUi,
+    connection,
+    channelId: CHANNEL_ID,
+    botId: account.botId,
   }),
 
   // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。

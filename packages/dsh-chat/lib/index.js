@@ -3573,6 +3573,25 @@ function apply(ctx, config = {}) {
         return failFrom(error, "chat/access-policy-failed");
       }
     }
+    if (method === "bot.conversations") {
+      if (!validBotPayload(payload)) {
+        return fail("chat/bad-request", "bot.conversations \u9700\u8981 channelId \u4E0E botId\u3002");
+      }
+      try {
+        const listed = await delivery.list({ channelId: payload.channelId, botId: payload.botId });
+        return ok({
+          conversations: listed.targets.map((target) => ({
+            id: target.id,
+            name: target.name ?? target.id,
+            kind: target.kind,
+            route: target.route,
+            saved: target.discovered !== true
+          }))
+        });
+      } catch (error) {
+        return failFrom(error, "chat/conversations-failed");
+      }
+    }
     if (method === "maintenance.import-legacy") {
       const valid = payload !== null && typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 2 && typeof payload.channelId === "string" && CHANNEL_ID.test(payload.channelId) && typeof payload.force === "boolean";
       if (!valid) {

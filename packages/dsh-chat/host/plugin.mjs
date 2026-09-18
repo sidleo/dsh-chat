@@ -363,6 +363,31 @@ export function apply(ctx, config = {}) {
         return failFrom(error, 'chat/access-policy-failed');
       }
     }
+    /**
+     * 该机器人聊过的会话（带人能认出的名字），给"指定用户/指定群"这类选择器用。
+     *
+     * 复用投递那套：hub 的持久会话绑定表 + 渠道的发现与 `decorateTargets`，
+     * 因此名字与投递列表一致，也不必让渠道页各自去查平台。
+     */
+    if (method === 'bot.conversations') {
+      if (!validBotPayload(payload)) {
+        return fail('chat/bad-request', 'bot.conversations 需要 channelId 与 botId。');
+      }
+      try {
+        const listed = await delivery.list({ channelId: payload.channelId, botId: payload.botId });
+        return ok({
+          conversations: listed.targets.map((target) => ({
+            id: target.id,
+            name: target.name ?? target.id,
+            kind: target.kind,
+            route: target.route,
+            saved: target.discovered !== true,
+          })),
+        });
+      } catch (error) {
+        return failFrom(error, 'chat/conversations-failed');
+      }
+    }
     if (method === 'maintenance.import-legacy') {
       const valid = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
         && Object.keys(payload).length === 2

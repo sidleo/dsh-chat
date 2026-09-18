@@ -864,3 +864,19 @@ test('机器人设置：工作区校验、Agent 预设对账、访问策略用�
     await app.cleanup();
   }
 });
+
+test('bot.conversations：把该机器人聊过的会话（带名字）给选择器用', async () => {
+  const app = await bootstrap();
+  try {
+    const empty = await callRoute(app.routes, HUB_PATH, 'bot.conversations', {
+      channelId: 'fixture', botId: 'bot_1',
+    });
+    assert.equal(empty.result.ok, true);
+    assert.deepEqual(empty.result.value.conversations, [], '没有渠道发现能力时给空表，不报错');
+
+    const bad = await callRoute(app.routes, HUB_PATH, 'bot.conversations', { channelId: 'fixture' });
+    assert.equal(bad.result.ok, false, '缺 botId 要拒绝');
+  } finally {
+    await app.cleanup();
+  }
+});

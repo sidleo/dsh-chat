@@ -152,7 +152,7 @@ function targetKindOf(scope) {
   return scope === 'direct' ? 'user' : 'group';
 }
 
-function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
+function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conversations }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
   return h('li', { className: 'dchat-targetRow' },
@@ -176,6 +176,21 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
     h('div', { className: 'dchat-targetGrid' },
       h('label', { className: 'dchat-targetField' },
         h('span', null, text.idLabel),
+        // 能选就别让人填 id：下拉里是这台机器人聊过的会话（带群名/人名），
+        // 手填输入框仍然保留，兼容还没聊过的会话与直接粘贴 id 的场合。
+        (conversations ?? []).length > 0
+          ? h('select', {
+            className: 'dchat-select',
+            value: (conversations ?? []).some((item) => item.id === target.id) ? target.id : '',
+            disabled,
+            'aria-label': text.idLabel,
+            onChange: (event) => {
+              if (event.target.value) onChange({ ...target, id: event.target.value });
+            },
+          },
+          h('option', { value: '' }, t('从会话里选…')),
+          (conversations ?? []).map((item) => h('option', { key: item.id, value: item.id }, item.name)))
+          : null,
         h('input', {
           type: 'text',
           value: target.id,
@@ -223,7 +238,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
       t('叠加全局提示词（不勾选则只使用上面的专属提示词）')));
 }
 
-function TargetPanel({ scope, targets, disabled, onChange, t }) {
+function TargetPanel({ scope, targets, disabled, onChange, t, conversations }) {
   const kind = targetKindOf(scope);
   const text = SCOPE_TEXT[scope];
   const rows = targets
@@ -265,10 +280,13 @@ function TargetPanel({ scope, targets, disabled, onChange, t }) {
         onChange: (next) => replace(index, next),
         onRemove: () => remove(index),
         t,
+        // 只给这一类作用域挑：私聊给"人"，群聊给"群"。
+        conversations: (conversations ?? []).filter((item) => (
+          kind === 'group' ? item.kind === 'group' : item.kind === 'direct')),
       }))));;
 }
 
-function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose }) {
+function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose, conversations }) {
   const t = t_of(translate);
   const [draft, setDraft] = React.useState(() => normalizeContextConfig(config));
   const [activeScope, setActiveScope] = React.useState('direct');
@@ -357,6 +375,7 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     targets: draft.targets,
     disabled: busy,
     t,
+    conversations,
     onChange: (targets) => setDraft((current) => ({ ...current, targets })),
   }))),
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
@@ -382,10 +401,17 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
  * @param props - { config, disabled, translate, onSave }。
  * @returns React 元素。
  */
-export function ContextEnhancementEditor({ config, disabled = false, translate, onSave }) {
+export function ContextEnhancementEditor({
+  config, disabled = false, translate, onSave, chatUi, connection, channelId, botId,
+}) {
   const t = t_of(translate);
   const [open, setOpen] = React.useState(false);
   const status = contextStatusLabel(config);
+  // 「指定用户/指定群」要填平台 id，用户不该被要求记住 `ou_xxx`：
+  // 能拿到这台机器人聊过的会话（带名字）就把它做成下拉。拿不到就只留手填输入框。
+  const conversations = typeof chatUi?.hooks?.useConversations === 'function'
+    ? chatUi.hooks.useConversations({ connection, channelId, botId }).conversations
+    : [];
   return h(React.Fragment, null,
     h('button', {
       type: 'button',
@@ -403,6 +429,7 @@ export function ContextEnhancementEditor({ config, disabled = false, translate, 
       disabled,
       translate: t,
       onSave,
+      conversations,
       onClose: () => setOpen(false),
     }) : null);
 }
