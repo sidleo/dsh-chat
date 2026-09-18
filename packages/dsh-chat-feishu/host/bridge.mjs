@@ -378,7 +378,17 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         return null;
       });
       if (command?.handled) {
-        if (command.reply) {
+        if (command.menu?.length && message.chat_id) {
+          try {
+            await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+          } catch (error) {
+            // 卡片发不出去不能把菜单吞掉：退回文本列表。
+            logger.warn?.(`[dsh-chat-feishu] 菜单卡片发送失败，退回文本：${error?.message ?? error}`);
+            if (command.reply) {
+              await gateway.replyText({ messageId: message.message_id, text: command.reply });
+            }
+          }
+        } else if (command.reply) {
           await gateway.replyText({ messageId: message.message_id, text: command.reply });
         }
         lastHandledAt = new Date().toISOString();
@@ -597,6 +607,31 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
+   * 菜单卡片：把命令渲染成一排按钮。
+   *
+   * 按钮里带的是**命令行**，点击后走与"用户手打"完全同一条命令路径，
+   * 因此按钮与文本不会出现两套行为。
+   */
+  function menuCard(items) {
+    return {
+      config: { wide_screen_mode: true },
+      header: { template: 'blue', title: { tag: 'plain_text', content: '机器人菜单' } },
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content: '点按钮执行，也可以直接发文字命令。' } },
+        {
+          tag: 'action',
+          actions: items.slice(0, 12).map((item) => ({
+            tag: 'button',
+            type: 'default',
+            text: { tag: 'plain_text', content: item.label },
+            value: { dsh_menu: item.command },
+          })),
+        },
+      ],
+    };
+  }
+
+  /**
    * 处理一次卡片点击：把按钮里的答案交给 hub 的交互服务认领。
    *
    * 与"用户手打文字"共用同一条认领路径（`offer`），所以按钮与文本不会有两套行为。
@@ -614,6 +649,42 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       logger.warn?.('[dsh-chat-feishu] 卡片回调缺少会话或操作者，无法认领'
         + `（chatId=${chatId ?? '无'} operator=${operatorId ?? '无'}）`);
       return undefined;
+    }
+
+    // 菜单卡片：按钮里带的是命令行，走与"用户手打"同一条路径。
+    if (typeof value.dsh_menu === 'string' && value.dsh_menu.startsWith('/')) {
+      const groupKey = `group:${chatId}`;
+      // 这个会话是群还是私聊：以已有的会话绑定为准（没有绑定时按私聊处理）。
+      const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey)
+        ? 'group' : 'direct';
+      const key = conversationType === 'group' ? groupKey : `p2p:${operatorId}`;
+      const command = await deps.commands?.handle?.({
+        text: value.dsh_menu,
+        channelId: deps.channelId,
+        botId: bot.id,
+        key,
+        conversationType,
+        senderId: operatorId,
+        isOwner: isOwner(bot, operatorId),
+        botLabel: bot.botName ?? bot.id,
+        channelLabel: '飞书',
+      }).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 菜单命令失败：${error?.message ?? error}`);
+        return null;
+      });
+      if (!command?.handled) return { toast: { type: 'error', content: '命令没有执行。' } };
+      if (command.menu?.length) {
+        await gateway.sendCard({ chatId, card: menuCard(command.menu) });
+        return { toast: { type: 'info', content: '菜单已更新' } };
+      }
+      if (command.reply) {
+        if (event.messageId) {
+          await gateway.replyText({ messageId: event.messageId, text: command.reply });
+        } else {
+          await gateway.sendText({ chatId, text: command.reply });
+        }
+      }
+      return { toast: { type: 'success', content: '已执行' } };
     }
 
     // 审批卡片：直接按按钮里的结论回答

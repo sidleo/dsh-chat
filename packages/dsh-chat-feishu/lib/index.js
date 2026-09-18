@@ -127283,7 +127283,16 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         return null;
       });
       if (command?.handled) {
-        if (command.reply) {
+        if (command.menu?.length && message.chat_id) {
+          try {
+            await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u9000\u56DE\u6587\u672C\uFF1A${error?.message ?? error}`);
+            if (command.reply) {
+              await gateway.replyText({ messageId: message.message_id, text: command.reply });
+            }
+          }
+        } else if (command.reply) {
           await gateway.replyText({ messageId: message.message_id, text: command.reply });
         }
         lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -127461,6 +127470,24 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       logger.info?.(`[dsh-chat-feishu] \u64A4\u9500\u8868\u60C5\u56DE\u590D\u5931\u8D25\uFF1A${error?.message ?? error}`);
     }
   }
+  function menuCard(items) {
+    return {
+      config: { wide_screen_mode: true },
+      header: { template: "blue", title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u83DC\u5355" } },
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: "\u70B9\u6309\u94AE\u6267\u884C\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002" } },
+        {
+          tag: "action",
+          actions: items.slice(0, 12).map((item) => ({
+            tag: "button",
+            type: "default",
+            text: { tag: "plain_text", content: item.label },
+            value: { dsh_menu: item.command }
+          }))
+        }
+      ]
+    };
+  }
   async function handleCardAction(event) {
     const value = event?.action?.value ?? {};
     const operatorId = event?.operator?.openId;
@@ -127468,6 +127495,38 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (!operatorId || !chatId) {
       logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u7F3A\u5C11\u4F1A\u8BDD\u6216\u64CD\u4F5C\u8005\uFF0C\u65E0\u6CD5\u8BA4\u9886\uFF08chatId=${chatId ?? "\u65E0"} operator=${operatorId ?? "\u65E0"}\uFF09`);
       return void 0;
+    }
+    if (typeof value.dsh_menu === "string" && value.dsh_menu.startsWith("/")) {
+      const groupKey = `group:${chatId}`;
+      const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey) ? "group" : "direct";
+      const key = conversationType === "group" ? groupKey : `p2p:${operatorId}`;
+      const command = await deps.commands?.handle?.({
+        text: value.dsh_menu,
+        channelId: deps.channelId,
+        botId: bot.id,
+        key,
+        conversationType,
+        senderId: operatorId,
+        isOwner: isOwner(bot, operatorId),
+        botLabel: bot.botName ?? bot.id,
+        channelLabel: "\u98DE\u4E66"
+      }).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u547D\u4EE4\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        return null;
+      });
+      if (!command?.handled) return { toast: { type: "error", content: "\u547D\u4EE4\u6CA1\u6709\u6267\u884C\u3002" } };
+      if (command.menu?.length) {
+        await gateway.sendCard({ chatId, card: menuCard(command.menu) });
+        return { toast: { type: "info", content: "\u83DC\u5355\u5DF2\u66F4\u65B0" } };
+      }
+      if (command.reply) {
+        if (event.messageId) {
+          await gateway.replyText({ messageId: event.messageId, text: command.reply });
+        } else {
+          await gateway.sendText({ chatId, text: command.reply });
+        }
+      }
+      return { toast: { type: "success", content: "\u5DF2\u6267\u884C" } };
     }
     if (value.dsh === "approval") {
       const decision = value.decision === "allowed-once" ? "allowed-once" : "rejected";

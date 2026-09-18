@@ -1081,6 +1081,7 @@ function line(text) {
   const value = String(text ?? "").replace(/\s+$/u, "");
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}\u2026` : value;
 }
+var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny"]);
 var MAX_HISTORY_CHARS = 160;
 function clip(text) {
   const value = String(text ?? "").replace(/\s+/gu, " ").trim();
@@ -1152,8 +1153,15 @@ function createCommandRegistry({ logger = console, services = {} } = {}) {
       log: logger
     };
     try {
-      const reply = await command.execute(context);
-      return { handled: true, reply: reply ?? "" };
+      const result = await command.execute(context);
+      if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+        return {
+          handled: true,
+          reply: typeof result.reply === "string" ? result.reply : "",
+          ...Array.isArray(result.menu) && result.menu.length > 0 ? { menu: result.menu } : {}
+        };
+      }
+      return { handled: true, reply: result ?? "" };
     } catch (error) {
       const message = error?.message ?? String(error);
       logger.warn?.(`[dsh-chat] \u547D\u4EE4 ${command.name} \u6267\u884C\u5931\u8D25\uFF1A${message}`);
@@ -1193,7 +1201,7 @@ function findModel(rows, token) {
   if (!provider || !model) return null;
   return rows.find((row) => row.provider === provider && row.model === model) ?? null;
 }
-function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
+function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands = null } = {}) {
   registry.register({
     name: "help",
     aliases: ["h"],
@@ -1226,6 +1234,24 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
       }
     };
   }
+  registry.register({
+    name: "menu",
+    summary: "\u53D1\u4E00\u5F20\u53EF\u70B9\u7684\u83DC\u5355\u5361\u7247\uFF08\u5E38\u7528\u547D\u4EE4\uFF09",
+    execute: (context) => {
+      const rows = typeof listCommands === "function" ? listCommands() : [];
+      const items = rows.filter((row) => row.name !== "menu").filter((row) => row.scope === "both" || row.scope === context.conversationType).filter((row) => context.isOwner === true || !OWNER_ONLY_COMMANDS.has(row.name)).map((row) => ({ label: `${PREFIX}${row.name}`, command: `${PREFIX}${row.name}` }));
+      if (items.length === 0) return "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u547D\u4EE4\u3002";
+      return {
+        menu: items,
+        // 没有卡片能力的渠道（微信）直接把这个文本列表发出去。
+        reply: [
+          "\u53EF\u7528\u547D\u4EE4\uFF1A",
+          ...items.map((item, index) => line(`${index + 1}. ${item.label}`)),
+          "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002"
+        ].join("\n")
+      };
+    }
+  });
   registry.register({
     name: "whoami",
     summary: "\u67E5\u770B\u4F60\u7684\u5E73\u53F0\u6807\u8BC6\u3001\u662F\u5426\u5C5E\u4E3B\uFF0C\u4EE5\u53CA\u672C\u6B21\u6D88\u606F\u7684\u8BBF\u95EE\u5224\u5B9A",
@@ -3395,7 +3421,7 @@ function apply(ctx, config = {}) {
       agentPresets: optionalAgentPresets
     }
   });
-  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION });
+  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION, listCommands: () => commands.list() });
   async function controlHandler(method, payload) {
     if (method === "channel.list") {
       if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {

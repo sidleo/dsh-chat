@@ -22,6 +22,9 @@ function line(text) {
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}…` : value;
 }
 
+/** 只有属主能用的命令（菜单里对非属主隐藏；执行时仍会再判一次）。 */
+const OWNER_ONLY_COMMANDS = new Set(['allow', 'deny']);
+
 /** 历史回看里每条消息的字符上限（避免一条命令刷屏）。 */
 const MAX_HISTORY_CHARS = 160;
 
@@ -119,8 +122,17 @@ export function createCommandRegistry({ logger = console, services = {} } = {}) 
       log: logger,
     };
     try {
-      const reply = await command.execute(context);
-      return { handled: true, reply: reply ?? '' };
+      const result = await command.execute(context);
+      // 命令可以返回字符串（纯文本），也可以返回 `{ reply, menu }`：
+      // 菜单卡片这类结构化结果要原样带出去，否则只能退化成文本。
+      if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+        return {
+          handled: true,
+          reply: typeof result.reply === 'string' ? result.reply : '',
+          ...(Array.isArray(result.menu) && result.menu.length > 0 ? { menu: result.menu } : {}),
+        };
+      }
+      return { handled: true, reply: result ?? '' };
     } catch (error) {
       const message = error?.message ?? String(error);
       logger.warn?.(`[dsh-chat] 命令 ${command.name} 执行失败：${message}`);
@@ -173,7 +185,7 @@ function findModel(rows, token) {
  * @param registry - 命令注册表。
  * @param options - { hubVersion }。
  */
-export function registerBuiltinCommands(registry, { hubVersion = '0.0.1' } = {}) {
+export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCommands = null } = {}) {
   registry.register({
     name: 'help',
     aliases: ['h'],
@@ -213,6 +225,30 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1' } = {})
       },
     };
   }
+
+  registry.register({
+    name: 'menu',
+    summary: '发一张可点的菜单卡片（常用命令）',
+    execute: (context) => {
+      const rows = typeof listCommands === 'function' ? listCommands() : [];
+      const items = rows
+        // 菜单不该出现在菜单里；属主专属命令不给非属主看。
+        .filter((row) => row.name !== 'menu')
+        .filter((row) => row.scope === 'both' || row.scope === context.conversationType)
+        .filter((row) => context.isOwner === true || !OWNER_ONLY_COMMANDS.has(row.name))
+        .map((row) => ({ label: `${PREFIX}${row.name}`, command: `${PREFIX}${row.name}` }));
+      if (items.length === 0) return '当前没有可用命令。';
+      return {
+        menu: items,
+        // 没有卡片能力的渠道（微信）直接把这个文本列表发出去。
+        reply: [
+          '可用命令：',
+          ...items.map((item, index) => line(`${index + 1}. ${item.label}`)),
+          '也可以直接发文字命令。',
+        ].join('\n'),
+      };
+    },
+  });
 
   registry.register({
     name: 'whoami',

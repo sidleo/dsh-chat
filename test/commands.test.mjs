@@ -557,3 +557,26 @@ test('访问策略自助：/whoami 说明判定，/allow 与 /deny 只有属主�
   const noop = await registry.handle(context('/deny ou_not_there', { isOwner: true }));
   assert.match(noop.reply, /本来就不在/);
 });
+
+test('菜单：/menu 列出当前会话可用的命令，属主专属的只给属主看', async () => {
+  const { services } = createServices();
+  const registry = createCommandRegistry({ logger: silentLogger, services });
+  registerBuiltinCommands(registry, { listCommands: () => registry.list() });
+
+  const guest = await registry.handle(context('/menu', { isOwner: false }));
+  assert.ok(Array.isArray(guest.menu) && guest.menu.length > 0, '要给出可点的菜单项');
+  const names = guest.menu.map((item) => item.command);
+  assert.ok(names.includes('/status'));
+  assert.ok(!names.includes('/menu'), '菜单里不该再有菜单');
+  assert.ok(!names.includes('/allow'), '非属主不该看到属主专属命令');
+  assert.match(guest.reply, /可用命令/, '没有卡片能力的渠道用这个文本兜底');
+
+  const owner = await registry.handle(context('/menu', { isOwner: true }));
+  assert.ok(owner.menu.map((item) => item.command).includes('/allow'), '属主能看到 /allow');
+
+  // 命令按钮里带的就是命令行，点它等价于手打这条命令。
+  for (const item of owner.menu) {
+    assert.match(item.command, /^\/[a-z][a-z0-9-]*$/u);
+    assert.equal(item.label, item.command);
+  }
+});

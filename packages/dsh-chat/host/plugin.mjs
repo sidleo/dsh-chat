@@ -221,7 +221,7 @@ export function apply(ctx, config = {}) {
       agentPresets: optionalAgentPresets,
     },
   });
-  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION });
+  registerBuiltinCommands(commands, { hubVersion: HUB_VERSION, listCommands: () => commands.list() });
 
   /**
    * hub 控制端点：渠道无关、所有渠道共用，因此渠道包不必重复实现。
