@@ -73,3 +73,21 @@ test('渠道徽标：sessionBadge 声明可选，非法声明直接拒绝', () =
     /sessionBadge/,
   );
 });
+
+test('渠道图标：支持 svg 字符串与 data URI 两种来源，取值函数统一出口', async () => {
+  const { createChannelRail, channelIconUri } = await import('../packages/dsh-chat/shared/channel-rail.mjs');
+  const rail = createChannelRail();
+  rail.register({ id: 'weixin', order: 10, label: '微信', icon: { svg: '<svg xmlns="…"></svg>' } });
+  rail.register({ id: 'feishu', order: 20, label: '飞书', icon: { uri: 'data:image/png;base64,AAAA' } });
+
+  const byId = Object.fromEntries(rail.entries().map((entry) => [entry.id, entry]));
+  assert.match(channelIconUri(byId.weixin.icon), /^data:image\/svg\+xml,/);
+  assert.equal(channelIconUri(byId.feishu.icon), 'data:image/png;base64,AAAA');
+  assert.equal(channelIconUri(null), null);
+  assert.equal(channelIconUri({ svg: 'not-an-svg' }), null);
+
+  assert.throws(
+    () => rail.register({ id: 'qq', order: 30, label: 'QQ', icon: { svg: 'nope' } }),
+    /icon/,
+  );
+});

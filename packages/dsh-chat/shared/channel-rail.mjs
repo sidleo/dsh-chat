@@ -18,6 +18,21 @@ function isPlainObject(value) {
  *
  * @returns 注册表：register / entries / get / subscribe / getSnapshot / size。
  */
+/**
+ * 取渠道图标的可用 URI（`uri` 优先，其次把 `svg` 编码成 data URI）。
+ *
+ * @param icon - 渠道定义里的 `icon`。
+ * @returns data URI 或 null。
+ */
+export function channelIconUri(icon) {
+  if (!isPlainObject(icon)) return null;
+  if (typeof icon.uri === 'string' && icon.uri.startsWith('data:image/')) return icon.uri;
+  if (typeof icon.svg === 'string' && icon.svg.trim().startsWith('<svg')) {
+    return `data:image/svg+xml,${encodeURIComponent(icon.svg)}`;
+  }
+  return null;
+}
+
 export function createChannelRail() {
   /** @type {Map<string, object>} */
   const byId = new Map();
@@ -44,7 +59,7 @@ export function createChannelRail() {
      * 注册一个渠道的显示元数据。
      *
      * @param definition - { id, order, label, logo, icon, sessionBadge, capabilities }。
-     *   `icon` = `{ svg }`：渠道的图标（设置页卡片与侧边栏会话行共用同一份）。
+     *   `icon` = `{ svg }` 或 `{ uri }`：渠道图标（设置页卡片与侧边栏会话行共用同一份）。
      *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
      *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
@@ -63,8 +78,10 @@ export function createChannelRail() {
         throw new TypeError('渠道 capabilities 必须是对象。');
       }
       if (icon !== undefined) {
-        if (!isPlainObject(icon) || typeof icon.svg !== 'string' || !icon.svg.trim().startsWith('<svg')) {
-          throw new TypeError('渠道 icon 需要 { svg: "<svg …>" }。');
+        const hasSvg = isPlainObject(icon) && typeof icon.svg === 'string' && icon.svg.trim().startsWith('<svg');
+        const hasUri = isPlainObject(icon) && typeof icon.uri === 'string' && icon.uri.startsWith('data:image/');
+        if (!hasSvg && !hasUri) {
+          throw new TypeError('渠道 icon 需要 { svg: "<svg …>" } 或 { uri: "data:image/…" }。');
         }
       }
       if (sessionBadge !== undefined) {
@@ -78,8 +95,14 @@ export function createChannelRail() {
         order,
         label: typeof label === 'function' ? label : () => label,
         logo: logo ?? null,
-        // 渠道图标（SVG 字符串）：设置页左栏卡片与侧边栏会话行徽标共用。
-        icon: icon === undefined ? null : Object.freeze({ svg: icon.svg }),
+        // 渠道图标：设置页左栏卡片与侧边栏会话行徽标共用。
+        // 官方标志常常是位图（favicon 提取），所以既支持 svg 字符串也支持 data URI。
+        icon: icon === undefined
+          ? null
+          : Object.freeze({
+            ...(typeof icon.svg === 'string' ? { svg: icon.svg } : {}),
+            ...(typeof icon.uri === 'string' ? { uri: icon.uri } : {}),
+          }),
         sessionBadge: sessionBadge === undefined
           ? null
           : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),

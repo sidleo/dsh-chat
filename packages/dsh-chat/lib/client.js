@@ -57,6 +57,14 @@ var CHANNEL_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+function channelIconUri(icon) {
+  if (!isPlainObject(icon)) return null;
+  if (typeof icon.uri === "string" && icon.uri.startsWith("data:image/")) return icon.uri;
+  if (typeof icon.svg === "string" && icon.svg.trim().startsWith("<svg")) {
+    return `data:image/svg+xml,${encodeURIComponent(icon.svg)}`;
+  }
+  return null;
+}
 function createChannelRail() {
   const byId = /* @__PURE__ */ new Map();
   const listeners = /* @__PURE__ */ new Set();
@@ -77,7 +85,7 @@ function createChannelRail() {
      * 注册一个渠道的显示元数据。
      *
      * @param definition - { id, order, label, logo, icon, sessionBadge, capabilities }。
-     *   `icon` = `{ svg }`：渠道的图标（设置页卡片与侧边栏会话行共用同一份）。
+     *   `icon` = `{ svg }` 或 `{ uri }`：渠道图标（设置页卡片与侧边栏会话行共用同一份）。
      *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
      *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
@@ -96,8 +104,10 @@ function createChannelRail() {
         throw new TypeError("\u6E20\u9053 capabilities \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       }
       if (icon !== void 0) {
-        if (!isPlainObject(icon) || typeof icon.svg !== "string" || !icon.svg.trim().startsWith("<svg")) {
-          throw new TypeError('\u6E20\u9053 icon \u9700\u8981 { svg: "<svg \u2026>" }\u3002');
+        const hasSvg = isPlainObject(icon) && typeof icon.svg === "string" && icon.svg.trim().startsWith("<svg");
+        const hasUri = isPlainObject(icon) && typeof icon.uri === "string" && icon.uri.startsWith("data:image/");
+        if (!hasSvg && !hasUri) {
+          throw new TypeError('\u6E20\u9053 icon \u9700\u8981 { svg: "<svg \u2026>" } \u6216 { uri: "data:image/\u2026" }\u3002');
         }
       }
       if (sessionBadge !== void 0) {
@@ -111,8 +121,12 @@ function createChannelRail() {
         order,
         label: typeof label === "function" ? label : () => label,
         logo: logo ?? null,
-        // 渠道图标（SVG 字符串）：设置页左栏卡片与侧边栏会话行徽标共用。
-        icon: icon === void 0 ? null : Object.freeze({ svg: icon.svg }),
+        // 渠道图标：设置页左栏卡片与侧边栏会话行徽标共用。
+        // 官方标志常常是位图（favicon 提取），所以既支持 svg 字符串也支持 data URI。
+        icon: icon === void 0 ? null : Object.freeze({
+          ...typeof icon.svg === "string" ? { svg: icon.svg } : {},
+          ...typeof icon.uri === "string" ? { uri: icon.uri } : {}
+        }),
         sessionBadge: sessionBadge === void 0 ? null : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),
         capabilities: Object.freeze({ ...capabilities ?? {} })
       });
@@ -2064,7 +2078,7 @@ function installSessionBadges({
         channel: entry.id,
         label: String(label ?? entry.id),
         // 优先用渠道自己的图标（和设置页左栏同一份）；没给图标才退回字徽标。
-        uri: typeof entry.icon?.svg === "string" ? `data:image/svg+xml,${encodeURIComponent(entry.icon.svg)}` : badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
+        uri: channelIconUri(entry.icon) ?? badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
       });
     }
     style.textContent = stylesheet(Object.fromEntries(
@@ -2332,13 +2346,13 @@ var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-weixin"
 ]);
 function ChannelMark({ entry }) {
-  if (typeof entry.icon?.svg === "string") {
+  const iconUri = channelIconUri(entry.icon);
+  if (iconUri) {
     return h7("span", {
       // 有真图标就不套那个"字母块"的边框与底色，让它看起来就是应用图标。
       className: "dchat-channelMark dchat-channelMarkIcon",
-      "aria-hidden": "true",
-      dangerouslySetInnerHTML: { __html: entry.icon.svg }
-    });
+      "aria-hidden": "true"
+    }, h7("img", { src: iconUri, alt: "", width: 20, height: 20 }));
   }
   if (typeof entry.logo === "function") {
     return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h7(entry.logo));

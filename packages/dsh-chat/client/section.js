@@ -8,6 +8,7 @@
 
 import * as React from 'react';
 
+import { channelIconUri } from '../shared/channel-rail.mjs';
 import { CHANNEL_PAGE_SLOT } from '../shared/contract.mjs';
 import { BotList } from './bot-list.js';
 import { VersionPanel } from './version-panel.js';
@@ -21,14 +22,14 @@ const KNOWN_CHANNEL_PACKAGES = Object.freeze([
 ]);
 
 function ChannelMark({ entry }) {
-  // 渠道图标（SVG 字符串，和侧边栏会话行徽标同一份）；没有图标才退回首字母。
-  if (typeof entry.icon?.svg === 'string') {
+  // 渠道图标（和侧边栏会话行徽标同一份）；没有图标才退回首字母。
+  const iconUri = channelIconUri(entry.icon);
+  if (iconUri) {
     return h('span', {
       // 有真图标就不套那个"字母块"的边框与底色，让它看起来就是应用图标。
       className: 'dchat-channelMark dchat-channelMarkIcon',
       'aria-hidden': 'true',
-      dangerouslySetInnerHTML: { __html: entry.icon.svg },
-    });
+    }, h('img', { src: iconUri, alt: '', width: 20, height: 20 }));
   }
   if (typeof entry.logo === 'function') {
     return h('span', { className: 'dchat-channelMark', 'aria-hidden': 'true' }, h(entry.logo));

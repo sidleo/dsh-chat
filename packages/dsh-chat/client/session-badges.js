@@ -15,6 +15,8 @@
  * @module dsh-chat/client/session-badges
  */
 
+import { channelIconUri } from '../shared/channel-rail.mjs';
+
 const STYLE_ID = 'dsh-chat-session-badges';
 const CHANNEL_ATTR = 'data-dsh-chat-channel';
 const TITLE_ATTR = 'data-dsh-chat-title';
@@ -200,9 +202,8 @@ export function installSessionBadges({
         channel: entry.id,
         label: String(label ?? entry.id),
         // 优先用渠道自己的图标（和设置页左栏同一份）；没给图标才退回字徽标。
-        uri: typeof entry.icon?.svg === 'string'
-          ? `data:image/svg+xml,${encodeURIComponent(entry.icon.svg)}`
-          : badgeUri({ text: badge.text, color: badge.color ?? '#3370ff' }),
+        uri: channelIconUri(entry.icon)
+          ?? badgeUri({ text: badge.text, color: badge.color ?? '#3370ff' }),
       });
     }
     style.textContent = stylesheet(Object.fromEntries(

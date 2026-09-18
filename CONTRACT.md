@@ -81,7 +81,10 @@ export function apply(ctx) {
   const t = ctx.locale.bind(NS);
   ctx.effect(() => ctx.chatChannels.register({
     id: CHANNEL_ID, order: 30, label: () => t('演示渠道'),
-    // 可选：侧边栏会话行里显示的渠道徽标（会话列表没有插槽，hub 做纯装饰的 DOM 增强）
+    // 可选：渠道图标（设置页左栏卡片与侧边栏会话行徽标共用）。
+    // 官方标志常是位图，所以 svg 与 data URI 两种来源都支持。
+    icon: { uri: 'data:image/png;base64,…' },   // 或 { svg: '<svg …></svg>' }
+    // 可选：没有图标时的字徽标回退
     sessionBadge: { text: '演', color: '#3370ff' },
   }), 'dsh-chat-demo: 渠道元数据');
   ctx.effect(() => ctx.slots.inject(PAGE_SLOT, () => ctx.slots.register({
@@ -491,7 +494,7 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 
 | 服务 | 提供方 | 用途 |
 |---|---|---|
-| `chatChannels` | hub | `register({ id, order, label, logo, sessionBadge, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()`。`sessionBadge` = `{ text, color }`：侧边栏会话行里的渠道徽标 |
+| `chatChannels` | hub | `register({ id, order, label, logo, icon, sessionBadge, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()`。`icon` = `{ svg }` 或 `{ uri }`：渠道图标（设置页卡片与会话行徽标共用，取值走 `channelIconUri`）；`sessionBadge` = `{ text, color }`：没有图标时的字徽标回退 |
 | `chatUi` | hub | `components` / `hooks` / `installStyles()` / `callChannelRpc` / `callControlRpc` / `unwrapRpc` / `translate` / `react` |
 
 `chatUi.components`：
