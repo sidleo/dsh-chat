@@ -1455,9 +1455,67 @@ function translatorOf2(translate, chatUi) {
   if (typeof chatUi?.translate === "function") return chatUi.translate;
   return (key) => key;
 }
-function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, onCancel, onRemove }) {
+function TargetRow2({
+  target,
+  busy,
+  confirming,
+  renaming,
+  renameDraft,
+  translate,
+  onSave,
+  onAskRemove,
+  onCancel,
+  onRemove,
+  onStartRename,
+  onRenameDraft,
+  onSubmitRename,
+  onCancelRename
+}) {
   const t = translate;
   const route = Object.entries(target.route ?? {}).map(([key, value]) => `${key}=${value}`).join(" \xB7 ");
+  const kindLabel = target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A");
+  if (renaming) {
+    return h3(
+      "div",
+      { className: "dchat-listItem dchat-deliveryRow" },
+      h3(
+        "div",
+        { className: "dchat-deliveryMeta" },
+        h3("input", {
+          className: "dchat-input",
+          value: renameDraft,
+          placeholder: t("\u7559\u7A7A\u5219\u7528\u81EA\u52A8\u8BC6\u522B\u7684\u540D\u5B57"),
+          autoComplete: "off",
+          spellCheck: false,
+          "aria-label": t("\u81EA\u5B9A\u4E49\u540D\u79F0"),
+          onChange: (event) => onRenameDraft(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === "Enter") onSubmitRename();
+            if (event.key === "Escape") onCancelRename();
+          }
+        }),
+        h3("small", null, `${kindLabel} \xB7 ${route}`)
+      ),
+      h3(
+        "div",
+        { className: "dchat-actions" },
+        h3("button", {
+          key: "submit",
+          type: "button",
+          className: "dchat-button dchat-buttonPrimary",
+          disabled: busy,
+          onClick: onSubmitRename
+        }, busy ? t("\u4FDD\u5B58\u4E2D\u2026") : t("\u4FDD\u5B58")),
+        h3("button", {
+          key: "cancel",
+          type: "button",
+          className: "dchat-button",
+          disabled: busy,
+          onClick: onCancelRename
+        }, t("\u53D6\u6D88"))
+      )
+    );
+  }
   const actions = target.discovered ? [h3("button", {
     key: "save",
     type: "button",
@@ -1479,13 +1537,22 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
       disabled: busy,
       onClick: onCancel
     }, t("\u53D6\u6D88"))
-  ] : [h3("button", {
-    key: "remove",
-    type: "button",
-    className: "dchat-button dchat-buttonDanger",
-    disabled: busy,
-    onClick: onAskRemove
-  }, t("\u5220\u9664"))];
+  ] : [
+    h3("button", {
+      key: "rename",
+      type: "button",
+      className: "dchat-button",
+      disabled: busy,
+      onClick: () => onStartRename(target)
+    }, t("\u91CD\u547D\u540D")),
+    h3("button", {
+      key: "remove",
+      type: "button",
+      className: "dchat-button dchat-buttonDanger",
+      disabled: busy,
+      onClick: onAskRemove
+    }, t("\u5220\u9664"))
+  ];
   return h3(
     "div",
     { className: "dchat-listItem dchat-deliveryRow" },
@@ -1495,7 +1562,7 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
       h3("strong", null, target.name || target.id),
       // 只留一行身份：`route` 里已经带了 openId/chatId，再挂一个 `p2p_…` 原始 id
       // 就是同一个东西的第二种写法，只会让人怀疑"这是两个不同的目标"。
-      h3("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`)
+      h3("small", null, `${kindLabel} \xB7 ${route}`)
     ),
     h3(
       "div",
@@ -1513,6 +1580,8 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
   const [notice, setNotice] = React4.useState(null);
   const [busyId, setBusyId] = React4.useState(null);
   const [confirmingId, setConfirmingId] = React4.useState(null);
+  const [renamingId, setRenamingId] = React4.useState(null);
+  const [renameDraft, setRenameDraft] = React4.useState("");
   const [draft, setDraft] = React4.useState("");
   const [sendTo, setSendTo] = React4.useState("");
   const [filter, setFilter] = React4.useState("");
@@ -1567,6 +1636,8 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
     target,
     busy: busyId === target.id,
     confirming: confirmingId === target.id,
+    renaming: renamingId === target.id,
+    renameDraft: renamingId === target.id ? renameDraft : "",
     translate: t,
     onSave: (item) => {
       void run(item.id, "delivery.save", {
@@ -1574,6 +1645,23 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
         botId,
         target: { id: item.id, name: item.name, kind: item.kind, route: item.route }
       }, () => t("\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002"));
+    },
+    onStartRename: (item) => {
+      setConfirmingId(null);
+      setRenamingId(item.id);
+      setRenameDraft(item.renamed ? item.name : "");
+    },
+    onRenameDraft: setRenameDraft,
+    onCancelRename: () => setRenamingId(null),
+    onSubmitRename: () => {
+      const id = renamingId;
+      setRenamingId(null);
+      void run(id, "delivery.target.rename", {
+        channelId,
+        botId,
+        targetId: id,
+        name: renameDraft.trim()
+      }, () => renameDraft.trim() ? t("\u5DF2\u6539\u540D\u3002") : t("\u5DF2\u6062\u590D\u81EA\u52A8\u540D\u5B57\u3002"));
     },
     onAskRemove: () => setConfirmingId(target.id),
     onCancel: () => setConfirmingId(null),
@@ -2706,6 +2794,11 @@ var zh = {
   "\u7FA4\u804A": "\u7FA4\u804A",
   "\u5019\u9009": "\u5019\u9009",
   "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807": "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807",
+  "\u91CD\u547D\u540D": "\u91CD\u547D\u540D",
+  "\u81EA\u5B9A\u4E49\u540D\u79F0": "\u81EA\u5B9A\u4E49\u540D\u79F0",
+  "\u7559\u7A7A\u5219\u7528\u81EA\u52A8\u8BC6\u522B\u7684\u540D\u5B57": "\u7559\u7A7A\u5219\u7528\u81EA\u52A8\u8BC6\u522B\u7684\u540D\u5B57",
+  "\u5DF2\u6539\u540D\u3002": "\u5DF2\u6539\u540D\u3002",
+  "\u5DF2\u6062\u590D\u81EA\u52A8\u540D\u5B57\u3002": "\u5DF2\u6062\u590D\u81EA\u52A8\u540D\u5B57\u3002",
   "\u5220\u9664": "\u5220\u9664",
   "\u786E\u8BA4\u5220\u9664": "\u786E\u8BA4\u5220\u9664",
   "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002": "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002",
@@ -2840,6 +2933,11 @@ var en = {
   "\u7FA4\u804A": "Group",
   "\u5019\u9009": "Candidate",
   "\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807": "Save as target",
+  "\u91CD\u547D\u540D": "Rename",
+  "\u81EA\u5B9A\u4E49\u540D\u79F0": "Custom name",
+  "\u7559\u7A7A\u5219\u7528\u81EA\u52A8\u8BC6\u522B\u7684\u540D\u5B57": "Leave empty to use the detected name",
+  "\u5DF2\u6539\u540D\u3002": "Renamed.",
+  "\u5DF2\u6062\u590D\u81EA\u52A8\u540D\u5B57\u3002": "Restored the detected name.",
   "\u5220\u9664": "Delete",
   "\u786E\u8BA4\u5220\u9664": "Confirm delete",
   "\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002": "This channel does not support proactive delivery.",

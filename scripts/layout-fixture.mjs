@@ -151,6 +151,10 @@ const FRAGMENTS = {
   delivery: () => h(DeliveryTargetsEditor, {
     chatUi, connection: {}, channelId: 'feishu', botId: 'bot_1', translate: t,
   }),
+  // 改名态：输入框 + 两个按钮同排，窄栏最容易挤爆。
+  deliveryRename: () => h(DeliveryTargetsEditor, {
+    chatUi, connection: {}, channelId: 'feishu', botId: 'bot_1', translate: t,
+  }),
   // 诊断面板：收起态与"展开日志尾部"态各测一遍（超长日志行的溢出风险在展开后）。
   diagnostics: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
   diagnosticsOpen: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
@@ -278,10 +282,13 @@ function measure() {
 let measured = 0;
 async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
-  // 「展开日志尾部」是被按钮控制的：点一次再量，覆盖展开态的溢出风险。
-  for (const frame of document.querySelectorAll('[data-scenario="diagnosticsOpen"]')) {
-    for (const button of frame.querySelectorAll('button')) {
-      if ((button.textContent ?? '').includes('看最后 40 行')) button.click();
+  // 展开态（日志尾部 / 改名输入框）都由按钮控制：点一次再量，否则这些帧等于没测。
+  const clicks = { diagnosticsOpen: '看最后 40 行', deliveryRename: '重命名' };
+  for (const [scenario, label] of Object.entries(clicks)) {
+    for (const frame of document.querySelectorAll(`[data-scenario="${scenario}"]`)) {
+      for (const button of frame.querySelectorAll('button')) {
+        if ((button.textContent ?? '').includes(label)) button.click();
+      }
     }
   }
   for (let index = 0; index < 5; index += 1) await Promise.resolve();

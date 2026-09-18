@@ -25,11 +25,52 @@ function translatorOf(translate, chatUi) {
   return (key) => key;
 }
 
-/** 一个目标的一行：名称、类型、路由与操作（候选可保存，已保存可删除）。 */
-function TargetRow({ target, busy, confirming, translate, onSave, onAskRemove, onCancel, onRemove }) {
+/** 一个目标的一行：名称、类型、路由与操作（候选可保存，已保存可改名/删除）。 */
+function TargetRow({
+  target, busy, confirming, renaming, renameDraft, translate,
+  onSave, onAskRemove, onCancel, onRemove, onStartRename, onRenameDraft, onSubmitRename, onCancelRename,
+}) {
   const t = translate;
   const route = Object.entries(target.route ?? {})
     .map(([key, value]) => `${key}=${value}`).join(' · ');
+  const kindLabel = target.kind === 'group' ? t('群聊') : t('私聊');
+
+  // 改名态：目标名字来自平台（微信没有昵称、飞书缺权限时只有掩码 id），
+  // 一排认不出的 id 里挑不出要发给谁，所以允许自己起名（留空 = 回到自动名字）。
+  if (renaming) {
+    return h('div', { className: 'dchat-listItem dchat-deliveryRow' },
+      h('div', { className: 'dchat-deliveryMeta' },
+        h('input', {
+          className: 'dchat-input',
+          value: renameDraft,
+          placeholder: t('留空则用自动识别的名字'),
+          autoComplete: 'off',
+          spellCheck: false,
+          'aria-label': t('自定义名称'),
+          onChange: (event) => onRenameDraft(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') onSubmitRename();
+            if (event.key === 'Escape') onCancelRename();
+          },
+        }),
+        h('small', null, `${kindLabel} · ${route}`)),
+      h('div', { className: 'dchat-actions' },
+        h('button', {
+          key: 'submit',
+          type: 'button',
+          className: 'dchat-button dchat-buttonPrimary',
+          disabled: busy,
+          onClick: onSubmitRename,
+        }, busy ? t('保存中…') : t('保存')),
+        h('button', {
+          key: 'cancel',
+          type: 'button',
+          className: 'dchat-button',
+          disabled: busy,
+          onClick: onCancelRename,
+        }, t('取消'))));
+  }
+
   const actions = target.discovered
     ? [h('button', {
       key: 'save',
@@ -55,20 +96,29 @@ function TargetRow({ target, busy, confirming, translate, onSave, onAskRemove, o
           onClick: onCancel,
         }, t('取消')),
       ]
-      : [h('button', {
-        key: 'remove',
-        type: 'button',
-        className: 'dchat-button dchat-buttonDanger',
-        disabled: busy,
-        onClick: onAskRemove,
-      }, t('删除'))]);
+      : [
+        h('button', {
+          key: 'rename',
+          type: 'button',
+          className: 'dchat-button',
+          disabled: busy,
+          onClick: () => onStartRename(target),
+        }, t('重命名')),
+        h('button', {
+          key: 'remove',
+          type: 'button',
+          className: 'dchat-button dchat-buttonDanger',
+          disabled: busy,
+          onClick: onAskRemove,
+        }, t('删除')),
+      ]);
 
   return h('div', { className: 'dchat-listItem dchat-deliveryRow' },
     h('div', { className: 'dchat-deliveryMeta' },
       h('strong', null, target.name || target.id),
       // 只留一行身份：`route` 里已经带了 openId/chatId，再挂一个 `p2p_…` 原始 id
       // 就是同一个东西的第二种写法，只会让人怀疑"这是两个不同的目标"。
-      h('small', null, `${target.kind === 'group' ? t('群聊') : t('私聊')} · ${route}`)),
+      h('small', null, `${kindLabel} · ${route}`)),
     h('div', { className: 'dchat-actions' },
       target.discovered ? h('span', { className: 'dchat-status' }, t('候选')) : null,
       ...actions));
@@ -88,6 +138,9 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
   const [notice, setNotice] = React.useState(null);
   const [busyId, setBusyId] = React.useState(null);
   const [confirmingId, setConfirmingId] = React.useState(null);
+  /** 正在改名的目标 id 与草稿（空草稿 = 取消自定义，回到自动名字）。 */
+  const [renamingId, setRenamingId] = React.useState(null);
+  const [renameDraft, setRenameDraft] = React.useState('');
   const [draft, setDraft] = React.useState('');
   const [sendTo, setSendTo] = React.useState('');
   /** 目标一多就要有过滤与折叠，否则 8 个群排下来既找不到也没法扫。 */
@@ -152,6 +205,8 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
     target,
     busy: busyId === target.id,
     confirming: confirmingId === target.id,
+    renaming: renamingId === target.id,
+    renameDraft: renamingId === target.id ? renameDraft : '',
     translate: t,
     onSave: (item) => {
       void run(item.id, 'delivery.save', {
@@ -159,6 +214,21 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
         botId,
         target: { id: item.id, name: item.name, kind: item.kind, route: item.route },
       }, () => t('已保存，现在可以主动发消息了。'));
+    },
+    onStartRename: (item) => {
+      setConfirmingId(null);
+      setRenamingId(item.id);
+      // 预填当前名字，便于微调；用户想恢复自动名字就把内容清空后保存。
+      setRenameDraft(item.renamed ? item.name : '');
+    },
+    onRenameDraft: setRenameDraft,
+    onCancelRename: () => setRenamingId(null),
+    onSubmitRename: () => {
+      const id = renamingId;
+      setRenamingId(null);
+      void run(id, 'delivery.target.rename', {
+        channelId, botId, targetId: id, name: renameDraft.trim(),
+      }, () => (renameDraft.trim() ? t('已改名。') : t('已恢复自动名字。')));
     },
     onAskRemove: () => setConfirmingId(target.id),
     onCancel: () => setConfirmingId(null),

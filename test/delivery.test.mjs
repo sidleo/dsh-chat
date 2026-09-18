@@ -53,8 +53,11 @@ const target = (overrides = {}) => ({
 
 test('目标校验：id/kind/route 逐项把关，坏数据不落盘', () => {
   assert.deepEqual(normalizeTarget(target()), {
-    id: 'tgt_1', name: '测试群', kind: 'group', route: { chatId: 'oc_1' },
+    id: 'tgt_1', name: '测试群', kind: 'group', route: { chatId: 'oc_1' }, renamed: false,
   });
+  assert.equal(normalizeTarget(target({ renamed: true })).renamed, true);
+  // `renamed` 但没有名字 = 不算自定义（渠道名字照旧可以补上）。
+  assert.equal(normalizeTarget(target({ renamed: true, name: '' })).renamed, false);
   assert.throws(() => normalizeTarget(target({ id: '带空格 的' })), /投递目标 id/);
   assert.throws(() => normalizeTarget(target({ kind: 'channel' })), /kind/);
   assert.throws(() => normalizeTarget(target({ route: {} })), /route/);
@@ -62,6 +65,49 @@ test('目标校验：id/kind/route 逐项把关，坏数据不落盘', () => {
   assert.throws(() => normalizeTarget(target({ route: { chatId: 'a'.repeat(300) } })), /route\.chatId/);
   assert.throws(() => normalizeTarget(target({ route: { chatId: { nested: 1 } } })), /route\.chatId/);
   assert.throws(() => normalizeTarget(target({ name: 'x'.repeat(200) })), /名称/);
+});
+
+test('改名：自定义名字优先于平台名字，清空则回到自动名字', async () => {
+  const app = await makeService();
+  try {
+    const provider = {
+      async send() { return { messageId: 'om_1' }; },
+      async discover() { return []; },
+      // 渠道总是补一个"平台名字"：用户改过名的不能被它顶回去（真机上会表现为"改完又变回去"）。
+      async decorateTargets({ targets }) {
+        return targets.map((item) => ({ ...item, name: `平台名(${item.id})` }));
+      },
+    };
+    app.service.attach('feishu', provider);
+
+    await app.service.save({ channelId: 'feishu', botId: 'bot_1', target: target() });
+    const decorated = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.equal(decorated.targets[0].name, '平台名(tgt_1)', '没自定义时用平台名字');
+
+    const renamed = await app.service.rename({
+      channelId: 'feishu', botId: 'bot_1', targetId: 'tgt_1', name: '  日报群  ',
+    });
+    assert.equal(renamed.name, '日报群', '两端空白要去掉');
+    assert.equal(renamed.renamed, true);
+    const afterRename = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.equal(afterRename.targets[0].name, '日报群', '自定义名字要盖过平台名字');
+    // 落盘，重启后仍在。
+    assert.equal(app.settings.read('feishu', 'bot_1').deliveryTargets.tgt_1.name, '日报群');
+    assert.equal(app.settings.read('feishu', 'bot_1').deliveryTargets.tgt_1.renamed, true);
+
+    // 清空 = 取消自定义，回到渠道给的名字（不是留下一行空名字）。
+    await app.service.rename({ channelId: 'feishu', botId: 'bot_1', targetId: 'tgt_1', name: '' });
+    const restored = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.equal(restored.targets[0].name, '平台名(tgt_1)');
+    assert.equal(restored.targets[0].renamed, false);
+
+    await assert.rejects(
+      () => app.service.rename({ channelId: 'feishu', botId: 'bot_1', targetId: 'tgt_nope', name: 'x' }),
+      /找不到投递目标/,
+    );
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test('保存、列出与删除：落进每机器人设置的 deliveryTargets', async () => {

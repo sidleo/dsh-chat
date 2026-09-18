@@ -1656,7 +1656,7 @@ function normalizeRoute(route) {
 }
 function normalizeTarget(input) {
   if (!isPlainObject5(input)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
-  const { id, name: name2, kind, route } = input;
+  const { id, name: name2, kind, route, renamed } = input;
   if (typeof id !== "string" || !TARGET_ID.test(id)) {
     throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807 id \u53EA\u80FD\u662F 1\u201364 \u4F4D\u5B57\u6BCD/\u6570\u5B57/\u4E0B\u5212\u7EBF/\u8FDE\u5B57\u7B26\u3002");
   }
@@ -1667,7 +1667,14 @@ function normalizeTarget(input) {
   if (label.length > TARGET_NAME_MAX) {
     throw deliveryError("chat/bad-target", `\u6295\u9012\u76EE\u6807\u540D\u79F0\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_NAME_MAX} \u4E2A\u5B57\u7B26\u3002`);
   }
-  return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
+  return Object.freeze({
+    id,
+    name: label,
+    kind,
+    route: normalizeRoute(route),
+    // 空名字等于"取消自定义"，这时渠道给什么名字就用什么。
+    renamed: renamed === true && label.length > 0
+  });
 }
 async function resolveOutboundFile({ path: inputPath, name: name2, workspace }) {
   const raw = typeof inputPath === "string" ? inputPath.trim() : "";
@@ -1781,6 +1788,7 @@ function createDeliveryService({ settings, sessionStore = null, logger = console
           });
           if (Array.isArray(decorated) && decorated.length === listed.length) {
             listed = listed.map((target, index) => {
+              if (target.renamed) return target;
               const name2 = decorated[index]?.name;
               return typeof name2 === "string" && name2 ? { ...target, name: name2 } : target;
             });
@@ -1806,6 +1814,29 @@ function createDeliveryService({ settings, sessionStore = null, logger = console
         deliveryTargets: { ...current, [normalized.id]: normalized }
       });
       return normalized;
+    },
+    /**
+     * 给一个**已保存**的目标改名字（用户自定义名）。
+     *
+     * 为什么需要：目标名字来自平台（群名/人名），但微信拿不到昵称、飞书缺权限时只有
+     * `oc_xxx` / `ou_xxx`——设置页里一排掩码 id，人认不出哪个是哪个。
+     * 传空名字 = 取消自定义，回到渠道给的名字。
+     */
+    async rename({ channelId, botId, targetId, name: name2 }) {
+      const current = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const target = current[targetId];
+      if (!target) {
+        throw deliveryError(
+          "chat/unknown-target",
+          `\u627E\u4E0D\u5230\u6295\u9012\u76EE\u6807 ${targetId}\uFF08\u5148\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\uFF0C\u518D\u6539\u540D\uFF09\u3002`
+        );
+      }
+      const label = typeof name2 === "string" ? name2.trim() : "";
+      const renamed = normalizeTarget({ ...target, name: label, renamed: label.length > 0 });
+      await settings.write(channelId, botId, {
+        deliveryTargets: { ...current, [targetId]: renamed }
+      });
+      return renamed;
     },
     /** 删除一个投递目标。 */
     async remove({ channelId, botId, targetId }) {
@@ -3721,6 +3752,22 @@ function apply(ctx, config = {}) {
         return ok({ target: saved });
       } catch (error) {
         return failFrom(error, "chat/delivery-save-failed");
+      }
+    }
+    if (method === "delivery.target.rename") {
+      if (!validBotPayload(payload, { extra: ["targetId", "name"] }) || typeof payload.targetId !== "string" || typeof payload.name !== "string") {
+        return fail("chat/bad-request", "delivery.target.rename \u9700\u8981 { channelId, botId, targetId, name }\u3002");
+      }
+      try {
+        const renamed = await delivery.rename({
+          channelId: payload.channelId,
+          botId: payload.botId,
+          targetId: payload.targetId,
+          name: payload.name
+        });
+        return ok({ target: renamed });
+      } catch (error) {
+        return failFrom(error, "chat/delivery-rename-failed");
       }
     }
     if (method === "delivery.remove") {

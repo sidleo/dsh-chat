@@ -452,6 +452,21 @@ export function apply(ctx, config = {}) {
         return failFrom(error, 'chat/delivery-save-failed');
       }
     }
+    if (method === 'delivery.target.rename') {
+      if (!validBotPayload(payload, { extra: ['targetId', 'name'] }) || typeof payload.targetId !== 'string'
+        || typeof payload.name !== 'string') {
+        return fail('chat/bad-request', 'delivery.target.rename 需要 { channelId, botId, targetId, name }。');
+      }
+      try {
+        const renamed = await delivery.rename({
+          channelId: payload.channelId, botId: payload.botId,
+          targetId: payload.targetId, name: payload.name,
+        });
+        return ok({ target: renamed });
+      } catch (error) {
+        return failFrom(error, 'chat/delivery-rename-failed');
+      }
+    }
     if (method === 'delivery.remove') {
       if (!validBotPayload(payload, { extra: ['targetId'] }) || typeof payload.targetId !== 'string') {
         return fail('chat/bad-request', 'delivery.remove 需要 { channelId, botId, targetId }。');

@@ -64,12 +64,15 @@ function normalizeRoute(route) {
 /**
  * 校验一个投递目标。
  *
- * @param input - { id, name?, kind, route }。
+ * `renamed` 标记"这个名字是用户自己起的"：渠道补名字（`decorateTargets`）时不许覆盖它
+ * ——否则用户刚改完的名字，下一次打开设置页就被平台群名顶回去了。
+ *
+ * @param input - { id, name?, kind, route, renamed? }。
  * @returns 冻结后的目标。
  */
 export function normalizeTarget(input) {
   if (!isPlainObject(input)) throw deliveryError('chat/bad-target', '投递目标必须是对象。');
-  const { id, name, kind, route } = input;
+  const { id, name, kind, route, renamed } = input;
   if (typeof id !== 'string' || !TARGET_ID.test(id)) {
     throw deliveryError('chat/bad-target', '投递目标 id 只能是 1–64 位字母/数字/下划线/连字符。');
   }
@@ -80,7 +83,14 @@ export function normalizeTarget(input) {
   if (label.length > TARGET_NAME_MAX) {
     throw deliveryError('chat/bad-target', `投递目标名称不得超过 ${TARGET_NAME_MAX} 个字符。`);
   }
-  return Object.freeze({ id, name: label, kind, route: normalizeRoute(route) });
+  return Object.freeze({
+    id,
+    name: label,
+    kind,
+    route: normalizeRoute(route),
+    // 空名字等于"取消自定义"，这时渠道给什么名字就用什么。
+    renamed: renamed === true && label.length > 0,
+  });
 }
 
 /**
@@ -251,6 +261,8 @@ export function createDeliveryService({ settings, sessionStore = null, logger = 
           });
           if (Array.isArray(decorated) && decorated.length === listed.length) {
             listed = listed.map((target, index) => {
+              // 用户自己起过名字的，平台名字不许顶掉它（真机上会表现为"改完又变回去"）。
+              if (target.renamed) return target;
               const name = decorated[index]?.name;
               return typeof name === 'string' && name ? { ...target, name } : target;
             });
@@ -277,6 +289,28 @@ export function createDeliveryService({ settings, sessionStore = null, logger = 
         deliveryTargets: { ...current, [normalized.id]: normalized },
       });
       return normalized;
+    },
+
+    /**
+     * 给一个**已保存**的目标改名字（用户自定义名）。
+     *
+     * 为什么需要：目标名字来自平台（群名/人名），但微信拿不到昵称、飞书缺权限时只有
+     * `oc_xxx` / `ou_xxx`——设置页里一排掩码 id，人认不出哪个是哪个。
+     * 传空名字 = 取消自定义，回到渠道给的名字。
+     */
+    async rename({ channelId, botId, targetId, name }) {
+      const current = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
+      const target = current[targetId];
+      if (!target) {
+        throw deliveryError('chat/unknown-target',
+          `找不到投递目标 ${targetId}（先保存为投递目标，再改名）。`);
+      }
+      const label = typeof name === 'string' ? name.trim() : '';
+      const renamed = normalizeTarget({ ...target, name: label, renamed: label.length > 0 });
+      await settings.write(channelId, botId, {
+        deliveryTargets: { ...current, [targetId]: renamed },
+      });
+      return renamed;
     },
 
     /** 删除一个投递目标。 */
