@@ -65,6 +65,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **"回合跑完但用户没收到"怎么查**：在日志里对齐四行——hub 的 `发送提示词` → hub 的 `回合结束` → 渠道的 `回合结束，准备回复` → 渠道的 `最终答案投递方式`。
   第 2 行有、第 3 行没有 = 结果没交回渠道（`ask()` 的返回路径被卡住：关流或提示词收据永不落地，二者都必须有界，见 `sessions.mjs`）；
   第 3 行有、第 4 行是 `failed` = 呈现层发不出去（会同时写进 `connection.status.lastError`）。
+- **设置页投递目标只显示 `oc_xxx` / `ou_xxx`**：名字解析要 `im:chat:readonly`（群名）与通讯录权限（人名），
+  缺权限时卡片上会直接写明原因并给开通链接（`connection.status` 的 `nameHint`），日志里是 `读取群列表失败` / `读取用户信息失败`。
+  这类失败会退避 30 分钟、期间不再重试（并发查询也合并成一次，免得把日志刷满），**开通权限后点「重新连接」即刻重取**。
 
 ## 阶段与进度
 

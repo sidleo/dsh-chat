@@ -1877,6 +1877,21 @@ function stamp() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
 var MAX_FIELD_CHARS = 2e3;
+function clip2(text) {
+  return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}\u2026` : text;
+}
+function httpErrorSummary(value) {
+  const status = value?.response?.status ?? value?.status;
+  if (!status || !value?.config && !value?.request && !value?.response) return null;
+  const data = value.response?.data ?? {};
+  const code = data?.code ?? value?.code;
+  const message = String(data?.msg ?? value?.message ?? "").replace(/\s+/gu, " ").trim();
+  const parts = [`HTTP ${status}`];
+  if (value.statusText) parts.push(String(value.statusText));
+  if (code !== void 0 && code !== null && code !== "") parts.push(`code=${code}`);
+  if (message) parts.push(message);
+  return parts.join(" ");
+}
 function oneLine(value) {
   if (typeof value === "string") return value;
   if (value === null || value === void 0) return String(value);
@@ -1884,6 +1899,9 @@ function oneLine(value) {
     return `${value.name}: ${value.message}${value.code ? `\uFF08code ${value.code}\uFF09` : ""}`;
   }
   if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return clip2(value.map(oneLine).filter((part) => part !== "").join(" "));
+  const http = httpErrorSummary(value);
+  if (http) return clip2(http);
   try {
     const seen = /* @__PURE__ */ new WeakSet();
     const text = JSON.stringify(value, (key, item) => {
@@ -1894,7 +1912,7 @@ function oneLine(value) {
       return item;
     });
     if (typeof text !== "string") return String(value);
-    return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}\u2026` : text;
+    return clip2(text);
   } catch {
     return String(value);
   }

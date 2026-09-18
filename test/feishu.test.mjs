@@ -1749,3 +1749,105 @@ test('工具行按 Web 的口径渲染：种类标题 + 摘要参数', () => {
   assert.equal(thinkRow('先看一眼\n再看第二眼'), '思考 · 先看一眼');
   assert.ok(thinkRow('x'.repeat(500)).length <= 126);
 });
+
+test('名字解析：并发查询合并成一次、缺权限长退避、「重新连接」立刻重取', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-name-'));
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_ctl_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '控制器机器人',
+        stepPushDirect: 'off',
+        stepPushGroup: 'off',
+      }],
+    }), 'utf8');
+
+    const calls = { chats: 0, users: 0 };
+    let failure = null;
+    const gateway = createFakeGateway();
+    gateway.listChats = async () => {
+      calls.chats += 1;
+      if (failure) throw failure;
+      return [{ chatId: 'oc_group_1', name: '日报临时推送群' }];
+    };
+    gateway.getUserName = async (openId) => {
+      calls.users += 1;
+      if (failure) throw failure;
+      return `名字(${openId})`;
+    };
+
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+    await controller.start();
+
+    const direct = (openId) => ({
+      id: `p2p:${openId}`, name: '私聊', kind: 'direct', route: { openId },
+    });
+
+    // ① 群列表：打开设置页会并发问几次，接口只能被打一次。
+    const [first, second] = await Promise.all([
+      controller.delivery.discover({ botId: 'bot_ctl' }),
+      controller.delivery.discover({ botId: 'bot_ctl' }),
+    ]);
+    assert.equal(calls.chats, 1, '同一瞬间的并发查询要合并成一次');
+    assert.equal(first.find((t) => t.kind === 'group')?.name, '日报临时推送群');
+    assert.equal(second.length, first.length);
+
+    // ② 人名：同一个人的并发查询也合成一次。
+    const paired = await Promise.all([
+      controller.delivery.decorateTargets({ botId: 'bot_ctl', targets: [direct('ou_c')] }),
+      controller.delivery.decorateTargets({ botId: 'bot_ctl', targets: [direct('ou_c')] }),
+    ]);
+    assert.equal(calls.users, 1, '同一个 open_id 的并发查询要合并成一次');
+    assert.equal(paired[0][0].name, '名字(ou_c)');
+    assert.equal(paired[1][0].name, '名字(ou_c)');
+
+    // ③ 缺权限：失败一次之后不再逐人重试（换个人也不重试），避免每次刷新都刷日志。
+    failure = Object.assign(new Error(
+      'Access denied. One of the following scopes is required: [im:chat:readonly].'
+      + ' https://open.feishu.cn/app/cli_ctl_12345678/auth?q=im:chat:readonly',
+    ), { code: 99991672 });
+    await controller.delivery.decorateTargets({ botId: 'bot_ctl', targets: [direct('ou_d')] });
+    assert.equal(calls.users, 2, '失败那次要真去问一次');
+    await controller.delivery.decorateTargets({ botId: 'bot_ctl', targets: [direct('ou_e')] });
+    assert.equal(calls.users, 2, '缺权限期间不该继续重试');
+    const hinted = await controller.endpoints['connection.status']({});
+    assert.equal(hinted.value.bots[0].nameHint.code, 'feishu/scope-missing');
+    assert.match(hinted.value.bots[0].nameHint.url, /open\.feishu\.cn\/app\/cli_ctl_12345678\/auth/);
+
+    // ④ 「重新连接」= 用户刚去开了权限：缓存与退避一起清掉，下次立刻重取。
+    const reconnected = await controller.endpoints['bot.reconnect']({ botId: 'bot_ctl' });
+    assert.equal(reconnected.ok, true);
+    failure = null;
+    const after = await controller.delivery.decorateTargets({
+      botId: 'bot_ctl', targets: [direct('ou_f')],
+    });
+    assert.equal(calls.users, 3, '重连后要重新取一次');
+    assert.equal(after[0].name, '名字(ou_f)');
+
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});

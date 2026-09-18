@@ -115,3 +115,41 @@ test('对象参数被写成可读的一行：不出现 [object Object]', async (
   logger.info(circular);
   assert.match(lines[3], /循环引用/);
 });
+
+test('SDK 的 axios 错误只留摘要：状态码 + code + msg，不写 config/request/response', async () => {
+  const lines = [];
+  const sink = { write: (line) => lines.push(line), path: '/tmp/x.log' };
+  const logger = withFileSink({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    sink,
+    scope: 'dsh-chat-feishu',
+  });
+
+  // 飞书 SDK 失败时丢进来的就是这个形态：三份互相引用，一次几 KB。
+  const response = {
+    status: 400,
+    data: { code: 99991672, msg: 'Access denied. 应用尚未开通所需的应用身份权限：im:chat:readonly' },
+  };
+  const config = { url: 'https://open.feishu.cn/open-apis/im/v1/chats', params: { page_size: 100 } };
+  const axiosError = {
+    message: 'Request failed with status code 400',
+    config,
+    request: { path: '/x' },
+    response,
+    // axios 把状态码同时放在顶层（真机上就是这样）。
+    status: 400,
+    statusText: 'Bad Request',
+  };
+  logger.error([axiosError, { code: 99991672, msg: 'Access denied' }]);
+
+  const line = lines[0];
+  assert.match(line, /HTTP 400 Bad Request code=99991672/, '要留下状态码与平台错误码');
+  assert.match(line, /im:chat:readonly/, '平台 msg 是唯一有用的上下文，要留着');
+  assert.ok(!line.includes('page_size'), '请求参数不该进日志');
+  assert.ok(!line.includes('open-apis/im/v1/chats'), '请求 URL 不该进日志');
+  assert.ok(line.length < 400, `摘要要短（实际 ${line.length} 字符）`);
+
+  // 普通对象照旧：不能被摘要规则误伤。
+  logger.info({ botId: 'bot_1', chats: 3 });
+  assert.match(lines[1], /"botId":"bot_1"/, '非 HTTP 错误对象仍是原来的可读 JSON');
+});

@@ -25,6 +25,30 @@ function stamp() {
 /** 单行日志的长度上限：SDK 会把整个 axios 请求对象丢进来。 */
 const MAX_FIELD_CHARS = 2000;
 
+function clip(text) {
+  return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}…` : text;
+}
+
+/**
+ * HTTP 客户端错误（axios 形态）压成一行摘要。
+ *
+ * 飞书 SDK 失败时把整个错误对象丢进 logger：`config`/`request`/`response` 三份且互相
+ * 引用，串起来一次几 KB，而真正的信息只有状态码、平台 code 和 msg。凑巧的是这类失败
+ * 往往每十分钟重试一次——现场就被它自己淹了。所以这类对象只留摘要。
+ */
+function httpErrorSummary(value) {
+  const status = value?.response?.status ?? value?.status;
+  if (!status || (!value?.config && !value?.request && !value?.response)) return null;
+  const data = value.response?.data ?? {};
+  const code = data?.code ?? value?.code;
+  const message = String(data?.msg ?? value?.message ?? '').replace(/\s+/gu, ' ').trim();
+  const parts = [`HTTP ${status}`];
+  if (value.statusText) parts.push(String(value.statusText));
+  if (code !== undefined && code !== null && code !== '') parts.push(`code=${code}`);
+  if (message) parts.push(message);
+  return parts.join(' ');
+}
+
 /** 把任意一个参数压成一行可读文本。 */
 function oneLine(value) {
   if (typeof value === 'string') return value;
@@ -33,6 +57,10 @@ function oneLine(value) {
     return `${value.name}: ${value.message}${value.code ? `（code ${value.code}）` : ''}`;
   }
   if (typeof value !== 'object') return String(value);
+  // SDK 常把参数打包成数组（`logger.error([err, ctx])`），逐个压好再拼。
+  if (Array.isArray(value)) return clip(value.map(oneLine).filter((part) => part !== '').join(' '));
+  const http = httpErrorSummary(value);
+  if (http) return clip(http);
   try {
     const seen = new WeakSet();
     const text = JSON.stringify(value, (key, item) => {
@@ -43,7 +71,7 @@ function oneLine(value) {
       return item;
     });
     if (typeof text !== 'string') return String(value);
-    return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}…` : text;
+    return clip(text);
   } catch {
     return String(value);
   }

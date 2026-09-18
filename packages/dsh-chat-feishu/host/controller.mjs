@@ -246,6 +246,15 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const NAME_TTL_MS = 10 * 60_000;
 
   /**
+   * "缺权限"这类失败的退避间隔。
+   *
+   * 权限要人去开放平台点，重试再密也不会自己好；而每重试一次，SDK 就往日志里写一次
+   * 整个 axios 对象（一次几 KB），把真正的现场淹掉——真机上刷屏的就是这里。
+   * 开通权限后点一下「重新连接」即可立即重取，不必等这个窗口。
+   */
+  const SCOPE_MISSING_TTL_MS = 30 * 60_000;
+
+  /**
    * 把"名字拿不到"的原因压成一句能显示的话 + 开通链接。
    *
    * 权限没开通时飞书会把开通地址写在错误里（`https://open.feishu.cn/app/<appId>/auth?q=…`），
@@ -255,23 +264,47 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   function nameHintFrom(error, fallback) {
     const message = String(error?.message ?? error ?? '');
     const url = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(message)?.[0] ?? null;
-    const scopeMissing = /Access denied|99991672/u.test(message);
+    const scopeMissing = isScopeMissing(error);
     return Object.freeze({
       code: scopeMissing ? 'feishu/scope-missing' : 'feishu/name-failed',
       message: scopeMissing
-        ? `${fallback}：飞书应用还没开通对应权限，所以只能显示 id。`
+        ? `${fallback}：飞书应用还没开通对应权限，所以只能显示 id。开通后点「重新连接」立刻生效。`
         : `${fallback}：${message.slice(0, 160)}`,
       url,
     });
   }
-  const nameCache = new Map(); // botId → { chats: Map, chatsAt, users: Map, usersAt }
+
+  function isScopeMissing(error) {
+    return /Access denied|99991672/u.test(String(error?.message ?? error ?? ''));
+  }
+
+  /** 失败后这个方向多久不再重试：缺权限长退避，其它错误照旧（下次刷新就重试）。 */
+  function backoffMs(error) {
+    return isScopeMissing(error) ? SCOPE_MISSING_TTL_MS : 0;
+  }
+
+  const nameCache = new Map(); // botId → { chats, chatsAt, chatsBlockMs, users, usersAt, usersBlockMs, nameHint }
+
   function cacheFor(botId) {
     let entry = nameCache.get(botId);
     if (!entry) {
-      entry = { chats: new Map(), chatsAt: 0, users: new Map(), usersAt: 0, nameHint: null };
+      entry = {
+        chats: new Map(), chatsAt: 0, chatsBlockMs: 0, chatsPromise: null,
+        users: new Map(), usersAt: 0, usersBlockMs: 0, userPromises: new Map(),
+        nameHint: null,
+      };
       nameCache.set(botId, entry);
     }
     return entry;
+  }
+
+  /** 手动重连 = 用户可能刚去开放平台开了权限：名字缓存连同"缺权限"的退避一起清掉。 */
+  function resetNameCache(botId) {
+    nameCache.delete(botId);
+  }
+
+  function chatEntries(cache) {
+    return [...cache.chats.entries()].map(([chatId, name]) => ({ chatId, name }));
   }
 
   /**
@@ -279,47 +312,68 @@ export function createFeishuController({ deps, logger = console, config = {}, in
    *
    * `minIntervalMs` 是最短重取间隔：正常走 `NAME_TTL_MS`，遇到"缓存里没有的群"时
    * 传一个更短的值（至少间隔一分钟），免得一个查不到的群 id 把接口打成筛子
-   * （`chat.list` 有每秒 5 次的频率上限）。失败也会更新时间戳，避免反复重试。
+   * （`chat.list` 有每秒 5 次的频率上限）。失败也会更新时间戳，避免反复重试；
+   * 同一瞬间的并发调用（打开设置页时 `delivery.list` 会并发问几次）也只发一次请求。
    */
   async function allChats(botId, { minIntervalMs = NAME_TTL_MS } = {}) {
     const record = runtimes.get(botId);
     if (!record?.gateway) return [];
     const cache = cacheFor(botId);
-    if (Date.now() - cache.chatsAt < minIntervalMs) {
-      return [...cache.chats.entries()].map(([chatId, name]) => ({ chatId, name }));
+    if (Date.now() - cache.chatsAt < Math.max(minIntervalMs, cache.chatsBlockMs)) {
+      return chatEntries(cache);
     }
-    try {
-      const chats = await record.gateway.listChats();
-      cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
-      return chats;
-    } catch (error) {
-      cache.nameHint = nameHintFrom(error, '读不到群名');
-      logger.warn?.(`[dsh-chat-feishu] 读取群列表失败，群名将退回 id：${error?.message ?? error}`);
-      return [];
-    } finally {
-      cache.chatsAt = Date.now();
-    }
+    if (cache.chatsPromise) return cache.chatsPromise;
+    cache.chatsPromise = (async () => {
+      try {
+        const chats = await record.gateway.listChats();
+        cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
+        cache.chatsBlockMs = 0;
+        return chats;
+      } catch (error) {
+        cache.nameHint = nameHintFrom(error, '读不到群名');
+        cache.chatsBlockMs = backoffMs(error);
+        logger.warn?.(`[dsh-chat-feishu] 读取群列表失败，群名将退回 id：${error?.message ?? error}`);
+        return [];
+      } finally {
+        cache.chatsAt = Date.now();
+        cache.chatsPromise = null;
+      }
+    })();
+    return cache.chatsPromise;
   }
 
-  /** 补一个人名；拿不到就留空。 */
+  /** 补一个人名；拿不到就留空。同一个人的并发查询合成一次。 */
   async function userName(botId, openId) {
     const record = runtimes.get(botId);
     if (!record?.gateway || !openId) return '';
     const cache = cacheFor(botId);
+    // 缺权限期间不再逐人重试：换个人也照样拿不到，只会把日志刷满。
+    if (cache.usersBlockMs > 0 && Date.now() - cache.usersAt < cache.usersBlockMs) {
+      return cache.users.get(openId) ?? '';
+    }
     const hit = cache.users.get(openId);
     if (hit !== undefined && Date.now() - cache.usersAt < NAME_TTL_MS) return hit;
-    try {
-      const name = await record.gateway.getUserName(openId);
-      cache.users.set(openId, name);
-      return name;
-    } catch (error) {
-      cache.nameHint = nameHintFrom(error, '读不到人名');
-      logger.warn?.(`[dsh-chat-feishu] 读取用户信息失败，人名将退回 id：${error?.message ?? error}`);
-      cache.users.set(openId, '');
-      return '';
-    } finally {
-      cache.usersAt = Date.now();
-    }
+    const pending = cache.userPromises.get(openId);
+    if (pending) return pending;
+    const task = (async () => {
+      try {
+        const name = await record.gateway.getUserName(openId);
+        cache.users.set(openId, name);
+        cache.usersBlockMs = 0;
+        return name;
+      } catch (error) {
+        cache.nameHint = nameHintFrom(error, '读不到人名');
+        cache.usersBlockMs = backoffMs(error);
+        logger.warn?.(`[dsh-chat-feishu] 读取用户信息失败，人名将退回 id：${error?.message ?? error}`);
+        cache.users.set(openId, '');
+        return '';
+      } finally {
+        cache.usersAt = Date.now();
+        cache.userPromises.delete(openId);
+      }
+    })();
+    cache.userPromises.set(openId, task);
+    return task;
   }
 
   const delivery = Object.freeze({
@@ -445,6 +499,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
           };
         }
         await stopBot(bot.id);
+        // 手动重连是用户"我刚去开了权限"的信号：清掉名字缓存与缺权限的退避。
+        resetNameCache(bot.id);
         const record = await startBot(bot);
         return { ok: true, value: botStatus(record) };
       },

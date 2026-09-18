@@ -128924,62 +128924,104 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     return Object.keys(state?.sessions?.() ?? {}).map((key) => targetFromKey(key)).filter(Boolean);
   }
   const NAME_TTL_MS = 10 * 6e4;
+  const SCOPE_MISSING_TTL_MS = 30 * 6e4;
   function nameHintFrom(error, fallback) {
     const message = String(error?.message ?? error ?? "");
     const url2 = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(message)?.[0] ?? null;
-    const scopeMissing = /Access denied|99991672/u.test(message);
+    const scopeMissing = isScopeMissing(error);
     return Object.freeze({
       code: scopeMissing ? "feishu/scope-missing" : "feishu/name-failed",
-      message: scopeMissing ? `${fallback}\uFF1A\u98DE\u4E66\u5E94\u7528\u8FD8\u6CA1\u5F00\u901A\u5BF9\u5E94\u6743\u9650\uFF0C\u6240\u4EE5\u53EA\u80FD\u663E\u793A id\u3002` : `${fallback}\uFF1A${message.slice(0, 160)}`,
+      message: scopeMissing ? `${fallback}\uFF1A\u98DE\u4E66\u5E94\u7528\u8FD8\u6CA1\u5F00\u901A\u5BF9\u5E94\u6743\u9650\uFF0C\u6240\u4EE5\u53EA\u80FD\u663E\u793A id\u3002\u5F00\u901A\u540E\u70B9\u300C\u91CD\u65B0\u8FDE\u63A5\u300D\u7ACB\u523B\u751F\u6548\u3002` : `${fallback}\uFF1A${message.slice(0, 160)}`,
       url: url2
     });
+  }
+  function isScopeMissing(error) {
+    return /Access denied|99991672/u.test(String(error?.message ?? error ?? ""));
+  }
+  function backoffMs(error) {
+    return isScopeMissing(error) ? SCOPE_MISSING_TTL_MS : 0;
   }
   const nameCache = /* @__PURE__ */ new Map();
   function cacheFor(botId) {
     let entry = nameCache.get(botId);
     if (!entry) {
-      entry = { chats: /* @__PURE__ */ new Map(), chatsAt: 0, users: /* @__PURE__ */ new Map(), usersAt: 0, nameHint: null };
+      entry = {
+        chats: /* @__PURE__ */ new Map(),
+        chatsAt: 0,
+        chatsBlockMs: 0,
+        chatsPromise: null,
+        users: /* @__PURE__ */ new Map(),
+        usersAt: 0,
+        usersBlockMs: 0,
+        userPromises: /* @__PURE__ */ new Map(),
+        nameHint: null
+      };
       nameCache.set(botId, entry);
     }
     return entry;
+  }
+  function resetNameCache(botId) {
+    nameCache.delete(botId);
+  }
+  function chatEntries(cache) {
+    return [...cache.chats.entries()].map(([chatId, name2]) => ({ chatId, name: name2 }));
   }
   async function allChats(botId, { minIntervalMs = NAME_TTL_MS } = {}) {
     const record = runtimes.get(botId);
     if (!record?.gateway) return [];
     const cache = cacheFor(botId);
-    if (Date.now() - cache.chatsAt < minIntervalMs) {
-      return [...cache.chats.entries()].map(([chatId, name2]) => ({ chatId, name: name2 }));
+    if (Date.now() - cache.chatsAt < Math.max(minIntervalMs, cache.chatsBlockMs)) {
+      return chatEntries(cache);
     }
-    try {
-      const chats = await record.gateway.listChats();
-      cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
-      return chats;
-    } catch (error) {
-      cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u7FA4\u540D");
-      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7FA4\u5217\u8868\u5931\u8D25\uFF0C\u7FA4\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
-      return [];
-    } finally {
-      cache.chatsAt = Date.now();
-    }
+    if (cache.chatsPromise) return cache.chatsPromise;
+    cache.chatsPromise = (async () => {
+      try {
+        const chats = await record.gateway.listChats();
+        cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
+        cache.chatsBlockMs = 0;
+        return chats;
+      } catch (error) {
+        cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u7FA4\u540D");
+        cache.chatsBlockMs = backoffMs(error);
+        logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7FA4\u5217\u8868\u5931\u8D25\uFF0C\u7FA4\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
+        return [];
+      } finally {
+        cache.chatsAt = Date.now();
+        cache.chatsPromise = null;
+      }
+    })();
+    return cache.chatsPromise;
   }
   async function userName(botId, openId) {
     const record = runtimes.get(botId);
     if (!record?.gateway || !openId) return "";
     const cache = cacheFor(botId);
+    if (cache.usersBlockMs > 0 && Date.now() - cache.usersAt < cache.usersBlockMs) {
+      return cache.users.get(openId) ?? "";
+    }
     const hit = cache.users.get(openId);
     if (hit !== void 0 && Date.now() - cache.usersAt < NAME_TTL_MS) return hit;
-    try {
-      const name2 = await record.gateway.getUserName(openId);
-      cache.users.set(openId, name2);
-      return name2;
-    } catch (error) {
-      cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u4EBA\u540D");
-      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
-      cache.users.set(openId, "");
-      return "";
-    } finally {
-      cache.usersAt = Date.now();
-    }
+    const pending = cache.userPromises.get(openId);
+    if (pending) return pending;
+    const task = (async () => {
+      try {
+        const name2 = await record.gateway.getUserName(openId);
+        cache.users.set(openId, name2);
+        cache.usersBlockMs = 0;
+        return name2;
+      } catch (error) {
+        cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u4EBA\u540D");
+        cache.usersBlockMs = backoffMs(error);
+        logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
+        cache.users.set(openId, "");
+        return "";
+      } finally {
+        cache.usersAt = Date.now();
+        cache.userPromises.delete(openId);
+      }
+    })();
+    cache.userPromises.set(openId, task);
+    return task;
   }
   const delivery = Object.freeze({
     /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
@@ -129098,6 +129140,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
           };
         }
         await stopBot(bot.id);
+        resetNameCache(bot.id);
         const record = await startBot(bot);
         return { ok: true, value: botStatus(record) };
       },
