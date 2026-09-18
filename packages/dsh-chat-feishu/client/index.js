@@ -232,10 +232,22 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   React.useEffect(() => {
     void settings.loadOptions();
   }, [settings.loadOptions]);
-  // 属主卡要"从会话里选人"，所以这里也用一次会话发现（与人共用同一份数据源）。
-  const conversations = chatUi.hooks.useConversations({
+  /**
+   * 会话 → 该应用的**平台 id**（`ou_…` / `oc_…`）。
+   *
+   * 这一步只有渠道能做：`route` 的字段名是平台概念（飞书是 openId/chatId，微信是 userId）。
+   * 属主与「指定用户/指定群」要的都是平台 id，而投递目标的 id（`p2p_ou_…`）**不是**——
+   * 混用会被 host 的校验挡下（属主）或永远匹配不上（上下文增强，静默失效）。
+   */
+  const sessions = chatUi.hooks.useConversations({
     connection, channelId: CHANNEL_ID, botId: bot.id,
-  }).conversations;
+  }).conversations
+    .map((item) => ({
+      id: item.kind === 'group' ? item.route?.chatId : item.route?.openId,
+      name: item.name,
+      kind: item.kind,
+    }))
+    .filter((item) => typeof item.id === 'string' && item.id);
   /** 设属主：写配置 + 渠道重连一次，然后刷新状态。 */
   const saveOwners = async (owners) => {
     const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.owner.set', {
@@ -358,7 +370,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     owners: status.ownerOpenIds ?? [],
     wildcard: status.ownersWildcard === true,
     // 属主只能是人（私聊会话），群不参与。
-    candidates: conversations.filter((item) => item.kind === 'direct'),
+    candidates: sessions.filter((item) => item.kind === 'direct'),
     translate: t,
     onSave: saveOwners,
   }),
@@ -393,10 +405,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     translate: t,
     onSave: settings.saveContextEnhancement,
     // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
-    chatUi,
-    connection,
-    channelId: CHANNEL_ID,
-    botId: bot.id,
+    conversations: sessions,
   }),
 
   // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。

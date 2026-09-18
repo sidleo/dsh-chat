@@ -435,6 +435,16 @@ test('设属主：落盘 + 立刻生效（重连），非法 id 与 `['*']` 的�
     assert.equal(cleared.ok, true);
     assert.equal(cleared.value.ownersWildcard, true);
 
+    // 投递目标的 id（`p2p_ou_…`）不是属主 id（`ou_…`）：真机上就是这样点出过一次报错，
+    // 所以这里钉住：拒绝，且报错要点出是哪个值不合法。
+    const wrongShape = await controller.endpoints['bot.owner.set']({
+      botId: 'bot_ctl', ownerOpenIds: ['p2p_ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5'],
+    });
+    assert.equal(wrongShape.ok, false);
+    assert.match(wrongShape.error.message, /ou_…/, '要说清正确形状');
+    assert.match(wrongShape.error.message, /p2p_ou_/, '要点出不合法的值');
+    assert.deepEqual(wrongShape.error.details.offending, ['p2p_ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5']);
+
     // 非法输入要被拒绝：空数组、坏 id、超上限、未知机器人。
     for (const payload of [
       { botId: 'bot_ctl', ownerOpenIds: [] },

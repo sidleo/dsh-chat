@@ -129111,12 +129111,14 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         const owners = payload?.ownerOpenIds;
         const valid = typeof payload?.botId === "string" && payload.botId && Array.isArray(owners) && owners.length > 0 && owners.length <= MAX_OWNERS && owners.every((id) => typeof id === "string" && OWNER_ID_PATTERN.test(id));
         if (!valid) {
+          const offending = Array.isArray(owners) ? owners.filter((id) => typeof id !== "string" || !OWNER_ID_PATTERN.test(id)) : [];
+          const detail = offending.length > 0 ? `\u4E0D\u5408\u6CD5\u7684\u503C\uFF1A${offending.map((id) => JSON.stringify(String(id).slice(0, 48))).join("\u3001")}` : "ownerOpenIds \u5FC5\u987B\u662F\u975E\u7A7A\u6570\u7EC4\u3002";
           return {
             ok: false,
             error: {
               code: "chat/bad-request",
-              message: `bot.owner.set \u9700\u8981 { botId, ownerOpenIds }\uFF1A1\u2013${MAX_OWNERS} \u4E2A\u8BE5\u5E94\u7528\u7684 open_id\uFF0C\u6216\u7528 ['*'] \u8868\u793A\u6CA1\u6709\u5C5E\u4E3B\u3002`,
-              details: {}
+              message: `bot.owner.set \u9700\u8981 { botId, ownerOpenIds }\uFF1A1\u2013${MAX_OWNERS} \u4E2A\u8BE5\u5E94\u7528\u7684 open_id\uFF08\u5F62\u5982 ou_\u2026\uFF09\uFF0C\u6216\u7528 ['*'] \u8868\u793A\u6CA1\u6709\u5C5E\u4E3B\u3002${detail}`,
+              details: { offending: offending.map((id) => String(id).slice(0, 48)) }
             }
           };
         }

@@ -329,6 +329,16 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   React.useEffect(() => {
     void settings.loadOptions();
   }, [settings.loadOptions]);
+  // 会话 → 该平台的用户 id（微信只有私聊，route 里是 userId）。
+  const sessions = chatUi.hooks.useConversations({
+    connection, channelId: CHANNEL_ID, botId: account.botId,
+  }).conversations
+    .map((item) => ({
+      id: item.kind === 'group' ? item.route?.chatId : item.route?.userId,
+      name: item.name,
+      kind: item.kind,
+    }))
+    .filter((item) => typeof item.id === 'string' && item.id);
   const shared = {
     workspace: settings.record?.workspace ?? null,
     agentPreset: settings.record?.agentPreset ?? null,
@@ -420,11 +430,8 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
     disabled: settings.phase !== 'ready',
     translate: t,
     onSave: settings.saveContextEnhancement,
-    // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
-    chatUi,
-    connection,
-    channelId: CHANNEL_ID,
-    botId: account.botId,
+    // 「指定用户」用平台 userId（route.userId），不是投递目标 id。
+    conversations: sessions,
   }),
 
   // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。

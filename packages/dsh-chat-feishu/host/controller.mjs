@@ -461,13 +461,21 @@ export function createFeishuController({ deps, logger = console, config = {}, in
           && Array.isArray(owners) && owners.length > 0 && owners.length <= MAX_OWNERS
           && owners.every((id) => typeof id === 'string' && OWNER_ID_PATTERN.test(id));
         if (!valid) {
+          // 把不合法的值带出来：属主必须是平台 open_id，传成投递目标 id（`p2p_ou_…`）
+          // 时只看这句话是查不出来的（真机上踩过）。
+          const offending = Array.isArray(owners)
+            ? owners.filter((id) => typeof id !== 'string' || !OWNER_ID_PATTERN.test(id))
+            : [];
+          const detail = offending.length > 0
+            ? `不合法的值：${offending.map((id) => JSON.stringify(String(id).slice(0, 48))).join('、')}`
+            : 'ownerOpenIds 必须是非空数组。';
           return {
             ok: false,
             error: {
               code: 'chat/bad-request',
-              message: `bot.owner.set 需要 { botId, ownerOpenIds }：1–${MAX_OWNERS} 个该应用的 open_id，`
-                + "或用 ['*'] 表示没有属主。",
-              details: {},
+              message: `bot.owner.set 需要 { botId, ownerOpenIds }：1–${MAX_OWNERS} 个该应用的 open_id`
+                + `（形如 ou_…），或用 ['*'] 表示没有属主。${detail}`,
+              details: { offending: offending.map((id) => String(id).slice(0, 48)) },
             },
           };
         }

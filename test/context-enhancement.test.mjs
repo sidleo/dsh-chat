@@ -261,3 +261,30 @@ test('contextStatusLabel 汇总开关与指定设置数量', () => {
   );
   assert.equal(contextStatusLabel(config({ targets: [target()] })), '未开启全局 · 1 项指定');
 });
+
+test('指定设置的 id 必须是平台 id：投递目标 id（p2p_…/group_…）在保存时就被挡下', async () => {
+  const { validateContextConfig, normalizeContextConfig } = await import('../packages/dsh-chat/shared/context-enhancement.mjs');
+  const base = normalizeContextConfig(null);
+  const withTarget = (id) => ({
+    ...base,
+    targets: [{
+      kind: 'user',
+      id,
+      label: '',
+      enabled: true,
+      fields: ['senderId'],
+      guidance: '',
+      merge: 'append',
+    }],
+  });
+
+  // 平台 id：正常保存。
+  assert.equal(validateContextConfig(withTarget('ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5')).targets[0].id,
+    'ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5');
+
+  // 投递目标 id：明确报错，而不是"存进去但永远匹配不上"。
+  assert.throws(() => validateContextConfig(withTarget('p2p_ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5')),
+    /投递目标的 id/);
+  assert.throws(() => validateContextConfig(withTarget('group_oc_3e5f7b9d1a2c4068b2d4f6a8c0e1b3d5')),
+    /投递目标的 id/);
+});

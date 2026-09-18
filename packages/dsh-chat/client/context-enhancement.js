@@ -402,16 +402,16 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
  * @returns React 元素。
  */
 export function ContextEnhancementEditor({
-  config, disabled = false, translate, onSave, chatUi, connection, channelId, botId,
+  config, disabled = false, translate, onSave, conversations = [],
 }) {
   const t = t_of(translate);
   const [open, setOpen] = React.useState(false);
   const status = contextStatusLabel(config);
-  // 「指定用户/指定群」要填平台 id，用户不该被要求记住 `ou_xxx`：
-  // 能拿到这台机器人聊过的会话（带名字）就把它做成下拉。拿不到就只留手填输入框。
-  const conversations = typeof chatUi?.hooks?.useConversations === 'function'
-    ? chatUi.hooks.useConversations({ connection, channelId, botId }).conversations
-    : [];
+  /**
+   * 「指定用户/指定群」的 id 必须是**平台 id**（`ou_…` / `oc_…`），因为它是拿消息里的
+   * `senderId` / `chatId` 去匹配的。**由渠道**把会话映射成平台 id 后传进来
+   * （`route` 的字段名是平台概念，hub 不认识）；没传就只留手填输入框。
+   */
   return h(React.Fragment, null,
     h('button', {
       type: 'button',

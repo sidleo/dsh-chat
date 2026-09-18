@@ -171,6 +171,12 @@ function validateTarget(input) {
     || /\s/.test(targetId)) {
     throw invalid('指定设置的标识不能为空、不能包含空白或控制字符，且不得超过 256 个字符。');
   }
+  // 这里要的是**平台 id**（飞书 `ou_…` / `oc_…`），因为它是拿消息里的 senderId / chatId
+  // 去匹配的。`p2p_…` / `group_…` 是**投递目标**的 id（我们生成的），填进来不会报错、
+  // 只会永远匹配不上——那是最难查的形态，所以在保存时就挡下来。
+  if (/^(p2p|group)_/.test(targetId)) {
+    throw invalid('这里要填平台 id（如 ou_… / oc_…），不是投递目标的 id（p2p_… / group_…）。');
+  }
   if (typeof label !== 'string' || label.length > TARGET_LABEL_MAX_LENGTH) {
     throw invalid(`指定设置的备注名不得超过 ${TARGET_LABEL_MAX_LENGTH} 个字符。`);
   }

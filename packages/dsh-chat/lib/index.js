@@ -374,6 +374,9 @@ function validateTarget(input) {
   if (!targetId || targetId.length > TARGET_ID_MAX_LENGTH || CONTROL_CHARACTER_TEST.test(targetId) || /\s/.test(targetId)) {
     throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6807\u8BC6\u4E0D\u80FD\u4E3A\u7A7A\u3001\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\uFF0C\u4E14\u4E0D\u5F97\u8D85\u8FC7 256 \u4E2A\u5B57\u7B26\u3002");
   }
+  if (/^(p2p|group)_/.test(targetId)) {
+    throw invalid2("\u8FD9\u91CC\u8981\u586B\u5E73\u53F0 id\uFF08\u5982 ou_\u2026 / oc_\u2026\uFF09\uFF0C\u4E0D\u662F\u6295\u9012\u76EE\u6807\u7684 id\uFF08p2p_\u2026 / group_\u2026\uFF09\u3002");
+  }
   if (typeof label !== "string" || label.length > TARGET_LABEL_MAX_LENGTH) {
     throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u5907\u6CE8\u540D\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_LABEL_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }

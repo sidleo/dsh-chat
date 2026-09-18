@@ -255,11 +255,15 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   React.useEffect(() => {
     void settings.loadOptions();
   }, [settings.loadOptions]);
-  const conversations = chatUi.hooks.useConversations({
+  const sessions = chatUi.hooks.useConversations({
     connection,
     channelId: CHANNEL_ID,
     botId: bot.id
-  }).conversations;
+  }).conversations.map((item) => ({
+    id: item.kind === "group" ? item.route?.chatId : item.route?.openId,
+    name: item.name,
+    kind: item.kind
+  })).filter((item) => typeof item.id === "string" && item.id);
   const saveOwners = async (owners) => {
     const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.owner.set", {
       botId: bot.id,
@@ -385,7 +389,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       owners: status.ownerOpenIds ?? [],
       wildcard: status.ownersWildcard === true,
       // 属主只能是人（私聊会话），群不参与。
-      candidates: conversations.filter((item) => item.kind === "direct"),
+      candidates: sessions.filter((item) => item.kind === "direct"),
       translate: t,
       onSave: saveOwners
     }),
@@ -416,10 +420,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       translate: t,
       onSave: settings.saveContextEnhancement,
       // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
-      chatUi,
-      connection,
-      channelId: CHANNEL_ID,
-      botId: bot.id
+      conversations: sessions
     }),
     // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
     h(DeliveryTargetsEditor, {
