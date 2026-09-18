@@ -43,12 +43,14 @@ export function createChannelRail() {
     /**
      * 注册一个渠道的显示元数据。
      *
-     * @param definition - { id, order, label, logo, capabilities }。
+     * @param definition - { id, order, label, logo, sessionBadge, capabilities }。
+     *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
+     *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
      */
     register(definition) {
       if (!isPlainObject(definition)) throw new TypeError('chatChannels.register 需要一份渠道元数据对象。');
-      const { id, order, label, logo, capabilities } = definition;
+      const { id, order, label, logo, sessionBadge, capabilities } = definition;
       if (typeof id !== 'string' || !CHANNEL_ID_PATTERN.test(id)) {
         throw new TypeError('渠道 id 必须是 2–32 位小写字母/数字/连字符，且以字母开头。');
       }
@@ -59,12 +61,20 @@ export function createChannelRail() {
       if (capabilities !== undefined && !isPlainObject(capabilities)) {
         throw new TypeError('渠道 capabilities 必须是对象。');
       }
+      if (sessionBadge !== undefined) {
+        if (!isPlainObject(sessionBadge) || typeof sessionBadge.text !== 'string' || !sessionBadge.text) {
+          throw new TypeError('渠道 sessionBadge 需要 { text, color? }。');
+        }
+      }
       if (byId.has(id)) throw new Error(`渠道 ${id} 已注册，不能重复注册。`);
       const entry = Object.freeze({
         id,
         order,
         label: typeof label === 'function' ? label : () => label,
         logo: logo ?? null,
+        sessionBadge: sessionBadge === undefined
+          ? null
+          : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),
         capabilities: Object.freeze({ ...(capabilities ?? {}) }),
       });
       byId.set(id, entry);

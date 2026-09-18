@@ -413,6 +413,8 @@ function apply(ctx) {
     id: CHANNEL_ID,
     order: 10,
     label: () => t("\u5FAE\u4FE1"),
+    // 侧边栏会话行的渠道徽标（微信品牌绿）。
+    sessionBadge: { text: "\u5FAE", color: "#07c160" },
     capabilities: { groups: false, note: t("\u4EC5\u79C1\u804A") }
   }), "dsh-chat-weixin: \u6E20\u9053\u5143\u6570\u636E");
   ctx.effect(() => ctx.slots.inject(PAGE_SLOT, () => ctx.slots.register({

@@ -76,12 +76,14 @@ function createChannelRail() {
     /**
      * 注册一个渠道的显示元数据。
      *
-     * @param definition - { id, order, label, logo, capabilities }。
+     * @param definition - { id, order, label, logo, sessionBadge, capabilities }。
+     *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
+     *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
      */
     register(definition) {
       if (!isPlainObject(definition)) throw new TypeError("chatChannels.register \u9700\u8981\u4E00\u4EFD\u6E20\u9053\u5143\u6570\u636E\u5BF9\u8C61\u3002");
-      const { id, order, label, logo, capabilities } = definition;
+      const { id, order, label, logo, sessionBadge, capabilities } = definition;
       if (typeof id !== "string" || !CHANNEL_ID_PATTERN.test(id)) {
         throw new TypeError("\u6E20\u9053 id \u5FC5\u987B\u662F 2\u201332 \u4F4D\u5C0F\u5199\u5B57\u6BCD/\u6570\u5B57/\u8FDE\u5B57\u7B26\uFF0C\u4E14\u4EE5\u5B57\u6BCD\u5F00\u5934\u3002");
       }
@@ -92,12 +94,18 @@ function createChannelRail() {
       if (capabilities !== void 0 && !isPlainObject(capabilities)) {
         throw new TypeError("\u6E20\u9053 capabilities \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       }
+      if (sessionBadge !== void 0) {
+        if (!isPlainObject(sessionBadge) || typeof sessionBadge.text !== "string" || !sessionBadge.text) {
+          throw new TypeError("\u6E20\u9053 sessionBadge \u9700\u8981 { text, color? }\u3002");
+        }
+      }
       if (byId.has(id)) throw new Error(`\u6E20\u9053 ${id} \u5DF2\u6CE8\u518C\uFF0C\u4E0D\u80FD\u91CD\u590D\u6CE8\u518C\u3002`);
       const entry = Object.freeze({
         id,
         order,
         label: typeof label === "function" ? label : () => label,
         logo: logo ?? null,
+        sessionBadge: sessionBadge === void 0 ? null : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),
         capabilities: Object.freeze({ ...capabilities ?? {} })
       });
       byId.set(id, entry);
@@ -1738,6 +1746,7 @@ var zh = {
   "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002",
   // 版本与更新（version-panel.js）
   "\u7248\u672C\u4E0E\u66F4\u65B0": "\u7248\u672C\u4E0E\u66F4\u65B0",
+  "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002",
   "Chat\u673A\u5668\u4EBA\u5185\u6838": "Chat\u673A\u5668\u4EBA\u5185\u6838",
   "\u6E20\u9053\u5951\u7EA6\u7248\u672C": "\u6E20\u9053\u5951\u7EA6\u7248\u672C",
@@ -1785,6 +1794,7 @@ var en = {
   "\u5DF2\u5220\u9664\u3002": "Deleted.",
   "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "A candidate must be saved before it can receive proactive messages.",
   "\u7248\u672C\u4E0E\u66F4\u65B0": "Version & updates",
+  "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "Hide version & updates",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "Upgrading the plugin needs a dsh restart; settings-only changes just need a page refresh.",
   "Chat\u673A\u5668\u4EBA\u5185\u6838": "Chat bot core",
   "\u6E20\u9053\u5951\u7EA6\u7248\u672C": "Channel contract version",
@@ -1804,6 +1814,203 @@ function bindTranslator(locale) {
     const language = locale?.getSnapshot?.()?.locale ?? "zh";
     const table = dictionary[language] ?? zh;
     return table[key] ?? zh[key] ?? key;
+  };
+}
+
+// packages/dsh-chat/client/session-badges.js
+var STYLE_ID2 = "dsh-chat-session-badges";
+var CHANNEL_ATTR = "data-dsh-chat-channel";
+var TITLE_ATTR = "data-dsh-chat-title";
+var ROW_SELECTOR = '[role="treeitem"][aria-selected]';
+function badgeUri({ text, color }, size = 16) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect x="0.5" y="0.5" width="${size - 1}" height="${size - 1}" rx="4" fill="${color}"/><text x="${size / 2}" y="${size / 2 + 3.4}" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="9.5" font-weight="600" fill="#ffffff">${text}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+function stylesheet(uris) {
+  const mapping = Object.entries(uris).map(([channel, uri]) => `[${CHANNEL_ATTR}="${channel}"] { --dchat-session-badge: url("${uri}"); }`).join("\n");
+  return `
+[${CHANNEL_ATTR}][${TITLE_ATTR}] {
+  position: relative;
+  -webkit-text-fill-color: transparent;
+  text-overflow: clip !important;
+  overflow: hidden;
+}
+[${CHANNEL_ATTR}][${TITLE_ATTR}]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  background: var(--dchat-session-badge) center / contain no-repeat;
+  pointer-events: none;
+}
+[${CHANNEL_ATTR}][${TITLE_ATTR}]::after {
+  content: attr(${TITLE_ATTR}) / "";
+  position: absolute;
+  inset: 0;
+  inset-inline-start: 22px;
+  -webkit-text-fill-color: currentColor;
+  text-indent: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+${mapping}
+`;
+}
+function findChannelTitle(row, known) {
+  if (!row || typeof row.querySelectorAll !== "function" || known.length === 0) return null;
+  let found = null;
+  for (const element of row.querySelectorAll("*")) {
+    if (element.children?.length > 0) continue;
+    const text = element.textContent;
+    if (!text) continue;
+    for (const [channel, label] of known) {
+      if (text.startsWith(`${label} \xB7 `)) {
+        found = { element, channel, text: text.slice(label.length + 3).trim() };
+      }
+    }
+  }
+  return found;
+}
+function installSessionBadges({
+  channels,
+  doc = globalThis.document,
+  win = globalThis.window
+} = {}) {
+  if (!doc?.body || typeof win?.MutationObserver !== "function") return () => {
+  };
+  const badges = /* @__PURE__ */ new Map();
+  const ready = /* @__PURE__ */ new Set();
+  const owned = /* @__PURE__ */ new Map();
+  const queued = /* @__PURE__ */ new Set();
+  const images = [];
+  let closed = false;
+  let scheduled = false;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID2;
+  doc.head?.appendChild(style);
+  function labels() {
+    return [...badges.values()].filter((entry) => ready.has(entry.channel)).map((entry) => [entry.channel, entry.label]);
+  }
+  function titleOf(row) {
+    return findChannelTitle(row, labels());
+  }
+  function restore(element) {
+    const previous = owned.get(element);
+    if (!previous) return;
+    owned.delete(element);
+    for (const [attribute, value] of previous) {
+      if (value === null) element.removeAttribute(attribute);
+      else element.setAttribute(attribute, value);
+    }
+  }
+  function update(row) {
+    const found = row.isConnected ? titleOf(row) : null;
+    for (const marked of row.querySelectorAll(`[${CHANNEL_ATTR}]`)) {
+      if (marked !== found?.element) restore(marked);
+    }
+    if (!found) return;
+    if (!owned.has(found.element)) {
+      owned.set(found.element, [CHANNEL_ATTR, TITLE_ATTR].map((attribute) => [attribute, found.element.getAttribute(attribute)]));
+    }
+    found.element.setAttribute(CHANNEL_ATTR, found.channel);
+    found.element.setAttribute(TITLE_ATTR, found.text);
+  }
+  function schedule() {
+    if (closed || scheduled || queued.size === 0) return;
+    scheduled = true;
+    win.queueMicrotask(() => {
+      scheduled = false;
+      if (closed) return;
+      const rows = [...queued];
+      queued.clear();
+      for (const row of rows) {
+        try {
+          update(row);
+        } catch {
+          for (const marked of row.querySelectorAll(`[${CHANNEL_ATTR}]`)) restore(marked);
+        }
+      }
+    });
+  }
+  function collect(node, descendants = false) {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    if (!element) return;
+    const row = element.closest(ROW_SELECTOR);
+    if (row) queued.add(row);
+    if (descendants) for (const child of element.querySelectorAll(ROW_SELECTOR)) queued.add(child);
+    if (owned.has(element)) {
+      const owner = element.closest(ROW_SELECTOR);
+      if (owner) queued.add(owner);
+      else restore(element);
+    }
+    schedule();
+  }
+  function applyBadges() {
+    if (closed) return;
+    badges.clear();
+    for (const entry of channels?.getSnapshot?.() ?? []) {
+      const badge = entry.sessionBadge;
+      if (!badge || typeof badge.text !== "string" || !badge.text) continue;
+      badges.set(entry.id, {
+        channel: entry.id,
+        label: String(entry.label ?? entry.id),
+        uri: badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
+      });
+    }
+    style.textContent = stylesheet(Object.fromEntries(
+      [...badges].map(([id, badge]) => [id, badge.uri])
+    ));
+    for (const [id, badge] of badges) {
+      if (ready.has(id)) continue;
+      const image = new win.Image();
+      images.push(image);
+      image.onload = () => {
+        ready.add(id);
+        for (const row of doc.querySelectorAll(ROW_SELECTOR)) queued.add(row);
+        schedule();
+      };
+      image.src = badge.uri;
+    }
+    for (const row of doc.querySelectorAll(ROW_SELECTOR)) queued.add(row);
+    schedule();
+  }
+  const observer = new win.MutationObserver((records) => {
+    if (closed) return;
+    for (const record of records) {
+      collect(record.target, record.type === "attributes");
+      if (record.type !== "childList") continue;
+      for (const node of record.addedNodes) collect(node, true);
+      for (const node of record.removedNodes) {
+        if (node.nodeType !== 1 || node.isConnected) continue;
+        if (owned.has(node)) restore(node);
+        for (const marked of node.querySelectorAll(`[${CHANNEL_ATTR}]`)) restore(marked);
+      }
+    }
+  });
+  observer.observe(doc.body, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["class", "role", "aria-selected"]
+  });
+  const unsubscribe = channels?.subscribe?.(applyBadges);
+  applyBadges();
+  return () => {
+    closed = true;
+    observer.disconnect();
+    unsubscribe?.();
+    for (const image of images) {
+      image.onload = null;
+      image.src = "";
+    }
+    for (const element of [...owned.keys()]) restore(element);
+    style.remove();
   };
 }
 
@@ -1930,6 +2137,7 @@ function ChannelMark({ entry }) {
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
+  const [showVersions, setShowVersions] = React7.useState(false);
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
   const entries = React7.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
@@ -1995,11 +2203,17 @@ function ChatSettingsSection(props) {
         { className: "dchat-brand" },
         h6("strong", { className: "dchat-brandName" }, "DSH-Chat"),
         h6("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
-      )
+      ),
+      // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      h6("button", {
+        type: "button",
+        className: "dchat-button",
+        "aria-expanded": showVersions,
+        onClick: () => setShowVersions((open) => !open)
+      }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))
     ),
-    body,
-    // 版本与更新固定在底部：现在跑的是哪个版本、渠道有没有启动失败、升级怎么做。
-    h6(VersionPanel, { connection, chatUi, translate: t })
+    showVersions ? h6(VersionPanel, { connection, chatUi, translate: t }) : null,
+    body
   );
 }
 
@@ -2028,6 +2242,7 @@ function apply(ctx) {
     "dsh-chat: \u5171\u4EAB UI \u5957\u4EF6"
   );
   ctx.effect(() => installChatStyles(), "dsh-chat: \u5171\u4EAB\u6837\u5F0F");
+  ctx.effect(() => installSessionBadges({ channels }), "dsh-chat: \u4F1A\u8BDD\u6E20\u9053\u5FBD\u6807");
   ctx.slots.inject(SETTINGS_SECTION_SLOT, () => ctx.slots.register({
     name: SETTINGS_SECTION_SLOT,
     id: SETTINGS_SECTION_ID,

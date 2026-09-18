@@ -302,6 +302,8 @@ export function apply(ctx) {
     id: CHANNEL_ID,
     order: 20,
     label: () => t('飞书'),
+    // 侧边栏会话行的渠道徽标（飞书品牌蓝）。
+    sessionBadge: { text: '飞', color: '#3370ff' },
     capabilities: { groups: true },
   }), 'dsh-chat-feishu: 渠道元数据');
 

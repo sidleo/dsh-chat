@@ -80,6 +80,8 @@ export function apply(ctx) {
   const t = ctx.locale.bind(NS);
   ctx.effect(() => ctx.chatChannels.register({
     id: CHANNEL_ID, order: 30, label: () => t('演示渠道'),
+    // 可选：侧边栏会话行里显示的渠道徽标（会话列表没有插槽，hub 做纯装饰的 DOM 增强）
+    sessionBadge: { text: '演', color: '#3370ff' },
   }), 'dsh-chat-demo: 渠道元数据');
   ctx.effect(() => ctx.slots.inject(PAGE_SLOT, () => ctx.slots.register({
     name: PAGE_SLOT, key: CHANNEL_ID, locale: NS,
@@ -359,6 +361,18 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
      `session/follow` 的 **snapshot**（`records` + `cursor`）；`session/page` 得先有 seq 才能翻页。
   2. `session/follow` 的 `assistantStream` 只接受 `true` 或省略，传 `false` 会被边界校验拒掉。
 
+### 会话渠道标识（两个层次）
+
+- **host 侧**：hub 把工作区命名成「渠道 · 机器人」（`飞书 · 张三-DSH`），并给会话标题加
+  「渠道 · 」前缀——两者都幂等、失败只打日志。渠道通过 `ensure()`/`ask()` 的
+  `channelLabel` / `botLabel` 提供中文名（hub 不认平台）。
+- **client 侧**：DSH 的会话列表**没有可注册的插槽**（`sidebar.workspaces` 是整块替换，
+  换掉会盖掉搜索/分组/对话框），所以徽标是**纯装饰的 DOM 增强**（`client/session-badges.js`）：
+  保留文字前缀作为匹配依据与降级形态，只给叶子标题元素加两个自有 data 属性（
+  `data-dsh-chat-channel` / `data-dsh-chat-title`），再用一张样式表把前缀隐藏并画上徽标。
+  三条纪律：只加属性不动 React 的节点/类名；**认结构不认类名**（谁前缀匹配谁是标题）；
+  图片没加载成功就不替换。
+
 ### 入站内容（文本与图片）
 
 hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，所以渠道只要把入站内容
@@ -461,7 +475,7 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 
 | 服务 | 提供方 | 用途 |
 |---|---|---|
-| `chatChannels` | hub | `register({ id, order, label, logo, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()` |
+| `chatChannels` | hub | `register({ id, order, label, logo, sessionBadge, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()`。`sessionBadge` = `{ text, color }`：侧边栏会话行里的渠道徽标 |
 | `chatUi` | hub | `components` / `hooks` / `installStyles()` / `callChannelRpc` / `callControlRpc` / `unwrapRpc` / `translate` / `react` |
 
 `chatUi.components`：

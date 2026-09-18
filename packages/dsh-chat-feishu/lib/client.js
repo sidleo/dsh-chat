@@ -325,6 +325,8 @@ function apply(ctx) {
     id: CHANNEL_ID,
     order: 20,
     label: () => t("\u98DE\u4E66"),
+    // 侧边栏会话行的渠道徽标（飞书品牌蓝）。
+    sessionBadge: { text: "\u98DE", color: "#3370ff" },
     capabilities: { groups: true }
   }), "dsh-chat-feishu: \u6E20\u9053\u5143\u6570\u636E");
   ctx.effect(() => ctx.slots.inject(PAGE_SLOT, () => ctx.slots.register({

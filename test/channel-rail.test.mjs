@@ -57,3 +57,19 @@ test('注销是幂等的，且不误删后来注册的同名渠道', () => {
   assert.equal(rail.size, 1);
   assert.equal(rail.entries()[0].label(), '飞书2');
 });
+
+test('渠道徽标：sessionBadge 声明可选，非法声明直接拒绝', () => {
+  const rail = createChannelRail();
+  rail.register({
+    id: 'feishu', order: 20, label: '飞书',
+    sessionBadge: { text: '飞', color: '#3370ff' },
+  });
+  rail.register({ id: 'weixin', order: 10, label: '微信' });
+  const byId = Object.fromEntries(rail.entries().map((entry) => [entry.id, entry]));
+  assert.deepEqual(byId.feishu.sessionBadge, { text: '飞', color: '#3370ff' });
+  assert.equal(byId.weixin.sessionBadge, null, '没声明就是 null');
+  assert.throws(
+    () => rail.register({ id: 'qq', order: 30, label: 'QQ', sessionBadge: { text: '' } }),
+    /sessionBadge/,
+  );
+});

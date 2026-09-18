@@ -365,6 +365,8 @@ export function apply(ctx) {
     id: CHANNEL_ID,
     order: 10,
     label: () => t('微信'),
+    // 侧边栏会话行的渠道徽标（微信品牌绿）。
+    sessionBadge: { text: '微', color: '#07c160' },
     capabilities: { groups: false, note: t('仅私聊') },
   }), 'dsh-chat-weixin: 渠道元数据');
 

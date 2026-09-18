@@ -22,6 +22,7 @@ import {
 import { createChannelRail } from '../shared/channel-rail.mjs';
 import { createChatUi } from './chat-ui.js';
 import { LOCALE_NAMESPACE, bindTranslator, en, zh } from './i18n.js';
+import { installSessionBadges } from './session-badges.js';
 import { ChatSettingsSection } from './section.js';
 import { installChatStyles } from './styles.js';
 
@@ -56,6 +57,9 @@ export function apply(ctx) {
   ctx.effect(() => provideService(ctx, CLIENT_UI_SERVICE, chatUi),
     'dsh-chat: 共享 UI 套件');
   ctx.effect(() => installChatStyles(), 'dsh-chat: 共享样式');
+  // 侧边栏会话行的渠道徽标：会话列表没有插槽，只能做纯装饰的 DOM 增强
+  // （保留「飞书 · 」文字前缀作为匹配依据与降级形态，卸载时全部还原）。
+  ctx.effect(() => installSessionBadges({ channels }), 'dsh-chat: 会话渠道徽标');
 
   ctx.slots.inject(SETTINGS_SECTION_SLOT, () => ctx.slots.register({
     name: SETTINGS_SECTION_SLOT,

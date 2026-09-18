@@ -35,6 +35,8 @@ function ChannelMark({ entry }) {
  */
 export function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
+  /** 版本与更新默认收起：右上角入口按需展开（只在展开时读一次数据）。 */
+  const [showVersions, setShowVersions] = React.useState(false);
   const t = typeof translate === 'function' ? translate
     : (typeof frameworkT === 'function' ? frameworkT : (key) => key);
 
@@ -91,8 +93,16 @@ export function ChatSettingsSection(props) {
     h('header', { className: 'dchat-header' },
       h('div', { className: 'dchat-brand' },
         h('strong', { className: 'dchat-brandName' }, 'DSH-Chat'),
-        h('span', { className: 'dchat-brandHint' }, t('Chat机器人')))),
-    body,
-    // 版本与更新固定在底部：现在跑的是哪个版本、渠道有没有启动失败、升级怎么做。
-    h(VersionPanel, { connection, chatUi, translate: t }));
+        h('span', { className: 'dchat-brandHint' }, t('Chat机器人'))),
+      // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        'aria-expanded': showVersions,
+        onClick: () => setShowVersions((open) => !open),
+      }, showVersions ? t('收起版本与更新') : t('版本与更新'))),
+    showVersions
+      ? h(VersionPanel, { connection, chatUi, translate: t })
+      : null,
+    body);
 }

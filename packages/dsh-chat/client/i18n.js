@@ -43,6 +43,7 @@ export const zh = {
   '候选目标需要先保存，保存后才能主动发送。': '候选目标需要先保存，保存后才能主动发送。',
   // 版本与更新（version-panel.js）
   '版本与更新': '版本与更新',
+  '收起版本与更新': '收起版本与更新',
   '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':
     '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。',
   'Chat机器人内核': 'Chat机器人内核',
@@ -98,6 +99,7 @@ export const en = {
   '候选目标需要先保存，保存后才能主动发送。':
     'A candidate must be saved before it can receive proactive messages.',
   '版本与更新': 'Version & updates',
+  '收起版本与更新': 'Hide version & updates',
   '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':
     'Upgrading the plugin needs a dsh restart; settings-only changes just need a page refresh.',
   'Chat机器人内核': 'Chat bot core',
