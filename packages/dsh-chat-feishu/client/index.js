@@ -35,6 +35,7 @@ const zh = {
   '增强提示词': '增强提示词',
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。',
   '从会话里选…': '从会话里选…',
+  '去开通权限': '去开通权限',
   '飞书': '飞书',
   '找不到这台机器人': '找不到这台机器人',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
@@ -91,6 +92,7 @@ const en = {
   '增强提示词': 'Prepended prompt',
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': 'Source fields are sent only when the incoming message already carries them; no extra platform calls are made.',
   '从会话里选…': 'Pick a conversation…',
+  '去开通权限': 'Grant the permission',
   '飞书': 'Feishu',
   '找不到这台机器人': 'Bot not found',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
@@ -240,6 +242,14 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   },
   status.errorMessage
     ? h('p', { className: 'dchat-error', role: 'alert' }, status.errorMessage)
+    : null,
+  // 名字拿不到（多为缺权限）时说明原因并给出开通入口：否则用户只能看到一串 id 猜原因。
+  status.nameHint
+    ? h('p', { className: 'dchat-cardDescription', role: 'status' },
+      `${status.nameHint.message} `,
+      status.nameHint.url
+        ? h('a', { href: status.nameHint.url, target: '_blank', rel: 'noreferrer' }, t('去开通权限'))
+        : null)
     : null,
   // 处理最近一条消息失败时留下的现场（与终端日志对应）。
   status.lastError

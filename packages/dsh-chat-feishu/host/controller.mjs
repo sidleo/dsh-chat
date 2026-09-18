@@ -162,6 +162,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       lastHandledAt: bridgeStatus.lastHandledAt ?? null,
       // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
       lastError: bridgeStatus.lastError ?? null,
+      // 名字解析失败（多为缺权限）也要能在界面上看到原因，而不是只显示一串 id。
+      nameHint: nameCache.get(bot.id)?.nameHint ?? null,
     });
   }
 
@@ -232,11 +234,31 @@ export function createFeishuController({ deps, logger = console, config = {}, in
    * 免得没权限的机器人在每次刷新时反复重试。
    */
   const NAME_TTL_MS = 10 * 60_000;
+
+  /**
+   * 把"名字拿不到"的原因压成一句能显示的话 + 开通链接。
+   *
+   * 权限没开通时飞书会把开通地址写在错误里（`https://open.feishu.cn/app/<appId>/auth?q=…`），
+   * 直接把它带给用户比"你自己去开放平台找"有用得多——否则界面上只能看到一串 oc_xxx，
+   * 原因却只在日志里（违反"失败必须可见"）。
+   */
+  function nameHintFrom(error, fallback) {
+    const message = String(error?.message ?? error ?? '');
+    const url = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(message)?.[0] ?? null;
+    const scopeMissing = /Access denied|99991672/u.test(message);
+    return Object.freeze({
+      code: scopeMissing ? 'feishu/scope-missing' : 'feishu/name-failed',
+      message: scopeMissing
+        ? `${fallback}：飞书应用还没开通对应权限，所以只能显示 id。`
+        : `${fallback}：${message.slice(0, 160)}`,
+      url,
+    });
+  }
   const nameCache = new Map(); // botId → { chats: Map, chatsAt, users: Map, usersAt }
   function cacheFor(botId) {
     let entry = nameCache.get(botId);
     if (!entry) {
-      entry = { chats: new Map(), chatsAt: 0, users: new Map(), usersAt: 0 };
+      entry = { chats: new Map(), chatsAt: 0, users: new Map(), usersAt: 0, nameHint: null };
       nameCache.set(botId, entry);
     }
     return entry;
@@ -261,6 +283,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
       return chats;
     } catch (error) {
+      cache.nameHint = nameHintFrom(error, '读不到群名');
       logger.warn?.(`[dsh-chat-feishu] 读取群列表失败，群名将退回 id：${error?.message ?? error}`);
       return [];
     } finally {
@@ -280,6 +303,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       cache.users.set(openId, name);
       return name;
     } catch (error) {
+      cache.nameHint = nameHintFrom(error, '读不到人名');
       logger.warn?.(`[dsh-chat-feishu] 读取用户信息失败，人名将退回 id：${error?.message ?? error}`);
       cache.users.set(openId, '');
       return '';

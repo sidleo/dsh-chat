@@ -128871,7 +128871,9 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       handled: bridgeStatus.handled,
       lastHandledAt: bridgeStatus.lastHandledAt ?? null,
       // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
-      lastError: bridgeStatus.lastError ?? null
+      lastError: bridgeStatus.lastError ?? null,
+      // 名字解析失败（多为缺权限）也要能在界面上看到原因，而不是只显示一串 id。
+      nameHint: nameCache.get(bot.id)?.nameHint ?? null
     });
   }
   async function status() {
@@ -128915,11 +128917,21 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     return Object.keys(state?.sessions?.() ?? {}).map((key) => targetFromKey(key)).filter(Boolean);
   }
   const NAME_TTL_MS = 10 * 6e4;
+  function nameHintFrom(error, fallback) {
+    const message = String(error?.message ?? error ?? "");
+    const url2 = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(message)?.[0] ?? null;
+    const scopeMissing = /Access denied|99991672/u.test(message);
+    return Object.freeze({
+      code: scopeMissing ? "feishu/scope-missing" : "feishu/name-failed",
+      message: scopeMissing ? `${fallback}\uFF1A\u98DE\u4E66\u5E94\u7528\u8FD8\u6CA1\u5F00\u901A\u5BF9\u5E94\u6743\u9650\uFF0C\u6240\u4EE5\u53EA\u80FD\u663E\u793A id\u3002` : `${fallback}\uFF1A${message.slice(0, 160)}`,
+      url: url2
+    });
+  }
   const nameCache = /* @__PURE__ */ new Map();
   function cacheFor(botId) {
     let entry = nameCache.get(botId);
     if (!entry) {
-      entry = { chats: /* @__PURE__ */ new Map(), chatsAt: 0, users: /* @__PURE__ */ new Map(), usersAt: 0 };
+      entry = { chats: /* @__PURE__ */ new Map(), chatsAt: 0, users: /* @__PURE__ */ new Map(), usersAt: 0, nameHint: null };
       nameCache.set(botId, entry);
     }
     return entry;
@@ -128936,6 +128948,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
       return chats;
     } catch (error) {
+      cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u7FA4\u540D");
       logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7FA4\u5217\u8868\u5931\u8D25\uFF0C\u7FA4\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
       return [];
     } finally {
@@ -128953,6 +128966,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       cache.users.set(openId, name2);
       return name2;
     } catch (error) {
+      cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u4EBA\u540D");
       logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
       cache.users.set(openId, "");
       return "";

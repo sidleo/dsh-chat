@@ -63,6 +63,7 @@ var zh = {
   "\u589E\u5F3A\u63D0\u793A\u8BCD": "\u589E\u5F3A\u63D0\u793A\u8BCD",
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026",
+  "\u53BB\u5F00\u901A\u6743\u9650": "\u53BB\u5F00\u901A\u6743\u9650",
   "\u98DE\u4E66": "\u98DE\u4E66",
   "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA",
   "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09",
@@ -115,6 +116,7 @@ var en = {
   "\u589E\u5F3A\u63D0\u793A\u8BCD": "Prepended prompt",
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "Source fields are sent only when the incoming message already carries them; no extra platform calls are made.",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "Pick a conversation\u2026",
+  "\u53BB\u5F00\u901A\u6743\u9650": "Grant the permission",
   "\u98DE\u4E66": "Feishu",
   "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "Bot not found",
   "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
@@ -266,6 +268,13 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       )
     },
     status.errorMessage ? h("p", { className: "dchat-error", role: "alert" }, status.errorMessage) : null,
+    // 名字拿不到（多为缺权限）时说明原因并给出开通入口：否则用户只能看到一串 id 猜原因。
+    status.nameHint ? h(
+      "p",
+      { className: "dchat-cardDescription", role: "status" },
+      `${status.nameHint.message} `,
+      status.nameHint.url ? h("a", { href: status.nameHint.url, target: "_blank", rel: "noreferrer" }, t("\u53BB\u5F00\u901A\u6743\u9650")) : null
+    ) : null,
     // 处理最近一条消息失败时留下的现场（与终端日志对应）。
     status.lastError ? h(
       "p",
