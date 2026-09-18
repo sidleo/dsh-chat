@@ -118,3 +118,28 @@ test('英文词典里不允许"值等于键"（那等于没翻译，界面上会
   }
   assert.deepEqual(offenders, [], `这些键的英文与中文一模一样：\n${offenders.join('\n')}`);
 });
+
+test('中文词典里不允许出现英文值（抄错语言的直接症状是"只有某张卡片是英文"）', () => {
+  /**
+   * 为什么单独测这条：`zh` 词典的约定是"值 = 键"（少数刻意简写除外，如
+   * 「渠道正在启动」→「正在启动」）。如果某个键的 zh 值被写成了英文，
+   * 中文界面下这张卡片就会整块变英文，而同一页其它卡片正常——真机上出现过，
+   * 排查了半天才发现是词典里混进了英文。
+   */
+  const offenders = [];
+  for (const entry of PACKAGES) {
+    const source = readFileSync(join(ROOT, entry.dictionary), 'utf8');
+    const zh = source.match(/const zh = \{([\s\S]*?)\n\};/)?.[1];
+    const en = source.match(/const en = \{([\s\S]*?)\n\};/)?.[1];
+    assert.ok(zh && en, `${entry.dictionary} 缺少 zh 或 en 词典`);
+    const enOf = new Map([...en.matchAll(/^\s*'([^']*)':\s*'([^']*)',\s*$/gm)].map((m) => [m[1], m[2]]));
+    for (const m of zh.matchAll(/^\s*'([^']*)':\s*'([^']*)',\s*$/gm)) {
+      const [, key, value] = m;
+      // 值与英文完全相同、且含字母 → 确定是抄错了语言（刻意简写不会同时满足这两条）。
+      if (value === enOf.get(key) && /[A-Za-z]/.test(value)) {
+        offenders.push(`${entry.name} :: ${key} → ${value}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `这些中文词典条目写成了英文：\n${offenders.join('\n')}`);
+});
