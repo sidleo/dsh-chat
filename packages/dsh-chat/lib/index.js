@@ -11,6 +11,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-chat/host/plugin.mjs
+import { stat as stat3 } from "node:fs/promises";
 import { join as join5, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
@@ -2301,7 +2302,14 @@ function historyMessagesOf(records, limit) {
   }
   return limit > 0 ? messages.slice(-limit) : messages;
 }
-function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
+function createSessionBridge({
+  ctx,
+  logger = console,
+  store,
+  settings = null,
+  guidance,
+  interactions
+}) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== "function") {
     throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
@@ -2378,6 +2386,16 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       throw error;
     }
   }
+  async function createSession({ workspaceId, agentPreset, signal, channelId, botId }) {
+    const request = { workspaceId, ...agentPreset ? { agentPreset } : {} };
+    try {
+      return await invoke("session", "create", { request }, signal);
+    } catch (error) {
+      if (!agentPreset) throw error;
+      logger.warn?.(`[dsh-chat] \u673A\u5668\u4EBA ${channelId}/${botId} \u7684 Agent Preset\u300C${agentPreset}\u300D\u4E0D\u53EF\u7528\uFF08${error?.message ?? error}\uFF09\uFF0C\u672C\u6B21\u9000\u56DE Host \u9ED8\u8BA4\u3002`);
+      return invoke("session", "create", { request: { workspaceId } }, signal);
+    }
+  }
   async function ensure({
     channelId,
     botId,
@@ -2395,14 +2413,23 @@ function createSessionBridge({ ctx, logger = console, store, guidance, interacti
       }
       await store.unbind(channelId, botId, key);
     }
-    if (typeof workspacePath !== "string" || !workspacePath.trim()) {
+    const record = settings?.read?.(channelId, botId) ?? {};
+    const targetWorkspace = typeof workspacePath === "string" && workspacePath.trim() ? workspacePath : record.workspace;
+    if (typeof targetWorkspace !== "string" || !targetWorkspace.trim()) {
       const error = new Error("\u8BE5\u673A\u5668\u4EBA\u8FD8\u6CA1\u6709\u8BBE\u7F6E\u5DE5\u4F5C\u533A\uFF0C\u65E0\u6CD5\u521B\u5EFA\u4F1A\u8BDD\u3002");
       error.code = "chat/workspace-required";
       throw error;
     }
     const workspaceTitle = [channelLabel2, botLabel].map((part) => String(part ?? "").trim()).filter(Boolean).join(" \xB7 ");
-    const workspaceId = await resolveWorkspaceId(workspacePath, signal, workspaceTitle);
-    const created = await invoke("session", "create", { request: { workspaceId } }, signal);
+    const workspaceId = await resolveWorkspaceId(targetWorkspace, signal, workspaceTitle);
+    const agentPreset = typeof record.agentPreset === "string" && record.agentPreset ? record.agentPreset : null;
+    const created = await createSession({
+      workspaceId,
+      agentPreset,
+      signal,
+      botId,
+      channelId
+    });
     const sessionId = created?.sessionId;
     if (typeof sessionId !== "string" || !sessionId) {
       const error = new Error("DSH \u672A\u8FD4\u56DE\u4F1A\u8BDD\u6807\u8BC6\u3002");
@@ -3150,6 +3177,7 @@ function apply(ctx, config = {}) {
     ctx,
     logger,
     store: sessionStore,
+    settings,
     guidance,
     interactions
   });
@@ -3270,6 +3298,93 @@ function apply(ctx, config = {}) {
         return ok({ contextEnhancement: saved.contextEnhancement });
       } catch (error) {
         return failFrom(error, "chat/context-enhancement-failed");
+      }
+    }
+    if (method === "bot.settings.options") {
+      if (!validBotPayload(payload)) {
+        return fail("chat/bad-request", "bot.settings.options \u9700\u8981 channelId \u4E0E botId\u3002");
+      }
+      await settings.ready();
+      const record = settings.read(payload.channelId, payload.botId);
+      const boundPaths = Object.values(sessionStore.entries(payload.channelId, payload.botId)).map((entry) => entry.workspacePath).filter((value) => typeof value === "string" && value);
+      const workspacePaths = [.../* @__PURE__ */ new Set([
+        ...typeof record.workspace === "string" && record.workspace ? [record.workspace] : [],
+        ...boundPaths
+      ])];
+      let presets = [];
+      if (typeof optionalAgentPresets?.remoteExportList === "function") {
+        try {
+          presets = (await optionalAgentPresets.remoteExportList())?.presets ?? [];
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u8BFB\u53D6 Agent Preset \u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        }
+      }
+      return ok({
+        workspacePaths,
+        presets,
+        current: {
+          workspace: record.workspace ?? null,
+          agentPreset: record.agentPreset ?? null,
+          accessPolicy: record.accessPolicy ?? null
+        }
+      });
+    }
+    if (method === "bot.workspace.set") {
+      if (!validBotPayload(payload, { extra: ["workspace"] })) {
+        return fail("chat/bad-request", "bot.workspace.set \u9700\u8981 channelId\u3001botId \u4E0E workspace\u3002");
+      }
+      const raw = payload.workspace;
+      if (raw !== null && typeof raw !== "string") {
+        return fail("chat/bad-request", "workspace \u53EA\u80FD\u662F\u7EDD\u5BF9\u8DEF\u5F84\u6216 null\u3002");
+      }
+      if (raw === null || !raw.trim()) {
+        const saved2 = await settings.write(payload.channelId, payload.botId, { workspace: null });
+        return ok({ workspace: saved2.workspace ?? null });
+      }
+      const target = resolve3(raw.trim());
+      let info;
+      try {
+        info = await stat3(target);
+      } catch (error) {
+        return fail("chat/workspace-invalid", `\u76EE\u5F55\u4E0D\u5B58\u5728\u6216\u8BFB\u4E0D\u5230\uFF1A${target}\uFF08${error?.code ?? error?.message}\uFF09`);
+      }
+      if (!info.isDirectory()) return fail("chat/workspace-invalid", `\u4E0D\u662F\u76EE\u5F55\uFF1A${target}`);
+      const saved = await settings.write(payload.channelId, payload.botId, { workspace: target });
+      return ok({ workspace: saved.workspace ?? null });
+    }
+    if (method === "bot.agent-preset.set") {
+      if (!validBotPayload(payload, { extra: ["agentPreset"] })) {
+        return fail("chat/bad-request", "bot.agent-preset.set \u9700\u8981 channelId\u3001botId \u4E0E agentPreset\u3002");
+      }
+      const raw = payload.agentPreset;
+      if (raw !== null && typeof raw !== "string") {
+        return fail("chat/bad-request", "agentPreset \u53EA\u80FD\u662F\u9884\u8BBE id \u6216 null\u3002");
+      }
+      const target = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+      if (target && typeof optionalAgentPresets?.remoteExportList === "function") {
+        let known = [];
+        try {
+          known = ((await optionalAgentPresets.remoteExportList())?.presets ?? []).map((row) => row.id);
+        } catch (error) {
+          return fail("chat/preset-unavailable", `\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF1A${error?.message ?? error}`);
+        }
+        if (!known.includes(target)) {
+          return fail("chat/unknown-preset", `\u5F53\u524D Host \u6CA1\u6709\u8FD9\u4E2A Agent Preset\uFF1A${target}`);
+        }
+      }
+      const saved = await settings.write(payload.channelId, payload.botId, { agentPreset: target });
+      return ok({ agentPreset: saved.agentPreset ?? null });
+    }
+    if (method === "bot.access-policy.set") {
+      if (!validBotPayload(payload, { extra: ["policy"] })) {
+        return fail("chat/bad-request", "bot.access-policy.set \u9700\u8981 channelId\u3001botId \u4E0E policy\u3002");
+      }
+      try {
+        const policy = payload.policy === null ? null : validateAccessPolicy(payload.policy);
+        const saved = await settings.write(payload.channelId, payload.botId, { accessPolicy: policy });
+        return ok({ accessPolicy: saved.accessPolicy ?? null });
+      } catch (error) {
+        return failFrom(error, "chat/access-policy-failed");
       }
     }
     if (method === "maintenance.import-legacy") {

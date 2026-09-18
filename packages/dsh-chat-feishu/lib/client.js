@@ -145,13 +145,24 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     StatusPill,
     ScopedModeEditor,
     ContextEnhancementEditor,
-    DeliveryTargetsEditor
+    DeliveryTargetsEditor,
+    WorkspaceEditor,
+    PresetEditor,
+    AccessPolicyEditor
   } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection,
     channelId: CHANNEL_ID,
     botId: bot.id
   });
+  React.useEffect(() => {
+    void settings.loadOptions();
+  }, [settings.loadOptions]);
+  const shared = {
+    workspace: settings.record?.workspace ?? null,
+    agentPreset: settings.record?.agentPreset ?? null,
+    accessPolicy: settings.record?.accessPolicy ?? null
+  };
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -238,6 +249,23 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
         h("span", null, String(status.handled ?? 0))
       )
     ),
+    h(WorkspaceEditor, {
+      value: shared.workspace,
+      options: settings.options?.workspacePaths ?? [],
+      translate: t,
+      onSave: settings.saveWorkspace
+    }),
+    h(PresetEditor, {
+      value: shared.agentPreset,
+      options: settings.options?.presets ?? [],
+      translate: t,
+      onSave: settings.saveAgentPreset
+    }),
+    h(AccessPolicyEditor, {
+      value: shared.accessPolicy,
+      translate: t,
+      onSave: settings.saveAccessPolicy
+    }),
     h(ScopedModeEditor, {
       title: t("\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A"),
       description: t("\u8BBE\u7F6E\u6267\u884C\u8FC7\u7A0B\u7684\u5448\u73B0\u65B9\u5F0F\uFF1B\u79C1\u804A\u4E0E\u7FA4\u804A\u5206\u522B\u751F\u6548"),

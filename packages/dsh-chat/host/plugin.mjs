@@ -10,6 +10,7 @@
  * @module dsh-chat/host/plugin
  */
 
+import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
@@ -123,7 +124,7 @@ export function apply(ctx, config = {}) {
   /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
   const interactions = createInteractionService({ logger });
   const sessions = createSessionBridge({
-    ctx, logger, store: sessionStore, guidance, interactions,
+    ctx, logger, store: sessionStore, settings, guidance, interactions,
   });
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
@@ -262,6 +263,104 @@ export function apply(ctx, config = {}) {
         return ok({ contextEnhancement: saved.contextEnhancement });
       } catch (error) {
         return failFrom(error, 'chat/context-enhancement-failed');
+      }
+    }
+    /**
+     * 机器人设置页要用的"可选项"：这台机器人用过的目录、当前 Host 可用的 Agent Preset。
+     * 渠道页据此渲染下拉，不必各自去查 DSH。
+     */
+    if (method === 'bot.settings.options') {
+      if (!validBotPayload(payload)) {
+        return fail('chat/bad-request', 'bot.settings.options 需要 channelId 与 botId。');
+      }
+      await settings.ready();
+      const record = settings.read(payload.channelId, payload.botId);
+      // 目录候选来自这台机器人**用过的**工作区（会话绑定表），而不是全机器的目录列表——
+      // 少而准，且不会把别的项目的路径泄漏到无关机器人的设置页。
+      const boundPaths = Object.values(sessionStore.entries(payload.channelId, payload.botId))
+        .map((entry) => entry.workspacePath)
+        .filter((value) => typeof value === 'string' && value);
+      const workspacePaths = [...new Set([
+        ...(typeof record.workspace === 'string' && record.workspace ? [record.workspace] : []),
+        ...boundPaths,
+      ])];
+      let presets = [];
+      if (typeof optionalAgentPresets?.remoteExportList === 'function') {
+        try {
+          presets = (await optionalAgentPresets.remoteExportList())?.presets ?? [];
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] 读取 Agent Preset 列表失败：${error?.message ?? error}`);
+        }
+      }
+      return ok({
+        workspacePaths,
+        presets,
+        current: {
+          workspace: record.workspace ?? null,
+          agentPreset: record.agentPreset ?? null,
+          accessPolicy: record.accessPolicy ?? null,
+        },
+      });
+    }
+    if (method === 'bot.workspace.set') {
+      if (!validBotPayload(payload, { extra: ['workspace'] })) {
+        return fail('chat/bad-request', 'bot.workspace.set 需要 channelId、botId 与 workspace。');
+      }
+      const raw = payload.workspace;
+      if (raw !== null && typeof raw !== 'string') {
+        return fail('chat/bad-request', 'workspace 只能是绝对路径或 null。');
+      }
+      if (raw === null || !raw.trim()) {
+        const saved = await settings.write(payload.channelId, payload.botId, { workspace: null });
+        return ok({ workspace: saved.workspace ?? null });
+      }
+      // 存绝对路径：相对路径会跟着 dsh 的启动目录变，排查时最难查。
+      const target = resolve(raw.trim());
+      let info;
+      try {
+        info = await stat(target);
+      } catch (error) {
+        return fail('chat/workspace-invalid', `目录不存在或读不到：${target}（${error?.code ?? error?.message}）`);
+      }
+      if (!info.isDirectory()) return fail('chat/workspace-invalid', `不是目录：${target}`);
+      const saved = await settings.write(payload.channelId, payload.botId, { workspace: target });
+      return ok({ workspace: saved.workspace ?? null });
+    }
+    if (method === 'bot.agent-preset.set') {
+      if (!validBotPayload(payload, { extra: ['agentPreset'] })) {
+        return fail('chat/bad-request', 'bot.agent-preset.set 需要 channelId、botId 与 agentPreset。');
+      }
+      const raw = payload.agentPreset;
+      if (raw !== null && typeof raw !== 'string') {
+        return fail('chat/bad-request', 'agentPreset 只能是预设 id 或 null。');
+      }
+      const target = typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+      if (target && typeof optionalAgentPresets?.remoteExportList === 'function') {
+        // 先跟当前 Host 的预设列表对账：存一个不存在的 id，只会在下次建会话时才炸。
+        let known = [];
+        try {
+          known = ((await optionalAgentPresets.remoteExportList())?.presets ?? []).map((row) => row.id);
+        } catch (error) {
+          return fail('chat/preset-unavailable', `读不到 Agent Preset 列表：${error?.message ?? error}`);
+        }
+        if (!known.includes(target)) {
+          return fail('chat/unknown-preset', `当前 Host 没有这个 Agent Preset：${target}`);
+        }
+      }
+      const saved = await settings.write(payload.channelId, payload.botId, { agentPreset: target });
+      return ok({ agentPreset: saved.agentPreset ?? null });
+    }
+    if (method === 'bot.access-policy.set') {
+      if (!validBotPayload(payload, { extra: ['policy'] })) {
+        return fail('chat/bad-request', 'bot.access-policy.set 需要 channelId、botId 与 policy。');
+      }
+      try {
+        // 用与 host 拦消息时**同一份**校验，避免"设置页存得进、运行时判非法"。
+        const policy = payload.policy === null ? null : accessPolicy.validateAccessPolicy(payload.policy);
+        const saved = await settings.write(payload.channelId, payload.botId, { accessPolicy: policy });
+        return ok({ accessPolicy: saved.accessPolicy ?? null });
+      } catch (error) {
+        return failFrom(error, 'chat/access-policy-failed');
       }
     }
     if (method === 'maintenance.import-legacy') {

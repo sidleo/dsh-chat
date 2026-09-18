@@ -41,6 +41,26 @@ export const zh = {
   '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。': '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。',
   '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。': '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。',
   '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。': '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。',
+  // 机器人设置页的共享编辑块（bot-shared-settings.js）
+  '工作区': '工作区',
+  '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。': '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。',
+  '目录': '目录',
+  '下拉里是这台机器人用过的目录。': '下拉里是这台机器人用过的目录。',
+  'Agent 预设': 'Agent 预设',
+  '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。': '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。',
+  '当前 Host 读不到 Agent Preset 列表。': '当前 Host 读不到 Agent Preset 列表。',
+  '跟随 Host 默认': '跟随 Host 默认',
+  '访问策略': '访问策略',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。': '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。',
+  '访问模式': '访问模式',
+  '仅名单内可用': '仅名单内可用',
+  '任何人可用': '任何人可用',
+  '允许执行命令': '允许执行命令',
+  '可执行命令': '可执行命令',
+  '移除': '移除',
+  '添加': '添加',
+  '名单为空时只有属主可用。': '名单为空时只有属主可用。',
+  '对方的平台 id，回车添加': '对方的平台 id，回车添加',
   // 版本与更新（version-panel.js）
   '当前页面不支持渠道子槽。': '当前页面不支持渠道子槽。',
   '设置': '设置',
@@ -119,6 +139,31 @@ export const en = {
     'No conversation to add: mention the bot once in a group, or send it a direct message, and that conversation shows up here.',
   '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。':
     'A conversation marked "Candidate" cannot receive proactive messages yet — press "Save as target" first.',
+  // 机器人设置页的共享编辑块（bot-shared-settings.js）
+  '工作区': 'Workspace',
+  '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。':
+    'Which directory the bot runs in: which files it may read and write, and which AGENTS.md'
+    + 'applies. Applies to new conversations only.',
+  '目录': 'Directory',
+  '下拉里是这台机器人用过的目录。': 'The suggestions are directories this bot has used before.',
+  'Agent 预设': 'Agent preset',
+  '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。':
+    'Which agent preset this bot uses (persona and tool set). Applies to new conversations only.',
+  '当前 Host 读不到 Agent Preset 列表。': 'This Host does not expose an agent preset list.',
+  '跟随 Host 默认': 'Follow the Host default',
+  '访问策略': 'Access policy',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。':
+    'Who may talk to the bot and who may run commands. Changes apply immediately;'
+    + 'the owner always has access.',
+  '访问模式': 'Access mode',
+  '仅名单内可用': 'Allowlist only',
+  '任何人可用': 'Anyone',
+  '允许执行命令': 'Allow commands',
+  '可执行命令': 'Allow commands',
+  '移除': 'Remove',
+  '添加': 'Add',
+  '名单为空时只有属主可用。': 'An empty allowlist means only the owner can use it.',
+  '对方的平台 id，回车添加': 'Their platform id — press Enter to add',
   '当前页面不支持渠道子槽。': 'This page does not support channel sub-slots.',
   '设置': 'Settings',
   '机器人': 'Bots',

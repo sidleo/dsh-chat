@@ -255,12 +255,28 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
 }
 function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor } = chatUi.components;
+  const {
+    Panel,
+    StatusPill,
+    ContextEnhancementEditor,
+    DeliveryTargetsEditor,
+    WorkspaceEditor,
+    PresetEditor,
+    AccessPolicyEditor
+  } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection,
     channelId: CHANNEL_ID,
     botId: account.botId
   });
+  React.useEffect(() => {
+    void settings.loadOptions();
+  }, [settings.loadOptions]);
+  const shared = {
+    workspace: settings.record?.workspace ?? null,
+    agentPreset: settings.record?.agentPreset ?? null,
+    accessPolicy: settings.record?.accessPolicy ?? null
+  };
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -340,6 +356,23 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
         h("span", null, String(account.handled ?? 0))
       )
     ),
+    h(WorkspaceEditor, {
+      value: shared.workspace,
+      options: settings.options?.workspacePaths ?? [],
+      translate: t,
+      onSave: settings.saveWorkspace
+    }),
+    h(PresetEditor, {
+      value: shared.agentPreset,
+      options: settings.options?.presets ?? [],
+      translate: t,
+      onSave: settings.saveAgentPreset
+    }),
+    h(AccessPolicyEditor, {
+      value: shared.accessPolicy,
+      translate: t,
+      onSave: settings.saveAccessPolicy
+    }),
     h(ContextEnhancementEditor, {
       config: settings.record?.contextEnhancement ?? null,
       disabled: settings.phase !== "ready",

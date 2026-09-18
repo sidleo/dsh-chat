@@ -172,7 +172,7 @@ function createChannelRail() {
 }
 
 // packages/dsh-chat/client/chat-ui.js
-var React5 = __toESM(require("react"), 1);
+var React6 = __toESM(require("react"), 1);
 
 // packages/dsh-chat/client/bot-settings.js
 var React = __toESM(require("react"), 1);
@@ -201,6 +201,7 @@ function unwrapRpc(result) {
 // packages/dsh-chat/client/bot-settings.js
 function useBotSettings({ connection, channelId, botId, enabled = true }) {
   const [state, setState] = React.useState({ phase: "idle", record: null, error: null });
+  const [options, setOptions] = React.useState(null);
   const aliveRef = React.useRef(true);
   React.useEffect(() => {
     aliveRef.current = true;
@@ -222,6 +223,18 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
   React.useEffect(() => {
     void load();
   }, [load]);
+  const loadOptions = React.useCallback(async () => {
+    if (!enabled || !connection || !channelId || !botId) return null;
+    try {
+      const result = await callControlRpc(connection, "bot.settings.options", { channelId, botId });
+      const value = unwrapRpc(result);
+      if (aliveRef.current) setOptions(value);
+      return value;
+    } catch {
+      if (aliveRef.current) setOptions({ workspacePaths: [], presets: [] });
+      return null;
+    }
+  }, [connection, channelId, botId, enabled]);
   const saveContextEnhancement = React.useCallback(async (config) => {
     const result = await callControlRpc(connection, "bot.context-enhancement.set", {
       channelId,
@@ -238,17 +251,434 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     }
     return value.contextEnhancement;
   }, [connection, channelId, botId]);
+  const saveField = React.useCallback(async (method, body, key) => {
+    const result = await callControlRpc(connection, method, { channelId, botId, ...body });
+    const value = unwrapRpc(result);
+    if (aliveRef.current) {
+      setState((current) => ({
+        ...current,
+        phase: "ready",
+        record: { ...current.record ?? {}, [key]: value[key] ?? null }
+      }));
+    }
+    return value[key] ?? null;
+  }, [connection, channelId, botId]);
+  const saveWorkspace = React.useCallback(
+    (workspace) => saveField("bot.workspace.set", { workspace }, "workspace"),
+    [saveField]
+  );
+  const saveAgentPreset = React.useCallback(
+    (agentPreset) => saveField("bot.agent-preset.set", { agentPreset }, "agentPreset"),
+    [saveField]
+  );
+  const saveAccessPolicy = React.useCallback(
+    (policy) => saveField("bot.access-policy.set", { policy }, "accessPolicy"),
+    [saveField]
+  );
   return {
     record: state.record,
     phase: state.phase,
     error: state.error,
+    options,
+    loadOptions,
     reload: load,
-    saveContextEnhancement
+    saveContextEnhancement,
+    saveWorkspace,
+    saveAgentPreset,
+    saveAccessPolicy
   };
 }
 
-// packages/dsh-chat/client/context-enhancement.js
+// packages/dsh-chat/client/bot-shared-settings.js
 var React2 = __toESM(require("react"), 1);
+
+// packages/dsh-chat/shared/access-policy.mjs
+var ACCESS_POLICY_MODES = Object.freeze(["open", "allowlist"]);
+var ACCESS_CONVERSATION_TYPES = Object.freeze(["direct", "group"]);
+var USER_ID_MAX_LENGTH = 256;
+var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+var ACCESS_RESULTS = Object.freeze({
+  OWNER: "owner",
+  OPEN: "open",
+  ALLOWLIST: "allowlist",
+  NOT_LISTED: "sender-not-allowed",
+  COMMAND_DENIED: "command-not-allowed",
+  NO_POLICY: "no-policy",
+  INVALID: "invalid-context"
+});
+function invalid(message) {
+  const error = new TypeError(message);
+  error.code = "access-policy-invalid";
+  return error;
+}
+function isPlainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function hasExactKeys(input, keys) {
+  return isPlainObject2(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+}
+function normalizeUserId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) value = String(value);
+  if (typeof value !== "string") throw invalid("\u7528\u6237\u6807\u8BC6\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002");
+  const normalized = value.replace(CONTROL_CHARACTERS, "").trim();
+  if (!normalized || normalized.length > USER_ID_MAX_LENGTH) throw invalid("\u7528\u6237\u6807\u8BC6\u65E0\u6548\u3002");
+  return normalized;
+}
+function validateUser(input) {
+  if (!hasExactKeys(input, ["id", "canExecuteCommands"])) throw invalid("\u767D\u540D\u5355\u6761\u76EE\u683C\u5F0F\u4E0D\u6B63\u786E\u3002");
+  if (typeof input.canExecuteCommands !== "boolean") throw invalid("\u547D\u4EE4\u6743\u9650\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  return Object.freeze({
+    id: normalizeUserId(input.id),
+    canExecuteCommands: input.canExecuteCommands
+  });
+}
+function validateScope(input) {
+  if (!hasExactKeys(input, ["mode", "open", "allowlist"])) throw invalid("\u8BBF\u95EE\u7B56\u7565\u7F3A\u5C11\u5B57\u6BB5\u3002");
+  if (!ACCESS_POLICY_MODES.includes(input.mode)) throw invalid("\u8BBF\u95EE\u6A21\u5F0F\u53EA\u80FD\u662F open \u6216 allowlist\u3002");
+  if (!hasExactKeys(input.open, ["defaultCanExecuteCommands", "commandPermissionOverrides"])) {
+    throw invalid("open \u6BB5\u683C\u5F0F\u4E0D\u6B63\u786E\u3002");
+  }
+  if (typeof input.open.defaultCanExecuteCommands !== "boolean") {
+    throw invalid("\u9ED8\u8BA4\u547D\u4EE4\u6743\u9650\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  }
+  if (!Array.isArray(input.open.commandPermissionOverrides) || !Array.isArray(input.allowlist?.users)) {
+    throw invalid("\u8BBF\u95EE\u7B56\u7565\u7684\u540D\u5355\u5FC5\u987B\u662F\u6570\u7EC4\u3002");
+  }
+  return Object.freeze({
+    mode: input.mode,
+    open: Object.freeze({
+      defaultCanExecuteCommands: input.open.defaultCanExecuteCommands,
+      commandPermissionOverrides: Object.freeze(input.open.commandPermissionOverrides.map(validateUser))
+    }),
+    allowlist: Object.freeze({ users: Object.freeze(input.allowlist.users.map(validateUser)) })
+  });
+}
+function validateAccessPolicy(input) {
+  if (!hasExactKeys(input, ["direct", "group"])) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u8BBF\u95EE\u7B56\u7565\u3002");
+  return Object.freeze({
+    direct: validateScope(input.direct),
+    group: validateScope(input.group)
+  });
+}
+function defaultAccessPolicy() {
+  const scope = () => ({
+    mode: "allowlist",
+    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+    allowlist: { users: [] }
+  });
+  return validateAccessPolicy({ direct: scope(), group: scope() });
+}
+
+// packages/dsh-chat/client/bot-shared-settings.js
+var h = React2.createElement;
+function translatorOf(translate) {
+  return typeof translate === "function" ? translate : (key) => key;
+}
+function Card({ title, description, actions, children }) {
+  return h(
+    "section",
+    { className: "dchat-card" },
+    h(
+      "div",
+      { className: "dchat-cardHeader" },
+      h(
+        "div",
+        { className: "dchat-cardHeading" },
+        h("h3", { className: "dchat-cardTitle" }, title),
+        description ? h("p", { className: "dchat-cardDescription" }, description) : null
+      ),
+      actions ? h("div", { className: "dchat-actions" }, actions) : null
+    ),
+    children
+  );
+}
+function useSaver(onSave) {
+  const [busy, setBusy] = React2.useState(false);
+  const [failed, setFailed] = React2.useState(null);
+  const run = React2.useCallback(async (next) => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      await onSave(next);
+      return true;
+    } catch (error) {
+      setFailed(error?.message ?? String(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [onSave]);
+  return { busy, failed, run };
+}
+function WorkspaceEditor({ value, options = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const [draft, setDraft] = React2.useState(value ?? "");
+  const { busy, failed, run } = useSaver(onSave);
+  const fieldId = React2.useId?.() ?? "dchat-workspace";
+  React2.useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+  const dirty = (draft ?? "").trim() !== (value ?? "");
+  return h(
+    Card,
+    {
+      title: t("\u5DE5\u4F5C\u533A"),
+      description: t("\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002"),
+      actions: h("button", {
+        type: "button",
+        className: "dchat-button",
+        disabled: busy || !dirty,
+        onClick: () => {
+          void run(draft.trim());
+        }
+      }, busy ? t("\u4FDD\u5B58\u4E2D\u2026") : t("\u4FDD\u5B58"))
+    },
+    h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      h(
+        "div",
+        { className: "dchat-scopeRow" },
+        h("label", { className: "dchat-scopeLabel", htmlFor: fieldId }, t("\u76EE\u5F55")),
+        h("input", {
+          id: fieldId,
+          className: "dchat-input",
+          list: `${fieldId}-options`,
+          value: draft,
+          disabled: busy,
+          placeholder: "/Users/me/project",
+          autoComplete: "off",
+          spellCheck: false,
+          onChange: (event) => setDraft(event.target.value)
+        }),
+        h(
+          "datalist",
+          { id: `${fieldId}-options` },
+          options.map((path) => h("option", { key: path, value: path }))
+        ),
+        options.length > 0 ? h("p", { className: "dchat-cardDescription" }, t("\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002")) : null
+      )
+    ),
+    failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
+function PresetEditor({ value, options = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const { busy, failed, run } = useSaver(onSave);
+  return h(
+    Card,
+    {
+      title: t("Agent \u9884\u8BBE"),
+      description: t("\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002"),
+      actions: busy ? h("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null
+    },
+    options.length === 0 ? h("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002")) : h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      h(
+        "div",
+        { className: "dchat-scopeRow" },
+        h(
+          "select",
+          {
+            className: "dchat-select",
+            value: value ?? "",
+            disabled: busy,
+            "aria-label": t("Agent \u9884\u8BBE"),
+            onChange: (event) => {
+              void run(event.target.value || null);
+            }
+          },
+          h("option", { value: "" }, t("\u8DDF\u968F Host \u9ED8\u8BA4")),
+          options.map((row) => h(
+            "option",
+            { key: row.id, value: row.id },
+            `${row.id}${row.name && row.name !== row.id ? ` \xB7 ${row.name}` : ""}`
+          ))
+        )
+      )
+    ),
+    failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
+function toDraft(value) {
+  const base = value ?? defaultAccessPolicy();
+  const scopeOf = (scope) => ({
+    mode: scope?.mode === "open" ? "open" : "allowlist",
+    defaultCanExecuteCommands: scope?.open?.defaultCanExecuteCommands === true,
+    // 不在界面上编辑，但必须原样带回去，否则保存一次就把已有例外清空了。
+    commandPermissionOverrides: Array.isArray(scope?.open?.commandPermissionOverrides) ? scope.open.commandPermissionOverrides : [],
+    users: Array.isArray(scope?.allowlist?.users) ? scope.allowlist.users : []
+  });
+  return { direct: scopeOf(base.direct), group: scopeOf(base.group) };
+}
+function fromDraft(draft) {
+  const scopeOf = (scope) => ({
+    mode: scope.mode,
+    open: {
+      defaultCanExecuteCommands: scope.defaultCanExecuteCommands,
+      commandPermissionOverrides: scope.commandPermissionOverrides
+    },
+    allowlist: { users: scope.users }
+  });
+  return { direct: scopeOf(draft.direct), group: scopeOf(draft.group) };
+}
+function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
+  const [entry, setEntry] = React2.useState("");
+  const inputId = `dchat-policy-${scopeKey}`;
+  const update = (patch) => onChange({ ...scope, ...patch });
+  const addUser = () => {
+    const id = entry.trim();
+    if (!id) return;
+    setEntry("");
+    if (scope.users.some((user) => user.id === id)) return;
+    update({ users: [...scope.users, { id, canExecuteCommands: false }] });
+  };
+  const allowlist = h(
+    React2.Fragment,
+    null,
+    scope.users.length > 0 ? h("ul", { className: "dchat-list" }, scope.users.map((user) => h(
+      "li",
+      {
+        key: user.id,
+        className: "dchat-listItem"
+      },
+      h("code", { className: "dchat-code" }, user.id),
+      h(
+        "span",
+        { className: "dchat-actions" },
+        h(
+          "label",
+          { className: "dchat-check" },
+          h("input", {
+            type: "checkbox",
+            checked: user.canExecuteCommands === true,
+            disabled: busy,
+            onChange: (event) => update({
+              users: scope.users.map((item) => item.id === user.id ? { ...item, canExecuteCommands: event.target.checked } : item)
+            })
+          }),
+          h("span", null, t("\u53EF\u6267\u884C\u547D\u4EE4"))
+        ),
+        h("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonDanger",
+          disabled: busy,
+          onClick: () => update({ users: scope.users.filter((item) => item.id !== user.id) })
+        }, t("\u79FB\u9664"))
+      )
+    ))) : h("p", { className: "dchat-cardDescription" }, t("\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002")),
+    h(
+      "div",
+      { className: "dchat-actions" },
+      h("input", {
+        id: inputId,
+        className: "dchat-input",
+        value: entry,
+        disabled: busy,
+        placeholder: t("\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0"),
+        autoComplete: "off",
+        spellCheck: false,
+        onChange: (event) => setEntry(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          addUser();
+        }
+      }),
+      h("button", {
+        type: "button",
+        className: "dchat-button",
+        disabled: busy || !entry.trim(),
+        onClick: addUser
+      }, t("\u6DFB\u52A0"))
+    )
+  );
+  const openScope = h(
+    "label",
+    { className: "dchat-check" },
+    h("input", {
+      type: "checkbox",
+      checked: scope.defaultCanExecuteCommands,
+      disabled: busy,
+      onChange: (event) => update({ defaultCanExecuteCommands: event.target.checked })
+    }),
+    h("span", null, t("\u5141\u8BB8\u6267\u884C\u547D\u4EE4"))
+  );
+  return h(
+    "div",
+    { className: "dchat-scopeRow" },
+    h(
+      "div",
+      { className: "dchat-policyHead" },
+      h("label", { className: "dchat-scopeLabel", htmlFor: inputId }, label),
+      h(
+        "select",
+        {
+          className: "dchat-select",
+          value: scope.mode,
+          disabled: busy,
+          "aria-label": `${label} ${t("\u8BBF\u95EE\u6A21\u5F0F")}`,
+          onChange: (event) => update({ mode: event.target.value })
+        },
+        h("option", { value: "allowlist" }, t("\u4EC5\u540D\u5355\u5185\u53EF\u7528")),
+        h("option", { value: "open" }, t("\u4EFB\u4F55\u4EBA\u53EF\u7528"))
+      )
+    ),
+    scope.mode === "open" ? openScope : allowlist
+  );
+}
+function AccessPolicyEditor({ value, translate, onSave }) {
+  const t = translatorOf(translate);
+  const [draft, setDraft] = React2.useState(() => toDraft(value));
+  const { busy, failed, run } = useSaver(onSave);
+  React2.useEffect(() => {
+    setDraft(toDraft(value));
+  }, [value]);
+  const commit = React2.useCallback(async (next) => {
+    setDraft(next);
+    const saved = await run(fromDraft(next));
+    if (!saved) setDraft(toDraft(value));
+  }, [run, value]);
+  return h(
+    Card,
+    {
+      title: t("\u8BBF\u95EE\u7B56\u7565"),
+      description: t("\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002"),
+      actions: busy ? h("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null
+    },
+    h(
+      "div",
+      { className: "dchat-policyGrid" },
+      h(ScopeBlock, {
+        scopeKey: "direct",
+        label: t("\u79C1\u804A"),
+        scope: draft.direct,
+        busy,
+        t,
+        onChange: (next) => {
+          void commit({ ...draft, direct: next });
+        }
+      }),
+      h(ScopeBlock, {
+        scopeKey: "group",
+        label: t("\u7FA4\u804A"),
+        scope: draft.group,
+        busy,
+        t,
+        onChange: (next) => {
+          void commit({ ...draft, group: next });
+        }
+      })
+    ),
+    failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
+
+// packages/dsh-chat/client/context-enhancement.js
+var React3 = __toESM(require("react"), 1);
 var import_react_dom = require("react-dom");
 
 // packages/dsh-chat/shared/context-enhancement.mjs
@@ -310,33 +740,33 @@ var SOURCE_LIMITS = Object.freeze({
   threadId: 256,
   botId: 128
 });
-var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+var CONTROL_CHARACTERS2 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 var CONTROL_CHARACTER_TEST = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
-function invalid(message) {
+function invalid2(message) {
   const error = new TypeError(message);
   error.code = "context-enhancement-invalid";
   return error;
 }
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
-function hasExactKeys(input, keys) {
-  return isPlainObject2(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+function hasExactKeys2(input, keys) {
+  return isPlainObject3(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
 }
 function offlineText(value, maxLength) {
-  return typeof value === "string" ? value.replace(CONTROL_CHARACTERS, "").slice(0, maxLength) : "";
+  return typeof value === "string" ? value.replace(CONTROL_CHARACTERS2, "").slice(0, maxLength) : "";
 }
-function validateScope(input, where) {
-  if (!hasExactKeys(input, SCOPE_KEYS)) throw invalid(`${where}\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002`);
+function validateScope2(input, where) {
+  if (!hasExactKeys2(input, SCOPE_KEYS)) throw invalid2(`${where}\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002`);
   const { enabled, fields, guidance } = input;
-  if (typeof enabled !== "boolean") throw invalid(`${where}\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002`);
+  if (typeof enabled !== "boolean") throw invalid2(`${where}\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002`);
   if (!Array.isArray(fields) || !fields.every((field) => CONTEXT_FIELDS.includes(field))) {
-    throw invalid(`${where}\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002`);
+    throw invalid2(`${where}\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002`);
   }
   if (typeof guidance !== "string" || guidance.length > GUIDANCE_MAX_LENGTH) {
-    throw invalid(`${where}\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`${where}\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
   return Object.freeze({
     enabled,
@@ -345,7 +775,7 @@ function validateScope(input, where) {
   });
 }
 function validateTarget(input) {
-  if (!hasExactKeys(input, TARGET_KEYS)) throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002");
+  if (!hasExactKeys2(input, TARGET_KEYS)) throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u91CD\u65B0\u4FDD\u5B58\u3002");
   const {
     kind,
     id,
@@ -355,22 +785,22 @@ function validateTarget(input) {
     guidance,
     merge
   } = input;
-  if (!TARGET_KINDS.includes(kind)) throw invalid('\u6307\u5B9A\u8BBE\u7F6E\u7684\u7C7B\u578B\u53EA\u80FD\u662F"\u6307\u5B9A\u7528\u6237"\u6216"\u6307\u5B9A\u7FA4"\u3002');
+  if (!TARGET_KINDS.includes(kind)) throw invalid2('\u6307\u5B9A\u8BBE\u7F6E\u7684\u7C7B\u578B\u53EA\u80FD\u662F"\u6307\u5B9A\u7528\u6237"\u6216"\u6307\u5B9A\u7FA4"\u3002');
   const targetId = typeof id === "string" ? id.trim() : "";
   if (!targetId || targetId.length > TARGET_ID_MAX_LENGTH || CONTROL_CHARACTER_TEST.test(targetId) || /\s/.test(targetId)) {
-    throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6807\u8BC6\u4E0D\u80FD\u4E3A\u7A7A\u3001\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\uFF0C\u4E14\u4E0D\u5F97\u8D85\u8FC7 256 \u4E2A\u5B57\u7B26\u3002");
+    throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6807\u8BC6\u4E0D\u80FD\u4E3A\u7A7A\u3001\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\uFF0C\u4E14\u4E0D\u5F97\u8D85\u8FC7 256 \u4E2A\u5B57\u7B26\u3002");
   }
   if (typeof label !== "string" || label.length > TARGET_LABEL_MAX_LENGTH) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u5907\u6CE8\u540D\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_LABEL_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u5907\u6CE8\u540D\u4E0D\u5F97\u8D85\u8FC7 ${TARGET_LABEL_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
-  if (typeof enabled !== "boolean") throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
+  if (typeof enabled !== "boolean") throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u542F\u7528\u5F00\u5173\u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002");
   if (!Array.isArray(fields) || !fields.every((field) => CONTEXT_FIELDS.includes(field))) {
-    throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002");
+    throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u7684\u6765\u6E90\u5B57\u6BB5\u53EA\u80FD\u4ECE\u5DF2\u5B9A\u4E49\u7684\u516B\u4E2A\u5B57\u6BB5\u4E2D\u9009\u62E9\u3002");
   }
   if (typeof guidance !== "string" || guidance.length > GUIDANCE_MAX_LENGTH) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u7684\u589E\u5F3A\u63D0\u793A\u8BCD\u4E0D\u5F97\u8D85\u8FC7 ${GUIDANCE_MAX_LENGTH} \u4E2A\u5B57\u7B26\u3002`);
   }
-  if (!TARGET_MERGES.includes(merge)) throw invalid('\u6307\u5B9A\u8BBE\u7F6E\u7684\u63D0\u793A\u8BCD\u53E0\u52A0\u65B9\u5F0F\u53EA\u652F\u6301"\u53E0\u52A0"\u6216"\u8986\u76D6"\u3002');
+  if (!TARGET_MERGES.includes(merge)) throw invalid2('\u6307\u5B9A\u8BBE\u7F6E\u7684\u63D0\u793A\u8BCD\u53E0\u52A0\u65B9\u5F0F\u53EA\u652F\u6301"\u53E0\u52A0"\u6216"\u8986\u76D6"\u3002');
   return Object.freeze({
     kind,
     id: targetId,
@@ -382,26 +812,26 @@ function validateTarget(input) {
   });
 }
 function validateContextConfig(input) {
-  if (!hasExactKeys(input, CONFIG_KEYS)) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
-  if (!Array.isArray(input.targets)) throw invalid("\u6307\u5B9A\u8BBE\u7F6E\u5FC5\u987B\u662F\u5217\u8868\u3002");
+  if (!hasExactKeys2(input, CONFIG_KEYS)) throw invalid2("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
+  if (!Array.isArray(input.targets)) throw invalid2("\u6307\u5B9A\u8BBE\u7F6E\u5FC5\u987B\u662F\u5217\u8868\u3002");
   if (input.targets.length > TARGET_LIMIT) {
-    throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\u3002`);
+    throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\u3002`);
   }
   const targets = input.targets.map(validateTarget);
   const seen = /* @__PURE__ */ new Set();
   for (const target of targets) {
     const key = `${target.kind}:${target.id}`;
-    if (seen.has(key)) throw invalid(`\u6307\u5B9A\u8BBE\u7F6E\u4E2D\u300C${target.id}\u300D\u91CD\u590D\uFF0C\u8BF7\u5408\u5E76\u540E\u518D\u4FDD\u5B58\u3002`);
+    if (seen.has(key)) throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u4E2D\u300C${target.id}\u300D\u91CD\u590D\uFF0C\u8BF7\u5408\u5E76\u540E\u518D\u4FDD\u5B58\u3002`);
     seen.add(key);
   }
   return Object.freeze({
-    group: validateScope(input.group, "\u7FA4\u804A"),
-    direct: validateScope(input.direct, "\u79C1\u804A"),
+    group: validateScope2(input.group, "\u7FA4\u804A"),
+    direct: validateScope2(input.direct, "\u79C1\u804A"),
     targets: Object.freeze(targets)
   });
 }
 function migrateLegacyConfig(input) {
-  if (!hasExactKeys(input, LEGACY_KEYS)) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
+  if (!hasExactKeys2(input, LEGACY_KEYS)) throw invalid2("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
   return validateContextConfig({
     group: { enabled: input.groupEnabled, fields: input.fields, guidance: input.guidance },
     direct: { enabled: input.directEnabled, fields: input.fields, guidance: input.guidance },
@@ -416,7 +846,7 @@ function normalizeContextConfig(input) {
       return migrateLegacyConfig(input);
     } catch {
       try {
-        if (isPlainObject2(input)) {
+        if (isPlainObject3(input)) {
           return validateContextConfig({ ...input, targets: input.targets ?? [] });
         }
       } catch {
@@ -437,7 +867,7 @@ function contextStatusLabel(config) {
 }
 
 // packages/dsh-chat/client/context-enhancement.js
-var h = React2.createElement;
+var h2 = React3.createElement;
 var FIELD_LABELS = Object.freeze({
   channel: "\u6E20\u9053",
   conversationType: "\u4F1A\u8BDD\u7C7B\u578B",
@@ -474,46 +904,46 @@ function t_of(translate) {
   return typeof translate === "function" ? translate : (key) => key;
 }
 function FieldPicker({ scopeKey, scope, disabled, onChange }) {
-  return h("div", { className: "dchat-contextFields" }, CONTEXT_FIELDS.map((field) => {
+  return h2("div", { className: "dchat-contextFields" }, CONTEXT_FIELDS.map((field) => {
     const inputId = `dchat-field-${scopeKey}-${field}`;
-    return h(
+    return h2(
       "div",
       { key: field, className: "dchat-contextField" },
-      h("input", {
+      h2("input", {
         id: inputId,
         type: "checkbox",
         checked: scope.fields.includes(field),
         disabled,
         onChange: (event) => onChange(event.target.checked ? [...scope.fields, field] : scope.fields.filter((value) => value !== field))
       }),
-      h(
+      h2(
         "label",
         { htmlFor: inputId, title: FIELD_HELP[field] ?? "" },
-        h("span", null, FIELD_LABELS[field]),
-        h("code", null, field)
+        h2("span", null, FIELD_LABELS[field]),
+        h2("code", null, field)
       )
     );
   }));
 }
 function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
   const id = `${idPrefix}-guidance`;
-  return h(
+  return h2(
     "div",
     { className: "dchat-contextGuidance" },
-    h(
+    h2(
       "div",
       { className: "dchat-contextGuidanceHeader" },
-      h("label", { htmlFor: id, className: "dchat-contextLegend" }, "\u589E\u5F3A\u63D0\u793A\u8BCD"),
-      h(
+      h2("label", { htmlFor: id, className: "dchat-contextLegend" }, "\u589E\u5F3A\u63D0\u793A\u8BCD"),
+      h2(
         "div",
         { className: "dchat-actions" },
-        h("button", {
+        h2("button", {
           type: "button",
           className: "dchat-button",
           disabled,
           onClick: () => onChange(example)
         }, "\u586B\u5165\u793A\u4F8B"),
-        h("button", {
+        h2("button", {
           type: "button",
           className: "dchat-button",
           disabled,
@@ -521,12 +951,12 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
         }, "\u6E05\u7A7A")
       )
     ),
-    h(
+    h2(
       "p",
       { className: "dchat-cardDescription" },
       "\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002"
     ),
-    h("textarea", {
+    h2("textarea", {
       id,
       className: "dchat-textarea",
       rows: 4,
@@ -542,18 +972,18 @@ function GlobalScopePanel({ kind, scope, disabled, onChange }) {
   const text = SCOPE_TEXT[kind];
   const example = kind === "group" ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE;
   const switchId = `dchat-enable-${kind}`;
-  return h(
+  return h2(
     "div",
     { className: "dchat-contextGlobal" },
-    h(
+    h2(
       "div",
       { className: "dchat-contextSwitchRow" },
-      h(
+      h2(
         "label",
         { htmlFor: switchId, className: "dchat-contextSwitchLabel" },
         `\u542F\u7528${text.title}\u5168\u5C40\u589E\u5F3A`
       ),
-      h("input", {
+      h2("input", {
         id: switchId,
         type: "checkbox",
         role: "switch",
@@ -562,14 +992,14 @@ function GlobalScopePanel({ kind, scope, disabled, onChange }) {
         onChange: (event) => onChange({ ...scope, enabled: event.target.checked })
       })
     ),
-    h("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
-    h(FieldPicker, {
+    h2("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
+    h2(FieldPicker, {
       scopeKey: `${kind}-global`,
       scope,
       disabled,
       onChange: (fields) => onChange({ ...scope, fields })
     }),
-    h(GuidanceEditor, {
+    h2(GuidanceEditor, {
       idPrefix: `dchat-${kind}-global`,
       value: scope.guidance,
       example,
@@ -584,16 +1014,16 @@ function targetKindOf(scope) {
 function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
-  return h(
+  return h2(
     "li",
     { className: "dchat-targetRow" },
-    h(
+    h2(
       "div",
       { className: "dchat-targetHead" },
-      h(
+      h2(
         "label",
         { className: "dchat-targetEnable" },
-        h("input", {
+        h2("input", {
           type: "checkbox",
           checked: target.enabled,
           disabled,
@@ -602,7 +1032,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
         }),
         "\u542F\u7528"
       ),
-      h("button", {
+      h2("button", {
         type: "button",
         className: "dchat-button",
         disabled,
@@ -610,14 +1040,14 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
         onClick: onRemove
       }, "\u5220\u9664")
     ),
-    h(
+    h2(
       "div",
       { className: "dchat-targetGrid" },
-      h(
+      h2(
         "label",
         { className: "dchat-targetField" },
-        h("span", null, text.idLabel),
-        h("input", {
+        h2("span", null, text.idLabel),
+        h2("input", {
           type: "text",
           value: target.id,
           maxLength: TARGET_ID_MAX_LENGTH,
@@ -626,11 +1056,11 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           onChange: (event) => onChange({ ...target, id: event.target.value })
         })
       ),
-      h(
+      h2(
         "label",
         { className: "dchat-targetField" },
-        h("span", null, "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09"),
-        h("input", {
+        h2("span", null, "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09"),
+        h2("input", {
           type: "text",
           value: target.label,
           maxLength: TARGET_LABEL_MAX_LENGTH,
@@ -640,24 +1070,24 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
         })
       )
     ),
-    h("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
-    h(FieldPicker, {
+    h2("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
+    h2(FieldPicker, {
       scopeKey: `${prefix}`,
       scope: target,
       disabled,
       onChange: (fields) => onChange({ ...target, fields })
     }),
-    h(GuidanceEditor, {
+    h2(GuidanceEditor, {
       idPrefix: prefix,
       value: target.guidance,
       example: scope === "group" ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE,
       disabled,
       onChange: (guidance) => onChange({ ...target, guidance })
     }),
-    h(
+    h2(
       "label",
       { className: "dchat-targetMerge" },
-      h("input", {
+      h2("input", {
         type: "checkbox",
         checked: target.merge === "append",
         disabled,
@@ -685,26 +1115,26 @@ function TargetPanel({ scope, targets, disabled, onChange }) {
   }]);
   const replace = (index, next) => onChange(targets.map((item, at) => at === index ? next : item));
   const remove = (index) => onChange(targets.filter((_, at) => at !== index));
-  return h(
+  return h2(
     "div",
     { className: "dchat-contextTargets" },
-    h(
+    h2(
       "div",
       { className: "dchat-cardHeader" },
-      h(
+      h2(
         "div",
         null,
-        h("h4", { className: "dchat-cardTitle" }, text.targetTitle),
-        h("p", { className: "dchat-cardDescription" }, text.targetHint)
+        h2("h4", { className: "dchat-cardTitle" }, text.targetTitle),
+        h2("p", { className: "dchat-cardDescription" }, text.targetHint)
       ),
-      h("button", {
+      h2("button", {
         type: "button",
         className: "dchat-button",
         disabled: disabled || targets.length >= TARGET_LIMIT,
         onClick: add
       }, "\u65B0\u589E")
     ),
-    rows.length === 0 ? h("p", { className: "dchat-cardDescription" }, "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002") : h("ul", { className: "dchat-targetList" }, rows.map(({ target, index }) => h(TargetRow, {
+    rows.length === 0 ? h2("p", { className: "dchat-cardDescription" }, "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002") : h2("ul", { className: "dchat-targetList" }, rows.map(({ target, index }) => h2(TargetRow, {
       key: index,
       scope,
       target,
@@ -717,13 +1147,13 @@ function TargetPanel({ scope, targets, disabled, onChange }) {
 }
 function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose }) {
   const t = t_of(translate);
-  const [draft, setDraft] = React2.useState(() => normalizeContextConfig(config));
-  const [activeScope, setActiveScope] = React2.useState("direct");
-  const [saving, setSaving] = React2.useState(false);
-  const [error, setError] = React2.useState(null);
-  const dialogRef = React2.useRef(null);
-  const titleId = React2.useId();
-  React2.useEffect(() => {
+  const [draft, setDraft] = React3.useState(() => normalizeContextConfig(config));
+  const [activeScope, setActiveScope] = React3.useState("direct");
+  const [saving, setSaving] = React3.useState(false);
+  const [error, setError] = React3.useState(null);
+  const dialogRef = React3.useRef(null);
+  const titleId = React3.useId();
+  React3.useEffect(() => {
     dialogRef.current?.focus?.();
   }, []);
   const busy = disabled || saving;
@@ -741,12 +1171,12 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
       setSaving(false);
     }
   };
-  const content = h("div", {
+  const content = h2("div", {
     className: "dchat-backdrop",
     onMouseDown: (event) => {
       if (event.target === event.currentTarget && !saving) onClose();
     }
-  }, h(
+  }, h2(
     "section",
     {
       ref: dialogRef,
@@ -762,11 +1192,11 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         }
       }
     },
-    h(
+    h2(
       "header",
       { className: "dchat-dialogHeader" },
-      h("h3", { id: titleId, className: "dchat-cardTitle" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
-      h("button", {
+      h2("h3", { id: titleId, className: "dchat-cardTitle" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
+      h2("button", {
         type: "button",
         className: "dchat-button",
         disabled: saving,
@@ -774,15 +1204,15 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         onClick: onClose
       }, "\u5173\u95ED")
     ),
-    h(
+    h2(
       "p",
       { className: "dchat-cardDescription" },
       "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002"
     ),
-    h(
+    h2(
       "div",
       { className: "dchat-tabs", role: "tablist", "aria-label": "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4" },
-      ["direct", "group"].map((kind) => h("button", {
+      ["direct", "group"].map((kind) => h2("button", {
         key: kind,
         type: "button",
         role: "tab",
@@ -792,7 +1222,7 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         onClick: () => setActiveScope(kind)
       }, SCOPE_TEXT[kind].title))
     ),
-    ["direct", "group"].map((kind) => h(
+    ["direct", "group"].map((kind) => h2(
       "div",
       {
         key: kind,
@@ -801,30 +1231,30 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         hidden: activeScope !== kind,
         "data-scope": kind
       },
-      h(GlobalScopePanel, {
+      h2(GlobalScopePanel, {
         kind,
         scope: draft[kind],
         disabled: busy,
         onChange: (scope) => setDraft((current) => ({ ...current, [kind]: scope }))
       }),
-      h(TargetPanel, {
+      h2(TargetPanel, {
         scope: kind,
         targets: draft.targets,
         disabled: busy,
         onChange: (targets) => setDraft((current) => ({ ...current, targets }))
       })
     )),
-    error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
-    h(
+    error ? h2("p", { className: "dchat-error", role: "alert" }, error) : null,
+    h2(
       "footer",
       { className: "dchat-dialogFooter" },
-      h("button", {
+      h2("button", {
         type: "button",
         className: "dchat-button",
         disabled: saving,
         onClick: onClose
       }, t("\u53D6\u6D88")),
-      h("button", {
+      h2("button", {
         type: "button",
         className: "dchat-button dchat-buttonPrimary",
         disabled: busy,
@@ -838,12 +1268,12 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
 }
 function ContextEnhancementEditor({ config, disabled = false, translate, onSave }) {
   const t = t_of(translate);
-  const [open, setOpen] = React2.useState(false);
+  const [open, setOpen] = React3.useState(false);
   const status = contextStatusLabel(config);
-  return h(
-    React2.Fragment,
+  return h2(
+    React3.Fragment,
     null,
-    h(
+    h2(
       "button",
       {
         type: "button",
@@ -853,11 +1283,11 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
         "aria-expanded": open,
         onClick: () => setOpen(true)
       },
-      h("span", { className: "dchat-entryLabel" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
-      h("span", { className: "dchat-entryStatus", "data-active": status !== "\u672A\u5F00\u542F" }, status),
-      h("span", { className: "dchat-entryArrow", "aria-hidden": "true" }, "\u203A")
+      h2("span", { className: "dchat-entryLabel" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
+      h2("span", { className: "dchat-entryStatus", "data-active": status !== "\u672A\u5F00\u542F" }, status),
+      h2("span", { className: "dchat-entryArrow", "aria-hidden": "true" }, "\u203A")
     ),
-    open ? h(ContextEnhancementDialog, {
+    open ? h2(ContextEnhancementDialog, {
       config,
       disabled,
       translate: t,
@@ -868,9 +1298,9 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
 }
 
 // packages/dsh-chat/client/delivery-targets.js
-var React3 = __toESM(require("react"), 1);
-var h2 = React3.createElement;
-function translatorOf(translate, chatUi) {
+var React4 = __toESM(require("react"), 1);
+var h3 = React4.createElement;
+function translatorOf2(translate, chatUi) {
   if (typeof translate === "function") return translate;
   if (typeof chatUi?.translate === "function") return chatUi.translate;
   return (key) => key;
@@ -878,68 +1308,68 @@ function translatorOf(translate, chatUi) {
 function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, onCancel, onRemove }) {
   const t = translate;
   const route = Object.entries(target.route ?? {}).map(([key, value]) => `${key}=${value}`).join(" \xB7 ");
-  const actions = target.discovered ? [h2("button", {
+  const actions = target.discovered ? [h3("button", {
     key: "save",
     type: "button",
     className: "dchat-button dchat-buttonPrimary",
     disabled: busy,
     onClick: () => onSave(target)
   }, t("\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807"))] : confirming ? [
-    h2("button", {
+    h3("button", {
       key: "confirm",
       type: "button",
       className: "dchat-button dchat-buttonDangerSolid",
       disabled: busy,
       onClick: () => onRemove(target)
     }, t("\u786E\u8BA4\u5220\u9664")),
-    h2("button", {
+    h3("button", {
       key: "cancel",
       type: "button",
       className: "dchat-button",
       disabled: busy,
       onClick: onCancel
     }, t("\u53D6\u6D88"))
-  ] : [h2("button", {
+  ] : [h3("button", {
     key: "remove",
     type: "button",
     className: "dchat-button dchat-buttonDanger",
     disabled: busy,
     onClick: onAskRemove
   }, t("\u5220\u9664"))];
-  return h2(
+  return h3(
     "div",
     { className: "dchat-listItem dchat-deliveryRow" },
-    h2(
+    h3(
       "div",
       { className: "dchat-deliveryMeta" },
-      h2("strong", null, target.name || target.id),
+      h3("strong", null, target.name || target.id),
       // 只留一行身份：`route` 里已经带了 openId/chatId，再挂一个 `p2p_…` 原始 id
       // 就是同一个东西的第二种写法，只会让人怀疑"这是两个不同的目标"。
-      h2("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`)
+      h3("small", null, `${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")} \xB7 ${route}`)
     ),
-    h2(
+    h3(
       "div",
       { className: "dchat-actions" },
-      target.discovered ? h2("span", { className: "dchat-status" }, t("\u5019\u9009")) : null,
+      target.discovered ? h3("span", { className: "dchat-status" }, t("\u5019\u9009")) : null,
       ...actions
     )
   );
 }
 function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate }) {
-  const t = translatorOf(translate, chatUi);
+  const t = translatorOf2(translate, chatUi);
   const { Panel: Panel2 } = chatUi.components;
-  const [state, setState] = React3.useState({ phase: "loading", targets: [], canSend: false });
-  const [error, setError] = React3.useState(null);
-  const [notice, setNotice] = React3.useState(null);
-  const [busyId, setBusyId] = React3.useState(null);
-  const [confirmingId, setConfirmingId] = React3.useState(null);
-  const [draft, setDraft] = React3.useState("");
-  const [sendTo, setSendTo] = React3.useState("");
-  const call = React3.useCallback(async (method, payload) => {
+  const [state, setState] = React4.useState({ phase: "loading", targets: [], canSend: false });
+  const [error, setError] = React4.useState(null);
+  const [notice, setNotice] = React4.useState(null);
+  const [busyId, setBusyId] = React4.useState(null);
+  const [confirmingId, setConfirmingId] = React4.useState(null);
+  const [draft, setDraft] = React4.useState("");
+  const [sendTo, setSendTo] = React4.useState("");
+  const call = React4.useCallback(async (method, payload) => {
     const result = await chatUi.callControlRpc(connection, method, payload);
     return chatUi.unwrapRpc(result);
   }, [chatUi, connection]);
-  const load = React3.useCallback(async () => {
+  const load = React4.useCallback(async () => {
     try {
       const value = await call("delivery.list", { channelId, botId });
       const targets = value.targets ?? [];
@@ -953,10 +1383,10 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
       setError(cause.message);
     }
   }, [call, channelId, botId]);
-  React3.useEffect(() => {
+  React4.useEffect(() => {
     void load();
   }, [load]);
-  const run = React3.useCallback(async (key, method, payload, message) => {
+  const run = React4.useCallback(async (key, method, payload, message) => {
     setBusyId(key);
     setError(null);
     setNotice(null);
@@ -975,17 +1405,17 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
   const saved = state.targets.filter((target) => !target.discovered);
   const candidates = state.targets.filter((target) => target.discovered);
   const ready = state.phase === "ready" && state.canSend === true;
-  return h2(
+  return h3(
     Panel2,
     {
       title: t("\u4E3B\u52A8\u6295\u9012"),
       description: t("\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\u3002")
     },
-    error ? h2("p", { className: "dchat-error", role: "alert" }, error) : null,
-    notice ? h2("p", { className: "dchat-notice", role: "status" }, notice) : null,
-    state.phase === "loading" ? h2("p", { className: "dchat-cardDescription" }, t("\u8BFB\u53D6\u4E2D\u2026")) : null,
-    state.phase === "ready" && state.canSend === false ? h2("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002")) : null,
-    state.targets.length > 0 ? h2("div", { className: "dchat-list" }, state.targets.map((target) => h2(TargetRow2, {
+    error ? h3("p", { className: "dchat-error", role: "alert" }, error) : null,
+    notice ? h3("p", { className: "dchat-notice", role: "status" }, notice) : null,
+    state.phase === "loading" ? h3("p", { className: "dchat-cardDescription" }, t("\u8BFB\u53D6\u4E2D\u2026")) : null,
+    state.phase === "ready" && state.canSend === false ? h3("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002")) : null,
+    state.targets.length > 0 ? h3("div", { className: "dchat-list" }, state.targets.map((target) => h3(TargetRow2, {
       key: target.id,
       target,
       busy: busyId === target.id,
@@ -1015,37 +1445,37 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
      * 之前只在"一个目标都没有"时显示，于是有 1 个已保存目标、又没有候选时，
      * 整张卡既看不到可添加项、也看不到为什么——用户只能说"没有添加入口"。
      */
-    ready && candidates.length === 0 ? h2(
+    ready && candidates.length === 0 ? h3(
       "p",
       { className: "dchat-cardDescription" },
       saved.length === 0 ? t("\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002") : t("\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
     ) : null,
-    candidates.length > 0 ? h2(
+    candidates.length > 0 ? h3(
       "p",
       { className: "dchat-cardDescription" },
       t("\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002")
     ) : null,
-    saved.length > 0 ? h2(
+    saved.length > 0 ? h3(
       "div",
       { className: "dchat-deliverySend" },
-      h2(
+      h3(
         "label",
         { className: "dchat-scopeLabel", htmlFor: `dchat-delivery-${botId}` },
         t("\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F")
       ),
-      h2(
+      h3(
         "div",
         { className: "dchat-actions" },
-        h2("select", {
+        h3("select", {
           className: "dchat-select",
           value: sendTo,
           "aria-label": t("\u9009\u62E9\u76EE\u6807"),
           onChange: (event) => setSendTo(event.target.value)
-        }, saved.map((target) => h2("option", {
+        }, saved.map((target) => h3("option", {
           key: target.id,
           value: target.id
         }, `${target.name || target.id}\uFF08${target.kind === "group" ? t("\u7FA4\u804A") : t("\u79C1\u804A")}\uFF09`))),
-        h2("button", {
+        h3("button", {
           type: "button",
           className: "dchat-button dchat-buttonPrimary",
           disabled: busyId === "send" || !draft.trim() || !sendTo,
@@ -1056,7 +1486,7 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
           }
         }, busyId === "send" ? t("\u53D1\u9001\u4E2D\u2026") : t("\u53D1\u9001"))
       ),
-      h2("textarea", {
+      h3("textarea", {
         id: `dchat-delivery-${botId}`,
         className: "dchat-textarea",
         rows: 2,
@@ -1069,8 +1499,8 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
 }
 
 // packages/dsh-chat/client/scoped-mode-editor.js
-var React4 = __toESM(require("react"), 1);
-var h3 = React4.createElement;
+var React5 = __toESM(require("react"), 1);
+var h4 = React5.createElement;
 function ScopedModeEditor({
   title,
   description,
@@ -1084,13 +1514,13 @@ function ScopedModeEditor({
   onSave
 }) {
   const t = typeof translate === "function" ? translate : (key) => key;
-  const [draft, setDraft] = React4.useState(() => ({ ...value }));
-  const [pending, setPending] = React4.useState(null);
-  const [failed, setFailed] = React4.useState(null);
-  const [helpFor, setHelpFor] = React4.useState(scopes[0]?.key ?? null);
+  const [draft, setDraft] = React5.useState(() => ({ ...value }));
+  const [pending, setPending] = React5.useState(null);
+  const [failed, setFailed] = React5.useState(null);
+  const [helpFor, setHelpFor] = React5.useState(scopes[0]?.key ?? null);
   const same = (a, b) => scopes.every((scope) => (a[scope.key] ?? null) === (b[scope.key] ?? null));
   const locked = disabled || saving || pending !== null;
-  React4.useEffect(() => {
+  React5.useEffect(() => {
     if (pending !== null) return;
     setDraft((current) => same(current, value) ? current : { ...value });
   }, [value, pending]);
@@ -1109,30 +1539,30 @@ function ScopedModeEditor({
       setPending(null);
     }
   };
-  const savingHint = pending !== null ? h3("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null;
+  const savingHint = pending !== null ? h4("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null;
   const help = options.find((option) => option.value === (draft[helpFor] ?? options[0]?.value))?.help;
-  return h3(
+  return h4(
     "section",
     { className: "dchat-card" },
-    h3(
+    h4(
       "div",
       { className: "dchat-cardHeader" },
-      h3(
+      h4(
         "div",
         { className: "dchat-cardHeading" },
-        h3("h3", { className: "dchat-cardTitle" }, title),
-        description ? h3("p", { className: "dchat-cardDescription" }, description) : null
+        h4("h3", { className: "dchat-cardTitle" }, title),
+        description ? h4("p", { className: "dchat-cardDescription" }, description) : null
       ),
-      savingHint ? h3("div", { className: "dchat-actions" }, savingHint) : null
+      savingHint ? h4("div", { className: "dchat-actions" }, savingHint) : null
     ),
-    h3("div", { className: "dchat-scopeGrid" }, scopes.map((scope) => {
+    h4("div", { className: "dchat-scopeGrid" }, scopes.map((scope) => {
       const selected = draft[scope.key] ?? options[0]?.value;
       const selectId = `dchat-mode-${scope.key}`;
-      return h3(
+      return h4(
         "div",
         { key: scope.key, className: "dchat-scopeRow" },
-        h3("label", { className: "dchat-scopeLabel", htmlFor: selectId }, scope.label),
-        h3("select", {
+        h4("label", { className: "dchat-scopeLabel", htmlFor: selectId }, scope.label),
+        h4("select", {
           id: selectId,
           className: "dchat-select",
           value: selected,
@@ -1143,14 +1573,14 @@ function ScopedModeEditor({
             setHelpFor(scope.key);
             void choose(scope.key, event.target.value);
           }
-        }, options.map((option) => h3("option", {
+        }, options.map((option) => h4("option", {
           key: option.value,
           value: option.value
         }, option.label))),
-        scope.key === helpFor && help ? h3("p", { className: "dchat-cardDescription" }, help) : null
+        scope.key === helpFor && help ? h4("p", { className: "dchat-cardDescription" }, help) : null
       );
     })),
-    failed || error ? h3("p", { className: "dchat-error", role: "alert" }, failed ?? error) : null
+    failed || error ? h4("p", { className: "dchat-error", role: "alert" }, failed ?? error) : null
   );
 }
 
@@ -1273,6 +1703,39 @@ var CSS = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.dchat-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+.dchat-check input {
+  margin: 0;
+}
+.dchat-policyGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dchat-policyGrid > * + * {
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+  padding-top: 14px;
+}
+/* \u4F5C\u7528\u57DF\u6807\u9898\u884C\uFF1A\u6A21\u5F0F\u4E0B\u62C9\u6309\u5185\u5BB9\u5BBD\u5EA6\uFF0C\u4E0D\u8981\u50CF\u64CD\u4F5C\u884C\u91CC\u7684\u4E0B\u62C9\u90A3\u6837\u5403\u6389\u6574\u884C\u3002 */
+.dchat-policyHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dchat-policyHead > select {
+  width: auto;
+  flex: none;
+}
+.dchat-actions > .dchat-check {
+  flex: none;
 }
 /* \u5361\u7247\u5957\u5361\u7247\uFF08\u673A\u5668\u4EBA\u5361\u91CC\u653E\u6E20\u9053/\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\u5757\uFF09\u65F6\uFF0C\u5185\u5C42\u53BB\u8FB9\u6846\u3001\u6539\u6210\u5206\u9694\u7EBF\uFF1A
    \u4E24\u5C42\u8FB9\u6846 + \u4E24\u5C42 padding \u4F1A\u8BA9\u7F29\u8FDB\u548C\u89C6\u89C9\u91CD\u91CF\u90FD\u4E71\u6389\u3002 */
@@ -1717,6 +2180,7 @@ var CSS = `
 }
 .dchat-textarea,
 .dchat-targetField input,
+.dchat-input,
 .dchat-select {
   width: 100%;
   box-sizing: border-box;
@@ -1844,31 +2308,31 @@ function installChatStyles(doc = globalThis.document) {
 }
 
 // packages/dsh-chat/client/chat-ui.js
-var h4 = React5.createElement;
+var h5 = React6.createElement;
 function Panel({ title, description, actions, children }) {
-  return h4(
+  return h5(
     "section",
     { className: "dchat-card" },
-    title || description || actions ? h4(
+    title || description || actions ? h5(
       "div",
       { className: "dchat-cardHeader" },
-      h4(
+      h5(
         "div",
         { className: "dchat-cardHeading" },
-        title ? h4("h3", { className: "dchat-cardTitle" }, title) : null,
-        description ? h4("p", { className: "dchat-cardDescription" }, description) : null
+        title ? h5("h3", { className: "dchat-cardTitle" }, title) : null,
+        description ? h5("p", { className: "dchat-cardDescription" }, description) : null
       ),
-      actions ? h4("div", { className: "dchat-actions" }, actions) : null
+      actions ? h5("div", { className: "dchat-actions" }, actions) : null
     ) : null,
     children
   );
 }
 function EmptyState({ title, description, children }) {
-  return h4(
+  return h5(
     "div",
     { className: "dchat-empty" },
-    h4("span", { className: "dchat-emptyTitle" }, title),
-    description ? h4("span", null, description) : null,
+    h5("span", { className: "dchat-emptyTitle" }, title),
+    description ? h5("span", null, description) : null,
     children
   );
 }
@@ -1879,7 +2343,7 @@ var TONES = Object.freeze({
   stopped: ""
 });
 function StatusPill({ status, label }) {
-  return h4("span", {
+  return h5("span", {
     className: "dchat-status",
     "data-tone": TONES[status] ?? "",
     "data-status": status
@@ -1897,6 +2361,12 @@ function createChatUi({ ctx, translate } = {}) {
       ContextEnhancementEditor,
       /** 通用"两作用域 × 多选项"设置块（如飞书任务过程展示）。 */
       ScopedModeEditor,
+      /** 机器人跑在哪个目录（只对新建会话生效）。 */
+      WorkspaceEditor,
+      /** 用哪套 Agent 预设（只对新建会话生效）。 */
+      PresetEditor,
+      /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
+      AccessPolicyEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
       DeliveryTargetsEditor
     }),
@@ -1912,8 +2382,8 @@ function createChatUi({ ctx, translate } = {}) {
     unwrapRpc,
     translate: t,
     /** 供渠道页复用的 React 运行时（渠道包只 external react/react-dom，无需各写一份）。 */
-    react: React5,
-    createElement: h4,
+    react: React6,
+    createElement: h5,
     /** hub 当前提供的契约版本，渠道页可据此显示兼容信息。 */
     contractVersion: CONTRACT_VERSION,
     context: Object.freeze({ has: () => typeof ctx === "object" })
@@ -1956,6 +2426,26 @@ var zh = {
   "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002": "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002",
   "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
   "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002": "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002",
+  // 机器人设置页的共享编辑块（bot-shared-settings.js）
+  "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
+  "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
+  "\u76EE\u5F55": "\u76EE\u5F55",
+  "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002",
+  "Agent \u9884\u8BBE": "Agent \u9884\u8BBE",
+  "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002": "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002",
+  "\u8DDF\u968F Host \u9ED8\u8BA4": "\u8DDF\u968F Host \u9ED8\u8BA4",
+  "\u8BBF\u95EE\u7B56\u7565": "\u8BBF\u95EE\u7B56\u7565",
+  "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002": "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002",
+  "\u8BBF\u95EE\u6A21\u5F0F": "\u8BBF\u95EE\u6A21\u5F0F",
+  "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "\u4EC5\u540D\u5355\u5185\u53EF\u7528",
+  "\u4EFB\u4F55\u4EBA\u53EF\u7528": "\u4EFB\u4F55\u4EBA\u53EF\u7528",
+  "\u5141\u8BB8\u6267\u884C\u547D\u4EE4": "\u5141\u8BB8\u6267\u884C\u547D\u4EE4",
+  "\u53EF\u6267\u884C\u547D\u4EE4": "\u53EF\u6267\u884C\u547D\u4EE4",
+  "\u79FB\u9664": "\u79FB\u9664",
+  "\u6DFB\u52A0": "\u6DFB\u52A0",
+  "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002",
+  "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0",
   // 版本与更新（version-panel.js）
   "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002": "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002",
   "\u8BBE\u7F6E": "\u8BBE\u7F6E",
@@ -2023,6 +2513,26 @@ var en = {
   "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002": "No conversation to add yet: mention the bot once in a group, or send it a direct message \u2014 the conversation then shows up here and can be saved for proactive delivery.",
   "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "No conversation to add: mention the bot once in a group, or send it a direct message, and that conversation shows up here.",
   "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002": 'A conversation marked "Candidate" cannot receive proactive messages yet \u2014 press "Save as target" first.',
+  // 机器人设置页的共享编辑块（bot-shared-settings.js）
+  "\u5DE5\u4F5C\u533A": "Workspace",
+  "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",
+  "\u76EE\u5F55": "Directory",
+  "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "The suggestions are directories this bot has used before.",
+  "Agent \u9884\u8BBE": "Agent preset",
+  "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which agent preset this bot uses (persona and tool set). Applies to new conversations only.",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002": "This Host does not expose an agent preset list.",
+  "\u8DDF\u968F Host \u9ED8\u8BA4": "Follow the Host default",
+  "\u8BBF\u95EE\u7B56\u7565": "Access policy",
+  "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002": "Who may talk to the bot and who may run commands. Changes apply immediately;the owner always has access.",
+  "\u8BBF\u95EE\u6A21\u5F0F": "Access mode",
+  "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "Allowlist only",
+  "\u4EFB\u4F55\u4EBA\u53EF\u7528": "Anyone",
+  "\u5141\u8BB8\u6267\u884C\u547D\u4EE4": "Allow commands",
+  "\u53EF\u6267\u884C\u547D\u4EE4": "Allow commands",
+  "\u79FB\u9664": "Remove",
+  "\u6DFB\u52A0": "Add",
+  "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "An empty allowlist means only the owner can use it.",
+  "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "Their platform id \u2014 press Enter to add",
   "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002": "This page does not support channel sub-slots.",
   "\u8BBE\u7F6E": "Settings",
   "\u673A\u5668\u4EBA": "Bots",
@@ -2264,11 +2774,11 @@ function installSessionBadges({
 }
 
 // packages/dsh-chat/client/section.js
-var React8 = __toESM(require("react"), 1);
+var React9 = __toESM(require("react"), 1);
 
 // packages/dsh-chat/client/bot-list.js
-var React6 = __toESM(require("react"), 1);
-var h5 = React6.createElement;
+var React7 = __toESM(require("react"), 1);
+var h6 = React7.createElement;
 var STATE_TEXT = Object.freeze({
   running: "\u8FD0\u884C\u6B63\u5E38",
   starting: "\u6B63\u5728\u542F\u52A8",
@@ -2302,8 +2812,8 @@ function formatTime(value) {
 function BotList(props) {
   const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React6.useState({ phase: "loading", bots: [], error: null });
-  const load = React6.useCallback(() => {
+  const [state, setState] = React7.useState({ phase: "loading", bots: [], error: null });
+  const load = React7.useCallback(() => {
     setState((current) => ({ ...current, phase: "loading", error: null }));
     chatUi.callChannelRpc(connection, channelId, "connection.status", {}).then((result) => {
       setState({ phase: "ready", bots: normalizeBots(chatUi.unwrapRpc(result)), error: null });
@@ -2311,27 +2821,27 @@ function BotList(props) {
       setState({ phase: "error", bots: [], error: error?.message ?? String(error) });
     });
   }, [channelId, chatUi, connection]);
-  React6.useEffect(() => {
+  React7.useEffect(() => {
     load();
   }, [load]);
   const { Panel: Panel2, EmptyState: EmptyState2, StatusPill: StatusPill2 } = chatUi.components;
   const bots = state.bots;
-  return h5(
+  return h6(
     Panel2,
     {
       title: `${label()} \xB7 ${t("\u673A\u5668\u4EBA")}`,
       description: note || null,
-      actions: h5(
+      actions: h6(
         "div",
         { className: "dchat-actions" },
         // 渠道级设置（飞书 dataDir/读取状态、微信扫码接入）与"某台机器人的设置"分开：
         // 进了单台机器人的设置页就不再掺渠道级面板，这里是指向渠道页的唯一常驻入口。
-        h5("button", {
+        h6("button", {
           type: "button",
           className: "dchat-button dchat-buttonLink",
           onClick: () => onOpenSettings(null)
         }, t("\u6E20\u9053\u8BBE\u7F6E")),
-        h5("button", {
+        h6("button", {
           type: "button",
           className: "dchat-button",
           onClick: load,
@@ -2339,44 +2849,44 @@ function BotList(props) {
         }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
       )
     },
-    state.error ? h5("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
-    state.phase !== "loading" && bots.length === 0 ? h5(EmptyState2, {
+    state.error ? h6("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
+    state.phase !== "loading" && bots.length === 0 ? h6(EmptyState2, {
       title: t("\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA"),
       description: t("\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
-    }, h5("button", {
+    }, h6("button", {
       type: "button",
       className: "dchat-button",
       onClick: () => onOpenSettings(null)
     }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
-    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot, index) => {
+    bots.length > 0 ? h6("ul", { className: "dchat-botList" }, bots.map((bot, index) => {
       const identity = botKeyOf(bot);
       const title = bot.name || identity || t("\u672A\u547D\u540D\u673A\u5668\u4EBA");
       const showIdentity = Boolean(identity) && identity !== title;
-      return h5(
+      return h6(
         "li",
         {
           key: identity ?? `row-${index}`,
           className: "dchat-botRow"
         },
-        h5(
+        h6(
           "div",
           { className: "dchat-botMain" },
-          h5(
+          h6(
             "div",
             { className: "dchat-botTitle" },
-            h5("strong", { title }, title),
-            h5(StatusPill2, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? "\u5DF2\u505C\u6B62") })
+            h6("strong", { title }, title),
+            h6(StatusPill2, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? "\u5DF2\u505C\u6B62") })
           ),
-          h5(
+          h6(
             "div",
             { className: "dchat-botMeta" },
-            showIdentity ? h5("span", { className: "dchat-code" }, identity) : null,
-            h5("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
-            h5("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
+            showIdentity ? h6("span", { className: "dchat-code" }, identity) : null,
+            h6("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
+            h6("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
           ),
-          bot.errorMessage || bot.lastError ? h5("div", { className: "dchat-botError" }, bot.errorMessage ?? bot.lastError) : null
+          bot.errorMessage || bot.lastError ? h6("div", { className: "dchat-botError" }, bot.errorMessage ?? bot.lastError) : null
         ),
-        h5("button", {
+        h6("button", {
           type: "button",
           className: "dchat-button",
           // 身份取不到就不能进"这台机器人的设置"——那会静默变成"整个渠道的设置"。
@@ -2390,8 +2900,8 @@ function BotList(props) {
 }
 
 // packages/dsh-chat/client/version-panel.js
-var React7 = __toESM(require("react"), 1);
-var h6 = React7.createElement;
+var React8 = __toESM(require("react"), 1);
+var h7 = React8.createElement;
 var CHANNEL_PACKAGE_HINTS = Object.freeze({
   feishu: "dsh-chat-feishu",
   weixin: "dsh-chat-weixin"
@@ -2399,8 +2909,8 @@ var CHANNEL_PACKAGE_HINTS = Object.freeze({
 function VersionPanel(props) {
   const { connection, chatUi, translate, t: frameworkT } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React7.useState({ loading: true, error: null, info: null });
-  const load = React7.useCallback(() => {
+  const [state, setState] = React8.useState({ loading: true, error: null, info: null });
+  const load = React8.useCallback(() => {
     setState((current) => ({ ...current, loading: true, error: null }));
     chatUi.callControlRpc(connection, "channel.list", {}).then((result) => {
       setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
@@ -2408,84 +2918,84 @@ function VersionPanel(props) {
       setState({ loading: false, error: error?.message ?? String(error), info: null });
     });
   }, [chatUi, connection]);
-  React7.useEffect(() => {
+  React8.useEffect(() => {
     load();
   }, [load]);
   const Panel2 = chatUi.components.Panel;
   const StatusPill2 = chatUi.components.StatusPill;
   const info = state.info;
-  return h6(
+  return h7(
     Panel2,
     {
       title: t("\u7248\u672C\u4E0E\u66F4\u65B0"),
       description: t("\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002"),
-      actions: h6("button", {
+      actions: h7("button", {
         type: "button",
         className: "dchat-button",
         onClick: load,
         disabled: state.loading
       }, state.loading ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
     },
-    state.error ? h6("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
-    h6(
+    state.error ? h7("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
+    h7(
       "ul",
       { className: "dchat-list" },
-      h6(
+      h7(
         "li",
         { className: "dchat-listItem" },
-        h6("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
-        h6(
+        h7("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
+        h7(
           "code",
           { className: "dchat-code" },
           `${info?.hubPackage ?? "dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
         )
       ),
-      h6(
+      h7(
         "li",
         { className: "dchat-listItem" },
-        h6("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
-        h6("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
+        h7("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
+        h7("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
       ),
-      ...(info?.channels ?? []).map((channel) => h6(
+      ...(info?.channels ?? []).map((channel) => h7(
         "li",
         {
           key: channel.id,
           className: "dchat-listItem"
         },
-        h6("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
-        h6(
+        h7("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
+        h7(
           "span",
           { className: "dchat-versionMeta" },
-          h6("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
-          h6(StatusPill2, {
+          h7("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
+          h7(StatusPill2, {
             status: channel.status,
             label: channel.status === "running" ? t("\u6E20\u9053\u5DF2\u5C31\u7EEA") : channel.error ? t("\u6E20\u9053\u542F\u52A8\u5931\u8D25") : t("\u6E20\u9053\u6B63\u5728\u542F\u52A8")
           })
         )
       ))
     ),
-    info?.dataDir ? h6(
+    info?.dataDir ? h7(
       "ul",
       { className: "dchat-list" },
-      h6(
+      h7(
         "li",
         { className: "dchat-listItem" },
-        h6("span", null, t("\u6570\u636E\u76EE\u5F55")),
-        h6("code", { className: "dchat-code" }, info.dataDir)
+        h7("span", null, t("\u6570\u636E\u76EE\u5F55")),
+        h7("code", { className: "dchat-code" }, info.dataDir)
       ),
-      h6(
+      h7(
         "li",
         { className: "dchat-listItem" },
-        h6("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
-        h6("code", { className: "dchat-code" }, info.logDir)
+        h7("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
+        h7("code", { className: "dchat-code" }, info.logDir)
       )
     ) : null,
-    h6(
+    h7(
       "div",
       { className: "dchat-updateHint" },
-      h6("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
-      h6("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
-      h6(
+      h7("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
+      h7("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
+      h7(
         "code",
         { className: "dchat-code dchat-codeBlock" },
         "dsh plugin --profile web add <\u672C\u4ED3\u5E93 packages/dsh-chat \u7684\u7EDD\u5BF9\u8DEF\u5F84>"
@@ -2495,7 +3005,7 @@ function VersionPanel(props) {
 }
 
 // packages/dsh-chat/client/section.js
-var h7 = React8.createElement;
+var h8 = React9.createElement;
 var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-feishu",
   "dsh-chat-weixin"
@@ -2503,29 +3013,29 @@ var KNOWN_CHANNEL_PACKAGES = Object.freeze([
 function ChannelMark({ entry }) {
   const iconUri = channelIconUri(entry.icon);
   if (iconUri) {
-    return h7("span", {
+    return h8("span", {
       // 有真图标就不套那个"字母块"的边框与底色，让它看起来就是应用图标。
       className: "dchat-channelMark dchat-channelMarkIcon",
       "aria-hidden": "true"
-    }, h7("img", { src: iconUri, alt: "", width: 20, height: 20 }));
+    }, h8("img", { src: iconUri, alt: "", width: 20, height: 20 }));
   }
   if (typeof entry.logo === "function") {
-    return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h7(entry.logo));
+    return h8("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h8(entry.logo));
   }
   const initial = entry.id.slice(0, 1).toUpperCase();
-  return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
+  return h8("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
-  const [showVersions, setShowVersions] = React8.useState(false);
-  const [view, setView] = React8.useState({ kind: "bots", botId: null });
+  const [showVersions, setShowVersions] = React9.useState(false);
+  const [view, setView] = React9.useState({ kind: "bots", botId: null });
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const entries = React8.useSyncExternalStore(
+  const entries = React9.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
     () => channels.getSnapshot(),
     () => channels.getSnapshot()
   );
-  const [selected, setSelected] = React8.useState(null);
+  const [selected, setSelected] = React9.useState(null);
   const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
   const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
   const openSettings = (botId) => setView({ kind: "channel", botId });
@@ -2533,7 +3043,7 @@ function ChatSettingsSection(props) {
   const EmptyState2 = chatUi?.components?.EmptyState;
   function botListView() {
     if (!activeEntry) return null;
-    return h7(BotList, {
+    return h8(BotList, {
       key: activeEntry.id,
       channelId: activeEntry.id,
       label: activeEntry.label,
@@ -2546,21 +3056,21 @@ function ChatSettingsSection(props) {
     });
   }
   function channelView() {
-    return h7(
-      React8.Fragment,
+    return h8(
+      React9.Fragment,
       null,
       typeof renderSlot === "function" ? renderSlot(
         CHANNEL_PAGE_SLOT,
         { channelId: activeId, botId: view.botId },
         { entryKey: activeId }
-      ) : h7("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
+      ) : h8("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
     );
   }
   function backBar() {
-    return h7(
+    return h8(
       "div",
       { className: "dchat-panelBar" },
-      h7("button", {
+      h8("button", {
         type: "button",
         className: "dchat-button",
         onClick: backToBots
@@ -2569,28 +3079,28 @@ function ChatSettingsSection(props) {
   }
   let body = null;
   if (entries.length === 0) {
-    body = EmptyState2 ? h7(EmptyState2, {
+    body = EmptyState2 ? h8(EmptyState2, {
       title: t("\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6"),
       description: t("\u5B89\u88C5\u6E20\u9053\u63D2\u4EF6\u540E\uFF0C\u8FD9\u91CC\u4F1A\u51FA\u73B0\u5BF9\u5E94\u7684\u804A\u5929\u8F6F\u4EF6\u3002")
-    }, h7(
+    }, h8(
       "ul",
       { className: "dchat-list" },
-      h7("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
-      ...KNOWN_CHANNEL_PACKAGES.map((name2) => h7("li", {
+      h8("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
+      ...KNOWN_CHANNEL_PACKAGES.map((name2) => h8("li", {
         key: name2,
         className: "dchat-listItem"
-      }, h7("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
+      }, h8("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
     )) : null;
   } else if (view.kind !== "bots") {
-    body = h7("div", { className: "dchat-solo" }, backBar(), channelView());
+    body = h8("div", { className: "dchat-solo" }, backBar(), channelView());
   } else {
-    body = h7(
+    body = h8(
       "div",
       { className: "dchat-layout" },
-      h7(
+      h8(
         "nav",
         { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
-        entries.map((entry) => h7(
+        entries.map((entry) => h8(
           "button",
           {
             key: entry.id,
@@ -2605,15 +3115,15 @@ function ChatSettingsSection(props) {
               backToBots();
             }
           },
-          h7(ChannelMark, { entry }),
-          h7(
+          h8(ChannelMark, { entry }),
+          h8(
             "span",
             { className: "dchat-channelLabel" },
-            h7("strong", null, entry.label())
+            h8("strong", null, entry.label())
           )
         ))
       ),
-      h7("main", {
+      h8("main", {
         className: "dchat-panel",
         role: "tabpanel",
         id: `dchat-panel-${activeId}`,
@@ -2621,28 +3131,28 @@ function ChatSettingsSection(props) {
       }, botListView())
     );
   }
-  return h7(
+  return h8(
     "section",
     { className: "dchat-page", "aria-label": t("Chat\u673A\u5668\u4EBA\u8BBE\u7F6E") },
-    h7(
+    h8(
       "header",
       { className: "dchat-header" },
-      h7(
+      h8(
         "div",
         { className: "dchat-brand" },
-        h7("strong", { className: "dchat-brandName" }, "DSH-Chat"),
-        h7("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
+        h8("strong", { className: "dchat-brandName" }, "DSH-Chat"),
+        h8("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
       ),
       // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
       // 用文字链接形态，避免和 DSH 自己的实心按钮（打开配置文件）平级抢注意力。
-      h7("button", {
+      h8("button", {
         type: "button",
         className: "dchat-button dchat-buttonLink",
         "aria-expanded": showVersions,
         onClick: () => setShowVersions((open) => !open)
       }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))
     ),
-    showVersions ? h7(VersionPanel, { connection, chatUi, translate: t }) : null,
+    showVersions ? h8(VersionPanel, { connection, chatUi, translate: t }) : null,
     body
   );
 }

@@ -126,10 +126,20 @@ const STEP_PUSH_OPTIONS = [
 function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor,
-    DeliveryTargetsEditor } = chatUi.components;
+    DeliveryTargetsEditor, WorkspaceEditor, PresetEditor,
+    AccessPolicyEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: bot.id,
   });
+  // 可选项（这台机器人用过的目录、Host 的 Agent Preset 列表）进来读一次。
+  React.useEffect(() => {
+    void settings.loadOptions();
+  }, [settings.loadOptions]);
+  const shared = {
+    workspace: settings.record?.workspace ?? null,
+    agentPreset: settings.record?.agentPreset ?? null,
+    accessPolicy: settings.record?.accessPolicy ?? null,
+  };
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -207,6 +217,26 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     h('div', { className: 'dchat-listItem' },
       h('span', null, t('已处理消息')),
       h('span', null, String(status.handled ?? 0)))),
+
+  h(WorkspaceEditor, {
+    value: shared.workspace,
+    options: settings.options?.workspacePaths ?? [],
+    translate: t,
+    onSave: settings.saveWorkspace,
+  }),
+
+  h(PresetEditor, {
+    value: shared.agentPreset,
+    options: settings.options?.presets ?? [],
+    translate: t,
+    onSave: settings.saveAgentPreset,
+  }),
+
+  h(AccessPolicyEditor, {
+    value: shared.accessPolicy,
+    translate: t,
+    onSave: settings.saveAccessPolicy,
+  }),
 
   h(ScopedModeEditor, {
     title: t('任务过程展示'),

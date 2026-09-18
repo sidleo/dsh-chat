@@ -11,6 +11,7 @@ import * as React from 'react';
 
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 import { useBotSettings } from './bot-settings.js';
+import { AccessPolicyEditor, PresetEditor, WorkspaceEditor } from './bot-shared-settings.js';
 import { ContextEnhancementEditor } from './context-enhancement.js';
 import { DeliveryTargetsEditor } from './delivery-targets.js';
 import { callChatRpc, callControlRpc, unwrapRpc } from './rpc.js';
@@ -89,6 +90,12 @@ export function createChatUi({ ctx, translate } = {}) {
       ContextEnhancementEditor,
       /** 通用"两作用域 × 多选项"设置块（如飞书任务过程展示）。 */
       ScopedModeEditor,
+      /** 机器人跑在哪个目录（只对新建会话生效）。 */
+      WorkspaceEditor,
+      /** 用哪套 Agent 预设（只对新建会话生效）。 */
+      PresetEditor,
+      /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
+      AccessPolicyEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
       DeliveryTargetsEditor,
     }),

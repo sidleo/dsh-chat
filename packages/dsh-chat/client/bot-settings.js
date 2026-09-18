@@ -15,10 +15,15 @@ import { callControlRpc, unwrapRpc } from './rpc.js';
  * 读取并保存某个机器人的共享设置。
  *
  * @param options - { connection, channelId, botId, enabled }。
- * @returns { record, phase, error, reload, saveContextEnhancement }。
+ * @returns {
+ *   record, phase, error, options, loadOptions, reload,
+ *   saveContextEnhancement, saveWorkspace, saveAgentPreset, saveAccessPolicy,
+ * }。
  */
 export function useBotSettings({ connection, channelId, botId, enabled = true }) {
   const [state, setState] = React.useState({ phase: 'idle', record: null, error: null });
+  /** 设置页的可选项（工作区候选、Agent Preset 列表），按需加载。 */
+  const [options, setOptions] = React.useState(null);
   const aliveRef = React.useRef(true);
 
   React.useEffect(() => {
@@ -44,6 +49,21 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     void load();
   }, [load]);
 
+  /** 读一次可选项（进设置页时调一次即可）。 */
+  const loadOptions = React.useCallback(async () => {
+    if (!enabled || !connection || !channelId || !botId) return null;
+    try {
+      const result = await callControlRpc(connection, 'bot.settings.options', { channelId, botId });
+      const value = unwrapRpc(result);
+      if (aliveRef.current) setOptions(value);
+      return value;
+    } catch {
+      // 可选项读不到不该让整页报错：对应编辑器退化成"手动输入"。
+      if (aliveRef.current) setOptions({ workspacePaths: [], presets: [] });
+      return null;
+    }
+  }, [connection, channelId, botId, enabled]);
+
   const saveContextEnhancement = React.useCallback(async (config) => {
     const result = await callControlRpc(connection, 'bot.context-enhancement.set', {
       channelId,
@@ -61,11 +81,43 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     return value.contextEnhancement;
   }, [connection, channelId, botId]);
 
+  /** 通用单字段保存：调端点、把返回值并回 record。 */
+  const saveField = React.useCallback(async (method, body, key) => {
+    const result = await callControlRpc(connection, method, { channelId, botId, ...body });
+    const value = unwrapRpc(result);
+    if (aliveRef.current) {
+      setState((current) => ({
+        ...current,
+        phase: 'ready',
+        record: { ...(current.record ?? {}), [key]: value[key] ?? null },
+      }));
+    }
+    return value[key] ?? null;
+  }, [connection, channelId, botId]);
+
+  const saveWorkspace = React.useCallback(
+    (workspace) => saveField('bot.workspace.set', { workspace }, 'workspace'),
+    [saveField],
+  );
+  const saveAgentPreset = React.useCallback(
+    (agentPreset) => saveField('bot.agent-preset.set', { agentPreset }, 'agentPreset'),
+    [saveField],
+  );
+  const saveAccessPolicy = React.useCallback(
+    (policy) => saveField('bot.access-policy.set', { policy }, 'accessPolicy'),
+    [saveField],
+  );
+
   return {
     record: state.record,
     phase: state.phase,
     error: state.error,
+    options,
+    loadOptions,
     reload: load,
     saveContextEnhancement,
+    saveWorkspace,
+    saveAgentPreset,
+    saveAccessPolicy,
   };
 }

@@ -797,3 +797,70 @@ test('chat_send_file：只发已保存目标，失败给可执行的下一步', 
     await app.cleanup();
   }
 });
+
+test('机器人设置：工作区校验、Agent 预设对账、访问策略用同一份校验', async () => {
+  const app = await bootstrap();
+  try {
+    // 工作区：必须是存在的目录，且一律存绝对路径。
+    const missing = await callRoute(app.routes, HUB_PATH, 'bot.workspace.set', {
+      channelId: 'fixture', botId: 'bot_1', workspace: '/definitely/not/here/at/all',
+    });
+    assert.equal(missing.result.ok, false);
+    assert.match(missing.result.error.message, /不存在|读不到/);
+
+    const okWorkspace = await callRoute(app.routes, HUB_PATH, 'bot.workspace.set', {
+      channelId: 'fixture', botId: 'bot_1', workspace: app.dataDir,
+    });
+    assert.equal(okWorkspace.result.ok, true);
+    assert.equal(okWorkspace.result.value.workspace, app.dataDir);
+    const readBack = await callRoute(app.routes, HUB_PATH, 'bot.settings.get', {
+      channelId: 'fixture', botId: 'bot_1',
+    });
+    assert.equal(readBack.result.value.settings.workspace, app.dataDir);
+
+    // 访问策略：与 host 拦消息时同一份校验，坏数据进不去。
+    const badPolicy = await callRoute(app.routes, HUB_PATH, 'bot.access-policy.set', {
+      channelId: 'fixture', botId: 'bot_1', policy: { direct: { mode: 'everyone' }, group: {} },
+    });
+    assert.equal(badPolicy.result.ok, false);
+
+    const policy = {
+      direct: {
+        mode: 'allowlist',
+        open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+        allowlist: { users: [{ id: 'ou_alice', canExecuteCommands: true }] },
+      },
+      group: {
+        mode: 'open',
+        open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] },
+        allowlist: { users: [] },
+      },
+    };
+    const okPolicy = await callRoute(app.routes, HUB_PATH, 'bot.access-policy.set', {
+      channelId: 'fixture', botId: 'bot_1', policy,
+    });
+    assert.equal(okPolicy.result.ok, true);
+    assert.equal(okPolicy.result.value.accessPolicy.direct.allowlist.users[0].id, 'ou_alice');
+
+    // Agent 预设：这台 Host 没装 agentPresets 服务时不做对账（不该把设置页卡死）。
+    const preset = await callRoute(app.routes, HUB_PATH, 'bot.agent-preset.set', {
+      channelId: 'fixture', botId: 'bot_1', agentPreset: 'some-preset',
+    });
+    assert.equal(preset.result.ok, true);
+    assert.equal(preset.result.value.agentPreset, 'some-preset');
+
+    // 可选项端点：至少要把当前值带回来，供渠道页渲染。
+    const options = await callRoute(app.routes, HUB_PATH, 'bot.settings.options', {
+      channelId: 'fixture', botId: 'bot_1',
+    });
+    assert.equal(options.result.ok, true);
+    assert.equal(options.result.value.current.workspace, app.dataDir);
+    assert.equal(options.result.value.current.agentPreset, 'some-preset');
+    assert.deepEqual(options.result.value.current.accessPolicy.direct.allowlist.users,
+      [{ id: 'ou_alice', canExecuteCommands: true }]);
+    assert.ok(Array.isArray(options.result.value.workspacePaths));
+    assert.ok(Array.isArray(options.result.value.presets));
+  } finally {
+    await app.cleanup();
+  }
+});

@@ -152,7 +152,9 @@ function historyMessagesOf(records, limit) {
  * @param options - { ctx, logger, store, guidance, interactions }。
  * @returns 会话桥。
  */
-export function createSessionBridge({ ctx, logger = console, store, guidance, interactions }) {
+export function createSessionBridge({
+  ctx, logger = console, store, settings = null, guidance, interactions,
+}) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== 'function') {
     throw new TypeError('会话桥需要 context 的 typertGateway.invoke（请在 inject 中声明）。');
@@ -280,6 +282,24 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
    * @param options - { channelId, botId, key, workspacePath, signal }。
    * @returns { sessionId, created }。
    */
+  /**
+   * 新建会话，带上机器人设置的 Agent Preset。
+   *
+   * 预设可能已经被删掉/改名：那样 `session.create` 会失败，**不能因此让机器人一个会话都建不出来**。
+   * 所以失败时记一条 warn、退回 Host 默认预设重试一次。
+   */
+  async function createSession({ workspaceId, agentPreset, signal, channelId, botId }) {
+    const request = { workspaceId, ...(agentPreset ? { agentPreset } : {}) };
+    try {
+      return await invoke('session', 'create', { request }, signal);
+    } catch (error) {
+      if (!agentPreset) throw error;
+      logger.warn?.(`[dsh-chat] 机器人 ${channelId}/${botId} 的 Agent Preset「${agentPreset}」不可用`
+        + `（${error?.message ?? error}），本次退回 Host 默认。`);
+      return invoke('session', 'create', { request: { workspaceId } }, signal);
+    }
+  }
+
   async function ensure({
     channelId, botId, key, workspacePath, signal, channelLabel = '', botLabel = '',
   }) {
@@ -292,15 +312,28 @@ export function createSessionBridge({ ctx, logger = console, store, guidance, in
       // 会话已被删除：解绑后重建。
       await store.unbind(channelId, botId, key);
     }
-    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+    /**
+     * 工作区与 Agent Preset 都取机器人自己的设置（调用方传的 workspacePath 优先）。
+     * 两者都**只在新建会话时生效**——已有绑定保持原样，设置页必须把这一点讲清楚。
+     */
+    const record = settings?.read?.(channelId, botId) ?? {};
+    const targetWorkspace = typeof workspacePath === 'string' && workspacePath.trim()
+      ? workspacePath
+      : record.workspace;
+    if (typeof targetWorkspace !== 'string' || !targetWorkspace.trim()) {
       const error = new Error('该机器人还没有设置工作区，无法创建会话。');
       error.code = 'chat/workspace-required';
       throw error;
     }
     const workspaceTitle = [channelLabel, botLabel].map((part) => String(part ?? '').trim())
       .filter(Boolean).join(' · ');
-    const workspaceId = await resolveWorkspaceId(workspacePath, signal, workspaceTitle);
-    const created = await invoke('session', 'create', { request: { workspaceId } }, signal);
+    const workspaceId = await resolveWorkspaceId(targetWorkspace, signal, workspaceTitle);
+    const agentPreset = typeof record.agentPreset === 'string' && record.agentPreset
+      ? record.agentPreset
+      : null;
+    const created = await createSession({
+      workspaceId, agentPreset, signal, botId, channelId,
+    });
     const sessionId = created?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) {
       const error = new Error('DSH 未返回会话标识。');

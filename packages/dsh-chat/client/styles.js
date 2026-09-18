@@ -125,6 +125,39 @@ const CSS = `
   flex-direction: column;
   gap: 10px;
 }
+.dchat-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+.dchat-check input {
+  margin: 0;
+}
+.dchat-policyGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dchat-policyGrid > * + * {
+  border-top: 1px solid var(--dsw-alias-separator-primary);
+  padding-top: 14px;
+}
+/* 作用域标题行：模式下拉按内容宽度，不要像操作行里的下拉那样吃掉整行。 */
+.dchat-policyHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dchat-policyHead > select {
+  width: auto;
+  flex: none;
+}
+.dchat-actions > .dchat-check {
+  flex: none;
+}
 /* 卡片套卡片（机器人卡里放渠道/机器人级设置块）时，内层去边框、改成分隔线：
    两层边框 + 两层 padding 会让缩进和视觉重量都乱掉。 */
 .dchat-card .dchat-card {
@@ -568,6 +601,7 @@ const CSS = `
 }
 .dchat-textarea,
 .dchat-targetField input,
+.dchat-input,
 .dchat-select {
   width: 100%;
   box-sizing: border-box;
