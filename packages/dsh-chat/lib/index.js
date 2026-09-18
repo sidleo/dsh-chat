@@ -2466,14 +2466,17 @@ function createSessionBridge({
   async function markSessionChannel(sessionId, channelLabel2, signal) {
     const label = typeof channelLabel2 === "string" ? channelLabel2.trim() : "";
     if (!label || namedSessions.has(sessionId)) return;
-    namedSessions.add(sessionId);
     try {
       const listed = await invoke("session", "list", { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
       if (typeof title !== "string" || !title.trim()) return;
-      if (title.startsWith(`${label} \xB7 `)) return;
+      if (title.startsWith(`${label} \xB7 `)) {
+        namedSessions.add(sessionId);
+        return;
+      }
       await invoke("session", "rename", { request: { sessionId, title: `${label} \xB7 ${title}` } }, signal);
+      namedSessions.add(sessionId);
       logger.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u5DF2\u6807\u6E20\u9053\uFF1A${sessionId} \u2192 ${label} \xB7 ${title}`);
     } catch (error) {
       logger.warn?.(`[dsh-chat] \u6807\u8BB0\u4F1A\u8BDD\u6E20\u9053\u5931\u8D25\uFF1A${sessionId} ${error?.message ?? error}`);
@@ -3064,6 +3067,7 @@ function createSessionBridge({
     cancel,
     isRunning,
     rename: rename3,
+    markSessionChannel,
     reset,
     history,
     runCommand,

@@ -842,3 +842,48 @@ test('同一会话的回合串行：第二条消息等第一条结束，不会�
   await Promise.allSettled([first, second]);
   await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
+
+test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮要能补上', async () => {
+  const { createSessionBridge } = await import('../packages/dsh-chat/host/sessions.mjs');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const renamed = [];
+  let titleReady = false;
+  const ctx = {
+    typertGateway: {
+      // 网关是 `invoke({ namespace, method, args, signal })` 的对象形式。
+      invoke: async ({ namespace, method, args }) => {
+        if (namespace !== 'session') return {};
+        if (method === 'list') {
+          return {
+            items: [{
+              sessionId: 'session-1',
+              projections: { values: titleReady ? { title: '看看昨天的销售' } : {} },
+            }],
+          };
+        }
+        if (method === 'rename') {
+          renamed.push(args?.request?.title);
+          return {};
+        }
+        return {};
+      },
+    },
+  };
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-mark-'));
+  const bridge = createSessionBridge({
+    ctx, logger: { info() {}, warn() {}, error() {} },
+    store: null, settings: { read: () => ({}) },
+  });
+
+  // 第一次：标题还没生成 —— 不能记成"已标记"。
+  await bridge.markSessionChannel?.('session-1', '飞书');
+  assert.deepEqual(renamed, [], '标题没生成时不该重命名');
+  // 第二次（标题已生成）——要补上前缀。
+  titleReady = true;
+  await bridge.markSessionChannel?.('session-1', '飞书');
+  assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+});

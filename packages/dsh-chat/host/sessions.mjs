@@ -186,19 +186,23 @@ export function createSessionBridge({
   async function markSessionChannel(sessionId, channelLabel, signal) {
     const label = typeof channelLabel === 'string' ? channelLabel.trim() : '';
     if (!label || namedSessions.has(sessionId)) return;
-    namedSessions.add(sessionId);
     try {
       // 标题只有 `session/list` 的投影里有（`session/page` 不带投影）。
-      // 每个会话只做一次，代价可接受。
       const listed = await invoke('session', 'list', { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
+      // 标题要等第一轮跑完才生成：这时**不能**记成"已标记"，否则同一个会话
+      // 在这个进程里再也不会重试，前缀就永远补不上了。
       if (typeof title !== 'string' || !title.trim()) return;
-      if (title.startsWith(`${label} · `)) return;
+      if (title.startsWith(`${label} · `)) {
+        namedSessions.add(sessionId);
+        return;
+      }
       await invoke('session', 'rename', { request: { sessionId, title: `${label} · ${title}` } }, signal);
+      namedSessions.add(sessionId);
       logger.info?.(`[dsh-chat] 会话标题已标渠道：${sessionId} → ${label} · ${title}`);
     } catch (error) {
-      // 命名是锦上添花：失败只留日志，绝不影响消息处理。
+      // 命名是锦上添花：失败只留日志、且不记"已标记"，下一轮还会再试，绝不影响消息处理。
       logger.warn?.(`[dsh-chat] 标记会话渠道失败：${sessionId} ${error?.message ?? error}`);
     }
   }
@@ -950,6 +954,7 @@ export function createSessionBridge({
     cancel,
     isRunning,
     rename,
+    markSessionChannel,
     reset,
     history,
     runCommand,
