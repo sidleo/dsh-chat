@@ -155,6 +155,52 @@ const CSS = `
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-primary);
 }
+.dchat-panelBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dchat-botList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dchat-botRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.dchat-botMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dchat-botTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.dchat-botMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dchat-botError {
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+  word-break: break-word;
+}
 .dchat-versionMeta {
   display: inline-flex;
   align-items: center;

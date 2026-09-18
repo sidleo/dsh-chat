@@ -42,6 +42,22 @@ export const zh = {
   '已删除。': '已删除。',
   '候选目标需要先保存，保存后才能主动发送。': '候选目标需要先保存，保存后才能主动发送。',
   // 版本与更新（version-panel.js）
+  '当前页面不支持渠道子槽。': '当前页面不支持渠道子槽。',
+  '设置': '设置',
+  '机器人': '机器人',
+  '每个机器人一行；点「设置」进入它的设置页（上下文增强、主动投递、工作区…）。':
+    '每个机器人一行；点「设置」进入它的设置页（上下文增强、主动投递、工作区…）。',
+  '这个渠道还没有机器人': '这个渠道还没有机器人',
+  '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。':
+    '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。',
+  '打开渠道设置页': '打开渠道设置页',
+  '← 机器人列表': '← 机器人列表',
+  '已处理': '已处理',
+  '最近': '最近',
+  '运行正常': '运行正常',
+  '正在启动': '正在启动',
+  '重连中': '重连中',
+  '已停止': '已停止',
   '版本与更新': '版本与更新',
   '收起版本与更新': '收起版本与更新',
   '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':
@@ -98,6 +114,22 @@ export const en = {
   '已删除。': 'Deleted.',
   '候选目标需要先保存，保存后才能主动发送。':
     'A candidate must be saved before it can receive proactive messages.',
+  '当前页面不支持渠道子槽。': 'This page does not support channel sub-slots.',
+  '设置': 'Settings',
+  '机器人': 'Bots',
+  '每个机器人一行；点「设置」进入它的设置页（上下文增强、主动投递、工作区…）。':
+    'One row per bot; click Settings to open its page (context enhancement, proactive delivery, workspace…).',
+  '这个渠道还没有机器人': 'No bot on this channel yet',
+  '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。':
+    'Finish onboarding on the channel page (Feishu app credentials, WeChat QR scan) and the bot shows up here.',
+  '打开渠道设置页': 'Open channel settings',
+  '← 机器人列表': '← Bot list',
+  '已处理': 'Handled',
+  '最近': 'Last',
+  '运行正常': 'Running',
+  '正在启动': 'Starting',
+  '重连中': 'Reconnecting',
+  '已停止': 'Stopped',
   '版本与更新': 'Version & updates',
   '收起版本与更新': 'Hide version & updates',
   '升级插件后需要重启 dsh；只改设置页代码则刷新页面即可。':

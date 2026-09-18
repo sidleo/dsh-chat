@@ -9,6 +9,7 @@
 import * as React from 'react';
 
 import { CHANNEL_PAGE_SLOT } from '../shared/contract.mjs';
+import { BotList } from './bot-list.js';
 import { VersionPanel } from './version-panel.js';
 
 const h = React.createElement;
@@ -37,6 +38,11 @@ export function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
   /** 版本与更新默认收起：右上角入口按需展开（只在展开时读一次数据）。 */
   const [showVersions, setShowVersions] = React.useState(false);
+  /**
+   * 右栏两级视图：`{ kind: 'bots' }` 机器人列表 → `{ kind: 'channel', botId }` 机器人设置页。
+   * 和 dsh-im 同构：渠道 → 机器人 → 设置。
+   */
+  const [view, setView] = React.useState({ kind: 'bots', botId: null });
   const t = typeof translate === 'function' ? translate
     : (typeof frameworkT === 'function' ? frameworkT : (key) => key);
 
@@ -50,9 +56,46 @@ export function ChatSettingsSection(props) {
     ? selected
     : (entries[0]?.id ?? null);
 
+  // 切换渠道时回到"机器人列表"，否则会带着上一个渠道的 botId 进错页。
+  const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
+  const openSettings = (botId) => setView({ kind: 'channel', botId });
+  const backToBots = () => setView({ kind: 'bots', botId: null });
+
   const EmptyState = chatUi?.components?.EmptyState;
-  const body = entries.length === 0
-    ? (EmptyState
+
+  /** 一级视图：机器人列表。 */
+  function botListView() {
+    if (!activeEntry) return null;
+    return h(BotList, {
+      key: activeEntry.id,
+      channelId: activeEntry.id,
+      label: activeEntry.label,
+      connection,
+      chatUi,
+      translate: t,
+      onOpenSettings: openSettings,
+    });
+  }
+
+  /** 二级视图：机器人（或整个渠道）的设置页。 */
+  function channelView() {
+    return h(React.Fragment, null,
+      h('div', { className: 'dchat-panelBar' },
+        h('button', {
+          type: 'button', className: 'dchat-button', onClick: backToBots,
+        }, t('← 机器人列表'))),
+      typeof renderSlot === 'function'
+        ? renderSlot(
+          CHANNEL_PAGE_SLOT,
+          { channelId: activeId, botId: view.botId },
+          { entryKey: activeId },
+        )
+        : h('p', { className: 'dchat-cardDescription' }, t('当前页面不支持渠道子槽。')));
+  }
+
+  let body = null;
+  if (entries.length === 0) {
+    body = EmptyState
       ? h(EmptyState, {
         title: t('未安装任何聊天软件插件'),
         description: t('安装渠道插件后，这里会出现对应的聊天软件。'),
@@ -61,8 +104,9 @@ export function ChatSettingsSection(props) {
         ...KNOWN_CHANNEL_PACKAGES.map((name) => h('li', {
           key: name, className: 'dchat-listItem',
         }, h('code', { className: 'dchat-code' }, `dsh plugin --profile web add ${name}`)))))
-      : null)
-    : h('div', { className: 'dchat-layout' },
+      : null;
+  } else {
+    body = h('div', { className: 'dchat-layout' },
       h('nav', { className: 'dchat-rail', role: 'tablist', 'aria-label': t('渠道导航') },
         entries.map((entry) => h('button', {
           key: entry.id,
@@ -72,22 +116,22 @@ export function ChatSettingsSection(props) {
           className: 'dchat-channel',
           'aria-selected': entry.id === activeId,
           'aria-controls': `dchat-panel-${entry.id}`,
-          onClick: () => setSelected(entry.id),
+          onClick: () => {
+            setSelected(entry.id);
+            backToBots();
+          },
         },
         h(ChannelMark, { entry }),
         h('span', { className: 'dchat-channelLabel' },
           h('strong', null, entry.label()),
-          entry.capabilities?.note
-            ? h('small', null, entry.capabilities.note)
-            : null)))),
+          entry.capabilities?.note ? h('small', null, entry.capabilities.note) : null)))),
       h('main', {
         className: 'dchat-panel',
         role: 'tabpanel',
         id: `dchat-panel-${activeId}`,
         'aria-labelledby': `dchat-tab-${activeId}`,
-      }, typeof renderSlot === 'function'
-        ? renderSlot(CHANNEL_PAGE_SLOT, { channelId: activeId }, { entryKey: activeId })
-        : h('p', { className: 'dchat-cardDescription' }, '当前页面不支持渠道子槽。')));
+      }, view.kind === 'bots' ? botListView() : channelView()));
+  }
 
   return h('section', { className: 'dchat-page', 'aria-label': t('Chat机器人设置') },
     h('header', { className: 'dchat-header' },

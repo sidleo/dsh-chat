@@ -128716,8 +128716,11 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     const { bot } = record;
     const bridgeStatus = record.bridge?.status?.() ?? { handled: 0, lastError: null };
     return Object.freeze({
-      id: bot.id,
+      // 规范化字段（契约要求）：hub 的机器人列表按这几个键渲染，渠道无关。
+      botId: bot.id,
       name: bot.botName ?? null,
+      // 以下三个是飞书自己的补充信息。
+      id: bot.id,
       appIdMasked: maskAppId(bot.appId),
       domain: bot.domain,
       state: record.phase,

@@ -305,7 +305,8 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
 }
 
 function WeixinPage(props) {
-  const { chatUi, connection, translate } = props;
+  // hub 从机器人列表点「设置」进来时会带上 botId：只展示这一台机器人的设置。
+  const { chatUi, connection, translate, botId = null } = props;
   const t = typeof translate === 'function' ? translate : (key) => key;
   const [state, setState] = React.useState({ phase: 'idle', value: null, error: null });
 
@@ -324,7 +325,8 @@ function WeixinPage(props) {
   }, [load]);
 
   const { Panel, EmptyState } = chatUi.components;
-  const accounts = state.value?.accounts ?? [];
+  const allAccounts = state.value?.accounts ?? [];
+  const accounts = botId ? allAccounts.filter((account) => account.botId === botId) : allAccounts;
 
   return h(React.Fragment, null,
     h(Panel, {

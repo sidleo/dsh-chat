@@ -49,7 +49,8 @@ export function apply(ctx) {
         async start() {},
         async stop() {},
         endpoints: {
-          'connection.status': async () => ({ ok: true, value: { phase: 'idle' } }),
+          // 规范化名单：hub 的机器人列表按 `bots` 渲染（字段见 §4；渠道自己的额外字段随便加）
+          'connection.status': async () => ({ ok: true, value: { bots: [] } }),
         },
       };
     },
@@ -360,6 +361,21 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
   1. `session/page` 的 `throughSeq: -1` 是**空页**（拿它探测会话存在性），取尾部要用
      `session/follow` 的 **snapshot**（`records` + `cursor`）；`session/page` 得先有 seq 才能翻页。
   2. `session/follow` 的 `assistantStream` 只接受 `true` 或省略，传 `false` 会被边界校验拒掉。
+
+### 逐机器人状态：`connection.status` 的规范形状
+
+设置页的「机器人列表」是 **hub 渲染**的（渠道 → 机器人 → 机器人设置 三级导航），
+所以 `connection.status` 必须给出**统一的 `bots` 名单**（渠道自己的额外字段随便加）：
+
+```js
+{ bots: [{ botId, name, state, errorMessage, handled, lastHandledAt }] }
+```
+
+- `state`：`running | starting | reconnecting | failed | stopped`（hub 据此渲染状态点）；
+- `handled` / `lastHandledAt` / `errorMessage`：用户能直接看到的运行现场，
+  失败原因绝不能只留在终端日志里；
+- 机器人的**设置页**仍然是渠道自己的页面（`chat.channel.page`）；hub 点「设置」时会把
+  `botId` 一起传给该槽，渠道页可据此只渲染这一台机器人。
 
 ### 会话渠道标识（两个层次）
 

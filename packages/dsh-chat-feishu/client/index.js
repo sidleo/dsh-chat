@@ -236,7 +236,8 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
 }
 
 function FeishuPage(props) {
-  const { chatUi, connection, translate } = props;
+  // hub 从机器人列表点「设置」进来时会带上 botId：只展示这一台机器人的设置。
+  const { chatUi, connection, translate, botId = null } = props;
   const t = typeof translate === 'function' ? translate : (key) => key;
   const [state, setState] = React.useState({ phase: 'idle', value: null, error: null });
 
@@ -255,7 +256,8 @@ function FeishuPage(props) {
   }, [load]);
 
   const { Panel, EmptyState } = chatUi.components;
-  const bots = state.value?.bots ?? [];
+  const allBots = state.value?.bots ?? [];
+  const bots = botId ? allBots.filter((bot) => bot.botId === botId || bot.id === botId) : allBots;
 
   return h(React.Fragment, null,
     h(Panel, {

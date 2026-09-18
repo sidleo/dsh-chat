@@ -1625,6 +1625,8 @@ function createWeixinController({ deps, logger = console, config = {}, internals
       botId: record.account.botId,
       accountIdMasked: maskAccountId(record.account.accountId),
       botName: record.account.botName ?? null,
+      // 规范化字段（契约要求）：hub 的机器人列表按这几个键渲染。
+      name: record.account.botName ?? null,
       state: runtime.phase ?? record.phase,
       error: record.error ?? null,
       errorMessage: record.errorMessage ?? runtime.error ?? null,
@@ -1641,12 +1643,15 @@ function createWeixinController({ deps, logger = console, config = {}, internals
   }
   async function status() {
     await configStore.ready();
+    const accounts = Object.freeze(configStore.list().map((account) => accountStatus(
+      runtimes.get(account.botId) ?? { account, phase: "stopped", runtime: null }
+    )));
     return Object.freeze({
       channel: deps.channelId,
       dataDir,
-      accounts: Object.freeze(configStore.list().map((account) => accountStatus(
-        runtimes.get(account.botId) ?? { account, phase: "stopped", runtime: null }
-      )))
+      // `bots` 是契约里的规范化名单（hub 的机器人列表按它渲染）；`accounts` 保留给老代码。
+      bots: accounts,
+      accounts
     });
   }
   async function startAll() {

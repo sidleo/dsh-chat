@@ -48,6 +48,7 @@ const PACKAGES = [
       'packages/dsh-chat/client/delivery-targets.js',
       'packages/dsh-chat/client/scoped-mode-editor.js',
       'packages/dsh-chat/client/version-panel.js',
+      'packages/dsh-chat/client/bot-list.js',
     ],
     dictionary: 'packages/dsh-chat/client/i18n.js',
   },

@@ -1275,6 +1275,52 @@ var CSS = `
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-primary);
 }
+.dchat-panelBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dchat-botList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dchat-botRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.dchat-botMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dchat-botTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.dchat-botMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dchat-botError {
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+  word-break: break-word;
+}
 .dchat-versionMeta {
   display: inline-flex;
   align-items: center;
@@ -1745,6 +1791,20 @@ var zh = {
   "\u5DF2\u5220\u9664\u3002": "\u5DF2\u5220\u9664\u3002",
   "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002",
   // 版本与更新（version-panel.js）
+  "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002": "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002",
+  "\u8BBE\u7F6E": "\u8BBE\u7F6E",
+  "\u673A\u5668\u4EBA": "\u673A\u5668\u4EBA",
+  "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002": "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002",
+  "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA": "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA",
+  "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
+  "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875": "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875",
+  "\u2190 \u673A\u5668\u4EBA\u5217\u8868": "\u2190 \u673A\u5668\u4EBA\u5217\u8868",
+  "\u5DF2\u5904\u7406": "\u5DF2\u5904\u7406",
+  "\u6700\u8FD1": "\u6700\u8FD1",
+  "\u8FD0\u884C\u6B63\u5E38": "\u8FD0\u884C\u6B63\u5E38",
+  "\u6B63\u5728\u542F\u52A8": "\u6B63\u5728\u542F\u52A8",
+  "\u91CD\u8FDE\u4E2D": "\u91CD\u8FDE\u4E2D",
+  "\u5DF2\u505C\u6B62": "\u5DF2\u505C\u6B62",
   "\u7248\u672C\u4E0E\u66F4\u65B0": "\u7248\u672C\u4E0E\u66F4\u65B0",
   "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002",
@@ -1793,6 +1853,20 @@ var en = {
   "\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002": "Saved. You can now send proactively.",
   "\u5DF2\u5220\u9664\u3002": "Deleted.",
   "\u5019\u9009\u76EE\u6807\u9700\u8981\u5148\u4FDD\u5B58\uFF0C\u4FDD\u5B58\u540E\u624D\u80FD\u4E3B\u52A8\u53D1\u9001\u3002": "A candidate must be saved before it can receive proactive messages.",
+  "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002": "This page does not support channel sub-slots.",
+  "\u8BBE\u7F6E": "Settings",
+  "\u673A\u5668\u4EBA": "Bots",
+  "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002": "One row per bot; click Settings to open its page (context enhancement, proactive delivery, workspace\u2026).",
+  "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA": "No bot on this channel yet",
+  "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "Finish onboarding on the channel page (Feishu app credentials, WeChat QR scan) and the bot shows up here.",
+  "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875": "Open channel settings",
+  "\u2190 \u673A\u5668\u4EBA\u5217\u8868": "\u2190 Bot list",
+  "\u5DF2\u5904\u7406": "Handled",
+  "\u6700\u8FD1": "Last",
+  "\u8FD0\u884C\u6B63\u5E38": "Running",
+  "\u6B63\u5728\u542F\u52A8": "Starting",
+  "\u91CD\u8FDE\u4E2D": "Reconnecting",
+  "\u5DF2\u505C\u6B62": "Stopped",
   "\u7248\u672C\u4E0E\u66F4\u65B0": "Version & updates",
   "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "Hide version & updates",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "Upgrading the plugin needs a dsh restart; settings-only changes just need a page refresh.",
@@ -1956,9 +2030,10 @@ function installSessionBadges({
     for (const entry of channels?.getSnapshot?.() ?? []) {
       const badge = entry.sessionBadge;
       if (!badge || typeof badge.text !== "string" || !badge.text) continue;
+      const label = typeof entry.label === "function" ? entry.label() : entry.label;
       badges.set(entry.id, {
         channel: entry.id,
-        label: String(entry.label ?? entry.id),
+        label: String(label ?? entry.id),
         uri: badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
       });
     }
@@ -2015,11 +2090,106 @@ function installSessionBadges({
 }
 
 // packages/dsh-chat/client/section.js
-var React7 = __toESM(require("react"), 1);
+var React8 = __toESM(require("react"), 1);
 
-// packages/dsh-chat/client/version-panel.js
+// packages/dsh-chat/client/bot-list.js
 var React6 = __toESM(require("react"), 1);
 var h5 = React6.createElement;
+var STATE_TEXT = Object.freeze({
+  running: "\u8FD0\u884C\u6B63\u5E38",
+  starting: "\u6B63\u5728\u542F\u52A8",
+  reconnecting: "\u91CD\u8FDE\u4E2D",
+  failed: "\u542F\u52A8\u5931\u8D25",
+  stopped: "\u5DF2\u505C\u6B62"
+});
+var TONES2 = Object.freeze({
+  running: "success",
+  starting: "warning",
+  reconnecting: "warning",
+  failed: "error"
+});
+function formatTime(value) {
+  if (!value) return "\u2014";
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return "\u2014";
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}:${pad(time.getMinutes())}`;
+}
+function BotList(props) {
+  const { channelId, label, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
+  const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
+  const [state, setState] = React6.useState({ phase: "loading", bots: [], error: null });
+  const load = React6.useCallback(() => {
+    setState((current) => ({ ...current, phase: "loading", error: null }));
+    chatUi.callChannelRpc(connection, channelId, "connection.status", {}).then((result) => {
+      const value = chatUi.unwrapRpc(result);
+      setState({ phase: "ready", bots: value?.bots ?? [], error: null });
+    }).catch((error) => {
+      setState({ phase: "error", bots: [], error: error?.message ?? String(error) });
+    });
+  }, [channelId, chatUi, connection]);
+  React6.useEffect(() => {
+    load();
+  }, [load]);
+  const { Panel: Panel2, EmptyState: EmptyState2, StatusPill: StatusPill2 } = chatUi.components;
+  const bots = state.bots;
+  return h5(
+    Panel2,
+    {
+      title: `${label()} \xB7 ${t("\u673A\u5668\u4EBA")}`,
+      description: t("\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002"),
+      actions: h5("button", {
+        type: "button",
+        className: "dchat-button",
+        onClick: load,
+        disabled: state.phase === "loading"
+      }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
+    },
+    state.error ? h5("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
+    state.phase !== "loading" && bots.length === 0 ? h5(EmptyState2, {
+      title: t("\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA"),
+      description: t("\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
+    }, h5("button", {
+      type: "button",
+      className: "dchat-button",
+      onClick: () => onOpenSettings(null)
+    }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
+    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot) => h5(
+      "li",
+      {
+        key: bot.botId,
+        className: "dchat-botRow"
+      },
+      h5(
+        "div",
+        { className: "dchat-botMain" },
+        h5(
+          "div",
+          { className: "dchat-botTitle" },
+          h5("strong", null, bot.name || bot.botId),
+          h5(StatusPill2, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? "\u5DF2\u505C\u6B62") })
+        ),
+        h5(
+          "div",
+          { className: "dchat-botMeta" },
+          h5("span", { className: "dchat-code" }, bot.botId),
+          h5("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
+          h5("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
+        ),
+        bot.errorMessage || bot.lastError ? h5("div", { className: "dchat-botError" }, bot.errorMessage ?? bot.lastError) : null
+      ),
+      h5("button", {
+        type: "button",
+        className: "dchat-button",
+        onClick: () => onOpenSettings(bot.botId)
+      }, t("\u8BBE\u7F6E"))
+    ))) : null
+  );
+}
+
+// packages/dsh-chat/client/version-panel.js
+var React7 = __toESM(require("react"), 1);
+var h6 = React7.createElement;
 var CHANNEL_PACKAGE_HINTS = Object.freeze({
   feishu: "dsh-chat-feishu",
   weixin: "dsh-chat-weixin"
@@ -2027,8 +2197,8 @@ var CHANNEL_PACKAGE_HINTS = Object.freeze({
 function VersionPanel(props) {
   const { connection, chatUi, translate, t: frameworkT } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React6.useState({ loading: true, error: null, info: null });
-  const load = React6.useCallback(() => {
+  const [state, setState] = React7.useState({ loading: true, error: null, info: null });
+  const load = React7.useCallback(() => {
     setState((current) => ({ ...current, loading: true, error: null }));
     chatUi.callControlRpc(connection, "channel.list", {}).then((result) => {
       setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
@@ -2036,84 +2206,84 @@ function VersionPanel(props) {
       setState({ loading: false, error: error?.message ?? String(error), info: null });
     });
   }, [chatUi, connection]);
-  React6.useEffect(() => {
+  React7.useEffect(() => {
     load();
   }, [load]);
   const Panel2 = chatUi.components.Panel;
   const StatusPill2 = chatUi.components.StatusPill;
   const info = state.info;
-  return h5(
+  return h6(
     Panel2,
     {
       title: t("\u7248\u672C\u4E0E\u66F4\u65B0"),
       description: t("\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002"),
-      actions: h5("button", {
+      actions: h6("button", {
         type: "button",
         className: "dchat-button",
         onClick: load,
         disabled: state.loading
       }, state.loading ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
     },
-    state.error ? h5("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
-    h5(
+    state.error ? h6("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
+    h6(
       "ul",
       { className: "dchat-list" },
-      h5(
+      h6(
         "li",
         { className: "dchat-listItem" },
-        h5("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
-        h5(
+        h6("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
+        h6(
           "code",
           { className: "dchat-code" },
           `${info?.hubPackage ?? "dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
         )
       ),
-      h5(
+      h6(
         "li",
         { className: "dchat-listItem" },
-        h5("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
-        h5("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
+        h6("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
+        h6("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
       ),
-      ...(info?.channels ?? []).map((channel) => h5(
+      ...(info?.channels ?? []).map((channel) => h6(
         "li",
         {
           key: channel.id,
           className: "dchat-listItem"
         },
-        h5("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
-        h5(
+        h6("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
+        h6(
           "span",
           { className: "dchat-versionMeta" },
-          h5("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
-          h5(StatusPill2, {
+          h6("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
+          h6(StatusPill2, {
             status: channel.status,
             label: channel.status === "running" ? t("\u6E20\u9053\u5DF2\u5C31\u7EEA") : channel.error ? t("\u6E20\u9053\u542F\u52A8\u5931\u8D25") : t("\u6E20\u9053\u6B63\u5728\u542F\u52A8")
           })
         )
       ))
     ),
-    info?.dataDir ? h5(
+    info?.dataDir ? h6(
       "ul",
       { className: "dchat-list" },
-      h5(
+      h6(
         "li",
         { className: "dchat-listItem" },
-        h5("span", null, t("\u6570\u636E\u76EE\u5F55")),
-        h5("code", { className: "dchat-code" }, info.dataDir)
+        h6("span", null, t("\u6570\u636E\u76EE\u5F55")),
+        h6("code", { className: "dchat-code" }, info.dataDir)
       ),
-      h5(
+      h6(
         "li",
         { className: "dchat-listItem" },
-        h5("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
-        h5("code", { className: "dchat-code" }, info.logDir)
+        h6("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
+        h6("code", { className: "dchat-code" }, info.logDir)
       )
     ) : null,
-    h5(
+    h6(
       "div",
       { className: "dchat-updateHint" },
-      h5("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
-      h5("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
-      h5(
+      h6("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
+      h6("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
+      h6(
         "code",
         { className: "dchat-code dchat-codeBlock" },
         "dsh plugin --profile web add <\u672C\u4ED3\u5E93 packages/dsh-chat \u7684\u7EDD\u5BF9\u8DEF\u5F84>"
@@ -2123,96 +2293,140 @@ function VersionPanel(props) {
 }
 
 // packages/dsh-chat/client/section.js
-var h6 = React7.createElement;
+var h7 = React8.createElement;
 var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-feishu",
   "dsh-chat-weixin"
 ]);
 function ChannelMark({ entry }) {
   if (typeof entry.logo === "function") {
-    return h6("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h6(entry.logo));
+    return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h7(entry.logo));
   }
   const initial = entry.id.slice(0, 1).toUpperCase();
-  return h6("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
+  return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
-  const [showVersions, setShowVersions] = React7.useState(false);
+  const [showVersions, setShowVersions] = React8.useState(false);
+  const [view, setView] = React8.useState({ kind: "bots", botId: null });
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const entries = React7.useSyncExternalStore(
+  const entries = React8.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
     () => channels.getSnapshot(),
     () => channels.getSnapshot()
   );
-  const [selected, setSelected] = React7.useState(null);
+  const [selected, setSelected] = React8.useState(null);
   const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
+  const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
+  const openSettings = (botId) => setView({ kind: "channel", botId });
+  const backToBots = () => setView({ kind: "bots", botId: null });
   const EmptyState2 = chatUi?.components?.EmptyState;
-  const body = entries.length === 0 ? EmptyState2 ? h6(EmptyState2, {
-    title: t("\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6"),
-    description: t("\u5B89\u88C5\u6E20\u9053\u63D2\u4EF6\u540E\uFF0C\u8FD9\u91CC\u4F1A\u51FA\u73B0\u5BF9\u5E94\u7684\u804A\u5929\u8F6F\u4EF6\u3002")
-  }, h6(
-    "ul",
-    { className: "dchat-list" },
-    h6("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
-    ...KNOWN_CHANNEL_PACKAGES.map((name2) => h6("li", {
-      key: name2,
-      className: "dchat-listItem"
-    }, h6("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
-  )) : null : h6(
-    "div",
-    { className: "dchat-layout" },
-    h6(
-      "nav",
-      { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
-      entries.map((entry) => h6(
-        "button",
-        {
-          key: entry.id,
+  function botListView() {
+    if (!activeEntry) return null;
+    return h7(BotList, {
+      key: activeEntry.id,
+      channelId: activeEntry.id,
+      label: activeEntry.label,
+      connection,
+      chatUi,
+      translate: t,
+      onOpenSettings: openSettings
+    });
+  }
+  function channelView() {
+    return h7(
+      React8.Fragment,
+      null,
+      h7(
+        "div",
+        { className: "dchat-panelBar" },
+        h7("button", {
           type: "button",
-          role: "tab",
-          id: `dchat-tab-${entry.id}`,
-          className: "dchat-channel",
-          "aria-selected": entry.id === activeId,
-          "aria-controls": `dchat-panel-${entry.id}`,
-          onClick: () => setSelected(entry.id)
-        },
-        h6(ChannelMark, { entry }),
-        h6(
-          "span",
-          { className: "dchat-channelLabel" },
-          h6("strong", null, entry.label()),
-          entry.capabilities?.note ? h6("small", null, entry.capabilities.note) : null
-        )
-      ))
-    ),
-    h6("main", {
-      className: "dchat-panel",
-      role: "tabpanel",
-      id: `dchat-panel-${activeId}`,
-      "aria-labelledby": `dchat-tab-${activeId}`
-    }, typeof renderSlot === "function" ? renderSlot(CHANNEL_PAGE_SLOT, { channelId: activeId }, { entryKey: activeId }) : h6("p", { className: "dchat-cardDescription" }, "\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
-  );
-  return h6(
+          className: "dchat-button",
+          onClick: backToBots
+        }, t("\u2190 \u673A\u5668\u4EBA\u5217\u8868"))
+      ),
+      typeof renderSlot === "function" ? renderSlot(
+        CHANNEL_PAGE_SLOT,
+        { channelId: activeId, botId: view.botId },
+        { entryKey: activeId }
+      ) : h7("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
+    );
+  }
+  let body = null;
+  if (entries.length === 0) {
+    body = EmptyState2 ? h7(EmptyState2, {
+      title: t("\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6"),
+      description: t("\u5B89\u88C5\u6E20\u9053\u63D2\u4EF6\u540E\uFF0C\u8FD9\u91CC\u4F1A\u51FA\u73B0\u5BF9\u5E94\u7684\u804A\u5929\u8F6F\u4EF6\u3002")
+    }, h7(
+      "ul",
+      { className: "dchat-list" },
+      h7("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
+      ...KNOWN_CHANNEL_PACKAGES.map((name2) => h7("li", {
+        key: name2,
+        className: "dchat-listItem"
+      }, h7("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
+    )) : null;
+  } else {
+    body = h7(
+      "div",
+      { className: "dchat-layout" },
+      h7(
+        "nav",
+        { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
+        entries.map((entry) => h7(
+          "button",
+          {
+            key: entry.id,
+            type: "button",
+            role: "tab",
+            id: `dchat-tab-${entry.id}`,
+            className: "dchat-channel",
+            "aria-selected": entry.id === activeId,
+            "aria-controls": `dchat-panel-${entry.id}`,
+            onClick: () => {
+              setSelected(entry.id);
+              backToBots();
+            }
+          },
+          h7(ChannelMark, { entry }),
+          h7(
+            "span",
+            { className: "dchat-channelLabel" },
+            h7("strong", null, entry.label()),
+            entry.capabilities?.note ? h7("small", null, entry.capabilities.note) : null
+          )
+        ))
+      ),
+      h7("main", {
+        className: "dchat-panel",
+        role: "tabpanel",
+        id: `dchat-panel-${activeId}`,
+        "aria-labelledby": `dchat-tab-${activeId}`
+      }, view.kind === "bots" ? botListView() : channelView())
+    );
+  }
+  return h7(
     "section",
     { className: "dchat-page", "aria-label": t("Chat\u673A\u5668\u4EBA\u8BBE\u7F6E") },
-    h6(
+    h7(
       "header",
       { className: "dchat-header" },
-      h6(
+      h7(
         "div",
         { className: "dchat-brand" },
-        h6("strong", { className: "dchat-brandName" }, "DSH-Chat"),
-        h6("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
+        h7("strong", { className: "dchat-brandName" }, "DSH-Chat"),
+        h7("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
       ),
       // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
-      h6("button", {
+      h7("button", {
         type: "button",
         className: "dchat-button",
         "aria-expanded": showVersions,
         onClick: () => setShowVersions((open) => !open)
       }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))
     ),
-    showVersions ? h6(VersionPanel, { connection, chatUi, translate: t }) : null,
+    showVersions ? h7(VersionPanel, { connection, chatUi, translate: t }) : null,
     body
   );
 }

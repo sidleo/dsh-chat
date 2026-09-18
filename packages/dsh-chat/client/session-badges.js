@@ -194,9 +194,11 @@ export function installSessionBadges({
     for (const entry of channels?.getSnapshot?.() ?? []) {
       const badge = entry.sessionBadge;
       if (!badge || typeof badge.text !== 'string' || !badge.text) continue;
+      // rail 里的 label 是**函数**（支持动态改名），必须调用后再用。
+      const label = typeof entry.label === 'function' ? entry.label() : entry.label;
       badges.set(entry.id, {
         channel: entry.id,
-        label: String(entry.label ?? entry.id),
+        label: String(label ?? entry.id),
         uri: badgeUri({ text: badge.text, color: badge.color ?? '#3370ff' }),
       });
     }
