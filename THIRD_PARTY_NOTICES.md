@@ -16,6 +16,7 @@
      | 本仓库文件 | 上游来源 | 移植范围 |
      |---|---|---|
      | `packages/dsh-chat-weixin/host/ilink-client.mjs` | `src/channels/weixin/weixin-api.mjs` | 扫码登录、长轮询、发文本 |
+     | `packages/dsh-chat/client/session-badges.js` | `plugin-src/client/session-channel-logos.js` | 侧边栏会话行的渠道徽标：沿用「保留文字前缀 + 只加自有属性 + 一张样式表用伪元素替换」的做法，**匹配方式不同**（上游按产品 CSS 类名找标题行，本项目只按"叶子元素文本以「渠道名 · 」开头"匹配，不依赖类名），并按本项目规范做了可还原的卸载 |
      | `packages/dsh-chat-weixin/host/media.mjs` | 同上 + `src/channels/shared/image-prompt.mjs` | 入站图片/文件的 AES-128-ECB 解密与 CDN 下载、出站加密与 CDN 上传（收窄为"下载解密"与"加密上传"两组纯函数，去掉上游 i18n、artifact 错误分类与惰性引用包装） |
 - 上游许可原文：
 
