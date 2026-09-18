@@ -41,6 +41,12 @@ export const zh = {
   '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。': '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。',
   '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。': '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。',
   '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。': '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。',
+  '已保存': '已保存',
+  '可添加的候选': '可添加的候选',
+  '展开全部': '展开全部',
+  '收起': '收起',
+  '按名字或 id 过滤': '按名字或 id 过滤',
+  '没有匹配的目标。': '没有匹配的目标。',
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   '工作区': '工作区',
   '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。': '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。',
@@ -139,6 +145,12 @@ export const en = {
     'No conversation to add: mention the bot once in a group, or send it a direct message, and that conversation shows up here.',
   '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。':
     'A conversation marked "Candidate" cannot receive proactive messages yet — press "Save as target" first.',
+  '已保存': 'Saved',
+  '可添加的候选': 'Candidates',
+  '展开全部': 'Show all',
+  '收起': 'Collapse',
+  '按名字或 id 过滤': 'Filter by name or id',
+  '没有匹配的目标。': 'No target matches the filter.',
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   '工作区': 'Workspace',
   '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。':

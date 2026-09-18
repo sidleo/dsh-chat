@@ -125,6 +125,12 @@ const CSS = `
   flex-direction: column;
   gap: 10px;
 }
+.dchat-groupTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
 .dchat-check {
   display: inline-flex;
   align-items: center;

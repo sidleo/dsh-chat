@@ -1300,6 +1300,8 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
 // packages/dsh-chat/client/delivery-targets.js
 var React4 = __toESM(require("react"), 1);
 var h3 = React4.createElement;
+var CANDIDATE_PREVIEW = 5;
+var FILTER_THRESHOLD = 6;
 function translatorOf2(translate, chatUi) {
   if (typeof translate === "function") return translate;
   if (typeof chatUi?.translate === "function") return chatUi.translate;
@@ -1311,7 +1313,7 @@ function TargetRow2({ target, busy, confirming, translate, onSave, onAskRemove, 
   const actions = target.discovered ? [h3("button", {
     key: "save",
     type: "button",
-    className: "dchat-button dchat-buttonPrimary",
+    className: "dchat-button",
     disabled: busy,
     onClick: () => onSave(target)
   }, t("\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807"))] : confirming ? [
@@ -1365,6 +1367,8 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
   const [confirmingId, setConfirmingId] = React4.useState(null);
   const [draft, setDraft] = React4.useState("");
   const [sendTo, setSendTo] = React4.useState("");
+  const [filter, setFilter] = React4.useState("");
+  const [showAllCandidates, setShowAllCandidates] = React4.useState(false);
   const call = React4.useCallback(async (method, payload) => {
     const result = await chatUi.callControlRpc(connection, method, payload);
     return chatUi.unwrapRpc(result);
@@ -1405,6 +1409,37 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
   const saved = state.targets.filter((target) => !target.discovered);
   const candidates = state.targets.filter((target) => target.discovered);
   const ready = state.phase === "ready" && state.canSend === true;
+  const query = filter.trim().toLowerCase();
+  const matches = (target) => !query || `${target.name ?? ""} ${target.id} ${JSON.stringify(target.route ?? {})}`.toLowerCase().includes(query);
+  const savedShown = saved.filter(matches);
+  const candidatesShown = candidates.filter(matches);
+  const visibleCandidates = showAllCandidates ? candidatesShown : candidatesShown.slice(0, CANDIDATE_PREVIEW);
+  const renderRow = (target) => h3(TargetRow2, {
+    key: target.id,
+    target,
+    busy: busyId === target.id,
+    confirming: confirmingId === target.id,
+    translate: t,
+    onSave: (item) => {
+      void run(item.id, "delivery.save", {
+        channelId,
+        botId,
+        target: { id: item.id, name: item.name, kind: item.kind, route: item.route }
+      }, () => t("\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002"));
+    },
+    onAskRemove: () => setConfirmingId(target.id),
+    onCancel: () => setConfirmingId(null),
+    onRemove: (item) => {
+      setConfirmingId(null);
+      void run(
+        item.id,
+        "delivery.remove",
+        { channelId, botId, targetId: item.id },
+        () => t("\u5DF2\u5220\u9664\u3002")
+      );
+    }
+  });
+  const groupTitle = (text) => h3("p", { className: "dchat-groupTitle" }, text);
   return h3(
     Panel2,
     {
@@ -1415,31 +1450,37 @@ function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate
     notice ? h3("p", { className: "dchat-notice", role: "status" }, notice) : null,
     state.phase === "loading" ? h3("p", { className: "dchat-cardDescription" }, t("\u8BFB\u53D6\u4E2D\u2026")) : null,
     state.phase === "ready" && state.canSend === false ? h3("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u6E20\u9053\u4E0D\u652F\u6301\u4E3B\u52A8\u6295\u9012\u3002")) : null,
-    state.targets.length > 0 ? h3("div", { className: "dchat-list" }, state.targets.map((target) => h3(TargetRow2, {
-      key: target.id,
-      target,
-      busy: busyId === target.id,
-      confirming: confirmingId === target.id,
-      translate: t,
-      onSave: (item) => {
-        void run(item.id, "delivery.save", {
-          channelId,
-          botId,
-          target: { id: item.id, name: item.name, kind: item.kind, route: item.route }
-        }, () => t("\u5DF2\u4FDD\u5B58\uFF0C\u73B0\u5728\u53EF\u4EE5\u4E3B\u52A8\u53D1\u6D88\u606F\u4E86\u3002"));
-      },
-      onAskRemove: () => setConfirmingId(target.id),
-      onCancel: () => setConfirmingId(null),
-      onRemove: (item) => {
-        setConfirmingId(null);
-        void run(
-          item.id,
-          "delivery.remove",
-          { channelId, botId, targetId: item.id },
-          () => t("\u5DF2\u5220\u9664\u3002")
-        );
-      }
-    }))) : null,
+    // 目标多到需要找的时候才出现过滤框，平时不占地方。
+    state.targets.length > FILTER_THRESHOLD ? h3(
+      "div",
+      { className: "dchat-actions" },
+      h3("input", {
+        className: "dchat-input",
+        value: filter,
+        placeholder: t("\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4"),
+        autoComplete: "off",
+        spellCheck: false,
+        onChange: (event) => setFilter(event.target.value)
+      })
+    ) : null,
+    savedShown.length > 0 ? h3(
+      React4.Fragment,
+      null,
+      groupTitle(t("\u5DF2\u4FDD\u5B58")),
+      h3("div", { className: "dchat-list" }, savedShown.map(renderRow))
+    ) : null,
+    candidatesShown.length > 0 ? h3(
+      React4.Fragment,
+      null,
+      groupTitle(`${t("\u53EF\u6DFB\u52A0\u7684\u5019\u9009")}\uFF08${candidatesShown.length}\uFF09`),
+      h3("div", { className: "dchat-list" }, visibleCandidates.map(renderRow)),
+      candidatesShown.length > CANDIDATE_PREVIEW ? h3("button", {
+        type: "button",
+        className: "dchat-button dchat-buttonLink",
+        onClick: () => setShowAllCandidates((value) => !value)
+      }, showAllCandidates ? t("\u6536\u8D77") : `${t("\u5C55\u5F00\u5168\u90E8")}\uFF08${candidatesShown.length}\uFF09`) : null
+    ) : null,
+    state.targets.length > 0 && savedShown.length === 0 && candidatesShown.length === 0 ? h3("p", { className: "dchat-cardDescription" }, t("\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002")) : null,
     /**
      * 「怎么添加」常驻说明：**只要没有候选就显示**。
      * 之前只在"一个目标都没有"时显示，于是有 1 个已保存目标、又没有候选时，
@@ -1703,6 +1744,12 @@ var CSS = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.dchat-groupTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
 }
 .dchat-check {
   display: inline-flex;
@@ -2426,6 +2473,12 @@ var zh = {
   "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002": "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002",
   "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
   "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002": "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002",
+  "\u5DF2\u4FDD\u5B58": "\u5DF2\u4FDD\u5B58",
+  "\u53EF\u6DFB\u52A0\u7684\u5019\u9009": "\u53EF\u6DFB\u52A0\u7684\u5019\u9009",
+  "\u5C55\u5F00\u5168\u90E8": "\u5C55\u5F00\u5168\u90E8",
+  "\u6536\u8D77": "\u6536\u8D77",
+  "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4": "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4",
+  "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002": "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
@@ -2513,6 +2566,12 @@ var en = {
   "\u8FD8\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\uFF0C\u4FDD\u5B58\u540E\u5373\u53EF\u4E3B\u52A8\u6295\u9012\u3002": "No conversation to add yet: mention the bot once in a group, or send it a direct message \u2014 the conversation then shows up here and can be saved for proactive delivery.",
   "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u4F1A\u8BDD\uFF1A\u5728\u7FA4\u91CC @ \u4E00\u6B21\u673A\u5668\u4EBA\uFF0C\u6216\u4E0E\u5B83\u79C1\u804A\u4E00\u6B21\uFF0C\u8BE5\u4F1A\u8BDD\u5C31\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "No conversation to add: mention the bot once in a group, or send it a direct message, and that conversation shows up here.",
   "\u4E0A\u9762\u6807\u300C\u5019\u9009\u300D\u7684\u4F1A\u8BDD\u8FD8\u4E0D\u80FD\u4E3B\u52A8\u6295\u9012\uFF0C\u70B9\u300C\u4FDD\u5B58\u4E3A\u6295\u9012\u76EE\u6807\u300D\u540E\u624D\u884C\u3002": 'A conversation marked "Candidate" cannot receive proactive messages yet \u2014 press "Save as target" first.',
+  "\u5DF2\u4FDD\u5B58": "Saved",
+  "\u53EF\u6DFB\u52A0\u7684\u5019\u9009": "Candidates",
+  "\u5C55\u5F00\u5168\u90E8": "Show all",
+  "\u6536\u8D77": "Collapse",
+  "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4": "Filter by name or id",
+  "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002": "No target matches the filter.",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "Workspace",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",
