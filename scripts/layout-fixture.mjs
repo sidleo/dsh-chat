@@ -17,7 +17,7 @@ import { createRoot } from 'react-dom/client';
 
 import { DeliveryTargetsEditor } from '../packages/dsh-chat/client/delivery-targets.js';
 import {
-  AccessPolicyEditor, PresetEditor, WorkspaceEditor,
+  AccessPolicyEditor, OwnerEditor, PresetEditor, WorkspaceEditor,
 } from '../packages/dsh-chat/client/bot-shared-settings.js';
 import { ScopedModeEditor } from '../packages/dsh-chat/client/scoped-mode-editor.js';
 // 用真的 Panel（不是手写复刻）：投递列表靠它渲染卡片外壳，复刻会跟着组件漂移。
@@ -89,6 +89,14 @@ const FRAGMENTS = {
       onSave: async () => {},
     }),
     h(PresetEditor, { value: 'standard', options: [{ id: 'standard' }], translate: t, onSave: async () => {} }),
+    h(OwnerEditor, {
+      owners: ['ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5'],
+      wildcard: false,
+      candidates: [{ id: 'ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5', name: '赵六' }],
+      translate: t,
+      onSave: async () => {},
+    }),
+    h(OwnerEditor, { owners: ['*'], wildcard: true, candidates: [], translate: t, onSave: async () => {} }),
     h(AccessPolicyEditor, {
       value: {
         direct: {
@@ -167,6 +175,8 @@ function measure() {
       .map((el) => ({
         selector: `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? `.${el.className.split(' ')[0]}` : ''}`,
         over: Math.round(el.getBoundingClientRect().right - frameRect.right),
+        // 带上文字，失败信息才能直接指出是哪一行（否则要靠猜）。
+        text: (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 40),
       }))
       .filter((item) => item.over > 1)
       .sort((left, right) => right.over - left.over)

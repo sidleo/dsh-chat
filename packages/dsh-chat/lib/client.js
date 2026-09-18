@@ -703,6 +703,90 @@ function AccessPolicyEditor({ value, translate, onSave }) {
     failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
   );
 }
+function OwnerEditor({ owners = [], wildcard = false, candidates = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const [picked, setPicked] = React2.useState("");
+  const { busy, failed, run } = useSaver(onSave);
+  const nameOf = (id) => candidates.find((item) => item.id === id)?.name ?? null;
+  const people = candidates.filter((item) => !owners.includes(item.id));
+  return h(
+    Card,
+    {
+      title: t("\u5C5E\u4E3B"),
+      description: t("\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002"),
+      actions: busy ? h("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null
+    },
+    h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      wildcard || owners.length === 0 ? h("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002")) : h("ul", { className: "dchat-list" }, owners.map((id) => h(
+        "li",
+        {
+          key: id,
+          className: "dchat-listItem"
+        },
+        // 名字 + id：id 用等宽块（可省略号），避免一行被 35 字符的 open_id 撑爆。
+        h(
+          "span",
+          null,
+          nameOf(id) ? `${nameOf(id)} ` : null,
+          h("code", { className: "dchat-code" }, id)
+        ),
+        h(
+          "span",
+          { className: "dchat-actions" },
+          h("button", {
+            type: "button",
+            className: "dchat-button dchat-buttonDanger",
+            disabled: busy,
+            onClick: () => {
+              void run([...owners.filter((item) => item !== id)]);
+            }
+          }, t("\u79FB\u9664"))
+        )
+      ))),
+      h(
+        "div",
+        { className: "dchat-actions" },
+        h(
+          "select",
+          {
+            className: "dchat-select",
+            value: picked,
+            disabled: busy || people.length === 0,
+            "aria-label": t("\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B"),
+            onChange: (event) => setPicked(event.target.value)
+          },
+          h(
+            "option",
+            { value: "" },
+            people.length === 0 ? t("\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09") : t("\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B")
+          ),
+          people.map((item) => h("option", { key: item.id, value: item.id }, item.name))
+        ),
+        h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: busy || !picked,
+          onClick: () => {
+            setPicked("");
+            void run([...owners.filter((item) => item !== "*"), picked]);
+          }
+        }, t("\u8BBE\u4E3A\u5C5E\u4E3B")),
+        h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: busy || wildcard && owners.length === 1,
+          title: t("\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565"),
+          onClick: () => {
+            void run(["*"]);
+          }
+        }, t("\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09"))
+      )
+    ),
+    failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
 
 // packages/dsh-chat/client/context-enhancement.js
 var React3 = __toESM(require("react"), 1);
@@ -1904,13 +1988,19 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
-/* \u540D\u5355\u91CC\u7684 id \u53EF\u80FD\u5F88\u957F\uFF08open_id \u6709 35 \u5B57\u7B26\uFF09\u3002\u5B83\u662F flex \u9879\uFF0C\u9ED8\u8BA4 min-width:auto
-   \u4E0D\u80AF\u7F29\uFF0C\u5C31\u4F1A\u628A\u540C\u6392\u7684\u52FE\u9009\u6846\u4E0E\u6309\u94AE\u6324\u51FA\u5BB9\u5668\uFF08\u7A84\u680F\u76F4\u63A5\u6A2A\u5411\u6EA2\u51FA\uFF09\u3002 */
-.dchat-listItem > .dchat-code {
+/* \u540D\u5355/\u5C5E\u4E3B\u884C\u91CC\u7684 id \u53EF\u80FD\u5F88\u957F\uFF08open_id \u6709 35 \u5B57\u7B26\uFF09\u3002\u5B83\u662F flex \u9879\uFF0C\u9ED8\u8BA4 min-width:auto
+   \u4E0D\u80AF\u7F29\uFF0C\u5C31\u4F1A\u628A\u540C\u6392\u7684\u6309\u94AE\u6324\u51FA\u5BB9\u5668\uFF08\u7A84\u680F\u76F4\u63A5\u6A2A\u5411\u6EA2\u51FA\uFF09\u3002 */
+.dchat-listItem .dchat-code {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* \u5DE6\u4FA7\u7684\u6587\u5B57\uFF08\u540D\u5B57\u3001\u8BF4\u660E\uFF09\u5141\u8BB8\u6362\u884C\u3001\u5141\u8BB8\u6536\u7F29\u2014\u2014\u4E0D\u8BB8\u628A\u53F3\u4FA7\u7684\u64CD\u4F5C\u9876\u51FA\u53BB\u3002 */
+.dchat-listItem > :not(.dchat-actions) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);
@@ -2043,6 +2133,8 @@ var CSS = `
   align-items: center;
   /* \u64CD\u4F5C\u5757\u81EA\u8EAB\u4E0D\u538B\u7F29\uFF08\u6298\u884C\u540E\u9760\u4E0B\u9762\u90A3\u6761 margin \u4FDD\u6301\u53F3\u5BF9\u9F50\uFF09\u3002 */
   flex: none;
+  /* \u653E\u4E0D\u4E0B\u65F6\u6309\u94AE\u81EA\u5DF1\u6362\u884C\uFF0C\u800C\u4E0D\u662F\u628A\u6574\u5757\u9876\u51FA\u5BB9\u5668\uFF08\u7A84\u680F\u91CC"\u4E0B\u62C9+\u4E24\u4E2A\u6309\u94AE"\u5C31\u4F1A\u6EA2\u51FA\uFF09\u3002 */
+  flex-wrap: wrap;
 }
 /* \u53EA\u7ED9\u5361\u7247\u5934\u7528\uFF1A\u6298\u5230\u7B2C\u4E8C\u884C\u65F6\u4ECD\u7136\u9760\u53F3\u3002
    \u4E0D\u80FD\u5199\u5728 .dchat-actions \u4E0A\u2014\u2014auto \u5916\u8FB9\u8DDD\u4F1A\u53D6\u6D88\u4EA4\u53C9\u8F74\u7684 stretch\uFF0C
@@ -2491,6 +2583,8 @@ function createChatUi({ ctx, translate } = {}) {
       PresetEditor,
       /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
       AccessPolicyEditor,
+      /** 属主：绕过所有策略的人（改完渠道会重连一次）。 */
+      OwnerEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
       DeliveryTargetsEditor
     }),
@@ -2576,6 +2670,14 @@ var zh = {
   "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4",
   "\u5DF2\u5F00\u542F": "\u5DF2\u5F00\u542F",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026",
+  "\u5C5E\u4E3B": "\u5C5E\u4E3B",
+  "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002",
+  "\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B",
+  "\u8BBE\u4E3A\u5C5E\u4E3B": "\u8BBE\u4E3A\u5C5E\u4E3B",
+  "\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09": "\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09",
+  "\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09": "\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09",
+  "\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565": "\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
@@ -2687,6 +2789,14 @@ var en = {
   "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "Context enhancement scope",
   "\u5DF2\u5F00\u542F": "On",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "Pick a conversation\u2026",
+  "\u5C5E\u4E3B": "Owner",
+  "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.",
+  "\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "No owner right now: nobody bypasses the access policy, so who may use this bot is decided entirely by the access policy below.",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "Pick a person from a conversation to make them the owner",
+  "\u8BBE\u4E3A\u5C5E\u4E3B": "Make owner",
+  "\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09": "No conversation to pick yet (talk to the bot once first)",
+  "\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09": "Clear (no owner)",
+  "\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565": "After clearing, nobody bypasses the access policy",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "Workspace",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",

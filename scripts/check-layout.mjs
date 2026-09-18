@@ -107,7 +107,8 @@ body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw
       continue;
     }
     if (frame.overflow > 1) {
-      const who = (frame.widest ?? []).map((item) => `${item.selector}(+${item.over})`).join('、');
+      const who = (frame.widest ?? [])
+        .map((item) => `${item.selector}(+${item.over}${item.text ? ` 「${item.text}」` : ''})`).join('、');
       failures.push(`${where}: 横向溢出 ${frame.overflow}px${who ? ` —— ${who}` : ''}`);
     }
     for (const item of frame.tall) {

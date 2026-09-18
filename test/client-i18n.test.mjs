@@ -84,6 +84,7 @@ test('hub 共享组件（用渠道的 t 渲染）的文案键在每个渠道字�
   const sharedFiles = [
     'packages/dsh-chat/client/context-enhancement.js',
     'packages/dsh-chat/client/scoped-mode-editor.js',
+    'packages/dsh-chat/client/bot-shared-settings.js',
   ];
   const shared = new Set();
   for (const file of sharedFiles) {

@@ -376,6 +376,81 @@ test('状态存储：按消息 id 去重且能读出旧的会话绑定', async (
   }
 });
 
+test('设属主：落盘 + 立刻生效（重连），非法 id 与 `['*']` 的语义', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-owner-'));
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_ctl_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['*'],
+        botName: '控制器机器人',
+      }],
+    }), 'utf8');
+
+    const gateway = createFakeGateway();
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+    await controller.start();
+
+    // 初始是 `*`：状态里要能看出来"没有属主"。
+    const before = await controller.endpoints['connection.status']({});
+    assert.equal(before.value.bots[0].ownersWildcard, true);
+    assert.equal(before.value.bots[0].ownerCount, 0, '`*` 不该被算成一个属主');
+
+    // 设一个具体属主：落盘 + 状态立刻反映。
+    const saved = await controller.endpoints['bot.owner.set']({
+      botId: 'bot_ctl', ownerOpenIds: ['ou_zhangzhiwei'],
+    });
+    assert.equal(saved.ok, true);
+    assert.deepEqual(saved.value.ownerOpenIds, ['ou_zhangzhiwei']);
+    assert.equal(saved.value.ownersWildcard, false);
+    assert.equal(saved.value.ownerCount, 1);
+    const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    assert.deepEqual(onDisk.bots[0].ownerOpenIds, ['ou_zhangzhiwei']);
+
+    // 清空回"没有属主"：写 `*`（配置里不允许空名单）。
+    const cleared = await controller.endpoints['bot.owner.set']({
+      botId: 'bot_ctl', ownerOpenIds: ['*'],
+    });
+    assert.equal(cleared.ok, true);
+    assert.equal(cleared.value.ownersWildcard, true);
+
+    // 非法输入要被拒绝：空数组、坏 id、超上限、未知机器人。
+    for (const payload of [
+      { botId: 'bot_ctl', ownerOpenIds: [] },
+      { botId: 'bot_ctl', ownerOpenIds: ['ou_ok', '不是 id'] },
+      { botId: 'bot_ctl', ownerOpenIds: Array.from({ length: 11 }, (_, i) => `ou_${i}`) },
+      { botId: 'bot_nope', ownerOpenIds: ['ou_ok'] },
+    ]) {
+      const result = await controller.endpoints['bot.owner.set'](payload);
+      assert.equal(result.ok, false, `应当拒绝：${JSON.stringify(payload).slice(0, 60)}`);
+    }
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('放行规则：指定属主绕过策略；`*` 只表示"没有属主"，不授权任何人绕过', async () => {
   // 指定属主：绕过策略，照常放行。
   const owner = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['ou_owner'] } });

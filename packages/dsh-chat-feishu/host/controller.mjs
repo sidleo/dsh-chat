@@ -158,6 +158,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       // 而实际上没有人能绕过访问策略。
       ownerCount: bot.ownerOpenIds.filter((id) => id !== '*').length,
       ownersWildcard: bot.ownerOpenIds.includes('*'),
+      // 设置页要显示"当前属主是谁"，也要支持从会话里选人替换。
+      ownerOpenIds: Object.freeze([...bot.ownerOpenIds]),
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
@@ -196,6 +198,11 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     logger.info?.(`[dsh-chat-feishu] 发现 ${bots.length} 个已配置机器人`);
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
+
+  /** 属主 id 的合法形状：该应用下的 open_id，或通配符（= 没有属主）。 */
+  const OWNER_ID_PATTERN = /^(\*|ou_[A-Za-z0-9_-]{1,64})$/;
+  /** 一台机器人的属主上限（属主绕过所有策略，不该是个长名单）。 */
+  const MAX_OWNERS = 10;
 
   /**
    * 会话键 → 可投递目标（`p2p:ou_x` → 私聊，`group:oc_y` → 群聊）。
@@ -439,6 +446,46 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         }
         await stopBot(bot.id);
         const record = await startBot(bot);
+        return { ok: true, value: botStatus(record) };
+      },
+
+      /**
+       * 设这台机器人的属主。
+       *
+       * `ownerOpenIds: ['*']` = **没有属主**（公开机器人：没有人绕过访问策略）。
+       * 改完必须重连：桥在创建时捕获了 `bot` 对象，属主判定用的就是它，重连才会重建。
+       */
+      'bot.owner.set': async (payload) => {
+        const owners = payload?.ownerOpenIds;
+        const valid = typeof payload?.botId === 'string' && payload.botId
+          && Array.isArray(owners) && owners.length > 0 && owners.length <= MAX_OWNERS
+          && owners.every((id) => typeof id === 'string' && OWNER_ID_PATTERN.test(id));
+        if (!valid) {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: `bot.owner.set 需要 { botId, ownerOpenIds }：1–${MAX_OWNERS} 个该应用的 open_id，`
+                + "或用 ['*'] 表示没有属主。",
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return {
+            ok: false,
+            error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} },
+          };
+        }
+        const saved = await configStore.saveBot({
+          id: bot.id,
+          ownerOpenIds: [...new Set(owners.map((id) => id.trim()))],
+        });
+        // 重连一次：新属主要立刻对"谁能绕过策略"生效，不能等下次重启。
+        await stopBot(saved.id);
+        const record = await startBot(saved);
         return { ok: true, value: botStatus(record) };
       },
 

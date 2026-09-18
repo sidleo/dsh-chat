@@ -215,13 +215,19 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
-/* 名单里的 id 可能很长（open_id 有 35 字符）。它是 flex 项，默认 min-width:auto
-   不肯缩，就会把同排的勾选框与按钮挤出容器（窄栏直接横向溢出）。 */
-.dchat-listItem > .dchat-code {
+/* 名单/属主行里的 id 可能很长（open_id 有 35 字符）。它是 flex 项，默认 min-width:auto
+   不肯缩，就会把同排的按钮挤出容器（窄栏直接横向溢出）。 */
+.dchat-listItem .dchat-code {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 左侧的文字（名字、说明）允许换行、允许收缩——不许把右侧的操作顶出去。 */
+.dchat-listItem > :not(.dchat-actions) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);
@@ -354,6 +360,8 @@ const CSS = `
   align-items: center;
   /* 操作块自身不压缩（折行后靠下面那条 margin 保持右对齐）。 */
   flex: none;
+  /* 放不下时按钮自己换行，而不是把整块顶出容器（窄栏里"下拉+两个按钮"就会溢出）。 */
+  flex-wrap: wrap;
 }
 /* 只给卡片头用：折到第二行时仍然靠右。
    不能写在 .dchat-actions 上——auto 外边距会取消交叉轴的 stretch，

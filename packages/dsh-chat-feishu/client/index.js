@@ -37,6 +37,35 @@ const zh = {
   '从会话里选…': '从会话里选…',
   '去开通权限': '去开通权限',
   '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。': '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。',
+  'Agent 预设': 'Agent 预设',
+  '下拉里是这台机器人用过的目录。': '下拉里是这台机器人用过的目录。',
+  '仅名单内可用': '仅名单内可用',
+  '从会话里选一个人设为属主': 'Pick a person from a conversation to make them the owner',
+  '任何人可用': '任何人可用',
+  '允许执行命令': '允许执行命令',
+  '可执行命令': '可执行命令',
+  '名单为空时只有属主可用。': '名单为空时只有属主可用。',
+  '对方的平台 id，回车添加': '对方的平台 id，回车添加',
+  '属主': 'Owner',
+  '属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。': 'An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.',
+  '工作区': '工作区',
+  '当前 Host 读不到 Agent Preset 列表。': '当前 Host 读不到 Agent Preset 列表。',
+  '当前没有属主：没有人绕过访问策略，谁能用完全由下面的「访问策略」决定。': 'No owner right now: nobody bypasses the access policy, so who may use this bot is decided entirely by the access policy below.',
+  '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。': '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。',
+  '没有可选的会话（先和机器人聊一次）': 'No conversation to pick yet (talk to the bot once first)',
+  '添加': '添加',
+  '清空后没有人绕过访问策略': 'After clearing, nobody bypasses the access policy',
+  '清空（无属主）': 'Clear (no owner)',
+  '目录': '目录',
+  '私聊': '私聊',
+  '移除': '移除',
+  '群聊': '群聊',
+  '设为属主': 'Make owner',
+  '访问模式': '访问模式',
+  '访问策略': '访问策略',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。': '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。',
+  '跟随 Host 默认': '跟随 Host 默认',
+  '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。': '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。',
   '飞书': '飞书',
   '找不到这台机器人': '找不到这台机器人',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
@@ -96,6 +125,35 @@ const en = {
   '去开通权限': 'Grant the permission',
   '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。':
     'The owner list is * (this bot has no owner bypass): who may use it is decided entirely by the access policy below.',
+  'Agent 预设': 'Agent preset',
+  '下拉里是这台机器人用过的目录。': 'The suggestions are directories this bot has used before.',
+  '仅名单内可用': 'Allowlist only',
+  '从会话里选一个人设为属主': 'Pick a person from a conversation to make them the owner',
+  '任何人可用': 'Anyone',
+  '允许执行命令': 'Allow commands',
+  '可执行命令': 'Allow commands',
+  '名单为空时只有属主可用。': 'An empty allowlist means only the owner can use it.',
+  '对方的平台 id，回车添加': 'Their platform id — press Enter to add',
+  '属主': 'Owner',
+  '属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。': 'An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.',
+  '工作区': 'Workspace',
+  '当前 Host 读不到 Agent Preset 列表。': 'This Host does not expose an agent preset list.',
+  '当前没有属主：没有人绕过访问策略，谁能用完全由下面的「访问策略」决定。': 'No owner right now: nobody bypasses the access policy, so who may use this bot is decided entirely by the access policy below.',
+  '机器人跑在哪个目录：能读写哪些文件、用哪份 AGENTS.md。只对新建会话生效。': 'Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.',
+  '没有可选的会话（先和机器人聊一次）': 'No conversation to pick yet (talk to the bot once first)',
+  '添加': 'Add',
+  '清空后没有人绕过访问策略': 'After clearing, nobody bypasses the access policy',
+  '清空（无属主）': 'Clear (no owner)',
+  '目录': 'Directory',
+  '私聊': 'Direct',
+  '移除': 'Remove',
+  '群聊': 'Group',
+  '设为属主': 'Make owner',
+  '访问模式': 'Access mode',
+  '访问策略': 'Access policy',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效；属主始终可用。': 'Who may talk to the bot and who may run commands. Changes apply immediately;the owner always has access.',
+  '跟随 Host 默认': 'Follow the Host default',
+  '这个机器人用哪套 Agent 预设（人设与工具集）。只对新建会话生效。': 'Which agent preset this bot uses (persona and tool set). Applies to new conversations only.',
   '飞书': 'Feishu',
   '找不到这台机器人': 'Bot not found',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
@@ -166,7 +224,7 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor,
     DeliveryTargetsEditor, WorkspaceEditor, PresetEditor,
-    AccessPolicyEditor } = chatUi.components;
+    AccessPolicyEditor, OwnerEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: bot.id,
   });
@@ -174,6 +232,18 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   React.useEffect(() => {
     void settings.loadOptions();
   }, [settings.loadOptions]);
+  // 属主卡要"从会话里选人"，所以这里也用一次会话发现（与人共用同一份数据源）。
+  const conversations = chatUi.hooks.useConversations({
+    connection, channelId: CHANNEL_ID, botId: bot.id,
+  }).conversations;
+  /** 设属主：写配置 + 渠道重连一次，然后刷新状态。 */
+  const saveOwners = async (owners) => {
+    const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.owner.set', {
+      botId: bot.id, ownerOpenIds: owners,
+    });
+    chatUi.unwrapRpc(result);
+    await onChanged?.();
+  };
   const shared = {
     workspace: settings.record?.workspace ?? null,
     agentPreset: settings.record?.agentPreset ?? null,
@@ -282,6 +352,15 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     options: settings.options?.presets ?? [],
     translate: t,
     onSave: settings.saveAgentPreset,
+  }),
+
+  h(OwnerEditor, {
+    owners: status.ownerOpenIds ?? [],
+    wildcard: status.ownersWildcard === true,
+    // 属主只能是人（私聊会话），群不参与。
+    candidates: conversations.filter((item) => item.kind === 'direct'),
+    translate: t,
+    onSave: saveOwners,
   }),
 
   h(AccessPolicyEditor, {

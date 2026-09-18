@@ -285,3 +285,80 @@ export function AccessPolicyEditor({ value, translate, onSave }) {
     })),
   failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
 }
+
+/**
+ * 属主：**属主绕过所有访问策略**（消息与命令都不看名单），所以这是权限面，不是普通设置。
+ *
+ * `owners` 里的 `*` 表示**没有属主**（公开机器人）——不是"人人都是属主"。
+ * 设置页只做三件事：看清现在是谁、从"它聊过的会话"里选一个人设为属主、清空回无属主。
+ * 保存后渠道会重连一次，属主立刻生效。
+ *
+ * @param props - {
+ *   owners: string[], wildcard: boolean, candidates: [{ id, name }],
+ *   busy?: boolean, translate, onSave(owners: string[]),
+ * }。
+ * @returns React 元素。
+ */
+export function OwnerEditor({ owners = [], wildcard = false, candidates = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const [picked, setPicked] = React.useState('');
+  const { busy, failed, run } = useSaver(onSave);
+  const nameOf = (id) => candidates.find((item) => item.id === id)?.name ?? null;
+  const people = candidates.filter((item) => !owners.includes(item.id));
+
+  return h(Card, {
+    title: t('属主'),
+    description: t('属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。'),
+    actions: busy ? h('span', { className: 'dchat-status' }, t('保存中…')) : null,
+  },
+  h('div', { className: 'dchat-scopeGrid' },
+    wildcard || owners.length === 0
+      ? h('p', { className: 'dchat-cardDescription' }, t('当前没有属主：没有人绕过访问策略，谁能用完全由下面的「访问策略」决定。'))
+      : h('ul', { className: 'dchat-list' }, owners.map((id) => h('li', {
+        key: id,
+        className: 'dchat-listItem',
+      },
+      // 名字 + id：id 用等宽块（可省略号），避免一行被 35 字符的 open_id 撑爆。
+      h('span', null,
+        nameOf(id) ? `${nameOf(id)} ` : null,
+        h('code', { className: 'dchat-code' }, id)),
+      h('span', { className: 'dchat-actions' },
+        h('button', {
+          type: 'button',
+          className: 'dchat-button dchat-buttonDanger',
+          disabled: busy,
+          onClick: () => {
+            void run([...owners.filter((item) => item !== id)]);
+          },
+        }, t('移除')))))),
+    h('div', { className: 'dchat-actions' },
+      h('select', {
+        className: 'dchat-select',
+        value: picked,
+        disabled: busy || people.length === 0,
+        'aria-label': t('从会话里选一个人设为属主'),
+        onChange: (event) => setPicked(event.target.value),
+      },
+      h('option', { value: '' },
+        people.length === 0 ? t('没有可选的会话（先和机器人聊一次）') : t('从会话里选一个人设为属主')),
+      people.map((item) => h('option', { key: item.id, value: item.id }, item.name))),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        disabled: busy || !picked,
+        onClick: () => {
+          setPicked('');
+          void run([...owners.filter((item) => item !== '*'), picked]);
+        },
+      }, t('设为属主')),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        disabled: busy || (wildcard && owners.length === 1),
+        title: t('清空后没有人绕过访问策略'),
+        onClick: () => {
+          void run(['*']);
+        },
+      }, t('清空（无属主）')))),
+  failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
+}

@@ -65,6 +65,35 @@ var zh = {
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026",
   "\u53BB\u5F00\u901A\u6743\u9650": "\u53BB\u5F00\u901A\u6743\u9650",
   "\u5C5E\u4E3B\u540D\u5355\u662F *\uFF08\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u5C5E\u4E3B\u7ED5\u8FC7\uFF09\uFF1A\u80FD\u7528\u5B83\u7684\u4EBA\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "\u5C5E\u4E3B\u540D\u5355\u662F *\uFF08\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u5C5E\u4E3B\u7ED5\u8FC7\uFF09\uFF1A\u80FD\u7528\u5B83\u7684\u4EBA\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002",
+  "Agent \u9884\u8BBE": "Agent \u9884\u8BBE",
+  "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002",
+  "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "\u4EC5\u540D\u5355\u5185\u53EF\u7528",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "Pick a person from a conversation to make them the owner",
+  "\u4EFB\u4F55\u4EBA\u53EF\u7528": "\u4EFB\u4F55\u4EBA\u53EF\u7528",
+  "\u5141\u8BB8\u6267\u884C\u547D\u4EE4": "\u5141\u8BB8\u6267\u884C\u547D\u4EE4",
+  "\u53EF\u6267\u884C\u547D\u4EE4": "\u53EF\u6267\u884C\u547D\u4EE4",
+  "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002",
+  "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0",
+  "\u5C5E\u4E3B": "Owner",
+  "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.",
+  "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002": "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002",
+  "\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "No owner right now: nobody bypasses the access policy, so who may use this bot is decided entirely by the access policy below.",
+  "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
+  "\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09": "No conversation to pick yet (talk to the bot once first)",
+  "\u6DFB\u52A0": "\u6DFB\u52A0",
+  "\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565": "After clearing, nobody bypasses the access policy",
+  "\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09": "Clear (no owner)",
+  "\u76EE\u5F55": "\u76EE\u5F55",
+  "\u79C1\u804A": "\u79C1\u804A",
+  "\u79FB\u9664": "\u79FB\u9664",
+  "\u7FA4\u804A": "\u7FA4\u804A",
+  "\u8BBE\u4E3A\u5C5E\u4E3B": "Make owner",
+  "\u8BBF\u95EE\u6A21\u5F0F": "\u8BBF\u95EE\u6A21\u5F0F",
+  "\u8BBF\u95EE\u7B56\u7565": "\u8BBF\u95EE\u7B56\u7565",
+  "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002": "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002",
+  "\u8DDF\u968F Host \u9ED8\u8BA4": "\u8DDF\u968F Host \u9ED8\u8BA4",
+  "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
   "\u98DE\u4E66": "\u98DE\u4E66",
   "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA",
   "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09",
@@ -119,6 +148,35 @@ var en = {
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "Pick a conversation\u2026",
   "\u53BB\u5F00\u901A\u6743\u9650": "Grant the permission",
   "\u5C5E\u4E3B\u540D\u5355\u662F *\uFF08\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u5C5E\u4E3B\u7ED5\u8FC7\uFF09\uFF1A\u80FD\u7528\u5B83\u7684\u4EBA\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "The owner list is * (this bot has no owner bypass): who may use it is decided entirely by the access policy below.",
+  "Agent \u9884\u8BBE": "Agent preset",
+  "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "The suggestions are directories this bot has used before.",
+  "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "Allowlist only",
+  "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "Pick a person from a conversation to make them the owner",
+  "\u4EFB\u4F55\u4EBA\u53EF\u7528": "Anyone",
+  "\u5141\u8BB8\u6267\u884C\u547D\u4EE4": "Allow commands",
+  "\u53EF\u6267\u884C\u547D\u4EE4": "Allow commands",
+  "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "An empty allowlist means only the owner can use it.",
+  "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "Their platform id \u2014 press Enter to add",
+  "\u5C5E\u4E3B": "Owner",
+  "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.",
+  "\u5DE5\u4F5C\u533A": "Workspace",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\u3002": "This Host does not expose an agent preset list.",
+  "\u5F53\u524D\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565\uFF0C\u8C01\u80FD\u7528\u5B8C\u5168\u7531\u4E0B\u9762\u7684\u300C\u8BBF\u95EE\u7B56\u7565\u300D\u51B3\u5B9A\u3002": "No owner right now: nobody bypasses the access policy, so who may use this bot is decided entirely by the access policy below.",
+  "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",
+  "\u6CA1\u6709\u53EF\u9009\u7684\u4F1A\u8BDD\uFF08\u5148\u548C\u673A\u5668\u4EBA\u804A\u4E00\u6B21\uFF09": "No conversation to pick yet (talk to the bot once first)",
+  "\u6DFB\u52A0": "Add",
+  "\u6E05\u7A7A\u540E\u6CA1\u6709\u4EBA\u7ED5\u8FC7\u8BBF\u95EE\u7B56\u7565": "After clearing, nobody bypasses the access policy",
+  "\u6E05\u7A7A\uFF08\u65E0\u5C5E\u4E3B\uFF09": "Clear (no owner)",
+  "\u76EE\u5F55": "Directory",
+  "\u79C1\u804A": "Direct",
+  "\u79FB\u9664": "Remove",
+  "\u7FA4\u804A": "Group",
+  "\u8BBE\u4E3A\u5C5E\u4E3B": "Make owner",
+  "\u8BBF\u95EE\u6A21\u5F0F": "Access mode",
+  "\u8BBF\u95EE\u7B56\u7565": "Access policy",
+  "\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD\u3001\u8C01\u80FD\u6267\u884C\u547D\u4EE4\u3002\u6539\u52A8\u7ACB\u5373\u751F\u6548\uFF1B\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002": "Who may talk to the bot and who may run commands. Changes apply immediately;the owner always has access.",
+  "\u8DDF\u968F Host \u9ED8\u8BA4": "Follow the Host default",
+  "\u8FD9\u4E2A\u673A\u5668\u4EBA\u7528\u54EA\u5957 Agent \u9884\u8BBE\uFF08\u4EBA\u8BBE\u4E0E\u5DE5\u5177\u96C6\uFF09\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which agent preset this bot uses (persona and tool set). Applies to new conversations only.",
   "\u98DE\u4E66": "Feishu",
   "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "Bot not found",
   "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
@@ -186,7 +244,8 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     DeliveryTargetsEditor,
     WorkspaceEditor,
     PresetEditor,
-    AccessPolicyEditor
+    AccessPolicyEditor,
+    OwnerEditor
   } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection,
@@ -196,6 +255,19 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   React.useEffect(() => {
     void settings.loadOptions();
   }, [settings.loadOptions]);
+  const conversations = chatUi.hooks.useConversations({
+    connection,
+    channelId: CHANNEL_ID,
+    botId: bot.id
+  }).conversations;
+  const saveOwners = async (owners) => {
+    const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.owner.set", {
+      botId: bot.id,
+      ownerOpenIds: owners
+    });
+    chatUi.unwrapRpc(result);
+    await onChanged?.();
+  };
   const shared = {
     workspace: settings.record?.workspace ?? null,
     agentPreset: settings.record?.agentPreset ?? null,
@@ -308,6 +380,14 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
       options: settings.options?.presets ?? [],
       translate: t,
       onSave: settings.saveAgentPreset
+    }),
+    h(OwnerEditor, {
+      owners: status.ownerOpenIds ?? [],
+      wildcard: status.ownersWildcard === true,
+      // 属主只能是人（私聊会话），群不参与。
+      candidates: conversations.filter((item) => item.kind === "direct"),
+      translate: t,
+      onSave: saveOwners
     }),
     h(AccessPolicyEditor, {
       value: shared.accessPolicy,
