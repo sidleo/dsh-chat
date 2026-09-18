@@ -46,6 +46,7 @@ const PACKAGES = [
       'packages/dsh-chat/client/chat-ui.js',
       'packages/dsh-chat/client/context-enhancement.js',
       'packages/dsh-chat/client/delivery-targets.js',
+      'packages/dsh-chat/client/diagnostics.js',
       'packages/dsh-chat/client/scoped-mode-editor.js',
       'packages/dsh-chat/client/version-panel.js',
       'packages/dsh-chat/client/bot-list.js',

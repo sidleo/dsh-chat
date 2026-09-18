@@ -1794,6 +1794,15 @@ var CSS = `
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  /* \u7A84\u680F\u4E0B\u5165\u53E3\u6362\u884C\uFF0C\u800C\u4E0D\u662F\u628A\u54C1\u724C\u540D\u6324\u51FA\u5BB9\u5668\u3002 */
+  flex-wrap: wrap;
+}
+/* \u53F3\u4E0A\u89D2\u5165\u53E3\u7EC4\uFF08\u8BCA\u65AD / \u7248\u672C\u4E0E\u66F4\u65B0\uFF09\uFF1A\u5F62\u6001\u4E00\u81F4\u3001\u653E\u4E0D\u4E0B\u5C31\u6362\u884C\u3002 */
+.dchat-headerActions {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .dchat-brand {
   display: flex;
@@ -2098,6 +2107,66 @@ var CSS = `
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+/* \u8BCA\u65AD\u9762\u677F\u91CC\u7684\u6E20\u9053\u5757\u5934\uFF1A\u6807\u9898\u4E0E\u72B6\u6001\u70B9\u5728\u4E24\u4FA7\uFF0C\u653E\u4E0D\u4E0B\u5C31\u6574\u5757\u6362\u884C\u3002 */
+.dchat-diagHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* \u6807\u9898\u4E0D\u6298\u884C\uFF08\u6298\u4E86\u5C31\u662F"\u9010\u5B57\u7AD6\u6392"\uFF09\u2014\u2014\u5B83\u6574\u5757\u6362\u884C\u9760\u4E0A\u9762\u90A3\u6761 wrap\u3002 */
+.dchat-diagHead > .dchat-groupTitle {
+  white-space: nowrap;
+}
+/* \u8BCA\u65AD\u9762\u677F\u91CC\u6BCF\u4E2A\u6E20\u9053/\u6BCF\u4E2A\u65E5\u5FD7\u5404\u4E00\u5757\uFF1A\u7AD6\u6392\u3002
+   .dchat-entry \u662F"\u53EF\u70B9\u51FB\u7684\u6298\u53E0\u884C"\uFF08\u6A2A\u6392\uFF09\uFF0C\u62FF\u6765\u88C5\u8FD9\u4E9B\u5757\u4F1A\u628A\u5B83\u4EEC\u6324\u6210\u4E00\u6761\u6761\u7EC6\u6761\u3002 */
+.dchat-diagSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.dchat-diagSection > .dchat-list {
+  min-width: 0;
+}
+/* \u673A\u5668\u4EBA\u5757\uFF1A\u72B6\u6001\u884C + \u82E5\u5E72\u884C\u9519\u8BEF/\u63D0\u793A\uFF0C\u7AD6\u76F4\u6392\u5217\u3002 */
+.dchat-diagBot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+/* \u8BCA\u65AD\u9762\u677F\u91CC\u7684\u673A\u5668\u4EBA\u884C\uFF1A\u4E00\u884C\u653E\u4E0D\u4E0B\u65F6\u6574\u4F53\u6362\u884C\uFF0C\u800C\u4E0D\u662F\u628A id \u9876\u51FA\u5BB9\u5668\u3002
+   min-width: 0 \u662F\u5FC5\u987B\u7684\uFF1A\u8FD9\u4E9B\u5757\u7684\u5185\u5BB9\uFF0835 \u5B57\u7B26\u7684 open_id\uFF09\u4F1A\u628A flex \u9879\u7684
+   min-width: auto \u6491\u6210 min-content\uFF0C\u4E8E\u662F\u6574\u5757\u6BD4\u5361\u7247\u8FD8\u5BBD\u3001\u628A\u9875\u9762\u9876\u51FA\u6EDA\u52A8\u6761\uFF08\u771F\u673A\u6D4B\u5230\u8FC7\uFF09\u3002 */
+.dchat-diagRow {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.dchat-diagRow > .dchat-code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dchat-diagRow > .dchat-diagMeta {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* \u8BCA\u65AD\u9762\u677F\u91CC\u673A\u5668\u4EBA\u884C\u7684\u53F3\u4FA7\u5143\u4FE1\u606F\uFF08\u72B6\u6001 \xB7 \u5DF2\u5904\u7406 \xB7 \u65F6\u95F4\uFF09\u3002
+   \u6574\u5757\u4E0D\u6298\u884C\uFF08\u6298\u4E86\u5C31\u6210\u4E86"\u9010\u5B57\u7AD6\u6392"\uFF09\uFF0C\u653E\u4E0D\u4E0B\u65F6\u9760 .dchat-diagRow \u6362\u884C\u3002 */
+.dchat-diagMeta {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+/* \u65E5\u5FD7\u5C3E\u90E8\uFF1A\u7B49\u5BBD\u3001\u9650\u9AD8\u3001\u53CC\u5411\u53EF\u6EDA\uFF08\u6EDA\u52A8\u53D1\u751F\u5728\u5757\u5185\uFF0C\u4E0D\u4F1A\u628A\u6574\u9875\u6491\u5BBD\uFF09\u3002 */
+.dchat-logTail {
+  white-space: pre;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .dchat-updateHint {
   display: flex;
@@ -2715,6 +2784,21 @@ var zh = {
   "\u6B63\u5728\u542F\u52A8": "\u6B63\u5728\u542F\u52A8",
   "\u91CD\u8FDE\u4E2D": "\u91CD\u8FDE\u4E2D",
   "\u5DF2\u505C\u6B62": "\u5DF2\u505C\u6B62",
+  // 诊断面板（client/diagnostics.js）：出故障时的自助现场。
+  "\u8BCA\u65AD": "\u8BCA\u65AD",
+  "\u6536\u8D77\u8BCA\u65AD": "\u6536\u8D77\u8BCA\u65AD",
+  "\u51FA\u6545\u969C\u65F6\u5148\u770B\u8FD9\u91CC\uFF1A\u8FDE\u63A5\u72B6\u6001\u3001\u6700\u8FD1\u9519\u8BEF\u3001\u65E5\u5FD7\u5C3E\u90E8\u3002": "\u51FA\u6545\u969C\u65F6\u5148\u770B\u8FD9\u91CC\uFF1A\u8FDE\u63A5\u72B6\u6001\u3001\u6700\u8FD1\u9519\u8BEF\u3001\u65E5\u5FD7\u5C3E\u90E8\u3002",
+  "\u8FD0\u884C\u4E2D": "\u8FD0\u884C\u4E2D",
+  "\u542F\u52A8\u4E2D": "\u542F\u52A8\u4E2D",
+  "\u5DF2\u8FDE\u63A5": "\u5DF2\u8FDE\u63A5",
+  "\u672A\u8FDE\u63A5": "\u672A\u8FDE\u63A5",
+  "\u5DF2\u5904\u7406": "\u5DF2\u5904\u7406",
+  "\u53BB\u5F00\u901A\u6743\u9650": "\u53BB\u5F00\u901A\u6743\u9650",
+  "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF",
+  "\u8FD9\u53F0\u6E20\u9053\u4E0B\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA\u3002": "\u8FD9\u53F0\u6E20\u9053\u4E0B\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA\u3002",
+  "\u8FD8\u6CA1\u6709\u65E5\u5FD7": "\u8FD8\u6CA1\u6709\u65E5\u5FD7",
+  "\u770B\u6700\u540E 40 \u884C": "\u770B\u6700\u540E 40 \u884C",
+  "\u6536\u8D77": "\u6536\u8D77",
   "\u7248\u672C\u4E0E\u66F4\u65B0": "\u7248\u672C\u4E0E\u66F4\u65B0",
   "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002",
@@ -2833,6 +2917,21 @@ var en = {
   "\u6B63\u5728\u542F\u52A8": "Starting",
   "\u91CD\u8FDE\u4E2D": "Reconnecting",
   "\u5DF2\u505C\u6B62": "Stopped",
+  // 诊断面板（client/diagnostics.js）
+  "\u8BCA\u65AD": "Diagnostics",
+  "\u6536\u8D77\u8BCA\u65AD": "Hide diagnostics",
+  "\u51FA\u6545\u969C\u65F6\u5148\u770B\u8FD9\u91CC\uFF1A\u8FDE\u63A5\u72B6\u6001\u3001\u6700\u8FD1\u9519\u8BEF\u3001\u65E5\u5FD7\u5C3E\u90E8\u3002": "Start here when something breaks: connection state, latest errors, log tail.",
+  "\u8FD0\u884C\u4E2D": "Running",
+  "\u542F\u52A8\u4E2D": "Starting",
+  "\u5DF2\u8FDE\u63A5": "Connected",
+  "\u672A\u8FDE\u63A5": "Disconnected",
+  "\u5DF2\u5904\u7406": "Handled",
+  "\u53BB\u5F00\u901A\u6743\u9650": "Grant the scope",
+  "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "Last error",
+  "\u8FD9\u53F0\u6E20\u9053\u4E0B\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA\u3002": "No bots on this channel yet.",
+  "\u8FD8\u6CA1\u6709\u65E5\u5FD7": "No log yet",
+  "\u770B\u6700\u540E 40 \u884C": "Show last 40 lines",
+  "\u6536\u8D77": "Hide",
   "\u7248\u672C\u4E0E\u66F4\u65B0": "Version & updates",
   "\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0": "Hide version & updates",
   "\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002": "Upgrading the plugin needs a dsh restart; settings-only changes just need a page refresh.",
@@ -3057,7 +3156,7 @@ function installSessionBadges({
 }
 
 // packages/dsh-chat/client/section.js
-var React9 = __toESM(require("react"), 1);
+var React10 = __toESM(require("react"), 1);
 
 // packages/dsh-chat/client/bot-list.js
 var React7 = __toESM(require("react"), 1);
@@ -3182,20 +3281,35 @@ function BotList(props) {
   );
 }
 
-// packages/dsh-chat/client/version-panel.js
+// packages/dsh-chat/client/diagnostics.js
 var React8 = __toESM(require("react"), 1);
 var h7 = React8.createElement;
-var CHANNEL_PACKAGE_HINTS = Object.freeze({
-  feishu: "dsh-chat-feishu",
-  weixin: "dsh-chat-weixin"
+var STATE_TEXT2 = Object.freeze({
+  running: "\u8FD0\u884C\u4E2D",
+  starting: "\u542F\u52A8\u4E2D",
+  stopped: "\u5DF2\u505C\u6B62",
+  failed: "\u542F\u52A8\u5931\u8D25"
 });
-function VersionPanel(props) {
+function formatSize(bytes) {
+  if (typeof bytes !== "number" || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+function formatTime2(iso) {
+  if (typeof iso !== "string" || !iso) return "\u2014";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function DiagnosticsPanel(props) {
   const { connection, chatUi, translate, t: frameworkT } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
   const [state, setState] = React8.useState({ loading: true, error: null, info: null });
+  const [openLog, setOpenLog] = React8.useState(null);
   const load = React8.useCallback(() => {
     setState((current) => ({ ...current, loading: true, error: null }));
-    chatUi.callControlRpc(connection, "channel.list", {}).then((result) => {
+    chatUi.callControlRpc(connection, "diagnostics.read", {}).then((result) => {
       setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
     }).catch((error) => {
       setState({ loading: false, error: error?.message ?? String(error), info: null });
@@ -3207,11 +3321,41 @@ function VersionPanel(props) {
   const Panel2 = chatUi.components.Panel;
   const StatusPill2 = chatUi.components.StatusPill;
   const info = state.info;
+  const statusLabel = (channel) => {
+    if (channel.status === "running") return t("\u6E20\u9053\u5DF2\u5C31\u7EEA");
+    if (channel.status === "failed") return t("\u6E20\u9053\u542F\u52A8\u5931\u8D25");
+    if (channel.status === "stopped") return t("\u6E20\u9053\u5DF2\u505C\u6B62");
+    return t("\u6E20\u9053\u6B63\u5728\u542F\u52A8");
+  };
+  const botRow = (bot) => h7(
+    "li",
+    { key: bot.id, className: "dchat-diagBot" },
+    // 一行放不下就整块换行：id 会省略号收缩，右侧元信息不拆字。
+    h7(
+      "div",
+      { className: "dchat-listItem dchat-diagRow" },
+      h7("span", { className: "dchat-code" }, bot.id),
+      h7(
+        "span",
+        { className: "dchat-diagMeta" },
+        `${STATE_TEXT2[bot.state] ? t(STATE_TEXT2[bot.state]) : bot.state ?? "\u2014"} \xB7 ${bot.connected ? t("\u5DF2\u8FDE\u63A5") : t("\u672A\u8FDE\u63A5")} \xB7 ${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}` + (bot.lastHandledAt ? ` \xB7 ${formatTime2(bot.lastHandledAt)}` : "")
+      )
+    ),
+    // 失败必须可见：连接错误、最近一次处理错误、名字拿不到（多为缺权限，带开通链接）。
+    bot.errorMessage ? h7("p", { className: "dchat-error", role: "alert" }, bot.errorMessage) : null,
+    bot.lastError ? h7("p", { className: "dchat-error", role: "alert" }, `${t("\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF")}\uFF1A${bot.lastError}`) : null,
+    bot.nameHint ? h7(
+      "p",
+      { className: "dchat-cardDescription" },
+      `${bot.nameHint.message} `,
+      bot.nameHint.url ? h7("a", { href: bot.nameHint.url, target: "_blank", rel: "noreferrer" }, t("\u53BB\u5F00\u901A\u6743\u9650")) : null
+    ) : null
+  );
   return h7(
     Panel2,
     {
-      title: t("\u7248\u672C\u4E0E\u66F4\u65B0"),
-      description: t("\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002"),
+      title: t("\u8BCA\u65AD"),
+      description: t("\u51FA\u6545\u969C\u65F6\u5148\u770B\u8FD9\u91CC\uFF1A\u8FDE\u63A5\u72B6\u6001\u3001\u6700\u8FD1\u9519\u8BEF\u3001\u65E5\u5FD7\u5C3E\u90E8\u3002"),
       actions: h7("button", {
         type: "button",
         className: "dchat-button",
@@ -3220,65 +3364,172 @@ function VersionPanel(props) {
       }, state.loading ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
     },
     state.error ? h7("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
-    h7(
-      "ul",
-      { className: "dchat-list" },
+    ...(info?.channels ?? []).map((channel) => h7(
+      "div",
+      {
+        key: channel.id,
+        className: "dchat-diagSection"
+      },
       h7(
-        "li",
-        { className: "dchat-listItem" },
-        h7("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
-        h7(
-          "code",
-          { className: "dchat-code" },
-          `${info?.hubPackage ?? "dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
-        )
+        "div",
+        { className: "dchat-diagHead" },
+        h7("span", { className: "dchat-groupTitle" }, `${channel.label} \xB7 ${channel.version ?? "\u2014"}`),
+        h7(StatusPill2, { status: channel.status, label: statusLabel(channel) })
       ),
-      h7(
-        "li",
-        { className: "dchat-listItem" },
-        h7("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
-        h7("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
-      ),
-      ...(info?.channels ?? []).map((channel) => h7(
-        "li",
-        {
-          key: channel.id,
-          className: "dchat-listItem"
-        },
-        h7("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
-        h7(
-          "span",
-          { className: "dchat-versionMeta" },
-          h7("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
-          h7(StatusPill2, {
-            status: channel.status,
-            label: channel.status === "running" ? t("\u6E20\u9053\u5DF2\u5C31\u7EEA") : channel.error ? t("\u6E20\u9053\u542F\u52A8\u5931\u8D25") : t("\u6E20\u9053\u6B63\u5728\u542F\u52A8")
-          })
-        )
-      ))
-    ),
-    info?.dataDir ? h7(
+      channel.statusError ? h7("p", { className: "dchat-error", role: "alert" }, channel.statusError) : null,
+      channel.bots.length === 0 ? h7("p", { className: "dchat-cardDescription" }, t("\u8FD9\u53F0\u6E20\u9053\u4E0B\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA\u3002")) : h7("ul", { className: "dchat-list" }, ...channel.bots.map(botRow))
+    )),
+    info ? h7(
       "ul",
       { className: "dchat-list" },
       h7(
         "li",
         { className: "dchat-listItem" },
         h7("span", null, t("\u6570\u636E\u76EE\u5F55")),
-        h7("code", { className: "dchat-code" }, info.dataDir)
+        h7("code", { className: "dchat-code" }, info.dataDir ?? "\u2014")
       ),
       h7(
         "li",
         { className: "dchat-listItem" },
         h7("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
-        h7("code", { className: "dchat-code" }, info.logDir)
+        h7("code", { className: "dchat-code" }, info.logDir ?? "\u2014")
       )
     ) : null,
-    h7(
+    ...(info?.logs ?? []).map((log) => {
+      const name2 = String(log.path ?? "").split("/").pop();
+      const open = openLog === log.path;
+      return h7(
+        "div",
+        { key: log.path, className: "dchat-diagSection" },
+        // 与机器人行同构：文件名 + 大小时间一行，展开按钮单独一行（窄栏下挤不下）。
+        h7(
+          "div",
+          { className: "dchat-diagBot" },
+          h7(
+            "div",
+            { className: "dchat-listItem dchat-diagRow" },
+            h7("span", { className: "dchat-code" }, name2),
+            h7(
+              "span",
+              { className: "dchat-diagMeta" },
+              log.exists ? `${formatSize(log.size)} \xB7 ${formatTime2(log.modifiedAt)}` : t("\u8FD8\u6CA1\u6709\u65E5\u5FD7")
+            )
+          ),
+          h7(
+            "div",
+            { className: "dchat-actions" },
+            h7("button", {
+              type: "button",
+              className: "dchat-button dchat-buttonLink",
+              disabled: !log.exists,
+              "aria-expanded": open,
+              onClick: () => setOpenLog(open ? null : log.path)
+            }, open ? t("\u6536\u8D77") : t("\u770B\u6700\u540E 40 \u884C"))
+          )
+        ),
+        open ? h7("pre", { className: "dchat-code dchat-codeBlock dchat-logTail" }, log.lines.join("\n")) : null
+      );
+    })
+  );
+}
+
+// packages/dsh-chat/client/version-panel.js
+var React9 = __toESM(require("react"), 1);
+var h8 = React9.createElement;
+var CHANNEL_PACKAGE_HINTS = Object.freeze({
+  feishu: "dsh-chat-feishu",
+  weixin: "dsh-chat-weixin"
+});
+function VersionPanel(props) {
+  const { connection, chatUi, translate, t: frameworkT } = props;
+  const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
+  const [state, setState] = React9.useState({ loading: true, error: null, info: null });
+  const load = React9.useCallback(() => {
+    setState((current) => ({ ...current, loading: true, error: null }));
+    chatUi.callControlRpc(connection, "channel.list", {}).then((result) => {
+      setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
+    }).catch((error) => {
+      setState({ loading: false, error: error?.message ?? String(error), info: null });
+    });
+  }, [chatUi, connection]);
+  React9.useEffect(() => {
+    load();
+  }, [load]);
+  const Panel2 = chatUi.components.Panel;
+  const StatusPill2 = chatUi.components.StatusPill;
+  const info = state.info;
+  return h8(
+    Panel2,
+    {
+      title: t("\u7248\u672C\u4E0E\u66F4\u65B0"),
+      description: t("\u5347\u7EA7\u63D2\u4EF6\u540E\u9700\u8981\u91CD\u542F dsh\uFF1B\u53EA\u6539\u8BBE\u7F6E\u9875\u4EE3\u7801\u5219\u5237\u65B0\u9875\u9762\u5373\u53EF\u3002"),
+      actions: h8("button", {
+        type: "button",
+        className: "dchat-button",
+        onClick: load,
+        disabled: state.loading
+      }, state.loading ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
+    },
+    state.error ? h8("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
+    h8(
+      "ul",
+      { className: "dchat-list" },
+      h8(
+        "li",
+        { className: "dchat-listItem" },
+        h8("span", null, t("Chat\u673A\u5668\u4EBA\u5185\u6838")),
+        h8(
+          "code",
+          { className: "dchat-code" },
+          `${info?.hubPackage ?? "dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
+        )
+      ),
+      h8(
+        "li",
+        { className: "dchat-listItem" },
+        h8("span", null, t("\u6E20\u9053\u5951\u7EA6\u7248\u672C")),
+        h8("code", { className: "dchat-code" }, `v${info?.contractVersion ?? "\u2026"}`)
+      ),
+      ...(info?.channels ?? []).map((channel) => h8(
+        "li",
+        {
+          key: channel.id,
+          className: "dchat-listItem"
+        },
+        h8("span", null, `${channel.label} \xB7 ${CHANNEL_PACKAGE_HINTS[channel.id] ?? channel.id}`),
+        h8(
+          "span",
+          { className: "dchat-versionMeta" },
+          h8("code", { className: "dchat-code" }, channel.version ?? "\u2014"),
+          h8(StatusPill2, {
+            status: channel.status,
+            label: channel.status === "running" ? t("\u6E20\u9053\u5DF2\u5C31\u7EEA") : channel.error ? t("\u6E20\u9053\u542F\u52A8\u5931\u8D25") : t("\u6E20\u9053\u6B63\u5728\u542F\u52A8")
+          })
+        )
+      ))
+    ),
+    info?.dataDir ? h8(
+      "ul",
+      { className: "dchat-list" },
+      h8(
+        "li",
+        { className: "dchat-listItem" },
+        h8("span", null, t("\u6570\u636E\u76EE\u5F55")),
+        h8("code", { className: "dchat-code" }, info.dataDir)
+      ),
+      h8(
+        "li",
+        { className: "dchat-listItem" },
+        h8("span", null, t("\u65E5\u5FD7\u76EE\u5F55")),
+        h8("code", { className: "dchat-code" }, info.logDir)
+      )
+    ) : null,
+    h8(
       "div",
       { className: "dchat-updateHint" },
-      h7("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
-      h7("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
-      h7(
+      h8("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
+      h8("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
+      h8(
         "code",
         { className: "dchat-code dchat-codeBlock" },
         "dsh plugin --profile web add <\u672C\u4ED3\u5E93 packages/dsh-chat \u7684\u7EDD\u5BF9\u8DEF\u5F84>"
@@ -3288,7 +3539,7 @@ function VersionPanel(props) {
 }
 
 // packages/dsh-chat/client/section.js
-var h8 = React9.createElement;
+var h9 = React10.createElement;
 var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-feishu",
   "dsh-chat-weixin"
@@ -3296,29 +3547,30 @@ var KNOWN_CHANNEL_PACKAGES = Object.freeze([
 function ChannelMark({ entry }) {
   const iconUri = channelIconUri(entry.icon);
   if (iconUri) {
-    return h8("span", {
+    return h9("span", {
       // 有真图标就不套那个"字母块"的边框与底色，让它看起来就是应用图标。
       className: "dchat-channelMark dchat-channelMarkIcon",
       "aria-hidden": "true"
-    }, h8("img", { src: iconUri, alt: "", width: 20, height: 20 }));
+    }, h9("img", { src: iconUri, alt: "", width: 20, height: 20 }));
   }
   if (typeof entry.logo === "function") {
-    return h8("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h8(entry.logo));
+    return h9("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h9(entry.logo));
   }
   const initial = entry.id.slice(0, 1).toUpperCase();
-  return h8("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
+  return h9("span", { className: "dchat-channelMark", "aria-hidden": "true" }, initial);
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
-  const [showVersions, setShowVersions] = React9.useState(false);
-  const [view, setView] = React9.useState({ kind: "bots", botId: null });
+  const [showVersions, setShowVersions] = React10.useState(false);
+  const [showDiagnostics, setShowDiagnostics] = React10.useState(false);
+  const [view, setView] = React10.useState({ kind: "bots", botId: null });
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const entries = React9.useSyncExternalStore(
+  const entries = React10.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
     () => channels.getSnapshot(),
     () => channels.getSnapshot()
   );
-  const [selected, setSelected] = React9.useState(null);
+  const [selected, setSelected] = React10.useState(null);
   const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
   const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
   const openSettings = (botId) => setView({ kind: "channel", botId });
@@ -3326,7 +3578,7 @@ function ChatSettingsSection(props) {
   const EmptyState2 = chatUi?.components?.EmptyState;
   function botListView() {
     if (!activeEntry) return null;
-    return h8(BotList, {
+    return h9(BotList, {
       key: activeEntry.id,
       channelId: activeEntry.id,
       label: activeEntry.label,
@@ -3339,21 +3591,21 @@ function ChatSettingsSection(props) {
     });
   }
   function channelView() {
-    return h8(
-      React9.Fragment,
+    return h9(
+      React10.Fragment,
       null,
       typeof renderSlot === "function" ? renderSlot(
         CHANNEL_PAGE_SLOT,
         { channelId: activeId, botId: view.botId },
         { entryKey: activeId }
-      ) : h8("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
+      ) : h9("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D\u9875\u9762\u4E0D\u652F\u6301\u6E20\u9053\u5B50\u69FD\u3002"))
     );
   }
   function backBar() {
-    return h8(
+    return h9(
       "div",
       { className: "dchat-panelBar" },
-      h8("button", {
+      h9("button", {
         type: "button",
         className: "dchat-button",
         onClick: backToBots
@@ -3362,28 +3614,28 @@ function ChatSettingsSection(props) {
   }
   let body = null;
   if (entries.length === 0) {
-    body = EmptyState2 ? h8(EmptyState2, {
+    body = EmptyState2 ? h9(EmptyState2, {
       title: t("\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6"),
       description: t("\u5B89\u88C5\u6E20\u9053\u63D2\u4EF6\u540E\uFF0C\u8FD9\u91CC\u4F1A\u51FA\u73B0\u5BF9\u5E94\u7684\u804A\u5929\u8F6F\u4EF6\u3002")
-    }, h8(
+    }, h9(
       "ul",
       { className: "dchat-list" },
-      h8("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
-      ...KNOWN_CHANNEL_PACKAGES.map((name2) => h8("li", {
+      h9("li", { className: "dchat-listItem" }, t("\u5DF2\u77E5\u6E20\u9053\u63D2\u4EF6")),
+      ...KNOWN_CHANNEL_PACKAGES.map((name2) => h9("li", {
         key: name2,
         className: "dchat-listItem"
-      }, h8("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
+      }, h9("code", { className: "dchat-code" }, `dsh plugin --profile web add ${name2}`)))
     )) : null;
   } else if (view.kind !== "bots") {
-    body = h8("div", { className: "dchat-solo" }, backBar(), channelView());
+    body = h9("div", { className: "dchat-solo" }, backBar(), channelView());
   } else {
-    body = h8(
+    body = h9(
       "div",
       { className: "dchat-layout" },
-      h8(
+      h9(
         "nav",
         { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
-        entries.map((entry) => h8(
+        entries.map((entry) => h9(
           "button",
           {
             key: entry.id,
@@ -3398,15 +3650,15 @@ function ChatSettingsSection(props) {
               backToBots();
             }
           },
-          h8(ChannelMark, { entry }),
-          h8(
+          h9(ChannelMark, { entry }),
+          h9(
             "span",
             { className: "dchat-channelLabel" },
-            h8("strong", null, entry.label())
+            h9("strong", null, entry.label())
           )
         ))
       ),
-      h8("main", {
+      h9("main", {
         className: "dchat-panel",
         role: "tabpanel",
         id: `dchat-panel-${activeId}`,
@@ -3414,28 +3666,39 @@ function ChatSettingsSection(props) {
       }, botListView())
     );
   }
-  return h8(
+  return h9(
     "section",
     { className: "dchat-page", "aria-label": t("Chat\u673A\u5668\u4EBA\u8BBE\u7F6E") },
-    h8(
+    h9(
       "header",
       { className: "dchat-header" },
-      h8(
+      h9(
         "div",
         { className: "dchat-brand" },
-        h8("strong", { className: "dchat-brandName" }, "DSH-Chat"),
-        h8("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
+        h9("strong", { className: "dchat-brandName" }, "DSH-Chat"),
+        h9("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
       ),
-      // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      // 右上角入口：版本与更新 / 诊断（展开后是同一块面板，收起时不请求数据）。
       // 用文字链接形态，避免和 DSH 自己的实心按钮（打开配置文件）平级抢注意力。
-      h8("button", {
-        type: "button",
-        className: "dchat-button dchat-buttonLink",
-        "aria-expanded": showVersions,
-        onClick: () => setShowVersions((open) => !open)
-      }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))
+      h9(
+        "div",
+        { className: "dchat-headerActions" },
+        h9("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonLink",
+          "aria-expanded": showDiagnostics,
+          onClick: () => setShowDiagnostics((open) => !open)
+        }, showDiagnostics ? t("\u6536\u8D77\u8BCA\u65AD") : t("\u8BCA\u65AD")),
+        h9("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonLink",
+          "aria-expanded": showVersions,
+          onClick: () => setShowVersions((open) => !open)
+        }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))
+      )
     ),
-    showVersions ? h8(VersionPanel, { connection, chatUi, translate: t }) : null,
+    showDiagnostics ? h9(DiagnosticsPanel, { connection, chatUi, translate: t }) : null,
+    showVersions ? h9(VersionPanel, { connection, chatUi, translate: t }) : null,
     body
   );
 }

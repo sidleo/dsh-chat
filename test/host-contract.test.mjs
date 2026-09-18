@@ -185,6 +185,33 @@ test('hub 发布契约版本与控制端点', async () => {
   }
 });
 
+test('诊断端点：一屏给出各渠道机器人状态与日志尾部（读不到日志也不算失败）', async () => {
+  const app = await bootstrap();
+  try {
+    const { result } = await callRoute(app.routes, HUB_PATH, 'diagnostics.read', {});
+    assert.equal(result.ok, true);
+    assert.equal(result.value.logDir, `${result.value.dataDir}/logs`);
+    assert.deepEqual(result.value.channels.map((channel) => channel.id), ['fixture']);
+    assert.equal(result.value.channels[0].status, 'running');
+    assert.deepEqual(result.value.channels[0].bots, [], '假渠道没有机器人，但字段必须在');
+    assert.equal(result.value.channels[0].statusError, null);
+
+    // hub + 每个渠道各一份日志；hub 日志里至少已经写了一行（启动时的就绪行）。
+    const names = result.value.logs.map((log) => log.path.split('/').pop());
+    assert.deepEqual(names, ['hub.log', 'fixture.log']);
+    const hub = result.value.logs[0];
+    assert.equal(hub.exists, true, 'hub 日志应该已经在写');
+    assert.ok(hub.lines.every((line) => typeof line === 'string'));
+
+    // 参数表：这个端点不吃任何参数。
+    const bad = await callRoute(app.routes, HUB_PATH, 'diagnostics.read', { hello: 1 });
+    assert.equal(bad.result.ok, false);
+    assert.equal(bad.result.error.code, 'chat/bad-request');
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('渠道 endpoints 经 hub 的 RPC 载体可达', async () => {
   const app = await bootstrap();
   try {

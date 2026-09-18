@@ -11,6 +11,7 @@ import * as React from 'react';
 import { channelIconUri } from '../shared/channel-rail.mjs';
 import { CHANNEL_PAGE_SLOT } from '../shared/contract.mjs';
 import { BotList } from './bot-list.js';
+import { DiagnosticsPanel } from './diagnostics.js';
 import { VersionPanel } from './version-panel.js';
 
 const h = React.createElement;
@@ -48,6 +49,8 @@ export function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
   /** 版本与更新默认收起：右上角入口按需展开（只在展开时读一次数据）。 */
   const [showVersions, setShowVersions] = React.useState(false);
+  /** 诊断同理：不看时不请求（读日志要碰文件系统，没必要常驻）。 */
+  const [showDiagnostics, setShowDiagnostics] = React.useState(false);
   /**
    * 右栏两级视图：`{ kind: 'bots' }` 机器人列表 → `{ kind: 'channel', botId }` 机器人设置页。
    * 和 dsh-im 同构：渠道 → 机器人 → 设置。
@@ -156,14 +159,24 @@ export function ChatSettingsSection(props) {
       h('div', { className: 'dchat-brand' },
         h('strong', { className: 'dchat-brandName' }, 'DSH-Chat'),
         h('span', { className: 'dchat-brandHint' }, t('Chat机器人'))),
-      // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      // 右上角入口：版本与更新 / 诊断（展开后是同一块面板，收起时不请求数据）。
       // 用文字链接形态，避免和 DSH 自己的实心按钮（打开配置文件）平级抢注意力。
-      h('button', {
-        type: 'button',
-        className: 'dchat-button dchat-buttonLink',
-        'aria-expanded': showVersions,
-        onClick: () => setShowVersions((open) => !open),
-      }, showVersions ? t('收起版本与更新') : t('版本与更新'))),
+      h('div', { className: 'dchat-headerActions' },
+        h('button', {
+          type: 'button',
+          className: 'dchat-button dchat-buttonLink',
+          'aria-expanded': showDiagnostics,
+          onClick: () => setShowDiagnostics((open) => !open),
+        }, showDiagnostics ? t('收起诊断') : t('诊断')),
+        h('button', {
+          type: 'button',
+          className: 'dchat-button dchat-buttonLink',
+          'aria-expanded': showVersions,
+          onClick: () => setShowVersions((open) => !open),
+        }, showVersions ? t('收起版本与更新') : t('版本与更新')))),
+    showDiagnostics
+      ? h(DiagnosticsPanel, { connection, chatUi, translate: t })
+      : null,
     showVersions
       ? h(VersionPanel, { connection, chatUi, translate: t })
       : null,

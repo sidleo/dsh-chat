@@ -289,6 +289,7 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
 | `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |
 | `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |
+| `diagnostics.read` | `{}` | 自助排查现场：数据/日志目录 + 各渠道各机器人的状态与最近错误（含缺权限提示）+ 每个渠道日志文件的尾部若干行（读不到日志返回 `exists:false`，不算失败） |
 | `delivery.save` / `delivery.remove` | `{ channelId, botId, target }` / `{ …, targetId }` | 目标增删 |
 | `delivery.send` | `{ channelId, botId, targetId, text }` | 主动发一条文本 |
 | `delivery.sendFile` | `{ channelId, botId, targetId, path, name? }` | 主动发文件/图片（≤30MB）；渠道没实现 `sendFile` 时明确报 `chat/delivery-unsupported` |

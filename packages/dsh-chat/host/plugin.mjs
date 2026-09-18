@@ -23,6 +23,7 @@ import { createChannelRegistry } from './channel-registry.mjs';
 import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createDeliveryService } from './delivery.mjs';
 import { channelLogPath, createLogFileSink, withFileSink } from './file-log.mjs';
+import { readLogTail } from './log-tail.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
@@ -244,6 +245,35 @@ export function apply(ctx, config = {}) {
         dataDir: hubDataDir(config.dataDir),
         logDir: logsDir,
         channels: registry.list(),
+      });
+    }
+    if (method === 'diagnostics.read') {
+      if (payload !== null && (typeof payload !== 'object' || Array.isArray(payload)
+        || Object.keys(payload).length > 0)) {
+        return fail('chat/bad-request', 'diagnostics.read 不接受参数。');
+      }
+      // 自助排查的"一屏现场"：每台机器人的连接状态与最近错误 + 日志尾部。
+      // 只取叶子字段（前端不碰 host 的活对象）；日志读不到不算失败。
+      const entries = registry.list();
+      const channels = await Promise.all(entries.map(async (entry) => {
+        const result = await registry.handleRpc(entry.id, 'connection.status', {});
+        return {
+          id: entry.id,
+          label: entry.label,
+          version: entry.version ?? null,
+          status: entry.status,
+          error: entry.error ?? null,
+          bots: result?.ok === true ? (result.value?.bots ?? []) : [],
+          statusError: result?.ok === true ? null : (result.error?.message ?? '状态读取失败'),
+        };
+      }));
+      const logs = await Promise.all(['hub', ...entries.map((entry) => entry.id)]
+        .map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+      return ok({
+        dataDir: hubDataDir(config.dataDir),
+        logDir: logsDir,
+        channels,
+        logs,
       });
     }
     if (method === 'bot.settings.get') {

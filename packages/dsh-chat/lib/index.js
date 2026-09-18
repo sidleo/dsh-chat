@@ -11,7 +11,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-chat/host/plugin.mjs
-import { stat as stat3 } from "node:fs/promises";
+import { stat as stat4 } from "node:fs/promises";
 import { join as join5, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
@@ -162,7 +162,7 @@ function normalizeAccessPolicy(input) {
   if (!isPlainObject2(input)) return null;
   const scopeOf = (value) => {
     const source = isPlainObject2(value) ? value : {};
-    const open = isPlainObject2(source.open) ? source.open : {};
+    const open2 = isPlainObject2(source.open) ? source.open : {};
     const allowlist = isPlainObject2(source.allowlist) ? source.allowlist : {};
     const usersOf = (value2) => Array.isArray(value2) ? value2.map((user) => {
       try {
@@ -174,8 +174,8 @@ function normalizeAccessPolicy(input) {
     return {
       mode: ACCESS_POLICY_MODES.includes(source.mode) ? source.mode : "allowlist",
       open: {
-        defaultCanExecuteCommands: open.defaultCanExecuteCommands === true,
-        commandPermissionOverrides: usersOf(open.commandPermissionOverrides)
+        defaultCanExecuteCommands: open2.defaultCanExecuteCommands === true,
+        commandPermissionOverrides: usersOf(open2.commandPermissionOverrides)
       },
       allowlist: { users: usersOf(allowlist.users) }
     };
@@ -1982,6 +1982,48 @@ function channelLogPath(logsDir, name2) {
   return join2(logsDir, `${name2}.log`);
 }
 
+// packages/dsh-chat/host/log-tail.mjs
+import { open, stat as stat3 } from "node:fs/promises";
+var DEFAULT_MAX_BYTES2 = 16 * 1024;
+var DEFAULT_MAX_LINES = 40;
+async function readLogTail(path, {
+  maxBytes = DEFAULT_MAX_BYTES2,
+  maxLines = DEFAULT_MAX_LINES
+} = {}) {
+  const empty = { path, exists: false, size: 0, modifiedAt: null, lines: [] };
+  let info;
+  try {
+    info = await stat3(path);
+    if (!info.isFile()) return empty;
+  } catch {
+    return empty;
+  }
+  const length = Math.min(maxBytes, info.size);
+  const start = Math.max(0, info.size - length);
+  let text = "";
+  try {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, start);
+      text = buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return empty;
+  }
+  const raw = text.split("\n");
+  if (start > 0) raw.shift();
+  return {
+    path,
+    exists: true,
+    size: info.size,
+    modifiedAt: info.mtime.toISOString(),
+    lines: raw.filter((line2) => line2.trim() !== "").slice(-maxLines)
+  };
+}
+
 // packages/dsh-chat/host/guidance.mjs
 var GUIDANCE_MAX_LENGTH2 = 8e3;
 var MAX_SESSIONS = 1024;
@@ -3499,6 +3541,31 @@ function apply(ctx, config = {}) {
         channels: registry.list()
       });
     }
+    if (method === "diagnostics.read") {
+      if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {
+        return fail("chat/bad-request", "diagnostics.read \u4E0D\u63A5\u53D7\u53C2\u6570\u3002");
+      }
+      const entries = registry.list();
+      const channels = await Promise.all(entries.map(async (entry) => {
+        const result = await registry.handleRpc(entry.id, "connection.status", {});
+        return {
+          id: entry.id,
+          label: entry.label,
+          version: entry.version ?? null,
+          status: entry.status,
+          error: entry.error ?? null,
+          bots: result?.ok === true ? result.value?.bots ?? [] : [],
+          statusError: result?.ok === true ? null : result.error?.message ?? "\u72B6\u6001\u8BFB\u53D6\u5931\u8D25"
+        };
+      }));
+      const logs = await Promise.all(["hub", ...entries.map((entry) => entry.id)].map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+      return ok({
+        dataDir: hubDataDir(config.dataDir),
+        logDir: logsDir,
+        channels,
+        logs
+      });
+    }
     if (method === "bot.settings.get") {
       if (!validBotPayload(payload)) return fail("chat/bad-request", "bot.settings.get \u9700\u8981 channelId \u4E0E botId\u3002");
       await settings.ready();
@@ -3562,7 +3629,7 @@ function apply(ctx, config = {}) {
       const target = resolve3(raw.trim());
       let info;
       try {
-        info = await stat3(target);
+        info = await stat4(target);
       } catch (error) {
         return fail("chat/workspace-invalid", `\u76EE\u5F55\u4E0D\u5B58\u5728\u6216\u8BFB\u4E0D\u5230\uFF1A${target}\uFF08${error?.code ?? error?.message}\uFF09`);
       }

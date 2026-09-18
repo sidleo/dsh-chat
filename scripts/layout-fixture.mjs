@@ -16,12 +16,13 @@ import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
 import { DeliveryTargetsEditor } from '../packages/dsh-chat/client/delivery-targets.js';
+import { DiagnosticsPanel } from '../packages/dsh-chat/client/diagnostics.js';
 import {
   AccessPolicyEditor, OwnerEditor, PresetEditor, WorkspaceEditor,
 } from '../packages/dsh-chat/client/bot-shared-settings.js';
 import { ScopedModeEditor } from '../packages/dsh-chat/client/scoped-mode-editor.js';
 // 用真的 Panel（不是手写复刻）：投递列表靠它渲染卡片外壳，复刻会跟着组件漂移。
-import { Panel } from '../packages/dsh-chat/client/chat-ui.js';
+import { Panel, StatusPill } from '../packages/dsh-chat/client/chat-ui.js';
 import { installChatStyles } from '../packages/dsh-chat/client/styles.js';
 
 const h = React.createElement;
@@ -43,7 +44,7 @@ const t = (key) => key;
 
 /** 极简 chatUi 桩：只提供被渲染组件用到的那几个面。 */
 const chatUi = {
-  components: { Panel },
+  components: { Panel, StatusPill },
   hooks: {},
   translate: t,
   unwrapRpc: (result) => {
@@ -69,6 +70,75 @@ const chatUi = {
         },
       };
     }
+    // 诊断面板：真实形态的数据（含失败行、权限提示、超长日志行）。
+    if (method === 'diagnostics.read') {
+      return {
+        ok: true,
+        value: {
+          dataDir: '/Users/zhang3/.dsh/integrations/dsh-chat',
+          logDir: '/Users/zhang3/.dsh/integrations/dsh-chat/logs',
+          channels: [
+            {
+              id: 'feishu',
+              label: '飞书',
+              version: '0.0.1',
+              status: 'running',
+              error: null,
+              statusError: null,
+              bots: [
+                {
+                  id: 'bot_1f4c7a9e2b5d83406a1c3e5f7b9d0a2c',
+                  state: 'running',
+                  connected: true,
+                  handled: 128,
+                  lastHandledAt: '2026-09-19T02:21:57.000Z',
+                  errorMessage: null,
+                  lastError: null,
+                  nameHint: {
+                    code: 'feishu/scope-missing',
+                    message: '读不到群名：飞书应用还没开通对应权限，所以只能显示 id。开通后点「重新连接」立刻生效。',
+                    url: 'https://open.feishu.cn/app/cli_7b9d1a2c4e6f8035/auth?q=im:chat:readonly',
+                  },
+                },
+                {
+                  id: 'bot_6d2b8f1a4c7e9350b2d4f6a8c0e1b3d5',
+                  state: 'running',
+                  connected: true,
+                  handled: 7,
+                  lastHandledAt: null,
+                  errorMessage: '呈现层发不出去：卡片被删了',
+                  lastError: '回复超时：15 分钟没有任何事件',
+                  nameHint: null,
+                },
+              ],
+            },
+            {
+              id: 'weixin', label: '微信', version: '0.0.1', status: 'stopped', error: null,
+              statusError: null, bots: [],
+            },
+          ],
+          logs: [
+            {
+              path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/feishu.log',
+              exists: true,
+              size: 128970,
+              modifiedAt: '2026-09-19T02:21:57.000Z',
+              lines: [
+                '2026-09-19T02:21:57.601Z WARN  [dsh-chat-feishu] 读取群列表失败，群名将退回 id：读取群列表失败：Access denied. One of the following scopes is required: [im:chat:readonly, im:chat, im:chat.group_info:readonly, im:chat:read]（code 99991672）',
+                '2026-09-19T02:22:03.114Z INFO  [dsh-chat-feishu] 张三 长连接已就绪',
+              ],
+            },
+            {
+              path: '/Users/zhang3/.dsh/integrations/dsh-chat/logs/hub.log',
+              exists: true,
+              size: 36181,
+              modifiedAt: '2026-09-19T02:37:36.000Z',
+              lines: ['2026-09-19T02:37:36.661Z INFO  [dsh-chat] 收到提问请求：会话=session-cc4e3ab1-dbe4-4170-b4bf-90cb34e5aa72 问题数=1 认领=否'],
+            },
+          ],
+        },
+      };
+    }
     return { ok: true, value: {} };
   },
 };
@@ -81,6 +151,9 @@ const FRAGMENTS = {
   delivery: () => h(DeliveryTargetsEditor, {
     chatUi, connection: {}, channelId: 'feishu', botId: 'bot_1', translate: t,
   }),
+  // 诊断面板：收起态与"展开日志尾部"态各测一遍（超长日志行的溢出风险在展开后）。
+  diagnostics: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
+  diagnosticsOpen: () => h(DiagnosticsPanel, { chatUi, connection: {}, translate: t }),
   shared: () => h(React.Fragment, null,
     h(WorkspaceEditor, {
       value: '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat',
@@ -205,6 +278,13 @@ function measure() {
 let measured = 0;
 async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
+  // 「展开日志尾部」是被按钮控制的：点一次再量，覆盖展开态的溢出风险。
+  for (const frame of document.querySelectorAll('[data-scenario="diagnosticsOpen"]')) {
+    for (const button of frame.querySelectorAll('button')) {
+      if ((button.textContent ?? '').includes('看最后 40 行')) button.click();
+    }
+  }
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
   measure();
   measured += 1;
 }

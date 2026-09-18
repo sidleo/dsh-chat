@@ -22,6 +22,15 @@ const CSS = `
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  /* 窄栏下入口换行，而不是把品牌名挤出容器。 */
+  flex-wrap: wrap;
+}
+/* 右上角入口组（诊断 / 版本与更新）：形态一致、放不下就换行。 */
+.dchat-headerActions {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .dchat-brand {
   display: flex;
@@ -326,6 +335,66 @@ const CSS = `
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+/* 诊断面板里的渠道块头：标题与状态点在两侧，放不下就整块换行。 */
+.dchat-diagHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 标题不折行（折了就是"逐字竖排"）——它整块换行靠上面那条 wrap。 */
+.dchat-diagHead > .dchat-groupTitle {
+  white-space: nowrap;
+}
+/* 诊断面板里每个渠道/每个日志各一块：竖排。
+   .dchat-entry 是"可点击的折叠行"（横排），拿来装这些块会把它们挤成一条条细条。 */
+.dchat-diagSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.dchat-diagSection > .dchat-list {
+  min-width: 0;
+}
+/* 机器人块：状态行 + 若干行错误/提示，竖直排列。 */
+.dchat-diagBot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+/* 诊断面板里的机器人行：一行放不下时整体换行，而不是把 id 顶出容器。
+   min-width: 0 是必须的：这些块的内容（35 字符的 open_id）会把 flex 项的
+   min-width: auto 撑成 min-content，于是整块比卡片还宽、把页面顶出滚动条（真机测到过）。 */
+.dchat-diagRow {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.dchat-diagRow > .dchat-code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dchat-diagRow > .dchat-diagMeta {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* 诊断面板里机器人行的右侧元信息（状态 · 已处理 · 时间）。
+   整块不折行（折了就成了"逐字竖排"），放不下时靠 .dchat-diagRow 换行。 */
+.dchat-diagMeta {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+/* 日志尾部：等宽、限高、双向可滚（滚动发生在块内，不会把整页撑宽）。 */
+.dchat-logTail {
+  white-space: pre;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .dchat-updateHint {
   display: flex;
