@@ -790,3 +790,55 @@ test('uploadFile：服务缺席/内容为空/服务报错都有稳定错误码',
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test('同一会话的回合串行：第二条消息等第一条结束，不会互相抢答案', async () => {
+  const { createSessionBridge } = await import('../packages/dsh-chat/host/sessions.mjs');
+  const { createSessionStore } = await import('../packages/dsh-chat/host/session-store.mjs');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-queue-'));
+  const store = createSessionStore({ dataDir, logger: { info() {}, warn() {}, error() {} } });
+  await store.ready();
+  await store.bind('feishu', 'bot_1', 'p2p:ou_1', { sessionId: 'session-1' });
+
+  const events = [];
+  let releaseFirst;
+  const ctx = {
+    // 第一轮：一直挂着，直到测试放行；第二轮必须排在它后面。
+    typertGateway: {
+      invoke: async (namespace, method) => {
+        if (namespace === 'session' && method === 'page') return { records: [], cursor: 0 };
+        if (namespace === 'session' && method === 'list') return { items: [{ sessionId: 'session-1', running: true }] };
+        if (namespace === 'session' && method === 'prompt') {
+          events.push(`prompt:${method}`);
+          return { accepted: true };
+        }
+        return {};
+      },
+    },
+  };
+  const bridge = createSessionBridge({
+    ctx, logger: { info() {}, warn() {}, error() {} }, store,
+    settings: { read: () => ({ workspace: '/tmp' }) },
+  });
+
+  const queued = [];
+  const first = bridge.ask({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/tmp',
+    content: [{ type: 'text', text: '第一条' }],
+    onQueued: (ahead) => queued.push(ahead),
+  }).catch((error) => error);
+  const second = bridge.ask({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/tmp',
+    content: [{ type: 'text', text: '第二条' }],
+    onQueued: (ahead) => queued.push(ahead),
+  }).catch((error) => error);
+
+  // 第二条必须给出"前面还有 1 条"的回执。
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(queued, [1], '第二条要收到排队回执');
+  await Promise.allSettled([first, second]);
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+});

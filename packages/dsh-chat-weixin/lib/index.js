@@ -1234,6 +1234,11 @@ function createWeixinRuntime({
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 同一会话已有回合在跑：先回一句"排队中"。
+        onQueued: (ahead) => {
+          void reply(sender, `\u5DF2\u6392\u961F\uFF08\u524D\u9762\u8FD8\u6709 ${ahead} \u6761\uFF09\uFF0C\u5904\u7406\u5B8C\u4F1A\u4F9D\u6B21\u56DE\u590D\u3002`, contextToken, runId, signal).catch(() => {
+          });
+        },
         // 会话列表里一眼看出渠道（微信只有私聊，标题前缀统一「微信 · 」）。
         channelLabel: "\u5FAE\u4FE1",
         botLabel: account.botName ?? account.botId,

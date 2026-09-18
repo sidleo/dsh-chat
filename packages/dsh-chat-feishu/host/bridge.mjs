@@ -443,6 +443,13 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 同一会话已有回合在跑：先回一句"排队中"，别让用户对着已读不回猜。
+        onQueued: (ahead) => {
+          void gateway.replyText({
+            messageId: message.message_id,
+            text: `已排队（前面还有 ${ahead} 条），处理完会依次回复。`,
+          }).catch(() => {});
+        },
         // 会话列表里一眼看出渠道：工作区叫「飞书 · 张三-DSH」，会话标题加「飞书 · 」前缀。
         channelLabel: '飞书',
         botLabel: bot.botName ?? bot.id,

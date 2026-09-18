@@ -2407,6 +2407,8 @@ function createSessionBridge({
     throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
   }
   const activeTurns = /* @__PURE__ */ new Map();
+  const turnQueues = /* @__PURE__ */ new Map();
+  const queueDepth = /* @__PURE__ */ new Map();
   const namedWorkspaces = /* @__PURE__ */ new Set();
   const namedSessions = /* @__PURE__ */ new Set();
   async function markSessionChannel(sessionId, channelLabel2, signal) {
@@ -2575,239 +2577,275 @@ function createSessionBridge({
     handlers = {},
     turnTimeoutMs,
     channelLabel: channelLabel2 = "",
-    botLabel = ""
+    botLabel = "",
+    onQueued
   }) {
-    const { sessionId } = await ensure({
-      channelId,
-      botId,
-      key,
-      workspacePath,
-      signal,
-      channelLabel: channelLabel2,
-      botLabel
+    const queueKey = `${channelId}:${botId}:${key}`;
+    const ahead = queueDepth.get(queueKey) ?? 0;
+    queueDepth.set(queueKey, ahead + 1);
+    let release;
+    const mine = new Promise((resolve4) => {
+      release = resolve4;
     });
-    guidance?.publish?.(sessionId, sourceGuidance ?? "");
-    const turnKey = `${channelId}:${botId}:${key}`;
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    signal?.addEventListener?.("abort", abort, { once: true });
-    activeTurns.set(turnKey, controller);
-    const frames = await stream("session", "follow", {
-      request: {
-        address: { kind: "session", sessionId },
-        maxMessages: 50,
-        assistantStream: true
+    const previous = turnQueues.get(queueKey) ?? Promise.resolve();
+    turnQueues.set(queueKey, previous.then(() => mine));
+    if (ahead > 0) {
+      try {
+        onQueued?.(ahead);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u6392\u961F\u63D0\u793A\u56DE\u8C03\u5931\u8D25\uFF1A${error?.message ?? error}`);
       }
-    }, controller.signal);
-    let cursor = -1;
-    let promptSent = false;
-    let closing = false;
-    let currentTurn = null;
-    const assistantText = /* @__PURE__ */ new Map();
-    const tools = [];
-    const presented = [];
-    const presentCalls = [];
-    let settled = false;
-    let settle;
-    const finished = new Promise((resolve4) => {
-      settle = resolve4;
-    });
-    const finishTurn = (value) => {
-      if (settled) return;
-      settled = true;
-      const reason = value?.reason?.kind ?? "unknown";
-      const files = presented.length > 0 ? presented : presentCalls;
-      logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0} \u4EA4\u4ED8\u6587\u4EF6=${files.length}`);
-      settle({ ...value, files: [...files] });
-    };
-    const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : TURN_IDLE_TIMEOUT_MS;
-    const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS) : TURN_TOTAL_TIMEOUT_MS;
-    let lastProgressAt = Date.now();
-    let idleTimer = null;
-    const markProgress = () => {
-      lastProgressAt = Date.now();
-    };
-    function armIdleTimer() {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(function tick() {
-        const idleMs = Date.now() - lastProgressAt;
-        if (idleMs >= effectiveIdleTimeoutMs) {
+      logger.info?.(`[dsh-chat] \u56DE\u5408\u6392\u961F\uFF1A${queueKey} \u524D\u9762\u8FD8\u6709 ${ahead} \u6761`);
+    }
+    try {
+      await previous;
+    } catch {
+    }
+    try {
+      return await runTurn();
+    } finally {
+      const left = (queueDepth.get(queueKey) ?? 1) - 1;
+      if (left <= 0) {
+        queueDepth.delete(queueKey);
+        turnQueues.delete(queueKey);
+      } else {
+        queueDepth.set(queueKey, left);
+      }
+      release();
+    }
+    async function runTurn() {
+      const { sessionId } = await ensure({
+        channelId,
+        botId,
+        key,
+        workspacePath,
+        signal,
+        channelLabel: channelLabel2,
+        botLabel
+      });
+      guidance?.publish?.(sessionId, sourceGuidance ?? "");
+      const turnKey = `${channelId}:${botId}:${key}`;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener?.("abort", abort, { once: true });
+      activeTurns.set(turnKey, controller);
+      const frames = await stream("session", "follow", {
+        request: {
+          address: { kind: "session", sessionId },
+          maxMessages: 50,
+          assistantStream: true
+        }
+      }, controller.signal);
+      let cursor = -1;
+      let promptSent = false;
+      let closing = false;
+      let currentTurn = null;
+      const assistantText = /* @__PURE__ */ new Map();
+      const tools = [];
+      const presented = [];
+      const presentCalls = [];
+      let settled = false;
+      let settle;
+      const finished = new Promise((resolve4) => {
+        settle = resolve4;
+      });
+      const finishTurn = (value) => {
+        if (settled) return;
+        settled = true;
+        const reason = value?.reason?.kind ?? "unknown";
+        const files = presented.length > 0 ? presented : presentCalls;
+        logger.info?.(`[dsh-chat] \u56DE\u5408\u7ED3\u675F\uFF1A${turnKey} turn=${currentTurn} reason=${reason} \u6587\u672C=${(value?.text ?? "").length}\u5B57 \u5DE5\u5177=${value?.tools?.length ?? 0} \u4EA4\u4ED8\u6587\u4EF6=${files.length}`);
+        settle({ ...value, files: [...files] });
+      };
+      const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : TURN_IDLE_TIMEOUT_MS;
+      const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS) : TURN_TOTAL_TIMEOUT_MS;
+      let lastProgressAt = Date.now();
+      let idleTimer = null;
+      const markProgress = () => {
+        lastProgressAt = Date.now();
+      };
+      function armIdleTimer() {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(function tick() {
+          const idleMs = Date.now() - lastProgressAt;
+          if (idleMs >= effectiveIdleTimeoutMs) {
+            finishTurn({
+              sessionId,
+              text: "",
+              reason: { kind: "timeout", idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+              tools: [...tools],
+              aborted: true
+            });
+            return;
+          }
+          idleTimer = setTimeout(tick, Math.max(1e3, effectiveIdleTimeoutMs - idleMs));
+        }, effectiveIdleTimeoutMs);
+        idleTimer.unref?.();
+      }
+      armIdleTimer();
+      const totalTimer = setTimeout(() => {
+        finishTurn({
+          sessionId,
+          text: "",
+          reason: { kind: "timeout", timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
+          tools: [...tools],
+          aborted: true
+        });
+      }, effectiveTotalTimeoutMs);
+      totalTimer.unref?.();
+      const pump = (async () => {
+        try {
+          for await (const frame of frames) {
+            markProgress();
+            if (frame?.type === "snapshot") {
+              cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
+              continue;
+            }
+            if (frame?.type === "assistant-stream") {
+              const inner = frame.frame;
+              if (inner?.type === "chunk" && inner.chunk?.type === "text-delta") {
+                const text = deltaTextOf(inner.chunk);
+                if (text) handlers.onDelta?.(text, inner);
+              }
+              handlers.onEvent?.(frame);
+              continue;
+            }
+            const event = frame?.event;
+            if (!event) continue;
+            if (Number.isInteger(event.seq)) {
+              if (event.seq <= cursor) continue;
+              cursor = event.seq;
+            }
+            handlers.onEvent?.(event);
+            switch (event.type) {
+              case "turn/start":
+                currentTurn = event.data?.turn ?? null;
+                assistantText.set(currentTurn, []);
+                handlers.onTurnStart?.(event);
+                break;
+              case "assistant/message": {
+                const turn = event.data?.turn ?? currentTurn;
+                const text = textOfAssistantMessage(event.data?.message);
+                if (text) {
+                  const bucket = assistantText.get(turn) ?? [];
+                  bucket.push(text);
+                  assistantText.set(turn, bucket);
+                }
+                handlers.onAssistantMessage?.(event, text);
+                break;
+              }
+              case "tool/call":
+                tools.push({ name: event.data?.name, arguments: event.data?.arguments });
+                if (event.data?.name === "present") {
+                  for (const file of filesOfPresentArgs(event.data?.arguments)) {
+                    if (!presentCalls.some((seen) => seen.path === file.path)) presentCalls.push(file);
+                  }
+                }
+                handlers.onToolCall?.(event);
+                break;
+              case "tool/result":
+                handlers.onToolResult?.(event, tools.at(-1));
+                break;
+              case "deliverables/presented": {
+                const files = Array.isArray(event.data?.files) ? event.data.files : [];
+                const accepted = [];
+                for (const file of files) {
+                  if (typeof file?.path !== "string" || !file.path) continue;
+                  accepted.push({
+                    path: file.path,
+                    ...typeof file.description === "string" && file.description ? { description: file.description } : {}
+                  });
+                }
+                presented.push(...accepted);
+                if (accepted.length > 0) handlers.onDeliverables?.(accepted);
+                break;
+              }
+              case "turn/end": {
+                const turn = event.data?.turn ?? currentTurn;
+                const texts = assistantText.get(turn) ?? [];
+                const text = (texts.at(-1) ?? "").slice(0, MAX_ASSISTANT_TEXT);
+                handlers.onTurnEnd?.(event, text);
+                assistantText.delete(turn);
+                if (promptSent) {
+                  finishTurn({
+                    sessionId,
+                    text,
+                    reason: event.data?.reason ?? null,
+                    tools: [...tools],
+                    aborted: false
+                  });
+                } else {
+                  logger.info?.(`[dsh-chat] \u5FFD\u7565\u63D0\u793A\u8BCD\u4E4B\u524D\u7684 turn/end\uFF1A${turnKey} turn=${turn}`);
+                }
+                break;
+              }
+              default:
+                break;
+            }
+          }
           finishTurn({
             sessionId,
             text: "",
-            reason: { kind: "timeout", idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+            reason: { kind: "stream-ended" },
             tools: [...tools],
+            files: [...presented],
+            aborted: false
+          });
+        } catch (error) {
+          const wasSettled = settled;
+          finishTurn({
+            sessionId,
+            text: "",
+            reason: { kind: "error", error: sessionError(error) },
+            tools: [...tools],
+            files: [...presented],
             aborted: true
           });
-          return;
+          if (wasSettled && !closing) {
+            logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u4E8B\u4EF6\u6D41\u4E2D\u65AD\uFF1A${error?.message ?? error}`);
+          }
         }
-        idleTimer = setTimeout(tick, Math.max(1e3, effectiveIdleTimeoutMs - idleMs));
-      }, effectiveIdleTimeoutMs);
-      idleTimer.unref?.();
-    }
-    armIdleTimer();
-    const totalTimer = setTimeout(() => {
-      finishTurn({
-        sessionId,
-        text: "",
-        reason: { kind: "timeout", timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
-        tools: [...tools],
-        aborted: true
-      });
-    }, effectiveTotalTimeoutMs);
-    totalTimer.unref?.();
-    const pump = (async () => {
+      })();
       try {
-        for await (const frame of frames) {
-          markProgress();
-          if (frame?.type === "snapshot") {
-            cursor = Number.isInteger(frame.cursor) ? frame.cursor : cursor;
-            continue;
-          }
-          if (frame?.type === "assistant-stream") {
-            const inner = frame.frame;
-            if (inner?.type === "chunk" && inner.chunk?.type === "text-delta") {
-              const text = deltaTextOf(inner.chunk);
-              if (text) handlers.onDelta?.(text, inner);
-            }
-            handlers.onEvent?.(frame);
-            continue;
-          }
-          const event = frame?.event;
-          if (!event) continue;
-          if (Number.isInteger(event.seq)) {
-            if (event.seq <= cursor) continue;
-            cursor = event.seq;
-          }
-          handlers.onEvent?.(event);
-          switch (event.type) {
-            case "turn/start":
-              currentTurn = event.data?.turn ?? null;
-              assistantText.set(currentTurn, []);
-              handlers.onTurnStart?.(event);
-              break;
-            case "assistant/message": {
-              const turn = event.data?.turn ?? currentTurn;
-              const text = textOfAssistantMessage(event.data?.message);
-              if (text) {
-                const bucket = assistantText.get(turn) ?? [];
-                bucket.push(text);
-                assistantText.set(turn, bucket);
-              }
-              handlers.onAssistantMessage?.(event, text);
-              break;
-            }
-            case "tool/call":
-              tools.push({ name: event.data?.name, arguments: event.data?.arguments });
-              if (event.data?.name === "present") {
-                for (const file of filesOfPresentArgs(event.data?.arguments)) {
-                  if (!presentCalls.some((seen) => seen.path === file.path)) presentCalls.push(file);
-                }
-              }
-              handlers.onToolCall?.(event);
-              break;
-            case "tool/result":
-              handlers.onToolResult?.(event, tools.at(-1));
-              break;
-            case "deliverables/presented": {
-              const files = Array.isArray(event.data?.files) ? event.data.files : [];
-              const accepted = [];
-              for (const file of files) {
-                if (typeof file?.path !== "string" || !file.path) continue;
-                accepted.push({
-                  path: file.path,
-                  ...typeof file.description === "string" && file.description ? { description: file.description } : {}
-                });
-              }
-              presented.push(...accepted);
-              if (accepted.length > 0) handlers.onDeliverables?.(accepted);
-              break;
-            }
-            case "turn/end": {
-              const turn = event.data?.turn ?? currentTurn;
-              const texts = assistantText.get(turn) ?? [];
-              const text = (texts.at(-1) ?? "").slice(0, MAX_ASSISTANT_TEXT);
-              handlers.onTurnEnd?.(event, text);
-              assistantText.delete(turn);
-              if (promptSent) {
-                finishTurn({
-                  sessionId,
-                  text,
-                  reason: event.data?.reason ?? null,
-                  tools: [...tools],
-                  aborted: false
-                });
-              } else {
-                logger.info?.(`[dsh-chat] \u5FFD\u7565\u63D0\u793A\u8BCD\u4E4B\u524D\u7684 turn/end\uFF1A${turnKey} turn=${turn}`);
-              }
-              break;
-            }
-            default:
-              break;
-          }
-        }
-        finishTurn({
-          sessionId,
-          text: "",
-          reason: { kind: "stream-ended" },
-          tools: [...tools],
-          files: [...presented],
-          aborted: false
-        });
-      } catch (error) {
-        const wasSettled = settled;
-        finishTurn({
-          sessionId,
-          text: "",
-          reason: { kind: "error", error: sessionError(error) },
-          tools: [...tools],
-          files: [...presented],
-          aborted: true
-        });
-        if (wasSettled && !closing) {
-          logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u4E8B\u4EF6\u6D41\u4E2D\u65AD\uFF1A${error?.message ?? error}`);
-        }
-      }
-    })();
-    try {
-      promptSent = true;
-      logger.info?.(`[dsh-chat] \u53D1\u9001\u63D0\u793A\u8BCD\uFF1A${turnKey} \u4F1A\u8BDD=${sessionId} \u5185\u5BB9=${content.map((part) => part?.type ?? "?").join("+")} mode=${mode}`);
-      const receiptFailure = prompt({ sessionId, content, mode, signal: controller.signal }).then(() => new Promise(() => {
-      }), (error) => ({ error }));
-      const first = await Promise.race([
-        finished.then((value) => ({ value })),
-        receiptFailure
-      ]);
-      if (first.error) throw first.error;
-      return first.value;
-    } finally {
-      clearTimeout(totalTimer);
-      if (idleTimer) clearTimeout(idleTimer);
-      void markSessionChannel(sessionId, channelLabel2);
-      signal?.removeEventListener?.("abort", abort);
-      activeTurns.delete(turnKey);
-      closing = true;
-      try {
-        controller.abort();
-      } catch {
-      }
-      const closing0 = typeof frames?.return === "function" ? frames.return() : null;
-      if (closing0) {
-        let graceTimer;
+        promptSent = true;
+        logger.info?.(`[dsh-chat] \u53D1\u9001\u63D0\u793A\u8BCD\uFF1A${turnKey} \u4F1A\u8BDD=${sessionId} \u5185\u5BB9=${content.map((part) => part?.type ?? "?").join("+")} mode=${mode}`);
+        const receiptFailure = prompt({ sessionId, content, mode, signal: controller.signal }).then(() => new Promise(() => {
+        }), (error) => ({ error }));
+        const first = await Promise.race([
+          finished.then((value) => ({ value })),
+          receiptFailure
+        ]);
+        if (first.error) throw first.error;
+        return first.value;
+      } finally {
+        clearTimeout(totalTimer);
+        if (idleTimer) clearTimeout(idleTimer);
+        void markSessionChannel(sessionId, channelLabel2);
+        signal?.removeEventListener?.("abort", abort);
+        activeTurns.delete(turnKey);
+        closing = true;
         try {
-          await Promise.race([
-            Promise.resolve(closing0).catch(() => {
-            }),
-            // 故意不 unref：这是"让调用方拿到结果"的兜底时限，必须真的会到点。
-            new Promise((resolve4) => {
-              graceTimer = setTimeout(resolve4, STREAM_CLOSE_GRACE_MS);
-            })
-          ]);
-        } finally {
-          clearTimeout(graceTimer);
+          controller.abort();
+        } catch {
         }
+        const closing0 = typeof frames?.return === "function" ? frames.return() : null;
+        if (closing0) {
+          let graceTimer;
+          try {
+            await Promise.race([
+              Promise.resolve(closing0).catch(() => {
+              }),
+              // 故意不 unref：这是"让调用方拿到结果"的兜底时限，必须真的会到点。
+              new Promise((resolve4) => {
+                graceTimer = setTimeout(resolve4, STREAM_CLOSE_GRACE_MS);
+              })
+            ]);
+          } finally {
+            clearTimeout(graceTimer);
+          }
+        }
+        void pump;
       }
-      void pump;
     }
   }
   function installInteractionRelays() {

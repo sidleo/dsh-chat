@@ -127342,6 +127342,14 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 同一会话已有回合在跑：先回一句"排队中"，别让用户对着已读不回猜。
+        onQueued: (ahead) => {
+          void gateway.replyText({
+            messageId: message.message_id,
+            text: `\u5DF2\u6392\u961F\uFF08\u524D\u9762\u8FD8\u6709 ${ahead} \u6761\uFF09\uFF0C\u5904\u7406\u5B8C\u4F1A\u4F9D\u6B21\u56DE\u590D\u3002`
+          }).catch(() => {
+          });
+        },
         // 会话列表里一眼看出渠道：工作区叫「飞书 · 张三-DSH」，会话标题加「飞书 · 」前缀。
         channelLabel: "\u98DE\u4E66",
         botLabel: bot.botName ?? bot.id,

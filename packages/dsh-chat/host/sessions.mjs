@@ -161,6 +161,15 @@ export function createSessionBridge({
   }
   /** @type {Map<string, AbortController>} 会话键 → 当前回合的中断控制器。 */
   const activeTurns = new Map();
+  /**
+   * 会话键 → 该会话的回合队列（尾部的 promise）与排队条数。
+   *
+   * DSH 侧的 `session/prompt` 本来就支持 `mode: 'queue'`，但**渠道侧**每条消息都会各自
+   * 开一条 `follow` 流等自己的答案：两个回合同时在飞会互相抢答案（第二条会看到第一条的
+   * 结果、第一条可能永远等不到）。所以同一个会话的回合必须在 hub 里串起来。
+   */
+  const turnQueues = new Map();
+  const queueDepth = new Map();
   /** 已经标过渠道的工作区 / 会话（进程内只标一次，避免每轮都发 rename）。 */
   const namedWorkspaces = new Set();
   const namedSessions = new Set();
@@ -415,104 +424,143 @@ export function createSessionBridge({
     turnTimeoutMs,
     channelLabel = '',
     botLabel = '',
+    onQueued,
   }) {
-    const { sessionId } = await ensure({
-      channelId, botId, key, workspacePath, signal, channelLabel, botLabel,
+    // 先排队再干活：同一会话的第二个回合必须等第一个真正结束。
+    const queueKey = `${channelId}:${botId}:${key}`;
+    const ahead = queueDepth.get(queueKey) ?? 0;
+    queueDepth.set(queueKey, ahead + 1);
+    let release;
+    const mine = new Promise((resolve) => {
+      release = resolve;
     });
-    // 提示词按会话发布：host 会把它物化成该 Session 的动态提示词上下文。
-    guidance?.publish?.(sessionId, sourceGuidance ?? '');
+    const previous = turnQueues.get(queueKey) ?? Promise.resolve();
+    turnQueues.set(queueKey, previous.then(() => mine));
+    if (ahead > 0) {
+      // 让渠道能立刻回一句"前面还有几条"，而不是让用户对着已读不回猜。
+      try {
+        onQueued?.(ahead);
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 排队提示回调失败：${error?.message ?? error}`);
+      }
+      logger.info?.(`[dsh-chat] 回合排队：${queueKey} 前面还有 ${ahead} 条`);
+    }
+    try {
+      await previous;
+    } catch {
+      // 前一个回合失败不该把后面的拖死。
+    }
+    try {
+      return await runTurn();
+    } finally {
+      const left = (queueDepth.get(queueKey) ?? 1) - 1;
+      if (left <= 0) {
+        queueDepth.delete(queueKey);
+        turnQueues.delete(queueKey);
+      } else {
+        queueDepth.set(queueKey, left);
+      }
+      release();
+    }
 
-    const turnKey = `${channelId}:${botId}:${key}`;
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    signal?.addEventListener?.('abort', abort, { once: true });
-    activeTurns.set(turnKey, controller);
+    async function runTurn() {
+      const { sessionId } = await ensure({
+        channelId, botId, key, workspacePath, signal, channelLabel, botLabel,
+      });
+      // 提示词按会话发布：host 会把它物化成该 Session 的动态提示词上下文。
+      guidance?.publish?.(sessionId, sourceGuidance ?? '');
 
-    const frames = await stream('session', 'follow', {
-      request: {
-        address: { kind: 'session', sessionId },
-        maxMessages: 50,
-        assistantStream: true,
-      },
-    }, controller.signal);
+      const turnKey = `${channelId}:${botId}:${key}`;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener?.('abort', abort, { once: true });
+      activeTurns.set(turnKey, controller);
 
-    let cursor = -1;
-    let promptSent = false;
-    /** 我们自己主动收摊时为 true：此时事件流中断属于正常，不该报成异常。 */
-    let closing = false;
-    let currentTurn = null;
-    const assistantText = new Map();
-    const tools = [];
-    /**
-     * 本轮 agent 通过 `present` 交付的文件（DSH 会 append `deliverables/presented`）。
-     * 渠道拿它把成品当附件发出去——只写在回复文字里，用户拿不到文件。
-     */
-    const presented = [];
-    /**
-     * 兜底：从 `present` 工具调用的参数里记下的文件。
-     * 万一某个版本的事件流不带 `deliverables/presented`，也不能让交付文件静默丢掉。
-     */
-    const presentCalls = [];
-    let settled = false;
-    let settle;
-    const finished = new Promise((resolve) => {
-      settle = resolve;
-    });
-    /**
-     * 唯一的收尾入口：任何结束路径都要留下可检索的一行。
-     * "回合跑完了但用户没收到"这类问题，就靠这行 + 渠道侧的呈现日志对上。
-     */
-    const finishTurn = (value) => {
-      if (settled) return;
-      settled = true;
-      const reason = value?.reason?.kind ?? 'unknown';
-      // 事件没来就退回工具参数（两者都按 path 去重，绝不把同一个文件发两遍）。
-      const files = presented.length > 0 ? presented : presentCalls;
-      logger.info?.(`[dsh-chat] 回合结束：${turnKey} turn=${currentTurn} reason=${reason}`
-        + ` 文本=${(value?.text ?? '').length}字 工具=${value?.tools?.length ?? 0}`
-        + ` 交付文件=${files.length}`);
-      settle({ ...value, files: [...files] });
-    };
+      const frames = await stream('session', 'follow', {
+        request: {
+          address: { kind: 'session', sessionId },
+          maxMessages: 50,
+          assistantStream: true,
+        },
+      }, controller.signal);
 
-    /**
-     * 兜底超时：防的是"流断了/回合卡死"，**不是**长任务。
-     *
-     * 真机教训：原先按"整轮总时长 10 分钟"掐，把一次合法的帆软排障（10 分 20 秒、
-     * 231 个事件、几次 90 秒的工具调用）在第 620 秒直接中断，用户看到的却是
-     * 「任务未正常完成（timeout）」——这是把"卡住"和"干得久"混为一谈了。
-     *
-     * 现在按**静默时长**判定：只要还有事件进来（工具结果、模型增量都算），就一直等；
-     * 连续 IDLE 没有任何进展才判定卡死。另留一个很大的绝对上限兜住死循环。
-     */
-    const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
-      ? turnTimeoutMs
-      : TURN_IDLE_TIMEOUT_MS;
-    const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
-      ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS)
-      : TURN_TOTAL_TIMEOUT_MS;
-    let lastProgressAt = Date.now();
-    let idleTimer = null;
-    const markProgress = () => {
-      lastProgressAt = Date.now();
-    };
-    /** 每次"有进展"都重置静默计时；到点说明这条路已经没人往前走了。 */
-    function armIdleTimer() {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(function tick() {
-        const idleMs = Date.now() - lastProgressAt;
-        if (idleMs >= effectiveIdleTimeoutMs) {
-          finishTurn({
-            sessionId,
-            text: '',
-            reason: { kind: 'timeout', idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
-            tools: [...tools],
-            aborted: true,
-          });
-          return;
-        }
-        idleTimer = setTimeout(tick, Math.max(1_000, effectiveIdleTimeoutMs - idleMs));
-      }, effectiveIdleTimeoutMs);
-      idleTimer.unref?.();
+      let cursor = -1;
+      let promptSent = false;
+      /** 我们自己主动收摊时为 true：此时事件流中断属于正常，不该报成异常。 */
+      let closing = false;
+      let currentTurn = null;
+      const assistantText = new Map();
+      const tools = [];
+      /**
+       * 本轮 agent 通过 `present` 交付的文件（DSH 会 append `deliverables/presented`）。
+       * 渠道拿它把成品当附件发出去——只写在回复文字里，用户拿不到文件。
+       */
+      const presented = [];
+      /**
+       * 兜底：从 `present` 工具调用的参数里记下的文件。
+       * 万一某个版本的事件流不带 `deliverables/presented`，也不能让交付文件静默丢掉。
+       */
+      const presentCalls = [];
+      let settled = false;
+      let settle;
+      const finished = new Promise((resolve) => {
+        settle = resolve;
+      });
+      /**
+       * 唯一的收尾入口：任何结束路径都要留下可检索的一行。
+       * "回合跑完了但用户没收到"这类问题，就靠这行 + 渠道侧的呈现日志对上。
+       */
+      const finishTurn = (value) => {
+        if (settled) return;
+        settled = true;
+        const reason = value?.reason?.kind ?? 'unknown';
+        // 事件没来就退回工具参数（两者都按 path 去重，绝不把同一个文件发两遍）。
+        const files = presented.length > 0 ? presented : presentCalls;
+        logger.info?.(`[dsh-chat] 回合结束：${turnKey} turn=${currentTurn} reason=${reason}`
+          + ` 文本=${(value?.text ?? '').length}字 工具=${value?.tools?.length ?? 0}`
+          + ` 交付文件=${files.length}`);
+        settle({ ...value, files: [...files] });
+      };
+
+      /**
+       * 兜底超时：防的是"流断了/回合卡死"，**不是**长任务。
+       *
+       * 真机教训：原先按"整轮总时长 10 分钟"掐，把一次合法的帆软排障（10 分 20 秒、
+       * 231 个事件、几次 90 秒的工具调用）在第 620 秒直接中断，用户看到的却是
+       * 「任务未正常完成（timeout）」——这是把"卡住"和"干得久"混为一谈了。
+       *
+       * 现在按**静默时长**判定：只要还有事件进来（工具结果、模型增量都算），就一直等；
+       * 连续 IDLE 没有任何进展才判定卡死。另留一个很大的绝对上限兜住死循环。
+       */
+      const effectiveIdleTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
+        ? turnTimeoutMs
+        : TURN_IDLE_TIMEOUT_MS;
+      const effectiveTotalTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0
+        ? Math.max(turnTimeoutMs * 6, TURN_TOTAL_TIMEOUT_MS)
+        : TURN_TOTAL_TIMEOUT_MS;
+      let lastProgressAt = Date.now();
+      let idleTimer = null;
+      const markProgress = () => {
+        lastProgressAt = Date.now();
+      };
+      /** 每次"有进展"都重置静默计时；到点说明这条路已经没人往前走了。 */
+      function armIdleTimer() {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(function tick() {
+          const idleMs = Date.now() - lastProgressAt;
+          if (idleMs >= effectiveIdleTimeoutMs) {
+            finishTurn({
+              sessionId,
+              text: '',
+              reason: { kind: 'timeout', idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+              tools: [...tools],
+              aborted: true,
+            });
+            return;
+          }
+          idleTimer = setTimeout(tick, Math.max(1_000, effectiveIdleTimeoutMs - idleMs));
+        }, effectiveIdleTimeoutMs);
+        idleTimer.unref?.();
     }
     armIdleTimer();
     const totalTimer = setTimeout(() => {
@@ -688,6 +736,7 @@ export function createSessionBridge({
         }
       }
       void pump;
+    }
     }
   }
 
