@@ -193,6 +193,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
     async send({ botId, target, text }) { /* 按 target.route 发 */ },
     async discover({ botId }) { /* 返回候选目标，不落盘 */ },
     targetFromKey(key) { /* 会话键（'p2p:ou_x' / 'group:oc_y'）→ 目标或 null，可选 */ },
+    async decorateTargets({ botId, targets }) { /* 把 oc_xxx/ou_xxx 换成群名/人名，可选 */ },
   },
 }
 ```
@@ -209,6 +210,14 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 只做 ① 的话，重启后设置页一个候选都没有，用户看到的是"没有添加入口"而不是"还没有会话"。
 `targetFromKey` 只做纯翻译（不查运行时、不异步）；不认识或不适用的键返回 `null`
 （例如仅私聊的渠道对 `group:` 键返回 `null`）。
+
+**目标必须是"人能认出的"**：`oc_xxx` / `ou_xxx` 对用户没有意义。渠道用可选的
+`decorateTargets({ botId, targets })` 返回**同长度、同顺序**的数组，hub 只取里面的 `name`
+覆盖展示名（已保存目标也覆盖——存下来的常常就是当时的掩码 id）。要点：
+
+- 只改 `name`，`id` / `kind` / `route` 由 hub 保持原样（判重与发送都靠它们）；
+- 名字解析失败、权限没开通、渠道没实现 —— 都必须**降级为原名称**，不能少列目标；
+- 名字变得很慢，渠道侧要缓存，别让每次打开设置页都打一遍平台接口。
 
 目标结构：`{ id, name?, kind: 'direct'|'group', route: { ... } }`，`route` 只允许
 1–8 个短标量字段（不放 Secret）；`id` 需满足 `[A-Za-z0-9_-]{1,64}`。

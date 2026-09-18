@@ -366,3 +366,44 @@ test('候选来自 hub 的持久会话绑定表：重启后渠道运行时是空
     await app.cleanup();
   }
 });
+
+test('目标名称由渠道补充：已保存目标也要补，补不到就保持原名、绝不少列', async () => {
+  const app = await makeService();
+  try {
+    const release = app.service.attach('feishu', {
+      async send() { return { messageId: 'om_1' }; },
+      async discover() {
+        return [{ id: 'group_oc_2', name: '群聊 · oc_2****', kind: 'group', route: { chatId: 'oc_2' } }];
+      },
+      async decorateTargets({ targets }) {
+        return targets.map((target) => (target.route.chatId === 'oc_1'
+          ? { ...target, name: '日报临时推送群' }
+          : target));
+      },
+    });
+    // oc_1 是已保存但名字还是掩码 id 的历史目标；oc_2 是新候选。
+    await app.service.save({
+      channelId: 'feishu',
+      botId: 'bot_1',
+      target: { id: 'group_oc_1', name: '群聊 · oc_1****', kind: 'group', route: { chatId: 'oc_1' } },
+    });
+
+    const listed = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.deepEqual(listed.targets.map((item) => item.name), ['日报临时推送群', '群聊 · oc_2****']);
+    assert.deepEqual(listed.targets.map((item) => item.id), ['group_oc_1', 'group_oc_2'], 'id 不能被改名动到');
+    assert.deepEqual(listed.targets[0].route, { chatId: 'oc_1' }, 'route 也不能被改名动到');
+    assert.equal(listed.targets[0].discovered, undefined, '已保存目标不该被标成候选');
+
+    // 渠道改名失败（比如没权限）：沿用原名称，目标一个都不能少。
+    release();
+    app.service.attach('feishu', {
+      async send() { return { messageId: 'om_1' }; },
+      async discover() { return []; },
+      async decorateTargets() { throw new Error('no scope'); },
+    });
+    const degraded = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.deepEqual(degraded.targets.map((item) => item.name), ['群聊 · oc_1****']);
+  } finally {
+    await app.cleanup();
+  }
+});

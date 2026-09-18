@@ -237,8 +237,30 @@ export function createDeliveryService({ settings, sessionStore = null, logger = 
           // 忽略无法识别的候选
         }
       }
+      /**
+       * 让人认得出：渠道把 `oc_xxx` / `ou_xxx` 换成群名 / 人名（只有渠道认识平台概念）。
+       * 已保存目标也要补——它们当年保存时存下来的常常就是掩码 id。
+       * 渠道没实现、或某个名字拿不到，就保持原名称，绝不因此少列目标。
+       */
+      let listed = [...savedList, ...candidates];
+      if (typeof provider?.decorateTargets === 'function' && listed.length > 0) {
+        try {
+          const decorated = await provider.decorateTargets({
+            botId,
+            targets: listed.map((target) => ({ ...target })),
+          });
+          if (Array.isArray(decorated) && decorated.length === listed.length) {
+            listed = listed.map((target, index) => {
+              const name = decorated[index]?.name;
+              return typeof name === 'string' && name ? { ...target, name } : target;
+            });
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] 渠道 ${channelId} 补充目标名称失败：${error?.message ?? error}`);
+        }
+      }
       return Object.freeze({
-        targets: Object.freeze([...savedList, ...candidates]),
+        targets: Object.freeze(listed),
         canSend: providers.has(channelId),
       });
     },

@@ -1639,8 +1639,25 @@ function createDeliveryService({ settings, sessionStore = null, logger = console
         } catch {
         }
       }
+      let listed = [...savedList, ...candidates];
+      if (typeof provider?.decorateTargets === "function" && listed.length > 0) {
+        try {
+          const decorated = await provider.decorateTargets({
+            botId,
+            targets: listed.map((target) => ({ ...target }))
+          });
+          if (Array.isArray(decorated) && decorated.length === listed.length) {
+            listed = listed.map((target, index) => {
+              const name2 = decorated[index]?.name;
+              return typeof name2 === "string" && name2 ? { ...target, name: name2 } : target;
+            });
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u6E20\u9053 ${channelId} \u8865\u5145\u76EE\u6807\u540D\u79F0\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        }
+      }
       return Object.freeze({
-        targets: Object.freeze([...savedList, ...candidates]),
+        targets: Object.freeze(listed),
         canSend: providers.has(channelId)
       });
     },

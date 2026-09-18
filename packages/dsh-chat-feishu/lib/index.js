@@ -127775,6 +127775,20 @@ function assertSuccess(operation, response) {
   if (response?.code && response.code !== 0) throw apiError(operation, response);
   return response;
 }
+function readableApiError(error) {
+  const detail = error?.response?.data;
+  if (detail?.msg) return `${detail.msg}${detail.code ? `\uFF08code ${detail.code}\uFF09` : ""}`;
+  const raw = typeof error?.message === "string" ? error.message : String(error);
+  const embedded = /\{[\s\S]*\}/.exec(raw);
+  if (embedded) {
+    try {
+      const parsed = JSON.parse(embedded[0]);
+      if (parsed?.msg) return `${parsed.msg}${parsed.code ? `\uFF08code ${parsed.code}\uFF09` : ""}`;
+    } catch {
+    }
+  }
+  return raw.slice(0, 300);
+}
 function createLarkGateway({
   appId,
   appSecret,
@@ -128505,6 +128519,60 @@ function createLarkGateway({
         throw error;
       }
       return { bytes, contentType: contentType || null };
+    },
+    /**
+     * 机器人所在的群（含群名）。
+     *
+     * 需要 `im:chat:readonly`（或 `im:chat` / `im:chat.group_info:readonly`）权限；
+     * 没开通就抛出可读错误，由调用方降级——**名字只影响好不好认，不该让设置页出错**。
+     *
+     * @param options - { pageSize?, maxPages? }。
+     * @returns `[{ chatId, name }]`（`name` 可能为空串）。
+     */
+    async listChats({ pageSize = 100, maxPages = 20 } = {}) {
+      const chats = [];
+      let pageToken = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        let response;
+        try {
+          response = await client.im.v1.chat.list({
+            params: { page_size: pageSize, ...pageToken ? { page_token: pageToken } : {} }
+          });
+        } catch (error) {
+          throw new Error(`\u8BFB\u53D6\u7FA4\u5217\u8868\u5931\u8D25\uFF1A${readableApiError(error)}`);
+        }
+        const data = assertSuccess("\u8BFB\u53D6\u7FA4\u5217\u8868", response)?.data ?? {};
+        for (const item of data.items ?? []) {
+          if (typeof item?.chat_id !== "string" || !item.chat_id) continue;
+          chats.push({ chatId: item.chat_id, name: typeof item.name === "string" ? item.name : "" });
+        }
+        if (!data.has_more || !data.page_token) break;
+        pageToken = data.page_token;
+      }
+      return chats;
+    },
+    /**
+     * 用 open_id 反查人名。
+     *
+     * 需要通讯录权限（`contact:user.base:readonly` 等）；没开通就抛出可读错误。
+     *
+     * @param openId - 用户 open_id。
+     * @returns 名字（查不到返回空串）。
+     */
+    async getUserName(openId) {
+      if (typeof openId !== "string" || !openId) return "";
+      let response;
+      try {
+        response = await client.contact.v3.user.get({
+          path: { user_id: openId },
+          params: { user_id_type: "open_id" }
+        });
+      } catch (error) {
+        throw new Error(`\u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF1A${readableApiError(error)}`);
+      }
+      const data = assertSuccess("\u8BFB\u53D6\u7528\u6237\u4FE1\u606F", response)?.data ?? {};
+      const name2 = data?.user?.name;
+      return typeof name2 === "string" ? name2 : "";
     }
   });
 }
@@ -128760,20 +128828,68 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     logger.info?.(`[dsh-chat-feishu] \u53D1\u73B0 ${bots.length} \u4E2A\u5DF2\u914D\u7F6E\u673A\u5668\u4EBA`);
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
+  const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+  const targetFor = (kind, rawId, name2) => ({
+    id: ids(`${kind}:${rawId}`),
+    name: name2,
+    kind: kind === "group" ? "group" : "direct",
+    route: kind === "group" ? { chatId: rawId } : { openId: rawId }
+  });
   function targetFromKey(key) {
-    const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-    const [kind, id] = String(key ?? "").split(":", 2);
-    if (!id) return null;
-    if (kind === "p2p") {
-      return { id: ids(key), name: `\u79C1\u804A \xB7 ${maskAppId(id)}`, kind: "direct", route: { openId: id } };
-    }
-    if (kind === "group") {
-      return { id: ids(key), name: `\u7FA4\u804A \xB7 ${maskAppId(id)}`, kind: "group", route: { chatId: id } };
-    }
+    const [kind, rawId] = String(key ?? "").split(":", 2);
+    if (!rawId) return null;
+    if (kind === "p2p") return targetFor("p2p", rawId, `\u79C1\u804A \xB7 ${maskAppId(rawId)}`);
+    if (kind === "group") return targetFor("group", rawId, `\u7FA4\u804A \xB7 ${maskAppId(rawId)}`);
     return null;
   }
   function targetsFromState(state) {
     return Object.keys(state?.sessions?.() ?? {}).map((key) => targetFromKey(key)).filter(Boolean);
+  }
+  const NAME_TTL_MS = 10 * 6e4;
+  const nameCache = /* @__PURE__ */ new Map();
+  function cacheFor(botId) {
+    let entry = nameCache.get(botId);
+    if (!entry) {
+      entry = { chats: /* @__PURE__ */ new Map(), chatsAt: 0, users: /* @__PURE__ */ new Map(), usersAt: 0 };
+      nameCache.set(botId, entry);
+    }
+    return entry;
+  }
+  async function allChats(botId, { minIntervalMs = NAME_TTL_MS } = {}) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway) return [];
+    const cache = cacheFor(botId);
+    if (Date.now() - cache.chatsAt < minIntervalMs) {
+      return [...cache.chats.entries()].map(([chatId, name2]) => ({ chatId, name: name2 }));
+    }
+    try {
+      const chats = await record.gateway.listChats();
+      cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
+      return chats;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7FA4\u5217\u8868\u5931\u8D25\uFF0C\u7FA4\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
+      return [];
+    } finally {
+      cache.chatsAt = Date.now();
+    }
+  }
+  async function userName(botId, openId) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway || !openId) return "";
+    const cache = cacheFor(botId);
+    const hit = cache.users.get(openId);
+    if (hit !== void 0 && Date.now() - cache.usersAt < NAME_TTL_MS) return hit;
+    try {
+      const name2 = await record.gateway.getUserName(openId);
+      cache.users.set(openId, name2);
+      return name2;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
+      cache.users.set(openId, "");
+      return "";
+    } finally {
+      cache.usersAt = Date.now();
+    }
   }
   const delivery = Object.freeze({
     /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
@@ -128822,14 +128938,52 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       });
       return { ...sent, kind: "file" };
     },
-    /** 从该机器人的会话记录里发现候选目标。 */
+    /**
+     * 候选目标：机器人**所在的全部群** + 运行时聊过的会话。
+     *
+     * 群列表来自飞书接口，因此"刚被拉进群、还没说过话"的群也能作为候选被添加；
+     * 拿不到权限时退回运行时状态（跟以前一样）。
+     */
     async discover({ botId }) {
       const record = runtimes.get(botId);
-      if (!record?.state) return [];
-      return targetsFromState(record.state);
+      const chats = await allChats(botId);
+      const groupTargets = chats.map((chat) => targetFor(
+        "group",
+        chat.chatId,
+        chat.name || `\u7FA4\u804A \xB7 ${maskAppId(chat.chatId)}`
+      ));
+      const sessionTargets = record?.state ? targetsFromState(record.state) : [];
+      return [...groupTargets, ...sessionTargets];
     },
     /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
-    targetFromKey
+    targetFromKey,
+    /**
+     * 给目标补上**人能认出的名字**（群名 / 人名）。
+     *
+     * 只在渠道里做：hub 不认平台概念。补不到就保持原样（掩码 id）——
+     * 权限没开通的机器人不该因为"名字拿不到"就看不到目标。
+     */
+    async decorateTargets({ botId, targets }) {
+      const list = Array.isArray(targets) ? targets : [];
+      if (list.length === 0) return list;
+      if (list.some((target) => target?.kind === "group" && !cacheFor(botId).chats.has(target.route?.chatId))) {
+        await allChats(botId, { minIntervalMs: 6e4 });
+      }
+      const chats = cacheFor(botId).chats;
+      const decorated = [];
+      for (const target of list) {
+        if (target?.kind === "group") {
+          const name2 = chats.get(target.route?.chatId);
+          decorated.push(name2 ? { ...target, name: name2 } : target);
+        } else if (target?.kind === "direct") {
+          const name2 = await userName(botId, target.route?.openId);
+          decorated.push(name2 ? { ...target, name: name2 } : target);
+        } else {
+          decorated.push(target);
+        }
+      }
+      return decorated;
+    }
   });
   return Object.freeze({
     start: startAll,

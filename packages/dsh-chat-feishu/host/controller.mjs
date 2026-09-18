@@ -195,19 +195,25 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   /**
    * 会话键 → 可投递目标（`p2p:ou_x` → 私聊，`group:oc_y` → 群聊）。
    *
-   * 同一份翻译两处用：`discover`（运行时状态）与 `targetFromKey`（hub 的**持久**会话绑定表）。
-   * 只做前者的话，重启后运行时是空的，设置页就一个可添加的候选都没有。
+   * 同一份翻译两处用：`discover`（运行时状态 / 群列表）与 `targetFromKey`
+   * （hub 的**持久**会话绑定表）。只做前者的话，重启后运行时是空的，
+   * 设置页就一个可添加的候选都没有。
+   *
+   * 这里的名字只是**兜底**（掩码后的 id）；能拿到真名的场合由 `decorateTargets` 覆盖。
    */
+  const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+  const targetFor = (kind, rawId, name) => ({
+    id: ids(`${kind}:${rawId}`),
+    name,
+    kind: kind === 'group' ? 'group' : 'direct',
+    route: kind === 'group' ? { chatId: rawId } : { openId: rawId },
+  });
+
   function targetFromKey(key) {
-    const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
-    const [kind, id] = String(key ?? '').split(':', 2);
-    if (!id) return null;
-    if (kind === 'p2p') {
-      return { id: ids(key), name: `私聊 · ${maskAppId(id)}`, kind: 'direct', route: { openId: id } };
-    }
-    if (kind === 'group') {
-      return { id: ids(key), name: `群聊 · ${maskAppId(id)}`, kind: 'group', route: { chatId: id } };
-    }
+    const [kind, rawId] = String(key ?? '').split(':', 2);
+    if (!rawId) return null;
+    if (kind === 'p2p') return targetFor('p2p', rawId, `私聊 · ${maskAppId(rawId)}`);
+    if (kind === 'group') return targetFor('group', rawId, `群聊 · ${maskAppId(rawId)}`);
     return null;
   }
 
@@ -216,6 +222,70 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     return Object.keys(state?.sessions?.() ?? {})
       .map((key) => targetFromKey(key))
       .filter(Boolean);
+  }
+
+  /**
+   * 名字缓存（群名 / 人名）。
+   *
+   * 这些名字变得很慢，而每次打开设置页都会走一遍 `delivery.list`；不缓存就会把
+   * 飞书接口打成筛子（`chat.list` 还有每秒 5 次的频率上限）。失败也记时间戳，
+   * 免得没权限的机器人在每次刷新时反复重试。
+   */
+  const NAME_TTL_MS = 10 * 60_000;
+  const nameCache = new Map(); // botId → { chats: Map, chatsAt, users: Map, usersAt }
+  function cacheFor(botId) {
+    let entry = nameCache.get(botId);
+    if (!entry) {
+      entry = { chats: new Map(), chatsAt: 0, users: new Map(), usersAt: 0 };
+      nameCache.set(botId, entry);
+    }
+    return entry;
+  }
+
+  /**
+   * 群列表（带群名）；拿不到就返回空表并记日志，不抛。
+   *
+   * `minIntervalMs` 是最短重取间隔：正常走 `NAME_TTL_MS`，遇到"缓存里没有的群"时
+   * 传一个更短的值（至少间隔一分钟），免得一个查不到的群 id 把接口打成筛子
+   * （`chat.list` 有每秒 5 次的频率上限）。失败也会更新时间戳，避免反复重试。
+   */
+  async function allChats(botId, { minIntervalMs = NAME_TTL_MS } = {}) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway) return [];
+    const cache = cacheFor(botId);
+    if (Date.now() - cache.chatsAt < minIntervalMs) {
+      return [...cache.chats.entries()].map(([chatId, name]) => ({ chatId, name }));
+    }
+    try {
+      const chats = await record.gateway.listChats();
+      cache.chats = new Map(chats.map((chat) => [chat.chatId, chat.name]));
+      return chats;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] 读取群列表失败，群名将退回 id：${error?.message ?? error}`);
+      return [];
+    } finally {
+      cache.chatsAt = Date.now();
+    }
+  }
+
+  /** 补一个人名；拿不到就留空。 */
+  async function userName(botId, openId) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway || !openId) return '';
+    const cache = cacheFor(botId);
+    const hit = cache.users.get(openId);
+    if (hit !== undefined && Date.now() - cache.usersAt < NAME_TTL_MS) return hit;
+    try {
+      const name = await record.gateway.getUserName(openId);
+      cache.users.set(openId, name);
+      return name;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] 读取用户信息失败，人名将退回 id：${error?.message ?? error}`);
+      cache.users.set(openId, '');
+      return '';
+    } finally {
+      cache.usersAt = Date.now();
+    }
   }
 
   const delivery = Object.freeze({
@@ -264,15 +334,56 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       return { ...sent, kind: 'file' };
     },
 
-    /** 从该机器人的会话记录里发现候选目标。 */
+    /**
+     * 候选目标：机器人**所在的全部群** + 运行时聊过的会话。
+     *
+     * 群列表来自飞书接口，因此"刚被拉进群、还没说过话"的群也能作为候选被添加；
+     * 拿不到权限时退回运行时状态（跟以前一样）。
+     */
     async discover({ botId }) {
       const record = runtimes.get(botId);
-      if (!record?.state) return [];
-      return targetsFromState(record.state);
+      const chats = await allChats(botId);
+      const groupTargets = chats.map((chat) => targetFor(
+        'group',
+        chat.chatId,
+        chat.name || `群聊 · ${maskAppId(chat.chatId)}`,
+      ));
+      const sessionTargets = record?.state ? targetsFromState(record.state) : [];
+      return [...groupTargets, ...sessionTargets];
     },
 
     /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
     targetFromKey,
+
+    /**
+     * 给目标补上**人能认出的名字**（群名 / 人名）。
+     *
+     * 只在渠道里做：hub 不认平台概念。补不到就保持原样（掩码 id）——
+     * 权限没开通的机器人不该因为"名字拿不到"就看不到目标。
+     */
+    async decorateTargets({ botId, targets }) {
+      const list = Array.isArray(targets) ? targets : [];
+      if (list.length === 0) return list;
+      // 群名查不到的（例如刚从会话绑定表来的群）先重取一次群列表，最短间隔一分钟。
+      if (list.some((target) => target?.kind === 'group'
+        && !cacheFor(botId).chats.has(target.route?.chatId))) {
+        await allChats(botId, { minIntervalMs: 60_000 });
+      }
+      const chats = cacheFor(botId).chats;
+      const decorated = [];
+      for (const target of list) {
+        if (target?.kind === 'group') {
+          const name = chats.get(target.route?.chatId);
+          decorated.push(name ? { ...target, name } : target);
+        } else if (target?.kind === 'direct') {
+          const name = await userName(botId, target.route?.openId);
+          decorated.push(name ? { ...target, name } : target);
+        } else {
+          decorated.push(target);
+        }
+      }
+      return decorated;
+    },
   });
 
   return Object.freeze({

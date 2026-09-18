@@ -107,6 +107,28 @@ function assertSuccess(operation, response) {
 }
 
 /**
+ * 把 SDK 抛出的错误压成一句可读的话。
+ *
+ * SDK 在业务失败时抛的是 axios 错误，真正的 code/msg 埋在 `response.data` 里（或塞在
+ * message 的一长串 JSON 里）。名字解析失败只该降级、不该刷屏，所以这里只取关键信息。
+ */
+function readableApiError(error) {
+  const detail = error?.response?.data;
+  if (detail?.msg) return `${detail.msg}${detail.code ? `（code ${detail.code}）` : ''}`;
+  const raw = typeof error?.message === 'string' ? error.message : String(error);
+  const embedded = /\{[\s\S]*\}/.exec(raw);
+  if (embedded) {
+    try {
+      const parsed = JSON.parse(embedded[0]);
+      if (parsed?.msg) return `${parsed.msg}${parsed.code ? `（code ${parsed.code}）` : ''}`;
+    } catch {
+      // 不是 JSON 就退回原文
+    }
+  }
+  return raw.slice(0, 300);
+}
+
+/**
  * 创建 SDK 网关。
  *
  * @param options - {
@@ -936,6 +958,62 @@ export function createLarkGateway({
         throw error;
       }
       return { bytes, contentType: contentType || null };
+    },
+
+    /**
+     * 机器人所在的群（含群名）。
+     *
+     * 需要 `im:chat:readonly`（或 `im:chat` / `im:chat.group_info:readonly`）权限；
+     * 没开通就抛出可读错误，由调用方降级——**名字只影响好不好认，不该让设置页出错**。
+     *
+     * @param options - { pageSize?, maxPages? }。
+     * @returns `[{ chatId, name }]`（`name` 可能为空串）。
+     */
+    async listChats({ pageSize = 100, maxPages = 20 } = {}) {
+      const chats = [];
+      let pageToken = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        let response;
+        try {
+          response = await client.im.v1.chat.list({
+            params: { page_size: pageSize, ...(pageToken ? { page_token: pageToken } : {}) },
+          });
+        } catch (error) {
+          throw new Error(`读取群列表失败：${readableApiError(error)}`);
+        }
+        const data = assertSuccess('读取群列表', response)?.data ?? {};
+        for (const item of data.items ?? []) {
+          if (typeof item?.chat_id !== 'string' || !item.chat_id) continue;
+          chats.push({ chatId: item.chat_id, name: typeof item.name === 'string' ? item.name : '' });
+        }
+        if (!data.has_more || !data.page_token) break;
+        pageToken = data.page_token;
+      }
+      return chats;
+    },
+
+    /**
+     * 用 open_id 反查人名。
+     *
+     * 需要通讯录权限（`contact:user.base:readonly` 等）；没开通就抛出可读错误。
+     *
+     * @param openId - 用户 open_id。
+     * @returns 名字（查不到返回空串）。
+     */
+    async getUserName(openId) {
+      if (typeof openId !== 'string' || !openId) return '';
+      let response;
+      try {
+        response = await client.contact.v3.user.get({
+          path: { user_id: openId },
+          params: { user_id_type: 'open_id' },
+        });
+      } catch (error) {
+        throw new Error(`读取用户信息失败：${readableApiError(error)}`);
+      }
+      const data = assertSuccess('读取用户信息', response)?.data ?? {};
+      const name = data?.user?.name;
+      return typeof name === 'string' ? name : '';
     },
   });
 }
