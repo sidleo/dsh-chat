@@ -318,7 +318,7 @@ const CSS = `
   white-space: nowrap;
 }
 /* 只有按钮和状态点"永不压缩"；输入类必须能缩，否则会撑出横向滚动：
-   `.dchat-select` 是 width:100%，配 flex:none 会先占满整行，再把同排的按钮挤出容器。 */
+   .dchat-select 是 width:100%，配 flex:none 会先占满整行，再把同排的按钮挤出容器。 */
 .dchat-actions > .dchat-button,
 .dchat-actions > .dchat-status {
   flex: none;

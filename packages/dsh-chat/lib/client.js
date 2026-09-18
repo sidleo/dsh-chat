@@ -1461,7 +1461,7 @@ var CSS = `
   white-space: nowrap;
 }
 /* \u53EA\u6709\u6309\u94AE\u548C\u72B6\u6001\u70B9"\u6C38\u4E0D\u538B\u7F29"\uFF1B\u8F93\u5165\u7C7B\u5FC5\u987B\u80FD\u7F29\uFF0C\u5426\u5219\u4F1A\u6491\u51FA\u6A2A\u5411\u6EDA\u52A8\uFF1A
-   `.dchat - select` 是 width:100%，配 flex:none 会先占满整行，再把同排的按钮挤出容器。 */
+   .dchat-select \u662F width:100%\uFF0C\u914D flex:none \u4F1A\u5148\u5360\u6EE1\u6574\u884C\uFF0C\u518D\u628A\u540C\u6392\u7684\u6309\u94AE\u6324\u51FA\u5BB9\u5668\u3002 */
 .dchat-actions > .dchat-button,
 .dchat-actions > .dchat-status {
   flex: none;
@@ -1481,7 +1481,7 @@ var CSS = `
   font-size: 12px;
   padding: 4px 10px;
   cursor: pointer;
-  /* 中文按钮被压窄时会二字竖排，任何按钮都不允许折行。 */
+  /* \u4E2D\u6587\u6309\u94AE\u88AB\u538B\u7A84\u65F6\u4F1A\u4E8C\u5B57\u7AD6\u6392\uFF0C\u4EFB\u4F55\u6309\u94AE\u90FD\u4E0D\u5141\u8BB8\u6298\u884C\u3002 */
   white-space: nowrap;
 }
 .dchat-button:hover:not(:disabled) {
@@ -1491,7 +1491,7 @@ var CSS = `
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* 次要入口（如「版本与更新」）：文字链接形态，不和 DSH 自己的实心按钮抢注意力。 */
+/* \u6B21\u8981\u5165\u53E3\uFF08\u5982\u300C\u7248\u672C\u4E0E\u66F4\u65B0\u300D\uFF09\uFF1A\u6587\u5B57\u94FE\u63A5\u5F62\u6001\uFF0C\u4E0D\u548C DSH \u81EA\u5DF1\u7684\u5B9E\u5FC3\u6309\u94AE\u62A2\u6CE8\u610F\u529B\u3002 */
 .dchat-buttonLink {
   border-color: transparent;
   background: transparent;
@@ -1503,7 +1503,7 @@ var CSS = `
   background: transparent;
   text-decoration: underline;
 }
-/* 不可逆操作：触发按钮只染文字，确认按钮才用实底，避免两个同级灰按钮里藏着删除。 */
+/* \u4E0D\u53EF\u9006\u64CD\u4F5C\uFF1A\u89E6\u53D1\u6309\u94AE\u53EA\u67D3\u6587\u5B57\uFF0C\u786E\u8BA4\u6309\u94AE\u624D\u7528\u5B9E\u5E95\uFF0C\u907F\u514D\u4E24\u4E2A\u540C\u7EA7\u7070\u6309\u94AE\u91CC\u85CF\u7740\u5220\u9664\u3002 */
 .dchat-buttonDanger {
   color: var(--dsw-alias-state-error-primary);
 }
@@ -1522,7 +1522,7 @@ var CSS = `
   gap: 5px;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
-  /* 状态点自己永远不折行也不压缩（窄栏里曾被压成「运行正/常」）。 */
+  /* \u72B6\u6001\u70B9\u81EA\u5DF1\u6C38\u8FDC\u4E0D\u6298\u884C\u4E5F\u4E0D\u538B\u7F29\uFF08\u7A84\u680F\u91CC\u66FE\u88AB\u538B\u6210\u300C\u8FD0\u884C\u6B63/\u5E38\u300D\uFF09\u3002 */
   flex: none;
   white-space: nowrap;
 }
@@ -1581,8 +1581,8 @@ var CSS = `
 .dchat-entryArrow {
   color: var(--dsw-alias-label-tertiary);
 }
-/* 折叠态的入口行放在卡片里时，跟内层设置块用同一种形态（分隔线 + 整宽 + 同字号标题），
-   否则它 40px 高的圆角小盒子夹在两张展开卡片中间，看起来像根分隔线。 */
+/* \u6298\u53E0\u6001\u7684\u5165\u53E3\u884C\u653E\u5728\u5361\u7247\u91CC\u65F6\uFF0C\u8DDF\u5185\u5C42\u8BBE\u7F6E\u5757\u7528\u540C\u4E00\u79CD\u5F62\u6001\uFF08\u5206\u9694\u7EBF + \u6574\u5BBD + \u540C\u5B57\u53F7\u6807\u9898\uFF09\uFF0C
+   \u5426\u5219\u5B83 40px \u9AD8\u7684\u5706\u89D2\u5C0F\u76D2\u5B50\u5939\u5728\u4E24\u5F20\u5C55\u5F00\u5361\u7247\u4E2D\u95F4\uFF0C\u770B\u8D77\u6765\u50CF\u6839\u5206\u9694\u7EBF\u3002 */
 .dchat-card .dchat-entry {
   width: 100%;
   border: 0;
@@ -1604,12 +1604,12 @@ var CSS = `
   justify-content: center;
   padding: 40px 16px;
   overflow: auto;
-  /* 设置弹层自身是 fixed + z-index:1000，渠道弹窗必须压在其上。 */
+  /* \u8BBE\u7F6E\u5F39\u5C42\u81EA\u8EAB\u662F fixed + z-index:1000\uFF0C\u6E20\u9053\u5F39\u7A97\u5FC5\u987B\u538B\u5728\u5176\u4E0A\u3002 */
   z-index: 1100;
 }
 .dchat-dialog {
   width: min(640px, 100%);
-  /* 自己滚，而不是让外层滚动：否则内容变高时底部按钮会掉出视口。 */
+  /* \u81EA\u5DF1\u6EDA\uFF0C\u800C\u4E0D\u662F\u8BA9\u5916\u5C42\u6EDA\u52A8\uFF1A\u5426\u5219\u5185\u5BB9\u53D8\u9AD8\u65F6\u5E95\u90E8\u6309\u94AE\u4F1A\u6389\u51FA\u89C6\u53E3\u3002 */
   max-height: calc(100vh - 80px);
   box-sizing: border-box;
   overflow: auto;
@@ -1631,7 +1631,7 @@ var CSS = `
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  /* 内容很长时按钮始终粘在弹窗底部。 */
+  /* \u5185\u5BB9\u5F88\u957F\u65F6\u6309\u94AE\u59CB\u7EC8\u7C98\u5728\u5F39\u7A97\u5E95\u90E8\u3002 */
   position: sticky;
   bottom: -16px;
   margin: 0 -18px -16px;
@@ -1802,7 +1802,7 @@ var CSS = `
 .dchat-deliveryMeta small {
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-  /* anywhere 而不是 break-all：只在真的放不下时才断长串，不会把普通词也切碎。 */
+  /* anywhere \u800C\u4E0D\u662F break-all\uFF1A\u53EA\u5728\u771F\u7684\u653E\u4E0D\u4E0B\u65F6\u624D\u65AD\u957F\u4E32\uFF0C\u4E0D\u4F1A\u628A\u666E\u901A\u8BCD\u4E5F\u5207\u788E\u3002 */
   overflow-wrap: anywhere;
 }
 .dchat-deliverySend {

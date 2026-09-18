@@ -7,7 +7,9 @@
  * 1. 必备包齐全（hub + 飞书 + 微信）；
  * 2. 每个包都声明了 dsh.bundle.patch 与 dsh.client.platform=web；
  * 3. cordis.patch.yml 插入的行 id/name 与本包名一致；
- * 4. host / client 两半都已构建，且 client bundle 的模块 id 等于包名；
+ * 4. host / client 两半都已构建，client bundle 的模块 id 等于包名，且**能真的加载**
+ *    （按浏览器的 `__ModuleLoader__.load(...)` → `factory(require)` 跑一遍：语法能过
+ *    esbuild、却在模块顶层抛错的问题只能在这一层暴露，真机上表现为整个插件加载失败）；
  * 5. 渠道包**不得** import hub 包（契约只经运行期服务，见 CONTRACT.md）。
  *
  * @module dsh-chat/verify-package
@@ -17,6 +19,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createContext, runInContext } from 'node:vm';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = join(root, 'packages');
@@ -40,6 +43,35 @@ async function walk(dir) {
     else files.push(full);
   }
   return files;
+}
+
+/**
+ * 按浏览器加载器的方式跑一遍 client bundle，返回错误描述；能加载则返回 null。
+ *
+ * 为什么必须真跑：`select is not defined` 这类问题**语法合法**（模板字符串被提前闭合，
+ * 后面的片段成了模块顶层的代码），esbuild 与普通单测都拦不住，只有真机加载才报错。
+ *
+ * @param source - `lib/client.js` 的源码。
+ * @param name - 包名，用于错误信息。
+ * @returns 错误字符串或 null。
+ */
+function loadClientBundle(source, name) {
+  // 依赖（react 等）在 Node 里不存在；这里只关心"模块顶层能不能跑完"，
+  // 所以 require 一律给一个什么都能取的占位对象。
+  const stub = new Proxy(function () {}, { get: () => stub, apply: () => stub });
+  let definition = null;
+  const context = createContext({
+    window: { __ModuleLoader__: { load: (value) => { definition = value; } } },
+    console,
+  });
+  try {
+    runInContext(source, context, { filename: `${name}/lib/client.js` });
+    if (!definition) throw new Error('没有调用 window.__ModuleLoader__.load');
+    definition.factory(() => stub);
+    return null;
+  } catch (error) {
+    return `${error?.constructor?.name ?? 'Error'}: ${error?.message ?? error}`;
+  }
 }
 
 const packageDirs = (await readdir(packagesDir, { withFileTypes: true }))
@@ -79,9 +111,13 @@ for (const [name, { dir, manifest }] of manifests) {
   check(existsSync(clientBundle), `${name}: 缺少 client 产物 lib/client.js（先跑 npm run build）`);
 
   if (existsSync(clientBundle)) {
-    const head = (await readFile(clientBundle, 'utf8')).slice(0, 400);
+    const source = await readFile(clientBundle, 'utf8');
+    const head = source.slice(0, 400);
     check(head.includes(`id: ${JSON.stringify(name)}`),
       `${name}: client bundle 的模块 id 必须等于包名`);
+    const loadError = loadClientBundle(source, name);
+    check(loadError === null,
+      `${name}: client bundle 加载失败（浏览器里会表现为整个插件加载失败）——${loadError}`);
   }
 
   if (existsSync(hostBundle)) {
