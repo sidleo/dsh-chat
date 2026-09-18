@@ -17,6 +17,22 @@ const PAGE_SLOT = 'chat.channel.page';
 const LOCALE_NAMESPACE = 'dsh-chat-weixin';
 
 const zh = {
+  '关闭': '关闭',
+  '删除': '删除',
+  '启用': '启用',
+  '填入示例': '填入示例',
+  '备注名（可选）': '备注名（可选）',
+  '张三': '张三',
+  '新增': '新增',
+  '来源字段': '来源字段',
+  '清空': '清空',
+  '还没有指定设置。': '还没有指定设置。',
+  '上下文增强': '上下文增强',
+  '上下文增强范围': '上下文增强范围',
+  '叠加全局提示词（不勾选则只使用上面的专属提示词）': '叠加全局提示词（不勾选则只使用上面的专属提示词）',
+  '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。': '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。',
+  '增强提示词': '增强提示词',
+  '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。',
   '微信': '微信',
   '找不到这个机器人': '找不到这个机器人',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
@@ -59,6 +75,22 @@ const zh = {
 };
 
 const en = {
+  '关闭': 'Close',
+  '删除': 'Delete',
+  '启用': 'Enabled',
+  '填入示例': 'Fill with example',
+  '备注名（可选）': 'Display name (optional)',
+  '张三': 'Alice',
+  '新增': 'Add',
+  '来源字段': 'Source fields',
+  '清空': 'Clear',
+  '还没有指定设置。': 'Nothing configured yet.',
+  '上下文增强': 'Context enhancement',
+  '上下文增强范围': 'Context enhancement scope',
+  '叠加全局提示词（不勾选则只使用上面的专属提示词）': 'Also stack the global prompt (unchecked: use only the prompt above)',
+  '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。': 'Tell the model how to use the source fields. Write the body only — the plugin wraps it into a source block.',
+  '增强提示词': 'Prepended prompt',
+  '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': 'Source fields are sent only when the incoming message already carries them; no extra platform calls are made.',
   '微信': 'WeChat',
   '找不到这个机器人': 'Bot not found',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':

@@ -66,7 +66,7 @@ function t_of(translate) {
   return typeof translate === 'function' ? translate : (key) => key;
 }
 
-function FieldPicker({ scopeKey, scope, disabled, onChange }) {
+function FieldPicker({ scopeKey, scope, disabled, onChange, t }) {
   return h('div', { className: 'dchat-contextFields' }, CONTEXT_FIELDS.map((field) => {
     const inputId = `dchat-field-${scopeKey}-${field}`;
     return h('div', { key: field, className: 'dchat-contextField' },
@@ -79,28 +79,28 @@ function FieldPicker({ scopeKey, scope, disabled, onChange }) {
           ? [...scope.fields, field]
           : scope.fields.filter((value) => value !== field)),
       }),
-      h('label', { htmlFor: inputId, title: FIELD_HELP[field] ?? '' },
-        h('span', null, FIELD_LABELS[field]),
+      h('label', { htmlFor: inputId, title: FIELD_HELP[field] ? t(FIELD_HELP[field]) : '' },
+        h('span', null, t(FIELD_LABELS[field])),
         h('code', null, field)));
   }));
 }
 
-function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
+function GuidanceEditor({ idPrefix, value, example, disabled, onChange, t }) {
   const id = `${idPrefix}-guidance`;
   return h('div', { className: 'dchat-contextGuidance' },
     h('div', { className: 'dchat-contextGuidanceHeader' },
-      h('label', { htmlFor: id, className: 'dchat-contextLegend' }, '增强提示词'),
+      h('label', { htmlFor: id, className: 'dchat-contextLegend' }, t('增强提示词')),
       h('div', { className: 'dchat-actions' },
         h('button', {
           type: 'button', className: 'dchat-button', disabled,
           onClick: () => onChange(example),
-        }, '填入示例'),
+        }, t('填入示例')),
         h('button', {
           type: 'button', className: 'dchat-button', disabled,
           onClick: () => onChange(''),
-        }, '清空'))),
+        }, t('清空')))),
     h('p', { className: 'dchat-cardDescription' },
-      '告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。'),
+      t('告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。')),
     h('textarea', {
       id,
       className: 'dchat-textarea',
@@ -113,7 +113,7 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
     }));
 }
 
-function GlobalScopePanel({ kind, scope, disabled, onChange }) {
+function GlobalScopePanel({ kind, scope, disabled, onChange, t }) {
   const text = SCOPE_TEXT[kind];
   const example = kind === 'group' ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE;
   const switchId = `dchat-enable-${kind}`;
@@ -129,12 +129,13 @@ function GlobalScopePanel({ kind, scope, disabled, onChange }) {
         disabled,
         onChange: (event) => onChange({ ...scope, enabled: event.target.checked }),
       })),
-    h('div', { className: 'dchat-contextLegendRow' }, '来源字段'),
+    h('div', { className: 'dchat-contextLegendRow' }, t('来源字段')),
     h(FieldPicker, {
       scopeKey: `${kind}-global`,
       scope,
       disabled,
       onChange: (fields) => onChange({ ...scope, fields }),
+      t,
     }),
     h(GuidanceEditor, {
       idPrefix: `dchat-${kind}-global`,
@@ -142,6 +143,7 @@ function GlobalScopePanel({ kind, scope, disabled, onChange }) {
       example,
       disabled,
       onChange: (guidance) => onChange({ ...scope, guidance }),
+      t,
     }));
 }
 
@@ -150,7 +152,7 @@ function targetKindOf(scope) {
   return scope === 'direct' ? 'user' : 'group';
 }
 
-function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
+function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
   return h('li', { className: 'dchat-targetRow' },
@@ -163,14 +165,14 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           'aria-label': `启用第 ${index + 1} 条${text.targetTitle}`,
           onChange: (event) => onChange({ ...target, enabled: event.target.checked }),
         }),
-        '启用'),
+        t('启用')),
       h('button', {
         type: 'button',
         className: 'dchat-button',
         disabled,
         'aria-label': `删除第 ${index + 1} 条${text.targetTitle}`,
         onClick: onRemove,
-      }, '删除')),
+      }, t('删除'))),
     h('div', { className: 'dchat-targetGrid' },
       h('label', { className: 'dchat-targetField' },
         h('span', null, text.idLabel),
@@ -183,21 +185,22 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           onChange: (event) => onChange({ ...target, id: event.target.value }),
         })),
       h('label', { className: 'dchat-targetField' },
-        h('span', null, '备注名（可选）'),
+        h('span', null, t('备注名（可选）')),
         h('input', {
           type: 'text',
           value: target.label,
           maxLength: TARGET_LABEL_MAX_LENGTH,
-          placeholder: '张三',
+          placeholder: t('张三'),
           disabled,
           onChange: (event) => onChange({ ...target, label: event.target.value }),
         }))),
-    h('div', { className: 'dchat-contextLegendRow' }, '来源字段'),
+    h('div', { className: 'dchat-contextLegendRow' }, t('来源字段')),
     h(FieldPicker, {
       scopeKey: `${prefix}`,
       scope: target,
       disabled,
       onChange: (fields) => onChange({ ...target, fields }),
+      t,
     }),
     h(GuidanceEditor, {
       idPrefix: prefix,
@@ -205,6 +208,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
       example: scope === 'group' ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE,
       disabled,
       onChange: (guidance) => onChange({ ...target, guidance }),
+      t,
     }),
     h('label', { className: 'dchat-targetMerge' },
       h('input', {
@@ -216,10 +220,10 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           merge: event.target.checked ? 'append' : 'replace',
         }),
       }),
-      '叠加全局提示词（不勾选则只使用上面的专属提示词）'));
+      t('叠加全局提示词（不勾选则只使用上面的专属提示词）')));
 }
 
-function TargetPanel({ scope, targets, disabled, onChange }) {
+function TargetPanel({ scope, targets, disabled, onChange, t }) {
   const kind = targetKindOf(scope);
   const text = SCOPE_TEXT[scope];
   const rows = targets
@@ -249,9 +253,9 @@ function TargetPanel({ scope, targets, disabled, onChange }) {
         className: 'dchat-button',
         disabled: disabled || targets.length >= TARGET_LIMIT,
         onClick: add,
-      }, '新增')),
+      }, t('新增'))),
     rows.length === 0
-      ? h('p', { className: 'dchat-cardDescription' }, '还没有指定设置。')
+      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置。'))
       : h('ul', { className: 'dchat-targetList' }, rows.map(({ target, index }) => h(TargetRow, {
         key: index,
         scope,
@@ -260,7 +264,8 @@ function TargetPanel({ scope, targets, disabled, onChange }) {
         disabled,
         onChange: (next) => replace(index, next),
         onRemove: () => remove(index),
-      }))));
+        t,
+      }))));;
 }
 
 function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose }) {
@@ -313,17 +318,17 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     },
   },
   h('header', { className: 'dchat-dialogHeader' },
-    h('h3', { id: titleId, className: 'dchat-cardTitle' }, '上下文增强'),
+    h('h3', { id: titleId, className: 'dchat-cardTitle' }, t('上下文增强')),
     h('button', {
       type: 'button',
       className: 'dchat-button',
       disabled: saving,
-      'aria-label': '关闭',
+      'aria-label': t('关闭'),
       onClick: onClose,
-    }, '关闭')),
+    }, t('关闭'))),
   h('p', { className: 'dchat-cardDescription' },
-    '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。'),
-  h('div', { className: 'dchat-tabs', role: 'tablist', 'aria-label': '上下文增强范围' },
+    t('来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。')),
+  h('div', { className: 'dchat-tabs', role: 'tablist', 'aria-label': t('上下文增强范围') },
     ['direct', 'group'].map((kind) => h('button', {
       key: kind,
       type: 'button',
@@ -332,7 +337,7 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
       'aria-selected': activeScope === kind,
       'data-scope': kind,
       onClick: () => setActiveScope(kind),
-    }, SCOPE_TEXT[kind].title))),
+    }, t(SCOPE_TEXT[kind].title)))),
   ['direct', 'group'].map((kind) => h('div', {
     key: kind,
     role: 'tabpanel',
@@ -344,12 +349,14 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     kind,
     scope: draft[kind],
     disabled: busy,
+    t,
     onChange: (scope) => setDraft((current) => ({ ...current, [kind]: scope })),
   }),
   h(TargetPanel, {
     scope: kind,
     targets: draft.targets,
     disabled: busy,
+    t,
     onChange: (targets) => setDraft((current) => ({ ...current, targets })),
   }))),
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
@@ -388,8 +395,8 @@ export function ContextEnhancementEditor({ config, disabled = false, translate, 
       'aria-expanded': open,
       onClick: () => setOpen(true),
     },
-    h('span', { className: 'dchat-entryLabel' }, '上下文增强'),
-    h('span', { className: 'dchat-entryStatus', 'data-active': status !== '未开启' }, status),
+    h('span', { className: 'dchat-entryLabel' }, t('上下文增强')),
+    h('span', { className: 'dchat-entryStatus', 'data-active': status !== '未开启' }, t(status)),
     h('span', { className: 'dchat-entryArrow', 'aria-hidden': 'true' }, '›')),
     open ? h(ContextEnhancementDialog, {
       config,

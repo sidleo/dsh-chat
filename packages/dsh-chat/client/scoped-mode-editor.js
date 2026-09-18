@@ -76,6 +76,7 @@ export function ScopedModeEditor({
     ? h('span', { className: 'dchat-status' }, t('保存中…'))
     : null;
   const help = options.find((option) => option.value === (draft[helpFor] ?? options[0]?.value))?.help;
+  // 选项文案由调用方给**键**，这里翻译：渠道不必各自准备两份文案。
 
   return h('section', { className: 'dchat-card' },
     h('div', { className: 'dchat-cardHeader' },
@@ -101,10 +102,10 @@ export function ScopedModeEditor({
           },
         }, options.map((option) => h('option', {
           key: option.value, value: option.value,
-        }, option.label))),
+        }, t(option.label))),
         scope.key === helpFor && help
-          ? h('p', { className: 'dchat-cardDescription' }, help)
-          : null);
+          ? h('p', { className: 'dchat-cardDescription' }, t(help))
+          : null));
     })),
     failed || error ? h('p', { className: 'dchat-error', role: 'alert' }, failed ?? error) : null);
 }

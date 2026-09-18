@@ -903,7 +903,7 @@ var SCOPE_TEXT = Object.freeze({
 function t_of(translate) {
   return typeof translate === "function" ? translate : (key) => key;
 }
-function FieldPicker({ scopeKey, scope, disabled, onChange }) {
+function FieldPicker({ scopeKey, scope, disabled, onChange, t }) {
   return h2("div", { className: "dchat-contextFields" }, CONTEXT_FIELDS.map((field) => {
     const inputId = `dchat-field-${scopeKey}-${field}`;
     return h2(
@@ -918,14 +918,14 @@ function FieldPicker({ scopeKey, scope, disabled, onChange }) {
       }),
       h2(
         "label",
-        { htmlFor: inputId, title: FIELD_HELP[field] ?? "" },
-        h2("span", null, FIELD_LABELS[field]),
+        { htmlFor: inputId, title: FIELD_HELP[field] ? t(FIELD_HELP[field]) : "" },
+        h2("span", null, t(FIELD_LABELS[field])),
         h2("code", null, field)
       )
     );
   }));
 }
-function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
+function GuidanceEditor({ idPrefix, value, example, disabled, onChange, t }) {
   const id = `${idPrefix}-guidance`;
   return h2(
     "div",
@@ -933,7 +933,7 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
     h2(
       "div",
       { className: "dchat-contextGuidanceHeader" },
-      h2("label", { htmlFor: id, className: "dchat-contextLegend" }, "\u589E\u5F3A\u63D0\u793A\u8BCD"),
+      h2("label", { htmlFor: id, className: "dchat-contextLegend" }, t("\u589E\u5F3A\u63D0\u793A\u8BCD")),
       h2(
         "div",
         { className: "dchat-actions" },
@@ -942,19 +942,19 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
           className: "dchat-button",
           disabled,
           onClick: () => onChange(example)
-        }, "\u586B\u5165\u793A\u4F8B"),
+        }, t("\u586B\u5165\u793A\u4F8B")),
         h2("button", {
           type: "button",
           className: "dchat-button",
           disabled,
           onClick: () => onChange("")
-        }, "\u6E05\u7A7A")
+        }, t("\u6E05\u7A7A"))
       )
     ),
     h2(
       "p",
       { className: "dchat-cardDescription" },
-      "\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002"
+      t("\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002")
     ),
     h2("textarea", {
       id,
@@ -968,7 +968,7 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange }) {
     })
   );
 }
-function GlobalScopePanel({ kind, scope, disabled, onChange }) {
+function GlobalScopePanel({ kind, scope, disabled, onChange, t }) {
   const text = SCOPE_TEXT[kind];
   const example = kind === "group" ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE;
   const switchId = `dchat-enable-${kind}`;
@@ -992,26 +992,28 @@ function GlobalScopePanel({ kind, scope, disabled, onChange }) {
         onChange: (event) => onChange({ ...scope, enabled: event.target.checked })
       })
     ),
-    h2("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
+    h2("div", { className: "dchat-contextLegendRow" }, t("\u6765\u6E90\u5B57\u6BB5")),
     h2(FieldPicker, {
       scopeKey: `${kind}-global`,
       scope,
       disabled,
-      onChange: (fields) => onChange({ ...scope, fields })
+      onChange: (fields) => onChange({ ...scope, fields }),
+      t
     }),
     h2(GuidanceEditor, {
       idPrefix: `dchat-${kind}-global`,
       value: scope.guidance,
       example,
       disabled,
-      onChange: (guidance) => onChange({ ...scope, guidance })
+      onChange: (guidance) => onChange({ ...scope, guidance }),
+      t
     })
   );
 }
 function targetKindOf(scope) {
   return scope === "direct" ? "user" : "group";
 }
-function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
+function TargetRow({ scope, target, index, disabled, onChange, onRemove, t }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
   return h2(
@@ -1030,7 +1032,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           "aria-label": `\u542F\u7528\u7B2C ${index + 1} \u6761${text.targetTitle}`,
           onChange: (event) => onChange({ ...target, enabled: event.target.checked })
         }),
-        "\u542F\u7528"
+        t("\u542F\u7528")
       ),
       h2("button", {
         type: "button",
@@ -1038,7 +1040,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
         disabled,
         "aria-label": `\u5220\u9664\u7B2C ${index + 1} \u6761${text.targetTitle}`,
         onClick: onRemove
-      }, "\u5220\u9664")
+      }, t("\u5220\u9664"))
     ),
     h2(
       "div",
@@ -1059,30 +1061,32 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
       h2(
         "label",
         { className: "dchat-targetField" },
-        h2("span", null, "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09"),
+        h2("span", null, t("\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09")),
         h2("input", {
           type: "text",
           value: target.label,
           maxLength: TARGET_LABEL_MAX_LENGTH,
-          placeholder: "\u5F20\u4E09",
+          placeholder: t("\u5F20\u4E09"),
           disabled,
           onChange: (event) => onChange({ ...target, label: event.target.value })
         })
       )
     ),
-    h2("div", { className: "dchat-contextLegendRow" }, "\u6765\u6E90\u5B57\u6BB5"),
+    h2("div", { className: "dchat-contextLegendRow" }, t("\u6765\u6E90\u5B57\u6BB5")),
     h2(FieldPicker, {
       scopeKey: `${prefix}`,
       scope: target,
       disabled,
-      onChange: (fields) => onChange({ ...target, fields })
+      onChange: (fields) => onChange({ ...target, fields }),
+      t
     }),
     h2(GuidanceEditor, {
       idPrefix: prefix,
       value: target.guidance,
       example: scope === "group" ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE,
       disabled,
-      onChange: (guidance) => onChange({ ...target, guidance })
+      onChange: (guidance) => onChange({ ...target, guidance }),
+      t
     }),
     h2(
       "label",
@@ -1096,11 +1100,11 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove }) {
           merge: event.target.checked ? "append" : "replace"
         })
       }),
-      "\u53E0\u52A0\u5168\u5C40\u63D0\u793A\u8BCD\uFF08\u4E0D\u52FE\u9009\u5219\u53EA\u4F7F\u7528\u4E0A\u9762\u7684\u4E13\u5C5E\u63D0\u793A\u8BCD\uFF09"
+      t("\u53E0\u52A0\u5168\u5C40\u63D0\u793A\u8BCD\uFF08\u4E0D\u52FE\u9009\u5219\u53EA\u4F7F\u7528\u4E0A\u9762\u7684\u4E13\u5C5E\u63D0\u793A\u8BCD\uFF09")
     )
   );
 }
-function TargetPanel({ scope, targets, disabled, onChange }) {
+function TargetPanel({ scope, targets, disabled, onChange, t }) {
   const kind = targetKindOf(scope);
   const text = SCOPE_TEXT[scope];
   const rows = targets.map((target, index) => ({ target, index })).filter((entry) => entry.target.kind === kind);
@@ -1132,18 +1136,20 @@ function TargetPanel({ scope, targets, disabled, onChange }) {
         className: "dchat-button",
         disabled: disabled || targets.length >= TARGET_LIMIT,
         onClick: add
-      }, "\u65B0\u589E")
+      }, t("\u65B0\u589E"))
     ),
-    rows.length === 0 ? h2("p", { className: "dchat-cardDescription" }, "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002") : h2("ul", { className: "dchat-targetList" }, rows.map(({ target, index }) => h2(TargetRow, {
+    rows.length === 0 ? h2("p", { className: "dchat-cardDescription" }, t("\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002")) : h2("ul", { className: "dchat-targetList" }, rows.map(({ target, index }) => h2(TargetRow, {
       key: index,
       scope,
       target,
       index,
       disabled,
       onChange: (next) => replace(index, next),
-      onRemove: () => remove(index)
+      onRemove: () => remove(index),
+      t
     })))
   );
+  ;
 }
 function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose }) {
   const t = t_of(translate);
@@ -1195,23 +1201,23 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     h2(
       "header",
       { className: "dchat-dialogHeader" },
-      h2("h3", { id: titleId, className: "dchat-cardTitle" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
+      h2("h3", { id: titleId, className: "dchat-cardTitle" }, t("\u4E0A\u4E0B\u6587\u589E\u5F3A")),
       h2("button", {
         type: "button",
         className: "dchat-button",
         disabled: saving,
-        "aria-label": "\u5173\u95ED",
+        "aria-label": t("\u5173\u95ED"),
         onClick: onClose
-      }, "\u5173\u95ED")
+      }, t("\u5173\u95ED"))
     ),
     h2(
       "p",
       { className: "dchat-cardDescription" },
-      "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002"
+      t("\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002")
     ),
     h2(
       "div",
-      { className: "dchat-tabs", role: "tablist", "aria-label": "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4" },
+      { className: "dchat-tabs", role: "tablist", "aria-label": t("\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4") },
       ["direct", "group"].map((kind) => h2("button", {
         key: kind,
         type: "button",
@@ -1220,7 +1226,7 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         "aria-selected": activeScope === kind,
         "data-scope": kind,
         onClick: () => setActiveScope(kind)
-      }, SCOPE_TEXT[kind].title))
+      }, t(SCOPE_TEXT[kind].title)))
     ),
     ["direct", "group"].map((kind) => h2(
       "div",
@@ -1235,12 +1241,14 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
         kind,
         scope: draft[kind],
         disabled: busy,
+        t,
         onChange: (scope) => setDraft((current) => ({ ...current, [kind]: scope }))
       }),
       h2(TargetPanel, {
         scope: kind,
         targets: draft.targets,
         disabled: busy,
+        t,
         onChange: (targets) => setDraft((current) => ({ ...current, targets }))
       })
     )),
@@ -1283,8 +1291,8 @@ function ContextEnhancementEditor({ config, disabled = false, translate, onSave 
         "aria-expanded": open,
         onClick: () => setOpen(true)
       },
-      h2("span", { className: "dchat-entryLabel" }, "\u4E0A\u4E0B\u6587\u589E\u5F3A"),
-      h2("span", { className: "dchat-entryStatus", "data-active": status !== "\u672A\u5F00\u542F" }, status),
+      h2("span", { className: "dchat-entryLabel" }, t("\u4E0A\u4E0B\u6587\u589E\u5F3A")),
+      h2("span", { className: "dchat-entryStatus", "data-active": status !== "\u672A\u5F00\u542F" }, t(status)),
       h2("span", { className: "dchat-entryArrow", "aria-hidden": "true" }, "\u203A")
     ),
     open ? h2(ContextEnhancementDialog, {
@@ -1603,22 +1611,26 @@ function ScopedModeEditor({
         "div",
         { key: scope.key, className: "dchat-scopeRow" },
         h4("label", { className: "dchat-scopeLabel", htmlFor: selectId }, scope.label),
-        h4("select", {
-          id: selectId,
-          className: "dchat-select",
-          value: selected,
-          disabled: locked,
-          "aria-label": `${title} \xB7 ${scope.label}`,
-          onFocus: () => setHelpFor(scope.key),
-          onChange: (event) => {
-            setHelpFor(scope.key);
-            void choose(scope.key, event.target.value);
-          }
-        }, options.map((option) => h4("option", {
-          key: option.value,
-          value: option.value
-        }, option.label))),
-        scope.key === helpFor && help ? h4("p", { className: "dchat-cardDescription" }, help) : null
+        h4(
+          "select",
+          {
+            id: selectId,
+            className: "dchat-select",
+            value: selected,
+            disabled: locked,
+            "aria-label": `${title} \xB7 ${scope.label}`,
+            onFocus: () => setHelpFor(scope.key),
+            onChange: (event) => {
+              setHelpFor(scope.key);
+              void choose(scope.key, event.target.value);
+            }
+          },
+          options.map((option) => h4("option", {
+            key: option.value,
+            value: option.value
+          }, t(option.label))),
+          scope.key === helpFor && help ? h4("p", { className: "dchat-cardDescription" }, t(help)) : null
+        )
       );
     })),
     failed || error ? h4("p", { className: "dchat-error", role: "alert" }, failed ?? error) : null
@@ -2479,6 +2491,23 @@ var zh = {
   "\u6536\u8D77": "\u6536\u8D77",
   "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4": "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4",
   "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002": "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002",
+  "\u586B\u5165\u793A\u4F8B": "\u586B\u5165\u793A\u4F8B",
+  "\u6E05\u7A7A": "\u6E05\u7A7A",
+  "\u6765\u6E90\u5B57\u6BB5": "\u6765\u6E90\u5B57\u6BB5",
+  "\u542F\u7528": "\u542F\u7528",
+  "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09": "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09",
+  "\u5F20\u4E09": "\u5F20\u4E09",
+  "\u65B0\u589E": "\u65B0\u589E",
+  "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002": "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002",
+  "\u5173\u95ED": "\u5173\u95ED",
+  "\u589E\u5F3A\u63D0\u793A\u8BCD": "\u589E\u5F3A\u63D0\u793A\u8BCD",
+  "\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002": "\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002",
+  "\u53E0\u52A0\u5168\u5C40\u63D0\u793A\u8BCD\uFF08\u4E0D\u52FE\u9009\u5219\u53EA\u4F7F\u7528\u4E0A\u9762\u7684\u4E13\u5C5E\u63D0\u793A\u8BCD\uFF09": "\u53E0\u52A0\u5168\u5C40\u63D0\u793A\u8BCD\uFF08\u4E0D\u52FE\u9009\u5219\u53EA\u4F7F\u7528\u4E0A\u9762\u7684\u4E13\u5C5E\u63D0\u793A\u8BCD\uFF09",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A": "\u4E0A\u4E0B\u6587\u589E\u5F3A",
+  "\u672A\u5F00\u542F": "\u672A\u5F00\u542F",
+  "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4",
+  "\u5DF2\u5F00\u542F": "\u5DF2\u5F00\u542F",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002",
@@ -2572,6 +2601,23 @@ var en = {
   "\u6536\u8D77": "Collapse",
   "\u6309\u540D\u5B57\u6216 id \u8FC7\u6EE4": "Filter by name or id",
   "\u6CA1\u6709\u5339\u914D\u7684\u76EE\u6807\u3002": "No target matches the filter.",
+  "\u586B\u5165\u793A\u4F8B": "Fill with example",
+  "\u6E05\u7A7A": "Clear",
+  "\u6765\u6E90\u5B57\u6BB5": "Source fields",
+  "\u542F\u7528": "Enabled",
+  "\u5907\u6CE8\u540D\uFF08\u53EF\u9009\uFF09": "Display name (optional)",
+  "\u5F20\u4E09": "Alice",
+  "\u65B0\u589E": "Add",
+  "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\u3002": "Nothing configured yet.",
+  "\u5173\u95ED": "Close",
+  "\u589E\u5F3A\u63D0\u793A\u8BCD": "Prepended prompt",
+  "\u544A\u8BC9\u6A21\u578B\u5982\u4F55\u4F7F\u7528\u6765\u6E90\u5B57\u6BB5\u3002\u53EA\u586B\u6B63\u6587\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u5305\u6210\u6765\u6E90\u589E\u5F3A\u5757\u3002": "Tell the model how to use the source fields. Write the body only \u2014 the plugin wraps it into a source block.",
+  "\u53E0\u52A0\u5168\u5C40\u63D0\u793A\u8BCD\uFF08\u4E0D\u52FE\u9009\u5219\u53EA\u4F7F\u7528\u4E0A\u9762\u7684\u4E13\u5C5E\u63D0\u793A\u8BCD\uFF09": "Also stack the global prompt (unchecked: use only the prompt above)",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A": "Context enhancement",
+  "\u672A\u5F00\u542F": "Off",
+  "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "Source fields are sent only when the incoming message already carries them; no extra platform calls are made.",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A\u8303\u56F4": "Context enhancement scope",
+  "\u5DF2\u5F00\u542F": "On",
   // 机器人设置页的共享编辑块（bot-shared-settings.js）
   "\u5DE5\u4F5C\u533A": "Workspace",
   "\u673A\u5668\u4EBA\u8DD1\u5728\u54EA\u4E2A\u76EE\u5F55\uFF1A\u80FD\u8BFB\u5199\u54EA\u4E9B\u6587\u4EF6\u3001\u7528\u54EA\u4EFD AGENTS.md\u3002\u53EA\u5BF9\u65B0\u5EFA\u4F1A\u8BDD\u751F\u6548\u3002": "Which directory the bot runs in: which files it may read and write, and which AGENTS.mdapplies. Applies to new conversations only.",
