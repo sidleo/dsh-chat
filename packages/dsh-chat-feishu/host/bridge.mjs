@@ -28,6 +28,9 @@ function messageText(message) {
 /** DSH 只认这四种图片类型；其余一律按"不支持"处理。 */
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
+/** 菜单卡片一行放几个按钮（超出的换到下一行 `action`，绝不截断命令）。 */
+const MENU_ROW_SIZE = 6;
+
 /**
  * 判定图片类型：优先看响应头，再用魔数兜底。
  *
@@ -621,7 +624,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 渲染进卡片正文——否则点一下只多了条新消息，用户看不出自己点到了没有（真机反馈过）。
    */
   function menuCard(items, last = null) {
-    const actions = items.slice(0, 12).map((item) => ({
+    const buttons = items.map((item) => ({
       tag: 'button',
       type: 'default',
       text: { tag: 'plain_text', content: item.label },
@@ -643,7 +646,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         },
       });
     }
-    elements.push({ tag: 'action', actions });
+    /**
+     * 一行放几个按钮。
+     *
+     * 以前是 `items.slice(0, 12)`——恰好把字母序后半截命令**静默丢掉**：真机上 17 个命令
+     * 只列出 12 个，`/session` `/status` `/stop` `/version` `/whoami` 在卡片上根本找不到
+     * （只能手打）。宁可多开几行 `action`，也不能少命令。
+     */
+    for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
+      elements.push({ tag: 'action', actions: buttons.slice(index, index + MENU_ROW_SIZE) });
+    }
     return {
       config: { wide_screen_mode: true },
       header: { template: 'blue', title: { tag: 'plain_text', content: '机器人菜单' } },

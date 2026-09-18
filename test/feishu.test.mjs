@@ -87,6 +87,12 @@ function createFakeGateway() {
       calls.cards.push({ messageId, card });
       return { messageId: 'om_card' };
     },
+    /** 主动发卡片（如 /menu 菜单卡）。此前假 gateway 没有这个方法，于是菜单卡一直走"退回文本"。 */
+    async sendCard({ chatId, card }) {
+      if (gatewayState.failures.sendCard) throw gatewayState.failures.sendCard;
+      calls.cards.push({ chatId, card });
+      return { messageId: 'om_card' };
+    },
     async patchCard({ messageId, card }) {
       if (gatewayState.failures.patchCard) throw gatewayState.failures.patchCard;
       calls.patches.push({ messageId, card });
@@ -1907,6 +1913,47 @@ test('菜单卡片：就地更新失败时退回回文字，用户不会什么�
     });
     assert.equal(answer.toast.type, 'success');
     assert.equal(app.gateway.calls.replies.at(-1)?.text, '输出：/status', '退回"回复文字"这条路');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('菜单卡片：命令一个都不能少（曾经 slice(0,12) 把后半截静默丢掉）', async () => {
+  // 真机上的命令表就是这么多：17 条（不含 /menu 自己），字母序后半截是
+  // /session /status /stop /version /whoami —— 正好被 slice(0,12) 丢掉的五个。
+  const names = [
+    'allow', 'compact', 'deny', 'help', 'history', 'model',
+    'models', 'new', 'preset', 'presets', 'reasoning', 'reasonings',
+    'session', 'status', 'stop', 'version', 'whoami',
+  ];
+  const menu = names.map((name) => ({ label: `/${name}`, command: `/${name}` }));
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') return { handled: true, reply: '可用命令见下', menu };
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  // 命令权限：直接放行（这条用例测的是卡片里的按钮，不是门禁）。
+  const app = await makeBridge({
+    commands,
+    policy: {
+      direct: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+      group: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+    },
+  });
+  try {
+    await app.bridge.accept(messageEvent({ text: '/menu' }));
+    const card = app.gateway.calls.cards.at(-1)?.card;
+    assert.ok(card, '要发一张菜单卡片');
+
+    const rows = card.elements.filter((element) => element.tag === 'action');
+    const commands2 = rows.flatMap((row) => row.actions.map((button) => button.value.dsh_menu));
+    assert.deepEqual(commands2, names.map((name) => `/${name}`), '每个命令都要有按钮，且顺序不变');
+    assert.ok(rows.length > 1, '命令多的时候要分行，而不是截断');
+    assert.ok(rows.every((row) => row.actions.length > 0 && row.actions.length <= 6), '每行不超过 6 个');
+    // 每个按钮都要带命令行本身（点它等于手打）。
+    assert.ok(rows.every((row) => row.actions.every((button) => button.tag === 'button'
+      && button.value.dsh_menu.startsWith('/'))));
   } finally {
     await app.cleanup();
   }

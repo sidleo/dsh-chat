@@ -127017,6 +127017,7 @@ function messageText(message) {
   }
 }
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+var MENU_ROW_SIZE = 6;
 function sniffImageMediaType(bytes, contentType) {
   const declared = String(contentType ?? "").split(";")[0].trim().toLowerCase();
   if (SUPPORTED_IMAGE_TYPES.has(declared)) return declared;
@@ -127471,7 +127472,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     }
   }
   function menuCard(items, last = null) {
-    const actions = items.slice(0, 12).map((item) => ({
+    const buttons = items.map((item) => ({
       tag: "button",
       type: "default",
       text: { tag: "plain_text", content: item.label },
@@ -127493,7 +127494,9 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
         }
       });
     }
-    elements.push({ tag: "action", actions });
+    for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
+      elements.push({ tag: "action", actions: buttons.slice(index, index + MENU_ROW_SIZE) });
+    }
     return {
       config: { wide_screen_mode: true },
       header: { template: "blue", title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u83DC\u5355" } },
