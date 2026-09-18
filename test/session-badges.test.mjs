@@ -61,3 +61,13 @@ test('机器人名单兼容 bots/accounts：老渠道 host 也不能显示成"�
   assert.deepEqual(normalizeBots(undefined), []);
   assert.deepEqual(normalizeBots({}), []);
 });
+
+test('机器人身份键按 botId 兜底到 id：host/client 版本错位也不能把"单台设置"变成"全部"', async () => {
+  const { botKeyOf } = await import('../packages/dsh-chat/client/bot-list.js');
+  assert.equal(botKeyOf({ botId: 'a', id: 'b' }), 'a', '契约字段优先');
+  assert.equal(botKeyOf({ id: 'b' }), 'b', '老 host 只给 id 时按 id 兜底');
+  assert.equal(botKeyOf({ botId: '' }), null, '空串等于没有身份，不能当成有效 id');
+  assert.equal(botKeyOf({}), null);
+  assert.equal(botKeyOf(null), null);
+  assert.equal(botKeyOf('wx_1'), null, '非对象不接受');
+});

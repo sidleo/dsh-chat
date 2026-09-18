@@ -19,6 +19,8 @@ const LOCALE_NAMESPACE = 'dsh-chat-feishu';
 
 const zh = {
   '飞书': '飞书',
+  '找不到这台机器人': '找不到这台机器人',
+  '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
   '飞书渠道': '飞书渠道',
   '已接入的机器人': '已接入的机器人',
   '读取状态': '读取状态',
@@ -57,6 +59,9 @@ const zh = {
 
 const en = {
   '飞书': 'Feishu',
+  '找不到这台机器人': 'Bot not found',
+  '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
+    "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
   '飞书渠道': 'Feishu channel',
   '已接入的机器人': 'Connected bots',
   '读取状态': 'Reload',
@@ -257,10 +262,20 @@ function FeishuPage(props) {
 
   const { Panel, EmptyState } = chatUi.components;
   const allBots = state.value?.bots ?? [];
-  const bots = botId ? allBots.filter((bot) => bot.botId === botId || bot.id === botId) : allBots;
+  /**
+   * 从机器人列表点「设置」进来时带上 botId：**只渲染这一台**。
+   * 这时渠道级的东西（dataDir、读取状态）一概不渲染——用户点的是"这台机器人的设置"。
+   */
+  const scoped = Boolean(botId);
+  const bots = scoped
+    ? allBots.filter((bot) => (bot?.botId ?? bot?.id ?? null) === botId)
+    : allBots;
+  // 指定了 botId 却一台都没匹配到：明确报出来，**绝不退回"显示全部"**——
+  // 静默显示全部会让人以为自己点错了机器人，而真正的问题（版本错位/已被移除）被藏起来。
+  const missing = scoped && state.phase === 'ready' && bots.length === 0;
 
   return h(React.Fragment, null,
-    h(Panel, {
+    scoped ? null : h(Panel, {
       title: t('飞书渠道'),
       description: `dataDir：${state.value?.dataDir ?? '—'}`,
       actions: h('button', {
@@ -277,6 +292,15 @@ function FeishuPage(props) {
         description: t('本机还没有飞书机器人配置。'),
       })
       : null),
+    scoped && state.error
+      ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message)
+      : null,
+    missing
+      ? h(EmptyState, {
+        title: t('找不到这台机器人'),
+        description: `${t('它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）')}：${botId}`,
+      })
+      : null,
     bots.map((bot) => h(BotCard, {
       key: bot.id,
       bot,

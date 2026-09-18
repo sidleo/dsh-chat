@@ -47,6 +47,8 @@ var PAGE_SLOT = "chat.channel.page";
 var LOCALE_NAMESPACE = "dsh-chat-weixin";
 var zh = {
   "\u5FAE\u4FE1": "\u5FAE\u4FE1",
+  "\u627E\u4E0D\u5230\u8FD9\u4E2A\u673A\u5668\u4EBA": "\u627E\u4E0D\u5230\u8FD9\u4E2A\u673A\u5668\u4EBA",
+  "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09",
   "\u5FAE\u4FE1\u6E20\u9053": "\u5FAE\u4FE1\u6E20\u9053",
   "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7": "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7",
   "\u626B\u7801\u63A5\u5165": "\u626B\u7801\u63A5\u5165",
@@ -84,6 +86,8 @@ var zh = {
 };
 var en = {
   "\u5FAE\u4FE1": "WeChat",
+  "\u627E\u4E0D\u5230\u8FD9\u4E2A\u673A\u5668\u4EBA": "Bot not found",
+  "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
   "\u5FAE\u4FE1\u6E20\u9053": "WeChat channel",
   "\u5DF2\u7ED1\u5B9A\u7684\u8D26\u53F7": "Linked accounts",
   "\u626B\u7801\u63A5\u5165": "Scan to link",
@@ -368,12 +372,14 @@ function WeixinPage(props) {
     void load();
   }, [load]);
   const { Panel, EmptyState } = chatUi.components;
-  const allAccounts = state.value?.accounts ?? [];
-  const accounts = botId ? allAccounts.filter((account) => account.botId === botId) : allAccounts;
+  const allAccounts = state.value?.accounts ?? state.value?.bots ?? [];
+  const scoped = Boolean(botId);
+  const accounts = scoped ? allAccounts.filter((account) => (account?.botId ?? account?.id ?? null) === botId) : allAccounts;
+  const missing = scoped && state.phase === "ready" && accounts.length === 0;
   return h(
     React.Fragment,
     null,
-    h(
+    scoped ? null : h(
       Panel,
       {
         title: t("\u5FAE\u4FE1\u6E20\u9053"),
@@ -393,7 +399,12 @@ function WeixinPage(props) {
         description: t("\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002")
       }) : null
     ),
-    h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
+    scoped && state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
+    missing ? h(EmptyState, {
+      title: t("\u627E\u4E0D\u5230\u8FD9\u4E2A\u673A\u5668\u4EBA"),
+      description: `${t("\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09")}\uFF1A${botId}`
+    }) : null,
+    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
     accounts.map((account) => h(AccountCard, {
       key: account.botId,
       account,

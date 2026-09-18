@@ -50,6 +50,9 @@ export const zh = {
   '这个渠道还没有机器人': '这个渠道还没有机器人',
   '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。':
     '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。',
+  '未命名机器人': '未命名机器人',
+  '这台机器人没有可用的身份标识，无法单独配置': '这台机器人没有可用的身份标识，无法单独配置',
+  '渠道设置': '渠道设置',
   '打开渠道设置页': '打开渠道设置页',
   '← 机器人列表': '← 机器人列表',
   '已处理': '已处理',
@@ -122,6 +125,10 @@ export const en = {
   '这个渠道还没有机器人': 'No bot on this channel yet',
   '在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。':
     'Finish onboarding on the channel page (Feishu app credentials, WeChat QR scan) and the bot shows up here.',
+  '未命名机器人': 'Unnamed bot',
+  '这台机器人没有可用的身份标识，无法单独配置':
+    'This bot has no usable identity, so it cannot be configured separately',
+  '渠道设置': 'Channel settings',
   '打开渠道设置页': 'Open channel settings',
   '← 机器人列表': '← Bot list',
   '已处理': 'Handled',

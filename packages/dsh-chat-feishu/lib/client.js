@@ -47,6 +47,8 @@ var PAGE_SLOT = "chat.channel.page";
 var LOCALE_NAMESPACE = "dsh-chat-feishu";
 var zh = {
   "\u98DE\u4E66": "\u98DE\u4E66",
+  "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA",
+  "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09",
   "\u98DE\u4E66\u6E20\u9053": "\u98DE\u4E66\u6E20\u9053",
   "\u5DF2\u63A5\u5165\u7684\u673A\u5668\u4EBA": "\u5DF2\u63A5\u5165\u7684\u673A\u5668\u4EBA",
   "\u8BFB\u53D6\u72B6\u6001": "\u8BFB\u53D6\u72B6\u6001",
@@ -81,6 +83,8 @@ var zh = {
 };
 var en = {
   "\u98DE\u4E66": "Feishu",
+  "\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA": "Bot not found",
+  "\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09": "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
   "\u98DE\u4E66\u6E20\u9053": "Feishu channel",
   "\u5DF2\u63A5\u5165\u7684\u673A\u5668\u4EBA": "Connected bots",
   "\u8BFB\u53D6\u72B6\u6001": "Reload",
@@ -281,11 +285,13 @@ function FeishuPage(props) {
   }, [load]);
   const { Panel, EmptyState } = chatUi.components;
   const allBots = state.value?.bots ?? [];
-  const bots = botId ? allBots.filter((bot) => bot.botId === botId || bot.id === botId) : allBots;
+  const scoped = Boolean(botId);
+  const bots = scoped ? allBots.filter((bot) => (bot?.botId ?? bot?.id ?? null) === botId) : allBots;
+  const missing = scoped && state.phase === "ready" && bots.length === 0;
   return h(
     React.Fragment,
     null,
-    h(
+    scoped ? null : h(
       Panel,
       {
         title: t("\u98DE\u4E66\u6E20\u9053"),
@@ -305,6 +311,11 @@ function FeishuPage(props) {
         description: t("\u672C\u673A\u8FD8\u6CA1\u6709\u98DE\u4E66\u673A\u5668\u4EBA\u914D\u7F6E\u3002")
       }) : null
     ),
+    scoped && state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
+    missing ? h(EmptyState, {
+      title: t("\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA"),
+      description: `${t("\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09")}\uFF1A${botId}`
+    }) : null,
     bots.map((bot) => h(BotCard, {
       key: bot.id,
       bot,

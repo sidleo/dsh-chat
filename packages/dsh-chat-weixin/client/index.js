@@ -18,6 +18,8 @@ const LOCALE_NAMESPACE = 'dsh-chat-weixin';
 
 const zh = {
   '微信': '微信',
+  '找不到这个机器人': '找不到这个机器人',
+  '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
   '微信渠道': '微信渠道',
   '已绑定的账号': '已绑定的账号',
   '扫码接入': '扫码接入',
@@ -58,6 +60,9 @@ const zh = {
 
 const en = {
   '微信': 'WeChat',
+  '找不到这个机器人': 'Bot not found',
+  '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
+    "It is not in this channel's bot list (it may have been removed, or the Host and the page are on different versions)",
   '微信渠道': 'WeChat channel',
   '已绑定的账号': 'Linked accounts',
   '扫码接入': 'Scan to link',
@@ -325,11 +330,20 @@ function WeixinPage(props) {
   }, [load]);
 
   const { Panel, EmptyState } = chatUi.components;
-  const allAccounts = state.value?.accounts ?? [];
-  const accounts = botId ? allAccounts.filter((account) => account.botId === botId) : allAccounts;
+  const allAccounts = state.value?.accounts ?? state.value?.bots ?? [];
+  /**
+   * 从机器人列表点「设置」进来时带上 botId：**只渲染这一个账号**，
+   * 渠道级的「微信渠道」「扫码接入」都不渲染——用户点的是"这个机器人的设置"。
+   */
+  const scoped = Boolean(botId);
+  const accounts = scoped
+    ? allAccounts.filter((account) => (account?.botId ?? account?.id ?? null) === botId)
+    : allAccounts;
+  // 指定了 botId 却没匹配到：明确报出来，绝不退回"显示全部账号"。
+  const missing = scoped && state.phase === 'ready' && accounts.length === 0;
 
   return h(React.Fragment, null,
-    h(Panel, {
+    scoped ? null : h(Panel, {
       title: t('微信渠道'),
       description: `dataDir：${state.value?.dataDir ?? '—'}`,
       actions: h('button', {
@@ -345,7 +359,16 @@ function WeixinPage(props) {
         description: t('本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。'),
       })
       : null),
-    h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
+    scoped && state.error
+      ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message)
+      : null,
+    missing
+      ? h(EmptyState, {
+        title: t('找不到这个机器人'),
+        description: `${t('它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）')}：${botId}`,
+      })
+      : null,
+    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
     accounts.map((account) => h(AccountCard, {
       key: account.botId, account, chatUi, connection, translate: t, onChanged: load,
     })));

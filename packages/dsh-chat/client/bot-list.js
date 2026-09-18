@@ -46,6 +46,23 @@ export function normalizeBots(value) {
   return [];
 }
 
+/**
+ * 机器人身份键。
+ *
+ * 契约字段是 `botId`；但 **host 与 client 的版本可以错位**（改 host 要重启 dsh，
+ * 改 client 刷新页面即可）：老 host 只给 `id`。这时如果读 `bot.botId` 会拿到
+ * undefined，点「设置」就把 undefined 传进渠道页，渠道页只能退回"显示全部机器人"
+ * ——**表面正常、实际进错页**，正是最难查的故障形态。所以这里按 `id` 保守兜底。
+ *
+ * @param bot - 渠道 `connection.status` 里的一台机器人。
+ * @returns 身份字符串，取不到时 null。
+ */
+export function botKeyOf(bot) {
+  if (!bot || typeof bot !== 'object') return null;
+  const key = bot.botId ?? bot.id ?? null;
+  return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
 function formatTime(value) {
   if (!value) return '—';
   const time = new Date(value);
@@ -87,12 +104,20 @@ export function BotList(props) {
   return h(Panel, {
     title: `${label()} · ${t('机器人')}`,
     description: note || null,
-    actions: h('button', {
-      type: 'button',
-      className: 'dchat-button',
-      onClick: load,
-      disabled: state.phase === 'loading',
-    }, state.phase === 'loading' ? t('读取中…') : t('重新读取')),
+    actions: h('div', { className: 'dchat-actions' },
+      // 渠道级设置（飞书 dataDir/读取状态、微信扫码接入）与"某台机器人的设置"分开：
+      // 进了单台机器人的设置页就不再掺渠道级面板，这里是指向渠道页的唯一常驻入口。
+      h('button', {
+        type: 'button',
+        className: 'dchat-button dchat-buttonLink',
+        onClick: () => onOpenSettings(null),
+      }, t('渠道设置')),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        onClick: load,
+        disabled: state.phase === 'loading',
+      }, state.phase === 'loading' ? t('读取中…') : t('重新读取'))),
   },
   state.error
     ? h('p', { className: 'dchat-error' }, `${t('读取失败')}：${state.error}`)
@@ -108,19 +133,20 @@ export function BotList(props) {
     }, t('打开渠道设置页')))
     : null,
   bots.length > 0
-    ? h('ul', { className: 'dchat-botList' }, bots.map((bot) => {
-      const title = bot.name || bot.botId;
-      // 没有名称时标题已经兜底成 botId，账号这一项就不再重复一遍。
-      const showId = Boolean(bot.botId) && bot.botId !== title;
+    ? h('ul', { className: 'dchat-botList' }, bots.map((bot, index) => {
+      const identity = botKeyOf(bot);
+      const title = bot.name || identity || t('未命名机器人');
+      // 没有名称时标题已经兜底成身份串，账号这一项就不再重复一遍。
+      const showIdentity = Boolean(identity) && identity !== title;
       return h('li', {
-        key: bot.botId, className: 'dchat-botRow',
+        key: identity ?? `row-${index}`, className: 'dchat-botRow',
       },
       h('div', { className: 'dchat-botMain' },
         h('div', { className: 'dchat-botTitle' },
           h('strong', { title }, title),
           h(StatusPill, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? '已停止') })),
         h('div', { className: 'dchat-botMeta' },
-          showId ? h('span', { className: 'dchat-code' }, bot.botId) : null,
+          showIdentity ? h('span', { className: 'dchat-code' }, identity) : null,
           h('span', null, `${t('已处理')} ${bot.handled ?? 0}`),
           h('span', null, `${t('最近')} ${formatTime(bot.lastHandledAt)}`)),
         bot.errorMessage || bot.lastError
@@ -129,7 +155,10 @@ export function BotList(props) {
       h('button', {
         type: 'button',
         className: 'dchat-button',
-        onClick: () => onOpenSettings(bot.botId),
+        // 身份取不到就不能进"这台机器人的设置"——那会静默变成"整个渠道的设置"。
+        disabled: identity === null,
+        title: identity ?? t('这台机器人没有可用的身份标识，无法单独配置'),
+        onClick: () => onOpenSettings(identity),
       }, t('设置')));
     }))
     : null);

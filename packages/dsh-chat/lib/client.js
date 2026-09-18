@@ -1882,6 +1882,9 @@ var zh = {
   "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002": "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002",
   "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA": "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA",
   "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
+  "\u672A\u547D\u540D\u673A\u5668\u4EBA": "\u672A\u547D\u540D\u673A\u5668\u4EBA",
+  "\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u53EF\u7528\u7684\u8EAB\u4EFD\u6807\u8BC6\uFF0C\u65E0\u6CD5\u5355\u72EC\u914D\u7F6E": "\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u53EF\u7528\u7684\u8EAB\u4EFD\u6807\u8BC6\uFF0C\u65E0\u6CD5\u5355\u72EC\u914D\u7F6E",
+  "\u6E20\u9053\u8BBE\u7F6E": "\u6E20\u9053\u8BBE\u7F6E",
   "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875": "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875",
   "\u2190 \u673A\u5668\u4EBA\u5217\u8868": "\u2190 \u673A\u5668\u4EBA\u5217\u8868",
   "\u5DF2\u5904\u7406": "\u5DF2\u5904\u7406",
@@ -1944,6 +1947,9 @@ var en = {
   "\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002": "One row per bot; click Settings to open its page (context enhancement, proactive delivery, workspace\u2026).",
   "\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA": "No bot on this channel yet",
   "\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "Finish onboarding on the channel page (Feishu app credentials, WeChat QR scan) and the bot shows up here.",
+  "\u672A\u547D\u540D\u673A\u5668\u4EBA": "Unnamed bot",
+  "\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u53EF\u7528\u7684\u8EAB\u4EFD\u6807\u8BC6\uFF0C\u65E0\u6CD5\u5355\u72EC\u914D\u7F6E": "This bot has no usable identity, so it cannot be configured separately",
+  "\u6E20\u9053\u8BBE\u7F6E": "Channel settings",
   "\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875": "Open channel settings",
   "\u2190 \u673A\u5668\u4EBA\u5217\u8868": "\u2190 Bot list",
   "\u5DF2\u5904\u7406": "Handled",
@@ -2199,6 +2205,11 @@ function normalizeBots(value) {
   if (Array.isArray(value?.accounts)) return value.accounts;
   return [];
 }
+function botKeyOf(bot) {
+  if (!bot || typeof bot !== "object") return null;
+  const key = bot.botId ?? bot.id ?? null;
+  return typeof key === "string" && key.length > 0 ? key : null;
+}
 function formatTime(value) {
   if (!value) return "\u2014";
   const time = new Date(value);
@@ -2228,12 +2239,23 @@ function BotList(props) {
     {
       title: `${label()} \xB7 ${t("\u673A\u5668\u4EBA")}`,
       description: note || null,
-      actions: h5("button", {
-        type: "button",
-        className: "dchat-button",
-        onClick: load,
-        disabled: state.phase === "loading"
-      }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
+      actions: h5(
+        "div",
+        { className: "dchat-actions" },
+        // 渠道级设置（飞书 dataDir/读取状态、微信扫码接入）与"某台机器人的设置"分开：
+        // 进了单台机器人的设置页就不再掺渠道级面板，这里是指向渠道页的唯一常驻入口。
+        h5("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonLink",
+          onClick: () => onOpenSettings(null)
+        }, t("\u6E20\u9053\u8BBE\u7F6E")),
+        h5("button", {
+          type: "button",
+          className: "dchat-button",
+          onClick: load,
+          disabled: state.phase === "loading"
+        }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u91CD\u65B0\u8BFB\u53D6"))
+      )
     },
     state.error ? h5("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
     state.phase !== "loading" && bots.length === 0 ? h5(EmptyState2, {
@@ -2244,13 +2266,14 @@ function BotList(props) {
       className: "dchat-button",
       onClick: () => onOpenSettings(null)
     }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
-    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot) => {
-      const title = bot.name || bot.botId;
-      const showId = Boolean(bot.botId) && bot.botId !== title;
+    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot, index) => {
+      const identity = botKeyOf(bot);
+      const title = bot.name || identity || t("\u672A\u547D\u540D\u673A\u5668\u4EBA");
+      const showIdentity = Boolean(identity) && identity !== title;
       return h5(
         "li",
         {
-          key: bot.botId,
+          key: identity ?? `row-${index}`,
           className: "dchat-botRow"
         },
         h5(
@@ -2265,7 +2288,7 @@ function BotList(props) {
           h5(
             "div",
             { className: "dchat-botMeta" },
-            showId ? h5("span", { className: "dchat-code" }, bot.botId) : null,
+            showIdentity ? h5("span", { className: "dchat-code" }, identity) : null,
             h5("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
             h5("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
           ),
@@ -2274,7 +2297,10 @@ function BotList(props) {
         h5("button", {
           type: "button",
           className: "dchat-button",
-          onClick: () => onOpenSettings(bot.botId)
+          // 身份取不到就不能进"这台机器人的设置"——那会静默变成"整个渠道的设置"。
+          disabled: identity === null,
+          title: identity ?? t("\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u53EF\u7528\u7684\u8EAB\u4EFD\u6807\u8BC6\uFF0C\u65E0\u6CD5\u5355\u72EC\u914D\u7F6E"),
+          onClick: () => onOpenSettings(identity)
         }, t("\u8BBE\u7F6E"))
       );
     })) : null
