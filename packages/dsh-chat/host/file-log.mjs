@@ -22,6 +22,43 @@ function stamp() {
   return new Date().toISOString();
 }
 
+/** 单行日志的长度上限：SDK 会把整个 axios 请求对象丢进来。 */
+const MAX_FIELD_CHARS = 2000;
+
+/** 把任意一个参数压成一行可读文本。 */
+function oneLine(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return String(value);
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}${value.code ? `（code ${value.code}）` : ''}`;
+  }
+  if (typeof value !== 'object') return String(value);
+  try {
+    const seen = new WeakSet();
+    const text = JSON.stringify(value, (key, item) => {
+      if (typeof item === 'object' && item !== null) {
+        if (seen.has(item)) return '[循环引用]';
+        seen.add(item);
+      }
+      return item;
+    });
+    if (typeof text !== 'string') return String(value);
+    return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}…` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * 拼一行日志正文。
+ *
+ * 第三方 SDK（飞书）是按 `logger.error(obj, obj)` 调的：直接 `String()` 只会写出
+ * `[object Object],[object Object]`，而日志是排查时唯一的现场——这种行等于没写。
+ */
+function describe(message, rest = []) {
+  return [message, ...rest].map(oneLine).filter((part) => part !== '').join(' ');
+}
+
 /**
  * 创建一个按大小轮转的日志文件写入口。
  *
@@ -86,7 +123,7 @@ export function withFileSink({ logger, sink, scope = '' }) {
         inner?.(message, ...rest);
       } finally {
         // 消息里通常已经带 `[dsh-chat-<渠道>]` 前缀，别再加一遍。
-        const text = String(message);
+        const text = describe(message, rest);
         const prefix = scope && !text.startsWith('[') ? `[${scope}] ` : '';
         sink.write(`${stamp()} ${level.toUpperCase().padEnd(5)} ${prefix}${text}`);
       }

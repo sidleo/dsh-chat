@@ -190,7 +190,7 @@ export function createSessionBridge({
     try {
       // 标题只有 `session/list` 的投影里有（`session/page` 不带投影）。
       // 每个会话只做一次，代价可接受。
-      const listed = await invoke('session', 'list', {}, signal);
+      const listed = await invoke('session', 'list', { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
       if (typeof title !== 'string' || !title.trim()) return;

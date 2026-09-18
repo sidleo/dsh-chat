@@ -87,3 +87,31 @@ test('logger 缺级别时补空实现，调用方不会因 undefined 崩', async
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test('对象参数被写成可读的一行：不出现 [object Object]', async () => {
+  const { withFileSink } = await import('../packages/dsh-chat/host/file-log.mjs');
+  const lines = [];
+  const sink = { write: (line) => lines.push(line), path: '/tmp/x.log' };
+  const logger = withFileSink({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    sink,
+    scope: 'dsh-chat-demo',
+  });
+
+  // 飞书 SDK 就是这么调的：两个对象。
+  logger.error([{ code: 99991672, msg: 'Access denied' }, { method_id: '6936075528890957852' }]);
+  logger.warn('普通字符串', { botId: 'bot_1' });
+  logger.error(new Error('炸了'));
+
+  assert.ok(!lines.join('\n').includes('[object Object]'), '不能出现 [object Object]');
+  assert.match(lines[0], /99991672/, '对象内容要写出来');
+  assert.match(lines[0], /Access denied/);
+  assert.match(lines[1], /bot_1/, '第二个参数也要落盘');
+  assert.match(lines[2], /Error: 炸了/, 'Error 要写成 name: message');
+
+  // 循环引用不能把日志本身弄崩。
+  const circular = { name: 'x' };
+  circular.self = circular;
+  logger.info(circular);
+  assert.match(lines[3], /循环引用/);
+});

@@ -1862,6 +1862,32 @@ var LEVELS = ["debug", "info", "warn", "error"];
 function stamp() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
+var MAX_FIELD_CHARS = 2e3;
+function oneLine(value) {
+  if (typeof value === "string") return value;
+  if (value === null || value === void 0) return String(value);
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}${value.code ? `\uFF08code ${value.code}\uFF09` : ""}`;
+  }
+  if (typeof value !== "object") return String(value);
+  try {
+    const seen = /* @__PURE__ */ new WeakSet();
+    const text = JSON.stringify(value, (key, item) => {
+      if (typeof item === "object" && item !== null) {
+        if (seen.has(item)) return "[\u5FAA\u73AF\u5F15\u7528]";
+        seen.add(item);
+      }
+      return item;
+    });
+    if (typeof text !== "string") return String(value);
+    return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}\u2026` : text;
+  } catch {
+    return String(value);
+  }
+}
+function describe(message, rest = []) {
+  return [message, ...rest].map(oneLine).filter((part) => part !== "").join(" ");
+}
 function createLogFileSink({ path, maxBytes = DEFAULT_MAX_BYTES } = {}) {
   if (typeof path !== "string" || !path) throw new TypeError("\u65E5\u5FD7\u6587\u4EF6\u9700\u8981 path\u3002");
   let queue = Promise.resolve();
@@ -1911,7 +1937,7 @@ function withFileSink({ logger, sink, scope = "" }) {
       try {
         inner?.(message, ...rest);
       } finally {
-        const text = String(message);
+        const text = describe(message, rest);
         const prefix = scope && !text.startsWith("[") ? `[${scope}] ` : "";
         sink.write(`${stamp()} ${level.toUpperCase().padEnd(5)} ${prefix}${text}`);
       }
@@ -2442,7 +2468,7 @@ function createSessionBridge({
     if (!label || namedSessions.has(sessionId)) return;
     namedSessions.add(sessionId);
     try {
-      const listed = await invoke("session", "list", {}, signal);
+      const listed = await invoke("session", "list", { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
       if (typeof title !== "string" || !title.trim()) return;
