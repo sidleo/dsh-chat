@@ -305,13 +305,29 @@ const CSS = `
   display: flex;
   gap: 8px;
   align-items: center;
-  /* 操作永不压缩；折行后靠 margin 保持右对齐。 */
+  /* 操作块自身不压缩（折行后靠下面那条 margin 保持右对齐）。 */
   flex: none;
+}
+/* 只给卡片头用：折到第二行时仍然靠右。
+   不能写在 .dchat-actions 上——auto 外边距会取消交叉轴的 stretch，
+   让"竖排容器里的操作行"退化成内容宽度（发送行的下拉框就缩成一小截）。 */
+.dchat-cardHeader > .dchat-actions {
   margin-left: auto;
 }
 .dchat-actions > * {
-  flex: none;
   white-space: nowrap;
+}
+/* 只有按钮和状态点"永不压缩"；输入类必须能缩，否则会撑出横向滚动：
+   `.dchat-select` 是 width:100%，配 flex:none 会先占满整行，再把同排的按钮挤出容器。 */
+.dchat-actions > .dchat-button,
+.dchat-actions > .dchat-status {
+  flex: none;
+}
+.dchat-actions > select,
+.dchat-actions > input {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
 }
 .dchat-button {
   border: 1px solid var(--dsw-alias-border-l2);
