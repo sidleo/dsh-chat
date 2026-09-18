@@ -1,0 +1,126 @@
+/**
+ * 布局守门：把真实组件在 549 / 360 / 320px 下渲染出来，量两件事。
+ *
+ * 1. **横向不溢出**：任何一帧 `scrollWidth <= clientWidth`。窄栏里一个 `flex: none`
+ *    打在 `width: 100%` 的下拉框上，就会把同排按钮挤出容器、整页出现横向滚动条。
+ * 2. **不逐字竖排**：按钮 / 状态点 / 分组标题必须是单行。中文的 `min-content` 只有一个字，
+ *    flex 一旦把它们压缩，就会出现"运行正/常""设/置"这种一字一行。
+ *
+ * 这两类问题语法与单测都发现不了（构建通过、测试全绿、真机上才炸），只能真的渲染。
+ * 页面入口是 `scripts/layout-fixture.mjs`，断言在 Node 侧做。
+ *
+ * 用法：node scripts/check-layout.mjs
+ *
+ * @module dsh-chat/check-layout
+ */
+
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { build } from 'esbuild';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** 找本机 Chrome；找不到就跳过（不能让没有 Chrome 的机器跑不了 check）。 */
+function findChrome() {
+  const candidates = [
+    process.env.DSH_CHROME,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ].filter(Boolean);
+  return candidates.find((path) => existsSync(path)) ?? null;
+}
+
+const chrome = findChrome();
+if (!chrome) {
+  console.log('· 跳过布局守门：本机没找到 Chrome（可用 DSH_CHROME 指定路径）');
+  process.exit(0);
+}
+
+const workDir = mkdtempSync(join(tmpdir(), 'dsh-chat-layout-'));
+try {
+  const bundlePath = join(workDir, 'layout.js');
+  await build({
+    entryPoints: [join(root, 'scripts/layout-fixture.mjs')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    outfile: bundlePath,
+    define: { 'process.env.NODE_ENV': '"development"' },
+    logLevel: 'warning',
+  });
+
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+<style>
+:root{
+--dsw-font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#f2f3f5;
+--dsw-alias-border-l1:#e5e6eb;--dsw-alias-border-l2:#dee0e3;--dsw-alias-border-l3:#d0d3d6;
+--dsw-alias-label-primary:#1f2329;--dsw-alias-label-secondary:#646a73;--dsw-alias-label-tertiary:#8f959e;
+--dsw-alias-brand-primary:#3370ff;--dsw-alias-link:#3370ff;
+--dsw-alias-interactive-bg-hover:rgba(31,35,41,.08);
+--dsw-alias-state-success-primary:#34c724;--dsw-alias-state-warn-primary:#ff8800;
+--dsw-alias-state-error-primary:#f54a45;--dsw-alias-separator-primary:#e5e6eb;
+--dsw-alias-markdown-code-block:#f2f3f5;
+--dsw-font-markdown-code-block-small:ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw-alias-label-primary)}
+.frame{padding:14px 18px}
+</style></head><body><div id="root"></div>
+<script src="./layout.js"></script></body></html>`;
+  const htmlPath = join(workDir, 'layout.html');
+  writeFileSync(htmlPath, html);
+
+  const dom = execFileSync(chrome, [
+    '--headless',
+    '--disable-gpu',
+    '--hide-scrollbars',
+    '--virtual-time-budget=8000',
+    '--dump-dom',
+    `file://${htmlPath}`,
+  ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+
+  const matched = /<pre id="dsh-layout-result">([\s\S]*?)<\/pre>/.exec(dom);
+  if (!matched) {
+    const error = /<pre id="dsh-layout-error">([\s\S]*?)<\/pre>/.exec(dom)?.[1];
+    console.error('布局守门失败：页面没有产出测量结果。');
+    if (error) console.error(`  页面报错：${error.slice(0, 600)}`);
+    process.exit(1);
+  }
+  const results = JSON.parse(matched[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+
+  const failures = [];
+  if (results.length === 0) failures.push('没有测到任何帧（测试本身失效了）');
+  for (const frame of results) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    if (!(frame.cards > 0)) {
+      failures.push(`${where}: 没有渲染出卡片（测试本身失效了）`);
+      continue;
+    }
+    if (frame.overflow > 1) {
+      const who = (frame.widest ?? []).map((item) => `${item.selector}(+${item.over})`).join('、');
+      failures.push(`${where}: 横向溢出 ${frame.overflow}px${who ? ` —— ${who}` : ''}`);
+    }
+    for (const item of frame.tall) {
+      failures.push(`${where}: 「${item.text}」被折成多行（高 ${item.height}px > ${item.limit}px）`);
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error(`布局守门失败（${failures.length} 项）：`);
+    for (const failure of failures) console.error(`  ✗ ${failure}`);
+    process.exit(1);
+  }
+  console.log(`布局守门通过：${results.length} 帧（549/360/320px × ${new Set(results.map((item) => item.scenario)).size} 个场景）`);
+} finally {
+  rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+}

@@ -1904,6 +1904,14 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+/* \u540D\u5355\u91CC\u7684 id \u53EF\u80FD\u5F88\u957F\uFF08open_id \u6709 35 \u5B57\u7B26\uFF09\u3002\u5B83\u662F flex \u9879\uFF0C\u9ED8\u8BA4 min-width:auto
+   \u4E0D\u80AF\u7F29\uFF0C\u5C31\u4F1A\u628A\u540C\u6392\u7684\u52FE\u9009\u6846\u4E0E\u6309\u94AE\u6324\u51FA\u5BB9\u5668\uFF08\u7A84\u680F\u76F4\u63A5\u6A2A\u5411\u6EA2\u51FA\uFF09\u3002 */
+.dchat-listItem > .dchat-code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;

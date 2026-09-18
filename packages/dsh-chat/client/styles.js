@@ -215,6 +215,14 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+/* 名单里的 id 可能很长（open_id 有 35 字符）。它是 flex 项，默认 min-width:auto
+   不肯缩，就会把同排的勾选框与按钮挤出容器（窄栏直接横向溢出）。 */
+.dchat-listItem > .dchat-code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
