@@ -43,14 +43,15 @@ export function createChannelRail() {
     /**
      * 注册一个渠道的显示元数据。
      *
-     * @param definition - { id, order, label, logo, sessionBadge, capabilities }。
+     * @param definition - { id, order, label, logo, icon, sessionBadge, capabilities }。
+     *   `icon` = `{ svg }`：渠道的图标（设置页卡片与侧边栏会话行共用同一份）。
      *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
      *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
      */
     register(definition) {
       if (!isPlainObject(definition)) throw new TypeError('chatChannels.register 需要一份渠道元数据对象。');
-      const { id, order, label, logo, sessionBadge, capabilities } = definition;
+      const { id, order, label, logo, icon, sessionBadge, capabilities } = definition;
       if (typeof id !== 'string' || !CHANNEL_ID_PATTERN.test(id)) {
         throw new TypeError('渠道 id 必须是 2–32 位小写字母/数字/连字符，且以字母开头。');
       }
@@ -60,6 +61,11 @@ export function createChannelRail() {
       if (!Number.isFinite(order)) throw new TypeError('渠道 order 必须是有限数字。');
       if (capabilities !== undefined && !isPlainObject(capabilities)) {
         throw new TypeError('渠道 capabilities 必须是对象。');
+      }
+      if (icon !== undefined) {
+        if (!isPlainObject(icon) || typeof icon.svg !== 'string' || !icon.svg.trim().startsWith('<svg')) {
+          throw new TypeError('渠道 icon 需要 { svg: "<svg …>" }。');
+        }
       }
       if (sessionBadge !== undefined) {
         if (!isPlainObject(sessionBadge) || typeof sessionBadge.text !== 'string' || !sessionBadge.text) {
@@ -72,6 +78,8 @@ export function createChannelRail() {
         order,
         label: typeof label === 'function' ? label : () => label,
         logo: logo ?? null,
+        // 渠道图标（SVG 字符串）：设置页左栏卡片与侧边栏会话行徽标共用。
+        icon: icon === undefined ? null : Object.freeze({ svg: icon.svg }),
         sessionBadge: sessionBadge === undefined
           ? null
           : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),

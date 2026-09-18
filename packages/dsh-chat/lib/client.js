@@ -76,14 +76,15 @@ function createChannelRail() {
     /**
      * 注册一个渠道的显示元数据。
      *
-     * @param definition - { id, order, label, logo, sessionBadge, capabilities }。
+     * @param definition - { id, order, label, logo, icon, sessionBadge, capabilities }。
+     *   `icon` = `{ svg }`：渠道的图标（设置页卡片与侧边栏会话行共用同一份）。
      *   `sessionBadge` = `{ text, color }`：侧边栏会话行里显示的渠道徽标
      *   （没有会话行插槽，只能靠 hub 的 DOM 增强渲染，见 client/session-badges.js）。
      * @returns 注销函数。
      */
     register(definition) {
       if (!isPlainObject(definition)) throw new TypeError("chatChannels.register \u9700\u8981\u4E00\u4EFD\u6E20\u9053\u5143\u6570\u636E\u5BF9\u8C61\u3002");
-      const { id, order, label, logo, sessionBadge, capabilities } = definition;
+      const { id, order, label, logo, icon, sessionBadge, capabilities } = definition;
       if (typeof id !== "string" || !CHANNEL_ID_PATTERN.test(id)) {
         throw new TypeError("\u6E20\u9053 id \u5FC5\u987B\u662F 2\u201332 \u4F4D\u5C0F\u5199\u5B57\u6BCD/\u6570\u5B57/\u8FDE\u5B57\u7B26\uFF0C\u4E14\u4EE5\u5B57\u6BCD\u5F00\u5934\u3002");
       }
@@ -93,6 +94,11 @@ function createChannelRail() {
       if (!Number.isFinite(order)) throw new TypeError("\u6E20\u9053 order \u5FC5\u987B\u662F\u6709\u9650\u6570\u5B57\u3002");
       if (capabilities !== void 0 && !isPlainObject(capabilities)) {
         throw new TypeError("\u6E20\u9053 capabilities \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+      }
+      if (icon !== void 0) {
+        if (!isPlainObject(icon) || typeof icon.svg !== "string" || !icon.svg.trim().startsWith("<svg")) {
+          throw new TypeError('\u6E20\u9053 icon \u9700\u8981 { svg: "<svg \u2026>" }\u3002');
+        }
       }
       if (sessionBadge !== void 0) {
         if (!isPlainObject(sessionBadge) || typeof sessionBadge.text !== "string" || !sessionBadge.text) {
@@ -105,6 +111,8 @@ function createChannelRail() {
         order,
         label: typeof label === "function" ? label : () => label,
         logo: logo ?? null,
+        // 渠道图标（SVG 字符串）：设置页左栏卡片与侧边栏会话行徽标共用。
+        icon: icon === void 0 ? null : Object.freeze({ svg: icon.svg }),
         sessionBadge: sessionBadge === void 0 ? null : Object.freeze({ text: sessionBadge.text, color: sessionBadge.color ?? null }),
         capabilities: Object.freeze({ ...capabilities ?? {} })
       });
@@ -1203,6 +1211,17 @@ var CSS = `
   font-weight: 600;
   flex: none;
 }
+.dchat-channelMarkIcon {
+  width: auto;
+  height: auto;
+  border: 0;
+  background: none;
+}
+.dchat-channelMarkIcon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
 .dchat-channelLabel {
   display: flex;
   flex-direction: column;
@@ -2034,7 +2053,8 @@ function installSessionBadges({
       badges.set(entry.id, {
         channel: entry.id,
         label: String(label ?? entry.id),
-        uri: badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
+        // 优先用渠道自己的图标（和设置页左栏同一份）；没给图标才退回字徽标。
+        uri: typeof entry.icon?.svg === "string" ? `data:image/svg+xml,${encodeURIComponent(entry.icon.svg)}` : badgeUri({ text: badge.text, color: badge.color ?? "#3370ff" })
       });
     }
     style.textContent = stylesheet(Object.fromEntries(
@@ -2108,6 +2128,11 @@ var TONES2 = Object.freeze({
   reconnecting: "warning",
   failed: "error"
 });
+function normalizeBots(value) {
+  if (Array.isArray(value?.bots)) return value.bots;
+  if (Array.isArray(value?.accounts)) return value.accounts;
+  return [];
+}
 function formatTime(value) {
   if (!value) return "\u2014";
   const time = new Date(value);
@@ -2122,8 +2147,7 @@ function BotList(props) {
   const load = React6.useCallback(() => {
     setState((current) => ({ ...current, phase: "loading", error: null }));
     chatUi.callChannelRpc(connection, channelId, "connection.status", {}).then((result) => {
-      const value = chatUi.unwrapRpc(result);
-      setState({ phase: "ready", bots: value?.bots ?? [], error: null });
+      setState({ phase: "ready", bots: normalizeBots(chatUi.unwrapRpc(result)), error: null });
     }).catch((error) => {
       setState({ phase: "error", bots: [], error: error?.message ?? String(error) });
     });
@@ -2137,7 +2161,6 @@ function BotList(props) {
     Panel2,
     {
       title: `${label()} \xB7 ${t("\u673A\u5668\u4EBA")}`,
-      description: t("\u6BCF\u4E2A\u673A\u5668\u4EBA\u4E00\u884C\uFF1B\u70B9\u300C\u8BBE\u7F6E\u300D\u8FDB\u5165\u5B83\u7684\u8BBE\u7F6E\u9875\uFF08\u4E0A\u4E0B\u6587\u589E\u5F3A\u3001\u4E3B\u52A8\u6295\u9012\u3001\u5DE5\u4F5C\u533A\u2026\uFF09\u3002"),
       actions: h5("button", {
         type: "button",
         className: "dchat-button",
@@ -2299,6 +2322,14 @@ var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-weixin"
 ]);
 function ChannelMark({ entry }) {
+  if (typeof entry.icon?.svg === "string") {
+    return h7("span", {
+      // 有真图标就不套那个"字母块"的边框与底色，让它看起来就是应用图标。
+      className: "dchat-channelMark dchat-channelMarkIcon",
+      "aria-hidden": "true",
+      dangerouslySetInnerHTML: { __html: entry.icon.svg }
+    });
+  }
   if (typeof entry.logo === "function") {
     return h7("span", { className: "dchat-channelMark", "aria-hidden": "true" }, h7(entry.logo));
   }

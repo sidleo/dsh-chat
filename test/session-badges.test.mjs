@@ -52,3 +52,12 @@ test('不是渠道标题的行、以及徽标未就绪的渠道都不动', () =>
   assert.equal(findChannelTitle(prefixed, [['feishu', '飞书']]), null, '渠道对不上也不动');
   assert.equal(findChannelTitle(null, [['feishu', '飞书']]), null);
 });
+
+test('机器人名单兼容 bots/accounts：老渠道 host 也不能显示成"没有机器人"', async () => {
+  const { normalizeBots } = await import('../packages/dsh-chat/client/bot-list.js');
+  assert.deepEqual(normalizeBots({ bots: [{ botId: 'a' }] }), [{ botId: 'a' }]);
+  assert.deepEqual(normalizeBots({ accounts: [{ botId: 'b' }] }), [{ botId: 'b' }], '老字段也要认');
+  assert.deepEqual(normalizeBots({ bots: [], accounts: [{ botId: 'b' }] }), [], '有 bots 就以内为准');
+  assert.deepEqual(normalizeBots(undefined), []);
+  assert.deepEqual(normalizeBots({}), []);
+});

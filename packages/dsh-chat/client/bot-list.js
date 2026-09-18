@@ -31,6 +31,21 @@ const TONES = Object.freeze({
   failed: 'error',
 });
 
+/**
+ * 从渠道的 `connection.status` 里取机器人名单。
+ *
+ * 契约里的规范字段是 `bots`；早期渠道只返回 `accounts`（微信就是这样），
+ * 所以这里按**保守方向**兼容两种键——否则升级期会出现"明明配了机器人却显示没有"。
+ *
+ * @param value - `connection.status` 的业务值。
+ * @returns 机器人数组（永远不是 undefined）。
+ */
+export function normalizeBots(value) {
+  if (Array.isArray(value?.bots)) return value.bots;
+  if (Array.isArray(value?.accounts)) return value.accounts;
+  return [];
+}
+
 function formatTime(value) {
   if (!value) return '—';
   const time = new Date(value);
@@ -55,8 +70,7 @@ export function BotList(props) {
     setState((current) => ({ ...current, phase: 'loading', error: null }));
     chatUi.callChannelRpc(connection, channelId, 'connection.status', {})
       .then((result) => {
-        const value = chatUi.unwrapRpc(result);
-        setState({ phase: 'ready', bots: value?.bots ?? [], error: null });
+        setState({ phase: 'ready', bots: normalizeBots(chatUi.unwrapRpc(result)), error: null });
       })
       .catch((error) => {
         setState({ phase: 'error', bots: [], error: error?.message ?? String(error) });
@@ -72,7 +86,6 @@ export function BotList(props) {
 
   return h(Panel, {
     title: `${label()} · ${t('机器人')}`,
-    description: t('每个机器人一行；点「设置」进入它的设置页（上下文增强、主动投递、工作区…）。'),
     actions: h('button', {
       type: 'button',
       className: 'dchat-button',

@@ -83,6 +83,17 @@ const CSS = `
   font-weight: 600;
   flex: none;
 }
+.dchat-channelMarkIcon {
+  width: auto;
+  height: auto;
+  border: 0;
+  background: none;
+}
+.dchat-channelMarkIcon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
 .dchat-channelLabel {
   display: flex;
   flex-direction: column;
