@@ -102,3 +102,19 @@ test('hub 共享组件（用渠道的 t 渲染）的文案键在每个渠道字�
     }
   }
 });
+
+test('英文词典里不允许"值等于键"（那等于没翻译，界面上会中英混排）', () => {
+  // 混排的成因就是这个：某个键只补了中文，英文直接抄了键名；英文界面下这个键
+  // 会回落成中文原文，于是同一张卡片一半英文一半中文（真机上出现过）。
+  const offenders = [];
+  for (const entry of PACKAGES) {
+    const file = join(ROOT, entry.dictionary);
+    const source = readFileSync(file, 'utf8');
+    const match = source.match(/const en = \{([\s\S]*?)\n\};/);
+    assert.ok(match, `${entry.dictionary} 里找不到 en 字典`);
+    for (const line of match[1].matchAll(/^\s*'([^']*)':\s*'([^']*)',\s*$/gm)) {
+      if (line[1] === line[2]) offenders.push(`${entry.name} :: ${line[1]}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `这些键的英文与中文一模一样：\n${offenders.join('\n')}`);
+});
