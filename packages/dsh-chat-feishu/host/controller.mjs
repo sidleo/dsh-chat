@@ -154,7 +154,10 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       error: record.error ?? null,
       errorMessage: record.errorMessage ?? null,
       connected: record.gateway?.isConnected?.() === true,
-      ownerCount: bot.ownerOpenIds.length,
+      // 通配符（`*`）是"没有记录属主"，不该算成一个属主——否则设置页显示"属主 1 人"，
+      // 而实际上没有人能绕过访问策略。
+      ownerCount: bot.ownerOpenIds.filter((id) => id !== '*').length,
+      ownersWildcard: bot.ownerOpenIds.includes('*'),
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),

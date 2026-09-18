@@ -127059,8 +127059,8 @@ function stripMentions(text, mentions) {
   }
   return result.trim();
 }
-function isOwner(bot, senderId) {
-  return bot.ownerOpenIds.includes("*") || bot.ownerOpenIds.includes(senderId);
+function isOwner(policyService, bot, senderId) {
+  return policyService?.isOwnerId?.(bot.ownerOpenIds, senderId) === true;
 }
 function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   if (!bot?.id) throw new TypeError("\u98DE\u4E66\u6865\u9700\u8981\u673A\u5668\u4EBA\u914D\u7F6E\u3002");
@@ -127141,7 +127141,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       policy: accessPolicy,
       conversationType,
       senderIds: [senderId],
-      isOwner: isOwner(bot, senderId)
+      isOwner: isOwner(deps.accessPolicy, bot, senderId)
     });
     if (!messageAccess.allowed) {
       logger.info?.(
@@ -127257,7 +127257,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         conversationType,
         senderIds: [senderId],
         isCommand: true,
-        isOwner: isOwner(bot, senderId)
+        isOwner: isOwner(deps.accessPolicy, bot, senderId)
       });
       if (!commandAccess.allowed && text.startsWith("/")) {
         logger.info?.(`[dsh-chat-feishu] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${bot.id} sender=${senderId}\uFF08${commandAccess.reason}\uFF09`);
@@ -127275,7 +127275,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         conversationType,
         senderId,
         // 属主判定只有渠道知道（属主名单在渠道配置里），带上给命令内核用。
-        isOwner: isOwner(bot, senderId),
+        isOwner: isOwner(deps.accessPolicy, bot, senderId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: "\u98DE\u4E66"
       }).catch((error) => {
@@ -127507,7 +127507,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         key,
         conversationType,
         senderId: operatorId,
-        isOwner: isOwner(bot, operatorId),
+        isOwner: isOwner(deps.accessPolicy, bot, operatorId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: "\u98DE\u4E66"
       }).catch((error) => {
@@ -127598,7 +127598,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         policy: accessPolicy,
         conversationType: candidate.conversationType,
         senderIds: [operatorId],
-        isOwner: isOwner(bot, operatorId)
+        isOwner: isOwner(deps.accessPolicy, bot, operatorId)
       });
       if (!access.allowed) continue;
       if (deps.interactions?.offer?.({
@@ -128864,7 +128864,10 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       error: record.error ?? null,
       errorMessage: record.errorMessage ?? null,
       connected: record.gateway?.isConnected?.() === true,
-      ownerCount: bot.ownerOpenIds.length,
+      // 通配符（`*`）是"没有记录属主"，不该算成一个属主——否则设置页显示"属主 1 人"，
+      // 而实际上没有人能绕过访问策略。
+      ownerCount: bot.ownerOpenIds.filter((id) => id !== "*").length,
+      ownersWildcard: bot.ownerOpenIds.includes("*"),
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),

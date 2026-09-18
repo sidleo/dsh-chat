@@ -180,3 +180,20 @@ test('默认策略与描述文案', () => {
     '名单内 2 人可用');
   assert.equal(describeAccessScope(null, 'direct'), '未设置（仅属主可用）');
 });
+
+test('属主判定：`*` 是"没有属主"，不是"人人都是属主"', async () => {
+  const { hasWildcardOwner, isOwnerId } = await import('../packages/dsh-chat/shared/access-policy.mjs');
+
+  assert.equal(hasWildcardOwner(['*']), true);
+  assert.equal(hasWildcardOwner(['ou_a', '*']), true);
+  assert.equal(hasWildcardOwner(['ou_a']), false);
+  assert.equal(hasWildcardOwner(null), false);
+
+  assert.equal(isOwnerId(['ou_a'], 'ou_a'), true, '具体 id 命中就是属主');
+  assert.equal(isOwnerId(['*'], 'ou_anyone'), false, '`*` 不授权任何人');
+  assert.equal(isOwnerId(['*', 'ou_a'], 'ou_a'), true, '`*` 与具体 id 并存时，具体 id 仍是属主');
+  assert.equal(isOwnerId(['*', 'ou_a'], 'ou_b'), false);
+  assert.equal(isOwnerId([], 'ou_a'), false);
+  assert.equal(isOwnerId(null, 'ou_a'), false);
+  assert.equal(isOwnerId(['ou_a'], ''), false);
+});

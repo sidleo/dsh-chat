@@ -376,17 +376,8 @@ test('状态存储：按消息 id 去重且能读出旧的会话绑定', async (
   }
 });
 
-test('放行规则：通配属主、指定属主、访问策略 open 三种都放行', async () => {
-  // 通配属主（现实里群机器人就是这样绑的：ownerOpenIds=['*']）
-  const wildcard = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['*'] } });
-  try {
-    await wildcard.bridge.accept(messageEvent({ messageId: 'om_w', senderId: 'ou_anyone' }));
-    assert.equal(wildcard.gateway.calls.replies.at(-1).text, '最终答案');
-  } finally {
-    await wildcard.cleanup();
-  }
-
-  // 指定属主
+test('放行规则：指定属主绕过策略；`*` 只表示"没有属主"，不授权任何人绕过', async () => {
+  // 指定属主：绕过策略，照常放行。
   const owner = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['ou_owner'] } });
   try {
     await owner.bridge.accept(messageEvent({ messageId: 'om_o', senderId: 'ou_owner' }));
@@ -395,10 +386,42 @@ test('放行规则：通配属主、指定属主、访问策略 open 三种都�
     await owner.cleanup();
   }
 
-  // 访问策略 open（旧配置里 direct 为 open 的机器人）
+  /**
+   * `['*']`（绑定时没记录属主）**不是**"人人都是属主"。
+   * 上游把它当成人人属主，于是这台机器人的访问策略完全失效——真机上的表现是
+   * "我没配黄忠，但他在群里 @ 一下就把任务跑起来了"。
+   */
+  const wildcard = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['*'] } });
+  try {
+    await wildcard.bridge.accept(messageEvent({ messageId: 'om_w', senderId: 'ou_anyone' }));
+    assert.equal(wildcard.gateway.calls.replies.length, 0, '`*` 不能让任何人绕过策略');
+    assert.equal(wildcard.gateway.calls.cards.length, 0);
+  } finally {
+    await wildcard.cleanup();
+  }
+
+  // 同一台 `*` 机器人：名单内的人照样能用（策略才是唯一的判据）。
+  const listed = await makeBridge({
+    bot: { ...BOT, ownerOpenIds: ['*'] },
+    policy: {
+      direct: { mode: 'allowlist', open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] }, allowlist: { users: [{ id: 'ou_listed', canExecuteCommands: true }] } },
+      group: { mode: 'allowlist', open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] }, allowlist: { users: [{ id: 'ou_listed', canExecuteCommands: true }] } },
+    },
+  });
+  try {
+    await listed.bridge.accept(messageEvent({ messageId: 'om_l', senderId: 'ou_listed' }));
+    assert.equal(listed.gateway.calls.replies.at(-1).text, '最终答案');
+  } finally {
+    await listed.cleanup();
+  }
+
+  // 访问策略 open（旧配置里 direct 为 open 的机器人）：任何人可用，与属主无关。
   const open = await makeBridge({
     bot: { ...BOT, ownerOpenIds: ['ou_someone_else'] },
-    policy: { direct: { mode: 'open' }, group: { mode: 'allowlist' } },
+    policy: {
+      direct: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+      group: { mode: 'allowlist', open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+    },
   });
   try {
     await open.bridge.accept(messageEvent({ messageId: 'om_p', senderId: 'ou_anyone' }));

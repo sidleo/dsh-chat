@@ -255,7 +255,8 @@ export function createWeixinRuntime({
       policy: record.accessPolicy,
       conversationType: 'direct',
       senderIds: [sender],
-      isOwner: sender === account.ownerUserId,
+      // 属主判定走与飞书同一份规则（`*` 表示没有属主，不授权任何人绕过策略）。
+        isOwner: deps.accessPolicy?.isOwnerId?.([account.ownerUserId], sender) === true,
     });
     if (!access.allowed) {
       logger.info?.(`[dsh-chat-weixin] 忽略未放行的消息：${account.botId} sender=${sender}（${access.reason}）`);
@@ -300,7 +301,7 @@ export function createWeixinRuntime({
           conversationType: 'direct',
           senderIds: [sender],
           isCommand: true,
-          isOwner: sender === account.ownerUserId,
+          isOwner: deps.accessPolicy?.isOwnerId?.([account.ownerUserId], sender) === true,
         });
         if (!commandAccess.allowed) {
           logger.info?.(`[dsh-chat-weixin] 命令被拒绝：${account.botId} sender=${sender}（${commandAccess.reason}）`);
@@ -318,7 +319,7 @@ export function createWeixinRuntime({
         conversationType: 'direct',
         senderId: sender,
         // 属主判定只有渠道知道（属主在渠道配置里），带上给命令内核用。
-        isOwner: sender === account.ownerUserId,
+        isOwner: deps.accessPolicy?.isOwnerId?.([account.ownerUserId], sender) === true,
         botLabel: account.botName ?? account.botId,
         channelLabel: '微信',
       }).catch((cause) => {

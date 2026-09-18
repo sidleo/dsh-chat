@@ -96,15 +96,20 @@ function stripMentions(text, mentions) {
 }
 
 /**
- * 是否本机器人的属主。`ownerOpenIds` 里的 `*` 表示绑定时没有记录单一属主，
- * 此时任何人都算"属主"（上游就是这么写的）。
+ * 是否本机器人的属主（属主绕过访问策略）。
+ *
+ * 规则在 `shared/access-policy.mjs`（所有渠道一致）：`ownerOpenIds` 里的 `*` 表示
+ * **没有记录属主**（公开机器人），**不授权任何人绕过策略**。上游 dsh-im 把它当成
+ * "人人都是属主"，结果这台机器人的访问策略完全失效——名单外的人 @ 一下就能用。
  *
  * @param bot - 机器人配置。
  * @param senderId - 发送者 open_id。
  * @returns true 表示属主。
  */
-function isOwner(bot, senderId) {
-  return bot.ownerOpenIds.includes('*') || bot.ownerOpenIds.includes(senderId);
+function isOwner(policyService, bot, senderId) {
+  // 规则实现在 hub 的 access-policy 里，渠道经运行期服务取用（不 import hub 包）。
+  // 服务缺席时返回 false：那样"没人绕过策略"，是保守方向。
+  return policyService?.isOwnerId?.(bot.ownerOpenIds, senderId) === true;
 }
 
 /**
@@ -221,7 +226,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       policy: accessPolicy,
       conversationType,
       senderIds: [senderId],
-      isOwner: isOwner(bot, senderId),
+      isOwner: isOwner(deps.accessPolicy, bot, senderId),
     });
     if (!messageAccess.allowed) {
       logger.info?.(
@@ -352,7 +357,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         conversationType,
         senderIds: [senderId],
         isCommand: true,
-        isOwner: isOwner(bot, senderId),
+        isOwner: isOwner(deps.accessPolicy, bot, senderId),
       });
       if (!commandAccess.allowed && text.startsWith('/')) {
         logger.info?.(`[dsh-chat-feishu] 命令被拒绝：${bot.id} sender=${senderId}（${commandAccess.reason}）`);
@@ -370,7 +375,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         conversationType,
         senderId,
         // 属主判定只有渠道知道（属主名单在渠道配置里），带上给命令内核用。
-        isOwner: isOwner(bot, senderId),
+        isOwner: isOwner(deps.accessPolicy, bot, senderId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: '飞书',
       }).catch((error) => {
@@ -665,7 +670,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         key,
         conversationType,
         senderId: operatorId,
-        isOwner: isOwner(bot, operatorId),
+        isOwner: isOwner(deps.accessPolicy, bot, operatorId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: '飞书',
       }).catch((error) => {
@@ -767,7 +772,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         policy: accessPolicy,
         conversationType: candidate.conversationType,
         senderIds: [operatorId],
-        isOwner: isOwner(bot, operatorId),
+        isOwner: isOwner(deps.accessPolicy, bot, operatorId),
       });
       if (!access.allowed) continue;
       if (deps.interactions?.offer?.({

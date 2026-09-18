@@ -72,9 +72,12 @@ __export(access_policy_exports, {
   ACCESS_CONVERSATION_TYPES: () => ACCESS_CONVERSATION_TYPES,
   ACCESS_POLICY_MODES: () => ACCESS_POLICY_MODES,
   ACCESS_RESULTS: () => ACCESS_RESULTS,
+  OWNER_WILDCARD: () => OWNER_WILDCARD,
   defaultAccessPolicy: () => defaultAccessPolicy,
   describeAccessScope: () => describeAccessScope,
   evaluateAccess: () => evaluateAccess,
+  hasWildcardOwner: () => hasWildcardOwner,
+  isOwnerId: () => isOwnerId,
   normalizeAccessPolicy: () => normalizeAccessPolicy,
   validateAccessPolicy: () => validateAccessPolicy
 });
@@ -139,6 +142,14 @@ function validateScope(input) {
     }),
     allowlist: Object.freeze({ users: Object.freeze(input.allowlist.users.map(validateUser)) })
   });
+}
+var OWNER_WILDCARD = "*";
+function hasWildcardOwner(ownerIds) {
+  return Array.isArray(ownerIds) && ownerIds.includes(OWNER_WILDCARD);
+}
+function isOwnerId(ownerIds, senderId) {
+  if (!Array.isArray(ownerIds) || typeof senderId !== "string" || !senderId) return false;
+  return ownerIds.some((id) => id !== OWNER_WILDCARD && id === senderId);
 }
 function validateAccessPolicy(input) {
   if (!hasExactKeys(input, ["direct", "group"])) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u8BBF\u95EE\u7B56\u7565\u3002");

@@ -91,6 +91,34 @@ function validateScope(input) {
 }
 
 /**
+ * 属主名单里的通配符。
+ *
+ * 历史配置（上游 dsh-im 绑定时没记录属主）会写成 `['*']`。它表示**这台机器人没有属主**
+ * （公开机器人），**不是**"人人都是属主"——后者会让策略引擎第一步的属主绕过生效，
+ * 于是这台机器人的访问策略完全失效：名单里没有的人也能照常使用（真机上出现过）。
+ */
+export const OWNER_WILDCARD = '*';
+
+/** @returns 该机器人是否"公开"（属主名单里只有通配符）。 */
+export function hasWildcardOwner(ownerIds) {
+  return Array.isArray(ownerIds) && ownerIds.includes(OWNER_WILDCARD);
+}
+
+/**
+ * 判定发送者是否是属主（属主由调用方绕过访问策略）。
+ *
+ * 通配符**不算属主**：它只说明"没记录属主"，不授权任何人绕过策略。
+ *
+ * @param ownerIds - 该应用的属主 id 名单。
+ * @param senderId - 发送者在**该应用**里的平台 id。
+ * @returns true 表示属主。
+ */
+export function isOwnerId(ownerIds, senderId) {
+  if (!Array.isArray(ownerIds) || typeof senderId !== 'string' || !senderId) return false;
+  return ownerIds.some((id) => id !== OWNER_WILDCARD && id === senderId);
+}
+
+/**
  * 严格校验一份完整策略（保存路径用）。
  *
  * @param input - `{ direct, group }`。

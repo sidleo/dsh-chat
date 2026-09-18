@@ -36,6 +36,7 @@ const zh = {
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。',
   '从会话里选…': '从会话里选…',
   '去开通权限': '去开通权限',
+  '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。': '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。',
   '飞书': '飞书',
   '找不到这台机器人': '找不到这台机器人',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）': '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）',
@@ -93,6 +94,8 @@ const en = {
   '来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。': 'Source fields are sent only when the incoming message already carries them; no extra platform calls are made.',
   '从会话里选…': 'Pick a conversation…',
   '去开通权限': 'Grant the permission',
+  '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。':
+    'The owner list is * (this bot has no owner bypass): who may use it is decided entirely by the access policy below.',
   '飞书': 'Feishu',
   '找不到这台机器人': 'Bot not found',
   '它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）':
@@ -242,6 +245,11 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   },
   status.errorMessage
     ? h('p', { className: 'dchat-error', role: 'alert' }, status.errorMessage)
+    : null,
+  // 属主名单是 `*`（绑定时没记录属主）时必须说清楚：这台机器人**没有属主绕过**，
+  // 一切按访问策略判定，所以 /allow 会回"只有属主"，名单要在下面的「访问策略」里改。
+  status.ownersWildcard
+    ? h('p', { className: 'dchat-cardDescription' }, t('属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。'))
     : null,
   // 名字拿不到（多为缺权限）时说明原因并给出开通入口：否则用户只能看到一串 id 猜原因。
   status.nameHint
