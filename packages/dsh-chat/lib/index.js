@@ -1576,7 +1576,7 @@ function normalizeStoredTargets(value) {
   }
   return targets;
 }
-function createDeliveryService({ settings, logger = console }) {
+function createDeliveryService({ settings, sessionStore = null, logger = console }) {
   if (!settings?.read) throw new TypeError("\u6295\u9012\u670D\u52A1\u9700\u8981\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E\u5B58\u50A8\u3002");
   const providers = /* @__PURE__ */ new Map();
   return Object.freeze({
@@ -1604,18 +1604,32 @@ function createDeliveryService({ settings, logger = console }) {
     async list({ channelId, botId }) {
       const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
       const provider = providers.get(channelId);
-      let discovered = [];
+      const discovered = [];
       if (typeof provider?.discover === "function") {
         try {
-          discovered = await provider.discover({ botId });
+          discovered.push(...await provider.discover({ botId }) ?? []);
         } catch (error) {
           logger.warn?.(`[dsh-chat] \u6E20\u9053 ${channelId} \u53D1\u73B0\u6295\u9012\u76EE\u6807\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        }
+      }
+      if (typeof provider?.targetFromKey === "function" && sessionStore) {
+        try {
+          await sessionStore.ready?.();
+          for (const key of Object.keys(sessionStore.entries(channelId, botId))) {
+            try {
+              const target = provider.targetFromKey(key);
+              if (target) discovered.push(target);
+            } catch {
+            }
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u7ED1\u5B9A\u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
       }
       const savedList = Object.values(saved);
       const known = new Set(savedList.map(routeKey));
       const candidates = [];
-      for (const candidate of Array.isArray(discovered) ? discovered : []) {
+      for (const candidate of discovered) {
         try {
           const target = normalizeTarget(candidate);
           const key = routeKey(target);
@@ -3123,7 +3137,7 @@ function apply(ctx, config = {}) {
     interactions
   });
   const rpc = createRpcCarrier(ctx, { logger });
-  const delivery = createDeliveryService({ settings, logger });
+  const delivery = createDeliveryService({ settings, sessionStore, logger });
   function storageFor(channelId) {
     return Object.freeze({
       read: (botId) => settings.read(channelId, botId),

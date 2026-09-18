@@ -128760,29 +128760,20 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     logger.info?.(`[dsh-chat-feishu] \u53D1\u73B0 ${bots.length} \u4E2A\u5DF2\u914D\u7F6E\u673A\u5668\u4EBA`);
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
-  function targetsFromState(state) {
+  function targetFromKey(key) {
     const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-    const targets = [];
-    for (const key of Object.keys(state?.sessions?.() ?? {})) {
-      const [kind, id] = key.split(":", 2);
-      if (!id) continue;
-      if (kind === "p2p") {
-        targets.push({
-          id: ids(key),
-          name: `\u79C1\u804A \xB7 ${maskAppId(id)}`,
-          kind: "direct",
-          route: { openId: id }
-        });
-      } else if (kind === "group") {
-        targets.push({
-          id: ids(key),
-          name: `\u7FA4\u804A \xB7 ${maskAppId(id)}`,
-          kind: "group",
-          route: { chatId: id }
-        });
-      }
+    const [kind, id] = String(key ?? "").split(":", 2);
+    if (!id) return null;
+    if (kind === "p2p") {
+      return { id: ids(key), name: `\u79C1\u804A \xB7 ${maskAppId(id)}`, kind: "direct", route: { openId: id } };
     }
-    return targets;
+    if (kind === "group") {
+      return { id: ids(key), name: `\u7FA4\u804A \xB7 ${maskAppId(id)}`, kind: "group", route: { chatId: id } };
+    }
+    return null;
+  }
+  function targetsFromState(state) {
+    return Object.keys(state?.sessions?.() ?? {}).map((key) => targetFromKey(key)).filter(Boolean);
   }
   const delivery = Object.freeze({
     /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
@@ -128836,7 +128827,9 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       const record = runtimes.get(botId);
       if (!record?.state) return [];
       return targetsFromState(record.state);
-    }
+    },
+    /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
+    targetFromKey
   });
   return Object.freeze({
     start: startAll,

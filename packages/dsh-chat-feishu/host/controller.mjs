@@ -192,30 +192,30 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     await Promise.all(bots.map((bot) => startBot(bot)));
   }
 
-  /** 会话键 → 可投递目标（`p2p:ou_x` / `group:oc_y`）。 */
-  function targetsFromState(state) {
+  /**
+   * 会话键 → 可投递目标（`p2p:ou_x` → 私聊，`group:oc_y` → 群聊）。
+   *
+   * 同一份翻译两处用：`discover`（运行时状态）与 `targetFromKey`（hub 的**持久**会话绑定表）。
+   * 只做前者的话，重启后运行时是空的，设置页就一个可添加的候选都没有。
+   */
+  function targetFromKey(key) {
     const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
-    const targets = [];
-    for (const key of Object.keys(state?.sessions?.() ?? {})) {
-      const [kind, id] = key.split(':', 2);
-      if (!id) continue;
-      if (kind === 'p2p') {
-        targets.push({
-          id: ids(key),
-          name: `私聊 · ${maskAppId(id)}`,
-          kind: 'direct',
-          route: { openId: id },
-        });
-      } else if (kind === 'group') {
-        targets.push({
-          id: ids(key),
-          name: `群聊 · ${maskAppId(id)}`,
-          kind: 'group',
-          route: { chatId: id },
-        });
-      }
+    const [kind, id] = String(key ?? '').split(':', 2);
+    if (!id) return null;
+    if (kind === 'p2p') {
+      return { id: ids(key), name: `私聊 · ${maskAppId(id)}`, kind: 'direct', route: { openId: id } };
     }
-    return targets;
+    if (kind === 'group') {
+      return { id: ids(key), name: `群聊 · ${maskAppId(id)}`, kind: 'group', route: { chatId: id } };
+    }
+    return null;
+  }
+
+  /** 运行时状态里出现过的会话 → 候选目标。 */
+  function targetsFromState(state) {
+    return Object.keys(state?.sessions?.() ?? {})
+      .map((key) => targetFromKey(key))
+      .filter(Boolean);
   }
 
   const delivery = Object.freeze({
@@ -270,6 +270,9 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       if (!record?.state) return [];
       return targetsFromState(record.state);
     },
+
+    /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
+    targetFromKey,
   });
 
   return Object.freeze({

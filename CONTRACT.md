@@ -192,6 +192,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   delivery: {               // 可选：声明后该渠道自动获得"主动投递"能力
     async send({ botId, target, text }) { /* 按 target.route 发 */ },
     async discover({ botId }) { /* 返回候选目标，不落盘 */ },
+    targetFromKey(key) { /* 会话键（'p2p:ou_x' / 'group:oc_y'）→ 目标或 null，可选 */ },
   },
 }
 ```
@@ -199,6 +200,15 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 **主动投递**：hub 持有目标清单（每机器人设置的 `deliveryTargets`）与调度；
 渠道只实现"怎么发"和"能发给谁"。`send` 只会收到**已保存**的目标，
 `discover` 返回的候选在用户保存前不可发送——避免误发到没确认过的会话。
+
+候选有**两个来源**，缺一不可：
+
+1. `discover()` —— 渠道运行时的会话状态（进程内，重启即空）；
+2. `targetFromKey()` + hub 的**持久**会话绑定表（`sessions.json`）—— 该机器人真实聊过的每个会话。
+
+只做 ① 的话，重启后设置页一个候选都没有，用户看到的是"没有添加入口"而不是"还没有会话"。
+`targetFromKey` 只做纯翻译（不查运行时、不异步）；不认识或不适用的键返回 `null`
+（例如仅私聊的渠道对 `group:` 键返回 `null`）。
 
 目标结构：`{ id, name?, kind: 'direct'|'group', route: { ... } }`，`route` 只允许
 1–8 个短标量字段（不放 Secret）；`id` 需满足 `[A-Za-z0-9_-]{1,64}`。
@@ -250,6 +260,7 @@ delivery: {
   async sendFile({ botId, target, file }) {},                   // 可选：file = { path, name, size, kind: 'file'|'image' }
                                                                 // kind 由扩展名判定：image 走图片气泡，file 走文件消息
   async discover({ botId }) { return [ /* 候选目标 */ ]; },
+  targetFromKey(key) { return /* 目标或 null */; },
 }
 ```
 

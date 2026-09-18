@@ -204,6 +204,26 @@ export function createWeixinController({ deps, logger = console, config = {}, in
     await Promise.all(accounts.map((account) => startAccount(account)));
   }
 
+  /**
+   * 会话键 → 可投递目标（本渠道仅私聊，`group:` 一律不认）。
+   *
+   * 同一份翻译两处用：`discover`（运行时状态）与 `targetFromKey`（hub 的**持久**会话绑定表）。
+   * 只做前者的话，重启后运行时是空的，设置页就一个可添加的候选都没有。
+   */
+  function targetFromKey(key) {
+    const value = String(key ?? '');
+    if (!value.startsWith('p2p:')) return null;
+    const userId = value.slice(4);
+    if (!userId) return null;
+    const short = userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
+    return {
+      id: value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64),
+      name: `私聊 · ${short}`,
+      kind: 'direct',
+      route: { userId },
+    };
+  }
+
   const delivery = Object.freeze({
     /** 主动发文本：私聊对端就是 `from_user_id`，回复要带该用户最近一次的 context_token。 */
     async send({ botId, target, text }) {
@@ -254,18 +274,12 @@ export function createWeixinController({ deps, logger = console, config = {}, in
       const record = runtimes.get(botId);
       if (!record?.state) return [];
       return Object.keys(record.state.sessions?.() ?? {})
-        .filter((key) => key.startsWith('p2p:'))
-        .map((key) => {
-          const userId = key.slice(4);
-          const short = userId.length > 12 ? `${userId.slice(0, 6)}…${userId.slice(-4)}` : userId;
-          return {
-            id: key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64),
-            name: `私聊 · ${short}`,
-            kind: 'direct',
-            route: { userId },
-          };
-        });
+        .map((key) => targetFromKey(key))
+        .filter(Boolean);
     },
+
+    /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
+    targetFromKey,
   });
 
   return Object.freeze({

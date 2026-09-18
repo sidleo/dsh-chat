@@ -127,7 +127,7 @@ export function apply(ctx, config = {}) {
   });
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
-  const delivery = createDeliveryService({ settings, logger });
+  const delivery = createDeliveryService({ settings, sessionStore, logger });
 
   function storageFor(channelId) {
     return Object.freeze({

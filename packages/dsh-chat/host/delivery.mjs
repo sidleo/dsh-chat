@@ -150,7 +150,15 @@ function normalizeStoredTargets(value) {  if (!isPlainObject(value)) return {};
  * @param options - { settings, logger }。
  * @returns 投递服务。
  */
-export function createDeliveryService({ settings, logger = console }) {
+/**
+ * 创建投递服务。
+ *
+ * @param options - { settings, sessionStore?, logger? }。
+ *   `sessionStore` 用来把该机器人**真实聊过的会话**补成候选（见 list 里的说明），
+ *   缺席时只依赖渠道的 `discover()`。
+ * @returns 投递服务。
+ */
+export function createDeliveryService({ settings, sessionStore = null, logger = console }) {
   if (!settings?.read) throw new TypeError('投递服务需要每机器人设置存储。');
   /** @type {Map<string, object>} channelId → 渠道投递实现 */
   const providers = new Map();
@@ -183,12 +191,34 @@ export function createDeliveryService({ settings, logger = console }) {
     async list({ channelId, botId }) {
       const saved = normalizeStoredTargets(settings.read(channelId, botId).deliveryTargets);
       const provider = providers.get(channelId);
-      let discovered = [];
+      const discovered = [];
       if (typeof provider?.discover === 'function') {
         try {
-          discovered = await provider.discover({ botId });
+          discovered.push(...(await provider.discover({ botId })) ?? []);
         } catch (error) {
           logger.warn?.(`[dsh-chat] 渠道 ${channelId} 发现投递目标失败：${error?.message ?? error}`);
+        }
+      }
+      /**
+       * 候选的第二个来源：hub 自己的**持久**会话绑定表。
+       *
+       * 只靠 `discover()`（渠道运行时状态）的话，重启后运行时是空的，设置页就一个候选都没有
+       * ——用户会说"看不到添加的入口"。而绑定表里的会话本来就是这个机器人真实聊过的，
+       * 由渠道用 `targetFromKey` 把会话键翻译成目标（平台概念只在渠道里）。
+       */
+      if (typeof provider?.targetFromKey === 'function' && sessionStore) {
+        try {
+          await sessionStore.ready?.();
+          for (const key of Object.keys(sessionStore.entries(channelId, botId))) {
+            try {
+              const target = provider.targetFromKey(key);
+              if (target) discovered.push(target);
+            } catch {
+              // 单个键翻译失败不该毁掉整份清单
+            }
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] 读取会话绑定失败：${error?.message ?? error}`);
         }
       }
       const savedList = Object.values(saved);
@@ -196,7 +226,7 @@ export function createDeliveryService({ settings, logger = console }) {
       // 因此除了 id，还要按"类型 + 路由"判重，否则设置页和 agent 会看到重复条目。
       const known = new Set(savedList.map(routeKey));
       const candidates = [];
-      for (const candidate of Array.isArray(discovered) ? discovered : []) {
+      for (const candidate of discovered) {
         try {
           const target = normalizeTarget(candidate);
           const key = routeKey(target);

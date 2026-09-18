@@ -1660,6 +1660,19 @@ function createWeixinController({ deps, logger = console, config = {}, internals
     logger.info?.(`[dsh-chat-weixin] \u53D1\u73B0 ${accounts.length} \u4E2A\u5DF2\u7ED1\u5B9A\u8D26\u53F7`);
     await Promise.all(accounts.map((account) => startAccount(account)));
   }
+  function targetFromKey(key) {
+    const value = String(key ?? "");
+    if (!value.startsWith("p2p:")) return null;
+    const userId = value.slice(4);
+    if (!userId) return null;
+    const short = userId.length > 12 ? `${userId.slice(0, 6)}\u2026${userId.slice(-4)}` : userId;
+    return {
+      id: value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64),
+      name: `\u79C1\u804A \xB7 ${short}`,
+      kind: "direct",
+      route: { userId }
+    };
+  }
   const delivery = Object.freeze({
     /** 主动发文本：私聊对端就是 `from_user_id`，回复要带该用户最近一次的 context_token。 */
     async send({ botId, target, text }) {
@@ -1707,17 +1720,10 @@ function createWeixinController({ deps, logger = console, config = {}, internals
     async discover({ botId }) {
       const record = runtimes.get(botId);
       if (!record?.state) return [];
-      return Object.keys(record.state.sessions?.() ?? {}).filter((key) => key.startsWith("p2p:")).map((key) => {
-        const userId = key.slice(4);
-        const short = userId.length > 12 ? `${userId.slice(0, 6)}\u2026${userId.slice(-4)}` : userId;
-        return {
-          id: key.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64),
-          name: `\u79C1\u804A \xB7 ${short}`,
-          kind: "direct",
-          route: { userId }
-        };
-      });
-    }
+      return Object.keys(record.state.sessions?.() ?? {}).map((key) => targetFromKey(key)).filter(Boolean);
+    },
+    /** 把 hub 持久会话绑定表里的会话键翻成目标（重启后仍有候选）。 */
+    targetFromKey
   });
   return Object.freeze({
     start: startAll,

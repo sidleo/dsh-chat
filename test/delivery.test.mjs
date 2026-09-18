@@ -10,17 +10,24 @@ import test from 'node:test';
 
 import { createBotSettingsStore } from '../packages/dsh-chat/host/bot-settings.mjs';
 import { createDeliveryService, normalizeTarget } from '../packages/dsh-chat/host/delivery.mjs';
+import { createSessionStore } from '../packages/dsh-chat/host/session-store.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
-async function makeService() {
+async function makeService({ withSessionStore = false } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-delivery-'));
   const settings = createBotSettingsStore({ dataDir, logger: silentLogger });
   await settings.ready();
-  const service = createDeliveryService({ settings, logger: silentLogger });
+  let sessionStore = null;
+  if (withSessionStore) {
+    sessionStore = createSessionStore({ dataDir, logger: silentLogger });
+    await sessionStore.ready();
+  }
+  const service = createDeliveryService({ settings, sessionStore, logger: silentLogger });
   return {
     settings,
     service,
+    sessionStore,
     dataDir,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -325,5 +332,37 @@ test('发文件：图片按 image 分类、可改名；缺文件/渠道不支持
   } finally {
     await app.cleanup();
     await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('候选来自 hub 的持久会话绑定表：重启后渠道运行时是空的，也要有可添加项', async () => {
+  const app = await makeService({ withSessionStore: true });
+  try {
+    await app.sessionStore.bind('feishu', 'bot_1', 'group:oc_1', { sessionId: 'session-a' });
+    await app.sessionStore.bind('feishu', 'bot_1', 'p2p:ou_1', { sessionId: 'session-b' });
+    // 渠道只提供"会话键 → 目标"的翻译（平台概念留在渠道里），运行时发现为空——正是重启后的样子。
+    app.service.attach('feishu', {
+      async send() { return { messageId: 'om_1' }; },
+      async discover() { return []; },
+      targetFromKey(key) {
+        const [kind, id] = key.split(':', 2);
+        if (!id) return null;
+        return kind === 'p2p'
+          ? { id: key.replace(/[^A-Za-z0-9_-]/g, '_'), name: `私聊 · ${id}`, kind: 'direct', route: { openId: id } }
+          : { id: key.replace(/[^A-Za-z0-9_-]/g, '_'), name: `群聊 · ${id}`, kind: 'group', route: { chatId: id } };
+      },
+    });
+
+    const listed = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.deepEqual(listed.targets.map((item) => item.id), ['group_oc_1', 'p2p_ou_1']);
+    assert.ok(listed.targets.every((item) => item.discovered === true), '绑定表来的都是候选，未保存不可发送');
+
+    // 保存其中一个后：它变成已保存目标，不再以候选身份重复出现（按"类型 + 路由"判重）。
+    await app.service.save({ channelId: 'feishu', botId: 'bot_1', target: listed.targets[0] });
+    const after = await app.service.list({ channelId: 'feishu', botId: 'bot_1' });
+    assert.deepEqual(after.targets.map((item) => item.id), ['group_oc_1', 'p2p_ou_1']);
+    assert.deepEqual(after.targets.map((item) => Boolean(item.discovered)), [false, true]);
+  } finally {
+    await app.cleanup();
   }
 });

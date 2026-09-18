@@ -27,8 +27,7 @@ export const zh = {
   '保存失败，请重试。': '保存失败，请重试。',
   // 主动投递（共享组件 delivery-targets.js）
   '主动投递': '主动投递',
-  '让定时任务或 agent 把结果直接发到指定会话；候选来自与该机器人的历史会话。':
-    '让定时任务或 agent 把结果直接发到指定会话；候选来自与该机器人的历史会话。',
+    '让定时任务或 agent 把结果直接发到指定会话。': '让定时任务或 agent 把结果直接发到指定会话。',
   '私聊': '私聊',
   '群聊': '群聊',
   '候选': '候选',
@@ -36,11 +35,12 @@ export const zh = {
   '删除': '删除',
   '确认删除': '确认删除',
   '当前渠道不支持主动投递。': '当前渠道不支持主动投递。',
-  '还没有可投递目标：先与机器人对话一次，会话会作为候选出现在这里。':
-    '还没有可投递目标：先与机器人对话一次，会话会作为候选出现在这里。',
+  
   '已保存，现在可以主动发消息了。': '已保存，现在可以主动发消息了。',
   '已删除。': '已删除。',
-  '候选目标需要先保存，保存后才能主动发送。': '候选目标需要先保存，保存后才能主动发送。',
+  '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。': '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。',
+  '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。': '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。',
+  '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。': '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。',
   // 版本与更新（version-panel.js）
   '当前页面不支持渠道子槽。': '当前页面不支持渠道子槽。',
   '设置': '设置',
@@ -101,9 +101,8 @@ export const en = {
   '保存失败，请重试。': 'Could not save. Try again.',
   // 主动投递
   '主动投递': 'Proactive delivery',
-  '让定时任务或 agent 把结果直接发到指定会话；候选来自与该机器人的历史会话。':
-    'Let a scheduled job or an agent push results straight into a conversation. '
-    + 'Candidates come from conversations this bot has already taken part in.',
+  '让定时任务或 agent 把结果直接发到指定会话。':
+    'Let a scheduled job or an agent push results straight into a conversation.',
   '私聊': 'Direct',
   '群聊': 'Group',
   '候选': 'Candidate',
@@ -111,12 +110,15 @@ export const en = {
   '删除': 'Delete',
   '确认删除': 'Confirm delete',
   '当前渠道不支持主动投递。': 'This channel does not support proactive delivery.',
-  '还没有可投递目标：先与机器人对话一次，会话会作为候选出现在这里。':
-    'No delivery target yet: talk to the bot once and the conversation shows up here as a candidate.',
   '已保存，现在可以主动发消息了。': 'Saved. You can now send proactively.',
   '已删除。': 'Deleted.',
-  '候选目标需要先保存，保存后才能主动发送。':
-    'A candidate must be saved before it can receive proactive messages.',
+  '还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。':
+    'No conversation to add yet: mention the bot once in a group, or send it a direct '
+    + 'message — the conversation then shows up here and can be saved for proactive delivery.',
+  '没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。':
+    'No conversation to add: mention the bot once in a group, or send it a direct message, and that conversation shows up here.',
+  '上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。':
+    'A conversation marked "Candidate" cannot receive proactive messages yet — press "Save as target" first.',
   '当前页面不支持渠道子槽。': 'This page does not support channel sub-slots.',
   '设置': 'Settings',
   '机器人': 'Bots',

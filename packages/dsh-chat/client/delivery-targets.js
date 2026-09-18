@@ -128,20 +128,17 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
 
   const saved = state.targets.filter((target) => !target.discovered);
   const candidates = state.targets.filter((target) => target.discovered);
+  const ready = state.phase === 'ready' && state.canSend === true;
 
   return h(Panel, {
     title: t('主动投递'),
-    description: t('让定时任务或 agent 把结果直接发到指定会话；候选来自与该机器人的历史会话。'),
+    description: t('让定时任务或 agent 把结果直接发到指定会话。'),
   },
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
   notice ? h('p', { className: 'dchat-notice', role: 'status' }, notice) : null,
   state.phase === 'loading' ? h('p', { className: 'dchat-cardDescription' }, t('读取中…')) : null,
   state.phase === 'ready' && state.canSend === false
     ? h('p', { className: 'dchat-cardDescription' }, t('当前渠道不支持主动投递。'))
-    : null,
-  state.phase === 'ready' && state.canSend === true && state.targets.length === 0
-    ? h('p', { className: 'dchat-cardDescription' },
-      t('还没有可投递目标：先与机器人对话一次，会话会作为候选出现在这里。'))
     : null,
   state.targets.length > 0
     ? h('div', { className: 'dchat-list' }, state.targets.map((target) => h(TargetRow, {
@@ -166,9 +163,20 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
       },
     })))
     : null,
+  /**
+   * 「怎么添加」常驻说明：**只要没有候选就显示**。
+   * 之前只在"一个目标都没有"时显示，于是有 1 个已保存目标、又没有候选时，
+   * 整张卡既看不到可添加项、也看不到为什么——用户只能说"没有添加入口"。
+   */
+  ready && candidates.length === 0
+    ? h('p', { className: 'dchat-cardDescription' },
+      saved.length === 0
+        ? t('还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。')
+        : t('没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。'))
+    : null,
   candidates.length > 0
     ? h('p', { className: 'dchat-cardDescription' },
-      t('候选目标需要先保存，保存后才能主动发送。'))
+      t('上面标「候选」的会话还不能主动投递，点「保存为投递目标」后才行。'))
     : null,
   saved.length > 0
     ? h('div', { className: 'dchat-deliverySend' },
