@@ -246,12 +246,36 @@ const result = await chatUi.callChannelRpc(connection, 'demo', 'connection.statu
 const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/details）
 ```
 
+### 命令内核（hub 实现，渠道只负责把文本交进来、把回复发出去）
+
+命令可以返回字符串（纯文本），也可以返回 `{ reply, menu }`：`menu` 是
+`[{ label, command }]`，渠道有卡片能力就渲染成按钮（**按钮值就是命令行**，点击后走与
+"用户手打"完全同一条路径），没有卡片能力就用 `reply` 的文本兜底。
+
+| 命令 | 作用 |
+|---|---|
+| `/help` `/version` `/status` `/new` `/stop` `/session` `/history [轮数]` `/compact` | 会话与运行状态 |
+| `/models` `/model` `/reasoning-efforts` `/reasoning` | 模型与推理等级（会话级） |
+| `/presets` `/preset` | Agent Preset（**对新会话生效**） |
+| `/whoami` | 你的平台 id、是否属主、本次消息的放行判定 |
+| `/allow [平台id] [--commands]` `/deny <平台id>` | 维护当前会话类型的访问名单（**仅属主**） |
+| `/menu` | 发一张可点的菜单卡片 |
+
+同一会话的多个回合在 hub 里**串行**：DSH 的 `session/prompt` 虽然会排队，但渠道侧每条消息
+各自开一条 `follow` 流、会在飞的时候互相抢答案。`ask()` 因此按会话键排队，并支持
+`onQueued(ahead)` 让渠道回一句"已排队"。
+
 ### hub 控制端点（渠道无需重复实现）
 
 | method | 载荷 | 说明 |
 |---|---|---|
 | `channel.list` | `{}` | 契约版本 + hub 版本/包名 + 数据/日志目录 + 全部渠道状态与**渠道包版本**（设置页的「版本与更新」面板用它） |
 | `bot.settings.get` | `{ channelId, botId }` | 读每机器人共享设置 |
+| `bot.settings.options` | `{ channelId, botId }` | 设置页的下拉候选：该机器人用过的目录、Host 的 Agent Preset 列表、当前值 |
+| `bot.workspace.set` | `{ channelId, botId, workspace }` | 设工作区（校验存在且是目录，一律存绝对路径）；**只对新会话生效** |
+| `bot.agent-preset.set` | `{ channelId, botId, agentPreset }` | 设 Agent Preset（先与当前 Host 的列表对账）；**只对新会话生效** |
+| `bot.access-policy.set` | `{ channelId, botId, policy }` | 设访问策略（与 host 拦消息同一份校验）；**立即生效** |
+| `bot.conversations` | `{ channelId, botId }` | 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
 | `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |
 | `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |

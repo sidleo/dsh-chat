@@ -21,9 +21,13 @@ packages/dsh-chat/             Hub：设置页入口 + 渠道注册表 + 共享�
   shared/                      浏览器安全：契约、上下文增强引擎、访问策略、渠道 rail
   host/                        Node：plugin、registry、rpc、bot-settings、session-store、sessions、commands、delivery、tools、interactions、json-store
   client/                      浏览器：设置页 section、共享 UI 组件与 hook
+                               （bot-shared-settings.js = 工作区/Agent 预设/访问策略三块，
+                                 delivery-targets.js = 主动投递，context-enhancement.js = 上下文增强）
 packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
+scripts/check-layout.mjs       布局守门：真实组件在 549/360/320px 下渲染并断言不溢出、不逐字竖排
+scripts/layout-fixture.mjs     上面那个守门的页面入口（headless Chrome 里跑，用 flushSync 同步提交）
 CONTRACT.md                    **新渠道作者唯一需要读的文档**
 UPSTREAM.md                    与上游 dsh-im 的对照关系、移植范围与出处
 ```
@@ -33,7 +37,8 @@ UPSTREAM.md                    与上游 dsh-im 的对照关系、移植范围�
 ```bash
 npm run build   # esbuild 打 host（ESM）+ client（DSH 模块加载器包装），产物在各自 lib/
 npm test        # node --test，覆盖契约/引擎/渠道/命令/策略
-npm run check   # build + test + 打包自检（含"渠道不得 import hub"与互斥检查）
+npm run check        # build + test + 打包自检（含"渠道不得 import hub"与互斥检查）+ 布局守门
+npm run check:layout # 只跑布局守门：真实组件在 549/360/320px 下渲染，断言不溢出、不逐字竖排
 DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额外检查双绑
 ```
 
@@ -42,6 +47,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
+- **界面样式改完**：跑 `npm run check`（含布局守门）。窄栏下的两类问题是"构建通过、单测全绿、
+  真机才炸"——① 中文被 flex 压成一字一行（`min-content` 只有一个字）；② `flex: none` 打在
+  `width: 100%` 的下拉框上，把同排按钮挤出容器、整页横向滚动。守门失败会指出是哪个元素伸出去的。
 - **隔离调试**：`config.channelDataDirs` 可把渠道数据目录指到临时目录，避免用真实凭据建长连接；覆盖时**不做**旧设置导入。
 - **飞书卡片按钮没反应**：按"事件到没到"分三步查——
   ① 重启时带 `DSH_CHAT_FEISHU_SDK_LOG=debug`（SDK 日志会进 `logs/feishu.log`），点一次按钮后看日志：
@@ -66,9 +74,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P1 | 共享内核：会话桥、旧设置导入、上下文增强 UI、共享组件 | ✅ |
 | P2 | 飞书渠道：长连接、私聊/群聊、任务过程展示分私聊/群聊、设置页 | ✅ 真实机器人验证通过 |
 | P3 | 微信渠道：iLink 协议、扫码登录、私聊收发 | ✅ 真实账号验证通过 |
-| P4 | 命令内核 + 访问策略 | ✅（`/history` 回看、`/compact` 转发 DSH 压缩命令已补；菜单卡片、批量输入待做） |
+| P4 | 命令内核 + 访问策略 | ✅ `/help` `/version` `/status` `/new` `/stop` `/session` `/history` `/compact`、`/models` `/model` `/reasoning`、`/presets` `/preset`、`/whoami`、`/allow` `/deny`（**仅属主**，命令内部再判一次，否则被授权者能给自己人授权）、`/menu`（飞书渲染成按钮卡片，按钮值就是命令行，点击走与手打同一条路径；微信用文本兜底）；**批量输入**：同一会话的回合在 hub 里串行（`ask()` 按会话键排队 + `onQueued(ahead)` 回执），因为渠道侧每条消息各开一条 follow 流、会在飞时抢答案 |
 | P5 | 富媒体（图片/文件）与主动投递 | ✅  主动投递文本+出站文件/图片（飞书）、飞书入站图片+入站文件已通；人在环回传已通：工具/思考/**已答提问**收进同一个折叠面板（默认收起、展开看全部；一行一项、形态对齐 DSH Web 会话：`工具调用 · wiki_get · …`/`Bash · 描述`/`Skill · 技能名`/`思考 · …`/`提问 · 口径 → 答案`；标题在本轮没结束时显示最新一项、结束后才显示「工具与思考(N)」）、已答提问**按发生顺序**在工具面板里**再嵌一层**「❓ N/M 已回答」折叠控件（控件本身留在面板外；Card 2.0，一页一题：单选按钮+输入框 / 多选勾选器 / 文本输入框；无进度卡时退回独立卡片）、**任务清单**单独一个面板放在工具面板下面（未结束展开、结束收起）、**交付文件**（`present` 声明）在回复后合成**一条不带任何文字的 `post` 消息**发出（图片按图片内嵌在前、文件进附件区在后）；微信入站图片+入站文件（CDN 下载 + AES-128-ECB 解密）与出站文件/图片（getuploadurl + 加密上传 CDN）已通 |
-| P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 会话渠道标识 ✅（host 侧：工作区命名「渠道 · 机器人」+ 会话标题加「渠道 · 」前缀，均幂等；client 侧：侧边栏会话行把前缀换渠道徽标——会话列表没有插槽，做的是纯装饰、可还原、**认结构不认类名**的 DOM 增强，见 `client/session-badges.js`）；版本与更新 ✅（Chat机器人 页右上角入口展开：内核/契约/各渠道包版本与状态、数据与日志目录、更新方式，`check` 会与 package.json 对账）；i18n 完整化待做（英文界面部分覆盖） |
+| P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 会话渠道标识 ✅（host 侧：工作区命名「渠道 · 机器人」+ 会话标题加「渠道 · 」前缀，均幂等；client 侧：侧边栏会话行把前缀换渠道徽标——会话列表没有插槽，做的是纯装饰、可还原、**认结构不认类名**的 DOM 增强，见 `client/session-badges.js`）；版本与更新 ✅（Chat机器人 页右上角入口展开：内核/契约/各渠道包版本与状态、数据与日志目录、更新方式，`check` 会与 package.json 对账）；i18n 完整化 ✅（共享组件与上下文增强表单全部走 `t()`，渠道字典同步补齐）；⚠️ 会话标题前缀自 P6-① 起一直是坏的（`session/list` 漏 `_request`），已修，重启后每个会话在**下一次消息**结束时补上 |
 
 ## 工作方式
 
