@@ -127274,6 +127274,8 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         key: conversationKey,
         conversationType,
         senderId,
+        // 属主判定只有渠道知道（属主名单在渠道配置里），带上给命令内核用。
+        isOwner: isOwner(bot, senderId),
         botLabel: bot.botName ?? bot.id,
         channelLabel: "\u98DE\u4E66"
       }).catch((error) => {

@@ -8,6 +8,7 @@
  * @module dsh-chat/host/commands
  */
 
+import * as accessPolicy from '../shared/access-policy.mjs';
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 
 /** 命令名前缀。 */
@@ -180,6 +181,111 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1' } = {})
     execute: () => {
       const rows = registry.list().map((command) => line(`${command.usage} — ${command.summary}`));
       return ['可用命令：', ...rows].join('\n');
+    },
+  });
+
+  /** 当前会话类型对应的策略作用域键。 */
+  const scopeKeyOf = (context) => (context.conversationType === 'group' ? 'group' : 'direct');
+  const scopeLabelOf = (context) => (context.conversationType === 'group' ? '群聊' : '私聊');
+
+  /** 读当前策略（没有就按默认：仅名单、命令默认不允许）。 */
+  function currentPolicy(context) {
+    const record = context.services.bots.read(context.channelId, context.botId);
+    return accessPolicy.normalizeAccessPolicy(record.accessPolicy)
+      ?? accessPolicy.defaultAccessPolicy();
+  }
+
+  /** 改一个作用域的名单；返回**完整**策略（保存路径要求两段都在）。 */
+  function withAllowlist(context, mutate) {
+    const policy = currentPolicy(context);
+    const key = scopeKeyOf(context);
+    const scope = policy[key];
+    return {
+      ...policy,
+      [key]: {
+        ...scope,
+        allowlist: { users: mutate(scope.allowlist.users) },
+        open: {
+          ...scope.open,
+          // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
+          commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides),
+        },
+      },
+    };
+  }
+
+  registry.register({
+    name: 'whoami',
+    summary: '查看你的平台标识、是否属主，以及本次消息的访问判定',
+    execute: (context) => {
+      const decision = accessPolicy.evaluateAccess({
+        policy: currentPolicy(context),
+        conversationType: context.conversationType,
+        senderIds: [context.senderId],
+        isOwner: context.isOwner === true,
+      });
+      return [
+        `你的平台 id：${context.senderId ?? '未知'}`,
+        `是否属主：${context.isOwner === true ? '是' : '否'}`,
+        `当前会话：${scopeLabelOf(context)}`,
+        `本次判定：${decision.allowed ? '放行' : '拦截'}（${decision.reason}）`,
+        context.isOwner === true
+          ? `属主始终可用。用 ${PREFIX}allow 查看/维护${scopeLabelOf(context)}名单。`
+          : null,
+      ].filter(Boolean).join('\n');
+    },
+  });
+
+  registry.register({
+    name: 'allow',
+    summary: '查看或维护当前会话类型的访问名单（仅属主）',
+    usage: '/allow [平台id] [--commands]',
+    execute: async (context) => {
+      if (context.isOwner !== true) return '只有属主能维护访问名单。';
+      const scope = scopeKeyOf(context);
+      const { policy } = { policy: currentPolicy(context) };
+      const id = context.args.find((arg) => !arg.startsWith('--'));
+      if (!id) {
+        const users = policy[scope].allowlist.users;
+        if (users.length === 0) return `${scopeLabelOf(context)}名单是空的（当前只有属主可用）。`;
+        return [
+          `${scopeLabelOf(context)}名单（${users.length} 人）：`,
+          ...users.map((user, index) => line(
+            `${index + 1}. ${user.id}${user.canExecuteCommands ? '（可执行命令）' : ''}`,
+          )),
+          `用 ${PREFIX}allow <平台id> [--commands] 添加，${PREFIX}deny <平台id> 移除。`,
+        ].join('\n');
+      }
+      const withCommands = context.args.includes('--commands');
+      const next = withAllowlist(context, (users) => [
+        ...users.filter((user) => user.id !== id),
+        { id, canExecuteCommands: withCommands },
+      ]);
+      await context.services.bots.write(context.channelId, context.botId, {
+        accessPolicy: accessPolicy.validateAccessPolicy(next),
+      });
+      return `已把 ${id} 加入${scopeLabelOf(context)}名单${withCommands ? '（允许执行命令）' : ''}。`;
+    },
+  });
+
+  registry.register({
+    name: 'deny',
+    summary: '把某人移出当前会话类型的访问名单（仅属主）',
+    usage: '/deny <平台id>',
+    execute: async (context) => {
+      if (context.isOwner !== true) return '只有属主能维护访问名单。';
+      const id = context.args[0];
+      if (!id) return `用法：${PREFIX}deny <平台id>`;
+      const before = currentPolicy(context);
+      const next = withAllowlist(context, (users) => users.filter((user) => user.id !== id));
+      const key = scopeKeyOf(context);
+      const removed = before[key].allowlist.users.some((user) => user.id === id)
+        || before[key].open.commandPermissionOverrides.some((user) => user.id === id);
+      if (!removed) return `${id} 本来就不在${scopeLabelOf(context)}名单里。`;
+      await context.services.bots.write(context.channelId, context.botId, {
+        accessPolicy: accessPolicy.validateAccessPolicy(next),
+      });
+      return `已把 ${id} 移出${scopeLabelOf(context)}名单。`;
     },
   });
 

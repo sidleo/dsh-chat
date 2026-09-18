@@ -509,3 +509,51 @@ test('/history：没有历史时说清楚；/help 里能看到新命令', async 
   assert.match(help, /\/compact — 压缩当前会话的上下文/);
   assert.match(help, /\/history \[轮数\] — 回看最近几轮对话/);
 });
+
+test('访问策略自助：/whoami 说明判定，/allow 与 /deny 只有属主能改', async () => {
+  const { services, calls } = createServices();
+  const registry = createCommandRegistry({ logger: silentLogger, services });
+  registerBuiltinCommands(registry);
+
+  // 非属主：能看自己的身份与判定，但不能改名单。
+  const guest = await registry.handle(context('/whoami', { senderId: 'ou_guest' }));
+  assert.match(guest.reply, /ou_guest/);
+  assert.match(guest.reply, /是否属主：否/);
+
+  const refused = await registry.handle(context('/allow ou_guest', { senderId: 'ou_guest' }));
+  assert.match(refused.reply, /只有属主/);
+  assert.equal(calls.writes.length, 0, '非属主不能写策略');
+
+  // 属主：加人进当前会话类型（私聊）的名单，并保留完整的策略形状。
+  const added = await registry.handle(context('/allow ou_alice', { isOwner: true }));
+  assert.match(added.reply, /已把 ou_alice 加入私聊名单/);
+  const patch = calls.writes.at(-1).patch.accessPolicy;
+  assert.deepEqual(patch.direct.allowlist.users, [{ id: 'ou_alice', canExecuteCommands: false }]);
+  assert.equal(patch.group.mode, 'allowlist', '另一个作用域也要在（保存路径要求完整策略）');
+
+  // 带 --commands：允许执行命令。
+  await registry.handle(context('/allow ou_bob --commands', { isOwner: true }));
+  const second = calls.writes.at(-1).patch.accessPolicy;
+  assert.deepEqual(second.direct.allowlist.users.map((user) => [user.id, user.canExecuteCommands]),
+    [['ou_alice', false], ['ou_bob', true]]);
+
+  // 不带参数：列名单。
+  const listed = await registry.handle(context('/allow', { isOwner: true }));
+  assert.match(listed.reply, /ou_alice/);
+  assert.match(listed.reply, /ou_bob（可执行命令）/);
+
+  // 群聊作用域独立：群里的授权不会写进私聊名单。
+  await registry.handle(context('/allow oc_group_user', { isOwner: true, conversationType: 'group' }));
+  const groupPatch = calls.writes.at(-1).patch.accessPolicy;
+  assert.deepEqual(groupPatch.group.allowlist.users, [{ id: 'oc_group_user', canExecuteCommands: false }]);
+  assert.deepEqual(groupPatch.direct.allowlist.users.map((user) => user.id), ['ou_alice', 'ou_bob']);
+
+  // 移除：名单与 open 例外一起清掉。
+  const removed = await registry.handle(context('/deny ou_bob', { isOwner: true }));
+  assert.match(removed.reply, /已把 ou_bob 移出私聊名单/);
+  assert.deepEqual(calls.writes.at(-1).patch.accessPolicy.direct.allowlist.users.map((user) => user.id),
+    ['ou_alice']);
+
+  const noop = await registry.handle(context('/deny ou_not_there', { isOwner: true }));
+  assert.match(noop.reply, /本来就不在/);
+});

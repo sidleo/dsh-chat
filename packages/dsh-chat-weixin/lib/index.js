@@ -1163,6 +1163,8 @@ function createWeixinRuntime({
         key,
         conversationType: "direct",
         senderId: sender,
+        // 属主判定只有渠道知道（属主在渠道配置里），带上给命令内核用。
+        isOwner: sender === account.ownerUserId,
         botLabel: account.botName ?? account.botId,
         channelLabel: "\u5FAE\u4FE1"
       }).catch((cause) => {

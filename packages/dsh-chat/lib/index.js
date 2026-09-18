@@ -1203,6 +1203,98 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1" } = {}) {
       return ["\u53EF\u7528\u547D\u4EE4\uFF1A", ...rows].join("\n");
     }
   });
+  const scopeKeyOf = (context) => context.conversationType === "group" ? "group" : "direct";
+  const scopeLabelOf = (context) => context.conversationType === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  function currentPolicy(context) {
+    const record = context.services.bots.read(context.channelId, context.botId);
+    return normalizeAccessPolicy(record.accessPolicy) ?? defaultAccessPolicy();
+  }
+  function withAllowlist(context, mutate) {
+    const policy = currentPolicy(context);
+    const key = scopeKeyOf(context);
+    const scope = policy[key];
+    return {
+      ...policy,
+      [key]: {
+        ...scope,
+        allowlist: { users: mutate(scope.allowlist.users) },
+        open: {
+          ...scope.open,
+          // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
+          commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides)
+        }
+      }
+    };
+  }
+  registry.register({
+    name: "whoami",
+    summary: "\u67E5\u770B\u4F60\u7684\u5E73\u53F0\u6807\u8BC6\u3001\u662F\u5426\u5C5E\u4E3B\uFF0C\u4EE5\u53CA\u672C\u6B21\u6D88\u606F\u7684\u8BBF\u95EE\u5224\u5B9A",
+    execute: (context) => {
+      const decision = evaluateAccess({
+        policy: currentPolicy(context),
+        conversationType: context.conversationType,
+        senderIds: [context.senderId],
+        isOwner: context.isOwner === true
+      });
+      return [
+        `\u4F60\u7684\u5E73\u53F0 id\uFF1A${context.senderId ?? "\u672A\u77E5"}`,
+        `\u662F\u5426\u5C5E\u4E3B\uFF1A${context.isOwner === true ? "\u662F" : "\u5426"}`,
+        `\u5F53\u524D\u4F1A\u8BDD\uFF1A${scopeLabelOf(context)}`,
+        `\u672C\u6B21\u5224\u5B9A\uFF1A${decision.allowed ? "\u653E\u884C" : "\u62E6\u622A"}\uFF08${decision.reason}\uFF09`,
+        context.isOwner === true ? `\u5C5E\u4E3B\u59CB\u7EC8\u53EF\u7528\u3002\u7528 ${PREFIX}allow \u67E5\u770B/\u7EF4\u62A4${scopeLabelOf(context)}\u540D\u5355\u3002` : null
+      ].filter(Boolean).join("\n");
+    }
+  });
+  registry.register({
+    name: "allow",
+    summary: "\u67E5\u770B\u6216\u7EF4\u62A4\u5F53\u524D\u4F1A\u8BDD\u7C7B\u578B\u7684\u8BBF\u95EE\u540D\u5355\uFF08\u4EC5\u5C5E\u4E3B\uFF09",
+    usage: "/allow [\u5E73\u53F0id] [--commands]",
+    execute: async (context) => {
+      if (context.isOwner !== true) return "\u53EA\u6709\u5C5E\u4E3B\u80FD\u7EF4\u62A4\u8BBF\u95EE\u540D\u5355\u3002";
+      const scope = scopeKeyOf(context);
+      const { policy } = { policy: currentPolicy(context) };
+      const id = context.args.find((arg) => !arg.startsWith("--"));
+      if (!id) {
+        const users = policy[scope].allowlist.users;
+        if (users.length === 0) return `${scopeLabelOf(context)}\u540D\u5355\u662F\u7A7A\u7684\uFF08\u5F53\u524D\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\uFF09\u3002`;
+        return [
+          `${scopeLabelOf(context)}\u540D\u5355\uFF08${users.length} \u4EBA\uFF09\uFF1A`,
+          ...users.map((user, index) => line(
+            `${index + 1}. ${user.id}${user.canExecuteCommands ? "\uFF08\u53EF\u6267\u884C\u547D\u4EE4\uFF09" : ""}`
+          )),
+          `\u7528 ${PREFIX}allow <\u5E73\u53F0id> [--commands] \u6DFB\u52A0\uFF0C${PREFIX}deny <\u5E73\u53F0id> \u79FB\u9664\u3002`
+        ].join("\n");
+      }
+      const withCommands = context.args.includes("--commands");
+      const next = withAllowlist(context, (users) => [
+        ...users.filter((user) => user.id !== id),
+        { id, canExecuteCommands: withCommands }
+      ]);
+      await context.services.bots.write(context.channelId, context.botId, {
+        accessPolicy: validateAccessPolicy(next)
+      });
+      return `\u5DF2\u628A ${id} \u52A0\u5165${scopeLabelOf(context)}\u540D\u5355${withCommands ? "\uFF08\u5141\u8BB8\u6267\u884C\u547D\u4EE4\uFF09" : ""}\u3002`;
+    }
+  });
+  registry.register({
+    name: "deny",
+    summary: "\u628A\u67D0\u4EBA\u79FB\u51FA\u5F53\u524D\u4F1A\u8BDD\u7C7B\u578B\u7684\u8BBF\u95EE\u540D\u5355\uFF08\u4EC5\u5C5E\u4E3B\uFF09",
+    usage: "/deny <\u5E73\u53F0id>",
+    execute: async (context) => {
+      if (context.isOwner !== true) return "\u53EA\u6709\u5C5E\u4E3B\u80FD\u7EF4\u62A4\u8BBF\u95EE\u540D\u5355\u3002";
+      const id = context.args[0];
+      if (!id) return `\u7528\u6CD5\uFF1A${PREFIX}deny <\u5E73\u53F0id>`;
+      const before = currentPolicy(context);
+      const next = withAllowlist(context, (users) => users.filter((user) => user.id !== id));
+      const key = scopeKeyOf(context);
+      const removed = before[key].allowlist.users.some((user) => user.id === id) || before[key].open.commandPermissionOverrides.some((user) => user.id === id);
+      if (!removed) return `${id} \u672C\u6765\u5C31\u4E0D\u5728${scopeLabelOf(context)}\u540D\u5355\u91CC\u3002`;
+      await context.services.bots.write(context.channelId, context.botId, {
+        accessPolicy: validateAccessPolicy(next)
+      });
+      return `\u5DF2\u628A ${id} \u79FB\u51FA${scopeLabelOf(context)}\u540D\u5355\u3002`;
+    }
+  });
   registry.register({
     name: "version",
     summary: "\u67E5\u770B dsh-chat \u63D2\u4EF6\u7248\u672C",
