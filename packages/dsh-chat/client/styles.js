@@ -47,7 +47,8 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 168px;
+  /* 只有「图标 + 渠道名」，副标题在右栏标题下，所以这里可以窄一点，把宽度让给右栏。 */
+  width: 148px;
   flex: none;
 }
 .dchat-channel {
@@ -55,6 +56,7 @@ const CSS = `
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  /* 边框始终占位（未选中是透明的），选中/未选中的外框一样大，列表才不会"一卡片 + 一裸行"。 */
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -69,6 +71,8 @@ const CSS = `
 .dchat-channel[aria-selected='true'] {
   background: var(--dsw-alias-bg-layer-2);
   border-color: var(--dsw-alias-border-l2);
+  /* 选中的第二个信号：左侧品牌色竖条（只靠底色在浅色主题下不够明显）。 */
+  box-shadow: inset 2px 0 0 0 var(--dsw-alias-brand-primary);
 }
 .dchat-channelMark {
   display: inline-flex;
@@ -95,21 +99,15 @@ const CSS = `
   display: block;
 }
 .dchat-channelLabel {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
   min-width: 0;
 }
 .dchat-channelLabel strong {
+  display: block;
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.dchat-channelLabel small {
-  font-size: 11px;
-  color: var(--dsw-alias-label-tertiary);
 }
 .dchat-panel {
   flex: 1;
@@ -138,6 +136,7 @@ const CSS = `
   font-weight: 600;
 }
 .dchat-cardDescription {
+  margin: 0;
   font-size: 12px;
   line-height: 1.6;
   color: var(--dsw-alias-label-secondary);
@@ -198,10 +197,15 @@ const CSS = `
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* 「设置」按钮永远是内容宽度：flex 默认的 min-width:auto 会让它在窄栏里被压成一个字宽。 */
+.dchat-botRow > .dchat-button {
+  flex: none;
+}
 .dchat-botMain {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .dchat-botTitle {
@@ -209,6 +213,18 @@ const CSS = `
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  min-width: 0;
+}
+/* 名称（可能是很长的 botId）负责截断，状态点保持自身宽度不被压缩。 */
+.dchat-botTitle > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dchat-botTitle > :not(strong) {
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-botMeta {
   display: flex;
@@ -216,6 +232,18 @@ const CSS = `
   gap: 10px;
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
+  /* 放不下就整项换行，绝不让中文按字折行（每个汉字都是断行点，会被压成竖排）。 */
+  flex-wrap: wrap;
+}
+.dchat-botMeta > * {
+  white-space: nowrap;
+}
+/* 账号可能很长：让它省略号截断，别把卡片撑破（flex 项默认 min-width:auto 不会缩）。 */
+.dchat-botMeta > .dchat-code {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dchat-botError {
   font-size: 12px;
@@ -268,6 +296,8 @@ const CSS = `
   font-size: 12px;
   padding: 4px 10px;
   cursor: pointer;
+  /* 中文按钮被压窄时会二字竖排，任何按钮都不允许折行。 */
+  white-space: nowrap;
 }
 .dchat-button:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
@@ -275,6 +305,18 @@ const CSS = `
 .dchat-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* 次要入口（如「版本与更新」）：文字链接形态，不和 DSH 自己的实心按钮抢注意力。 */
+.dchat-buttonLink {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dsw-alias-link);
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.dchat-buttonLink:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
 }
 .dchat-status {
   display: inline-flex;

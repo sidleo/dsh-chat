@@ -1189,7 +1189,8 @@ var CSS = `
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 168px;
+  /* \u53EA\u6709\u300C\u56FE\u6807 + \u6E20\u9053\u540D\u300D\uFF0C\u526F\u6807\u9898\u5728\u53F3\u680F\u6807\u9898\u4E0B\uFF0C\u6240\u4EE5\u8FD9\u91CC\u53EF\u4EE5\u7A84\u4E00\u70B9\uFF0C\u628A\u5BBD\u5EA6\u8BA9\u7ED9\u53F3\u680F\u3002 */
+  width: 148px;
   flex: none;
 }
 .dchat-channel {
@@ -1197,6 +1198,7 @@ var CSS = `
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  /* \u8FB9\u6846\u59CB\u7EC8\u5360\u4F4D\uFF08\u672A\u9009\u4E2D\u662F\u900F\u660E\u7684\uFF09\uFF0C\u9009\u4E2D/\u672A\u9009\u4E2D\u7684\u5916\u6846\u4E00\u6837\u5927\uFF0C\u5217\u8868\u624D\u4E0D\u4F1A"\u4E00\u5361\u7247 + \u4E00\u88F8\u884C"\u3002 */
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -1211,6 +1213,8 @@ var CSS = `
 .dchat-channel[aria-selected='true'] {
   background: var(--dsw-alias-bg-layer-2);
   border-color: var(--dsw-alias-border-l2);
+  /* \u9009\u4E2D\u7684\u7B2C\u4E8C\u4E2A\u4FE1\u53F7\uFF1A\u5DE6\u4FA7\u54C1\u724C\u8272\u7AD6\u6761\uFF08\u53EA\u9760\u5E95\u8272\u5728\u6D45\u8272\u4E3B\u9898\u4E0B\u4E0D\u591F\u660E\u663E\uFF09\u3002 */
+  box-shadow: inset 2px 0 0 0 var(--dsw-alias-brand-primary);
 }
 .dchat-channelMark {
   display: inline-flex;
@@ -1237,21 +1241,15 @@ var CSS = `
   display: block;
 }
 .dchat-channelLabel {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
   min-width: 0;
 }
 .dchat-channelLabel strong {
+  display: block;
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.dchat-channelLabel small {
-  font-size: 11px;
-  color: var(--dsw-alias-label-tertiary);
 }
 .dchat-panel {
   flex: 1;
@@ -1280,6 +1278,7 @@ var CSS = `
   font-weight: 600;
 }
 .dchat-cardDescription {
+  margin: 0;
   font-size: 12px;
   line-height: 1.6;
   color: var(--dsw-alias-label-secondary);
@@ -1340,10 +1339,15 @@ var CSS = `
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* \u300C\u8BBE\u7F6E\u300D\u6309\u94AE\u6C38\u8FDC\u662F\u5185\u5BB9\u5BBD\u5EA6\uFF1Aflex \u9ED8\u8BA4\u7684 min-width:auto \u4F1A\u8BA9\u5B83\u5728\u7A84\u680F\u91CC\u88AB\u538B\u6210\u4E00\u4E2A\u5B57\u5BBD\u3002 */
+.dchat-botRow > .dchat-button {
+  flex: none;
+}
 .dchat-botMain {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .dchat-botTitle {
@@ -1351,6 +1355,18 @@ var CSS = `
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  min-width: 0;
+}
+/* \u540D\u79F0\uFF08\u53EF\u80FD\u662F\u5F88\u957F\u7684 botId\uFF09\u8D1F\u8D23\u622A\u65AD\uFF0C\u72B6\u6001\u70B9\u4FDD\u6301\u81EA\u8EAB\u5BBD\u5EA6\u4E0D\u88AB\u538B\u7F29\u3002 */
+.dchat-botTitle > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dchat-botTitle > :not(strong) {
+  flex: none;
+  white-space: nowrap;
 }
 .dchat-botMeta {
   display: flex;
@@ -1358,6 +1374,18 @@ var CSS = `
   gap: 10px;
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
+  /* \u653E\u4E0D\u4E0B\u5C31\u6574\u9879\u6362\u884C\uFF0C\u7EDD\u4E0D\u8BA9\u4E2D\u6587\u6309\u5B57\u6298\u884C\uFF08\u6BCF\u4E2A\u6C49\u5B57\u90FD\u662F\u65AD\u884C\u70B9\uFF0C\u4F1A\u88AB\u538B\u6210\u7AD6\u6392\uFF09\u3002 */
+  flex-wrap: wrap;
+}
+.dchat-botMeta > * {
+  white-space: nowrap;
+}
+/* \u8D26\u53F7\u53EF\u80FD\u5F88\u957F\uFF1A\u8BA9\u5B83\u7701\u7565\u53F7\u622A\u65AD\uFF0C\u522B\u628A\u5361\u7247\u6491\u7834\uFF08flex \u9879\u9ED8\u8BA4 min-width:auto \u4E0D\u4F1A\u7F29\uFF09\u3002 */
+.dchat-botMeta > .dchat-code {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dchat-botError {
   font-size: 12px;
@@ -1410,6 +1438,8 @@ var CSS = `
   font-size: 12px;
   padding: 4px 10px;
   cursor: pointer;
+  /* \u4E2D\u6587\u6309\u94AE\u88AB\u538B\u7A84\u65F6\u4F1A\u4E8C\u5B57\u7AD6\u6392\uFF0C\u4EFB\u4F55\u6309\u94AE\u90FD\u4E0D\u5141\u8BB8\u6298\u884C\u3002 */
+  white-space: nowrap;
 }
 .dchat-button:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
@@ -1417,6 +1447,18 @@ var CSS = `
 .dchat-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* \u6B21\u8981\u5165\u53E3\uFF08\u5982\u300C\u7248\u672C\u4E0E\u66F4\u65B0\u300D\uFF09\uFF1A\u6587\u5B57\u94FE\u63A5\u5F62\u6001\uFF0C\u4E0D\u548C DSH \u81EA\u5DF1\u7684\u5B9E\u5FC3\u6309\u94AE\u62A2\u6CE8\u610F\u529B\u3002 */
+.dchat-buttonLink {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dsw-alias-link);
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.dchat-buttonLink:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
 }
 .dchat-status {
   display: inline-flex;
@@ -2165,7 +2207,7 @@ function formatTime(value) {
   return `${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}:${pad(time.getMinutes())}`;
 }
 function BotList(props) {
-  const { channelId, label, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
+  const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
   const [state, setState] = React6.useState({ phase: "loading", bots: [], error: null });
   const load = React6.useCallback(() => {
@@ -2185,6 +2227,7 @@ function BotList(props) {
     Panel2,
     {
       title: `${label()} \xB7 ${t("\u673A\u5668\u4EBA")}`,
+      description: note || null,
       actions: h5("button", {
         type: "button",
         className: "dchat-button",
@@ -2201,36 +2244,40 @@ function BotList(props) {
       className: "dchat-button",
       onClick: () => onOpenSettings(null)
     }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
-    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot) => h5(
-      "li",
-      {
-        key: bot.botId,
-        className: "dchat-botRow"
-      },
-      h5(
-        "div",
-        { className: "dchat-botMain" },
+    bots.length > 0 ? h5("ul", { className: "dchat-botList" }, bots.map((bot) => {
+      const title = bot.name || bot.botId;
+      const showId = Boolean(bot.botId) && bot.botId !== title;
+      return h5(
+        "li",
+        {
+          key: bot.botId,
+          className: "dchat-botRow"
+        },
         h5(
           "div",
-          { className: "dchat-botTitle" },
-          h5("strong", null, bot.name || bot.botId),
-          h5(StatusPill2, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? "\u5DF2\u505C\u6B62") })
+          { className: "dchat-botMain" },
+          h5(
+            "div",
+            { className: "dchat-botTitle" },
+            h5("strong", { title }, title),
+            h5(StatusPill2, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? "\u5DF2\u505C\u6B62") })
+          ),
+          h5(
+            "div",
+            { className: "dchat-botMeta" },
+            showId ? h5("span", { className: "dchat-code" }, bot.botId) : null,
+            h5("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
+            h5("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
+          ),
+          bot.errorMessage || bot.lastError ? h5("div", { className: "dchat-botError" }, bot.errorMessage ?? bot.lastError) : null
         ),
-        h5(
-          "div",
-          { className: "dchat-botMeta" },
-          h5("span", { className: "dchat-code" }, bot.botId),
-          h5("span", null, `${t("\u5DF2\u5904\u7406")} ${bot.handled ?? 0}`),
-          h5("span", null, `${t("\u6700\u8FD1")} ${formatTime(bot.lastHandledAt)}`)
-        ),
-        bot.errorMessage || bot.lastError ? h5("div", { className: "dchat-botError" }, bot.errorMessage ?? bot.lastError) : null
-      ),
-      h5("button", {
-        type: "button",
-        className: "dchat-button",
-        onClick: () => onOpenSettings(bot.botId)
-      }, t("\u8BBE\u7F6E"))
-    ))) : null
+        h5("button", {
+          type: "button",
+          className: "dchat-button",
+          onClick: () => onOpenSettings(bot.botId)
+        }, t("\u8BBE\u7F6E"))
+      );
+    })) : null
   );
 }
 
@@ -2382,6 +2429,8 @@ function ChatSettingsSection(props) {
       key: activeEntry.id,
       channelId: activeEntry.id,
       label: activeEntry.label,
+      // 渠道能力说明（如「仅私聊」）放右栏标题下：左栏只留"图标 + 渠道名"，形态才整齐。
+      note: activeEntry.capabilities?.note ?? null,
       connection,
       chatUi,
       translate: t,
@@ -2452,8 +2501,7 @@ function ChatSettingsSection(props) {
           h7(
             "span",
             { className: "dchat-channelLabel" },
-            h7("strong", null, entry.label()),
-            entry.capabilities?.note ? h7("small", null, entry.capabilities.note) : null
+            h7("strong", null, entry.label())
           )
         ))
       ),
@@ -2478,9 +2526,10 @@ function ChatSettingsSection(props) {
         h7("span", { className: "dchat-brandHint" }, t("Chat\u673A\u5668\u4EBA"))
       ),
       // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      // 用文字链接形态，避免和 DSH 自己的实心按钮（打开配置文件）平级抢注意力。
       h7("button", {
         type: "button",
-        className: "dchat-button",
+        className: "dchat-button dchat-buttonLink",
         "aria-expanded": showVersions,
         onClick: () => setShowVersions((open) => !open)
       }, showVersions ? t("\u6536\u8D77\u7248\u672C\u4E0E\u66F4\u65B0") : t("\u7248\u672C\u4E0E\u66F4\u65B0"))

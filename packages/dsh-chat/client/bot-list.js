@@ -57,11 +57,11 @@ function formatTime(value) {
 /**
  * 机器人列表。
  *
- * @param props - { channelId, label, connection, chatUi, translate, t, onOpenSettings }。
+ * @param props - { channelId, label, note, connection, chatUi, translate, t, onOpenSettings }。
  * @returns React 元素。
  */
 export function BotList(props) {
-  const { channelId, label, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
+  const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
   const t = typeof translate === 'function' ? translate
     : (typeof frameworkT === 'function' ? frameworkT : (key) => key);
   const [state, setState] = React.useState({ phase: 'loading', bots: [], error: null });
@@ -86,6 +86,7 @@ export function BotList(props) {
 
   return h(Panel, {
     title: `${label()} · ${t('机器人')}`,
+    description: note || null,
     actions: h('button', {
       type: 'button',
       className: 'dchat-button',
@@ -107,24 +108,29 @@ export function BotList(props) {
     }, t('打开渠道设置页')))
     : null,
   bots.length > 0
-    ? h('ul', { className: 'dchat-botList' }, bots.map((bot) => h('li', {
-      key: bot.botId, className: 'dchat-botRow',
-    },
-    h('div', { className: 'dchat-botMain' },
-      h('div', { className: 'dchat-botTitle' },
-        h('strong', null, bot.name || bot.botId),
-        h(StatusPill, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? '已停止') })),
-      h('div', { className: 'dchat-botMeta' },
-        h('span', { className: 'dchat-code' }, bot.botId),
-        h('span', null, `${t('已处理')} ${bot.handled ?? 0}`),
-        h('span', null, `${t('最近')} ${formatTime(bot.lastHandledAt)}`)),
-      bot.errorMessage || bot.lastError
-        ? h('div', { className: 'dchat-botError' }, bot.errorMessage ?? bot.lastError)
-        : null),
-    h('button', {
-      type: 'button',
-      className: 'dchat-button',
-      onClick: () => onOpenSettings(bot.botId),
-    }, t('设置')))))
+    ? h('ul', { className: 'dchat-botList' }, bots.map((bot) => {
+      const title = bot.name || bot.botId;
+      // 没有名称时标题已经兜底成 botId，账号这一项就不再重复一遍。
+      const showId = Boolean(bot.botId) && bot.botId !== title;
+      return h('li', {
+        key: bot.botId, className: 'dchat-botRow',
+      },
+      h('div', { className: 'dchat-botMain' },
+        h('div', { className: 'dchat-botTitle' },
+          h('strong', { title }, title),
+          h(StatusPill, { status: bot.state, label: t(STATE_TEXT[bot.state] ?? '已停止') })),
+        h('div', { className: 'dchat-botMeta' },
+          showId ? h('span', { className: 'dchat-code' }, bot.botId) : null,
+          h('span', null, `${t('已处理')} ${bot.handled ?? 0}`),
+          h('span', null, `${t('最近')} ${formatTime(bot.lastHandledAt)}`)),
+        bot.errorMessage || bot.lastError
+          ? h('div', { className: 'dchat-botError' }, bot.errorMessage ?? bot.lastError)
+          : null),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        onClick: () => onOpenSettings(bot.botId),
+      }, t('设置')));
+    }))
     : null);
 }

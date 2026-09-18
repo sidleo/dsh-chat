@@ -80,6 +80,8 @@ export function ChatSettingsSection(props) {
       key: activeEntry.id,
       channelId: activeEntry.id,
       label: activeEntry.label,
+      // 渠道能力说明（如「仅私聊」）放右栏标题下：左栏只留"图标 + 渠道名"，形态才整齐。
+      note: activeEntry.capabilities?.note ?? null,
       connection,
       chatUi,
       translate: t,
@@ -140,8 +142,7 @@ export function ChatSettingsSection(props) {
         },
         h(ChannelMark, { entry }),
         h('span', { className: 'dchat-channelLabel' },
-          h('strong', null, entry.label()),
-          entry.capabilities?.note ? h('small', null, entry.capabilities.note) : null)))),
+          h('strong', null, entry.label()))))),
       h('main', {
         className: 'dchat-panel',
         role: 'tabpanel',
@@ -156,9 +157,10 @@ export function ChatSettingsSection(props) {
         h('strong', { className: 'dchat-brandName' }, 'DSH-Chat'),
         h('span', { className: 'dchat-brandHint' }, t('Chat机器人'))),
       // 右上角入口：版本与更新（展开后是同一块面板，收起时不请求数据）。
+      // 用文字链接形态，避免和 DSH 自己的实心按钮（打开配置文件）平级抢注意力。
       h('button', {
         type: 'button',
-        className: 'dchat-button',
+        className: 'dchat-button dchat-buttonLink',
         'aria-expanded': showVersions,
         onClick: () => setShowVersions((open) => !open),
       }, showVersions ? t('收起版本与更新') : t('版本与更新'))),
