@@ -42,6 +42,9 @@ function makePanel({
   bound = 'session-1',
   presets = [{ id: 'standard', isDefault: true }, { id: 'yh-olap' }],
   presetsFailing = false,
+  /** true：`session/list` 直接抛错（DSH 侧不可用）——读失败不能说成"从没选过模型"。 */
+  listFailing = false,
+  sessionCheckFailing = false,
   entries = { 'p2p:ou_a': { sessionId: 'session-1', workspacePath: '/ws/from-binding' } },
 } = {}) {
   const state = { ...record };
@@ -60,6 +63,7 @@ function makePanel({
       calls.push({ kind: 'invoke', namespace, method, args });
       if (method === 'modelCatalog') return CATALOG;
       if (method === 'list') {
+        if (listFailing) throw new Error('session service down');
         /**
          * 真形状：`modelSelection = { lastUsed, next }`，`next = pending ?? lastUsed`。
          * 桩里刻意让两者不同：`next` 是"刚选的"，`lastUsed` 是"上一轮真正跑过的" ——
@@ -93,9 +97,14 @@ function makePanel({
       },
     },
     reset: async (options) => calls.push({ kind: 'reset', options }),
-    sessionExists: async (sessionId) => sessionId === 'session-known',
+    sessionExists: async (sessionId) => {
+      if (sessionCheckFailing) throw new Error('gateway timeout');
+      return sessionId === 'session-known';
+    },
   };
   const sessionStore = { entries: () => entries };
+  /** 记下 warn：几条"失败必须可见"的约定只能这样验（静默吞掉就查不出来）。 */
+  const warns = [];
   const panel = createPanelService({
     settings,
     sessions,
@@ -106,9 +115,9 @@ function makePanel({
         return { presets };
       },
     },
-    logger: silentLogger,
+    logger: { ...silentLogger, warn: (...args) => warns.push(args.join(' ')) },
   });
-  return { panel, calls, state };
+  return { panel, calls, state, warns };
 }
 
 test('读面板：当前值、模型选项与推理等级、预设、工作区候选都在', async () => {
@@ -333,4 +342,33 @@ test('读不到预设列表：不当成"没有预设"放行，报错且不写设
   );
   assert.equal(state.agentPreset, undefined);
   assert.equal(calls.some((call) => call.kind === 'write'), false);
+});
+
+test('读不到会话模型选择：记 warn 并降级，不能静默当成"没选过"', async () => {
+  const { panel, warns } = makePanel({ listFailing: true });
+
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(view.model.current, null);
+  assert.equal(
+    warns.some((line) => line.includes('读取会话模型选择失败')), true,
+    '静默降级会让卡片显示"跟随 Host 默认"、日志里一行线索都没有',
+  );
+
+  // 改推理等级时不能把"读失败"说成"你从没选过模型"。
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'reasoning', value: 'high',
+    }),
+    (error) => error.code === 'chat/model-selection-unavailable' && /session service down/.test(error.message),
+  );
+});
+
+test('切换会话时校验失败不能说成"找不到会话"', async () => {
+  const { panel } = makePanel({ sessionCheckFailing: true });
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: 'session-x',
+    }),
+    (error) => error.code === 'chat/session-check-failed' && /gateway timeout/.test(error.message),
+  );
 });

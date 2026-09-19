@@ -2131,7 +2131,7 @@ function createPanelService({
   }
   async function currentSelection(sessionId) {
     if (!sessionId) return null;
-    const listed = await sessions.invoke("session", "list", { _request: {} }).catch(() => null);
+    const listed = await sessions.invoke("session", "list", { _request: {} });
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
     const projection = item?.projections?.values?.modelSelection;
     const selection = projection?.next ?? projection?.lastUsed ?? null;
@@ -2271,7 +2271,12 @@ function createPanelService({
             message: `\u5DF2\u5207\u6362\u6A21\u578B\u4E3A ${now2.provider ?? target.provider}/${now2.model ?? target.model}\u3002`
           };
         }
-        const selection = await currentSelection(sessionId);
+        const selection = await currentSelection(sessionId).catch((error) => {
+          throw panelError(
+            "chat/model-selection-unavailable",
+            `\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF1A${error?.message ?? error}`
+          );
+        });
         if (!selection) {
           throw panelError("chat/no-model", "\u5F53\u524D\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u518D\u6539\u63A8\u7406\u7B49\u7EA7\u3002");
         }
@@ -2330,7 +2335,9 @@ function createPanelService({
           return { field, value: "new", message: "\u5DF2\u89E3\u9664\u5F53\u524D\u4F1A\u8BDD\u7ED1\u5B9A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u5C06\u5F00\u542F\u65B0\u4F1A\u8BDD\u3002" };
         }
         const target = String(value);
-        const exists = await sessions.sessionExists(target).catch(() => false);
+        const exists = await sessions.sessionExists(target).catch((error) => {
+          throw panelError("chat/session-check-failed", `\u6821\u9A8C\u4F1A\u8BDD\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        });
         if (!exists) throw panelError("chat/unknown-session", `\u627E\u4E0D\u5230\u4F1A\u8BDD ${target}\u3002`);
         await sessions.bindings.bind(channelId, botId, key, { sessionId: target });
         return { field, value: target, message: `\u5DF2\u5207\u6362\u5230\u4F1A\u8BDD ${target}\u3002` };

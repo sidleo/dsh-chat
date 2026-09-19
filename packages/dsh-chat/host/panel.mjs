@@ -101,7 +101,9 @@ export function createPanelService({
    */
   async function currentSelection(sessionId) {
     if (!sessionId) return null;
-    const listed = await sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
+    // 这里**不吞异常**：吞掉会让 read() 里那句 warn 变成死代码，还会让 apply 把
+    // "这次 RPC 失败了"讲成"你从没选过模型"。读失败由调用方按各自语义处理。
+    const listed = await sessions.invoke('session', 'list', { _request: {} });
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
     const projection = item?.projections?.values?.modelSelection;
     const selection = projection?.next ?? projection?.lastUsed ?? null;
@@ -266,7 +268,11 @@ export function createPanelService({
           };
         }
         // reasoning：必须已经显式选过模型，否则"推理等级"没有落点。
-        const selection = await currentSelection(sessionId);
+        const selection = await currentSelection(sessionId).catch((error) => {
+          // 读不到 ≠ 没选过：混为一谈会把一次 RPC 失败说成"你从没选过模型"。
+          throw panelError('chat/model-selection-unavailable',
+            `读不到当前会话的模型选择：${error?.message ?? error}`);
+        });
         if (!selection) {
           throw panelError('chat/no-model', '当前会话还没有显式选择模型，先选一个模型再改推理等级。');
         }
@@ -332,7 +338,11 @@ export function createPanelService({
           return { field, value: 'new', message: '已解除当前会话绑定，下一条消息将开启新会话。' };
         }
         const target = String(value);
-        const exists = await sessions.sessionExists(target).catch(() => false);
+        // `sessionExists` 只把 not-found 折成 false，其余是真失败（DSH 侧不可用/超时）：
+        // 压成 false 会让用户拿到"找不到会话"，而真正的原因卡片和日志里都没有。
+        const exists = await sessions.sessionExists(target).catch((error) => {
+          throw panelError('chat/session-check-failed', `校验会话失败：${error?.message ?? error}`);
+        });
         if (!exists) throw panelError('chat/unknown-session', `找不到会话 ${target}。`);
         await sessions.bindings.bind(channelId, botId, key, { sessionId: target });
         return { field, value: target, message: `已切换到会话 ${target}。` };

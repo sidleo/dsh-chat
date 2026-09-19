@@ -158,7 +158,8 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      field ∈ model | reasoning | preset | workspace | session
    *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
    *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /
-   *         chat/unknown-session / chat/unknown-field），渠道把 message 原样给用户看。
+   *         chat/unknown-session / chat/session-check-failed / chat/model-selection-unavailable /
+   *         chat/unknown-field），渠道把 message 原样给用户看。
    * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**。
    */
   panel: { read, apply },
