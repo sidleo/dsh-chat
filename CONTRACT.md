@@ -149,13 +149,16 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
   /**
    * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
-   * read({ channelId, botId, key })   -> { sessionId, bound, model{current,options,efforts,currentEffort},
-   *                                        preset{current,options}, workspace{current,options} }
+   * read({ channelId, botId, key })   -> { sessionId, bound, model{current,hostDefault,failures,options,
+   *                                        efforts,currentEffort}, preset{current,options,failed},
+   *                                        workspace{current,options} }
+   *      `model.failures` 是读不到模型的 provider 及原因，`preset.failed` 表示预设列表**读失败**
+   *      （与"列表为空"是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设"。
    * apply({ channelId, botId, key, field, value })
    *      field ∈ model | reasoning | preset | workspace | session
    *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
-   *         chat/unknown-effort / chat/unknown-preset / chat/workspace-invalid / chat/unknown-session /
-   *         chat/unknown-field），渠道把 message 原样给用户看。
+   *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /
+   *         chat/unknown-session / chat/unknown-field），渠道把 message 原样给用户看。
    * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**。
    */
   panel: { read, apply },

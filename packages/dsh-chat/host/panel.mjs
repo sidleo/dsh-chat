@@ -156,17 +156,27 @@ export function createPanelService({
     return { options, hostDefault, failures };
   }
 
+  /**
+   * Agent Preset 列表。
+   *
+   * `failed` 必须与"列表为空"分开：读失败时若也返回空列表，`apply` 的校验会落进
+   * 「列表为空 → 不校验」这条放行路径，把任意 id 写进设置（fail-open），此后每次建会话
+   * 都只能静默退回 Host 默认。设置页那条同字段的写入路径遇到同样情形是 fail-closed。
+   */
   async function presetOptions() {
-    if (typeof agentPresets?.remoteExportList !== 'function') return [];
+    if (typeof agentPresets?.remoteExportList !== 'function') return { options: [], failed: false };
     try {
       const rows = (await agentPresets.remoteExportList())?.presets ?? [];
-      return rows.map((row) => ({
-        id: row.id, label: row.name && row.name !== row.id ? `${row.id} · ${row.name}` : row.id,
-        isDefault: row.isDefault === true,
-      }));
+      return {
+        options: rows.map((row) => ({
+          id: row.id, label: row.name && row.name !== row.id ? `${row.id} · ${row.name}` : row.id,
+          isDefault: row.isDefault === true,
+        })),
+        failed: false,
+      };
     } catch (error) {
       logger.warn?.(`[dsh-chat] 读取 Agent Preset 列表失败：${error?.message ?? error}`);
-      return [];
+      return { options: [], failed: true };
     }
   }
 
@@ -181,7 +191,7 @@ export function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presets, selection] = await Promise.all([
+      const [catalog, presetState, selection] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: '', name: '', message: String(error?.message ?? error) }] };
@@ -212,7 +222,9 @@ export function createPanelService({
         },
         preset: {
           current: record.agentPreset ?? null,
-          options: presets,
+          options: presetState.options,
+          // 读不到列表时卡片要如实说明（否则用户看到的是"一个预设都没有"，与事实相反）。
+          failed: presetState.failed === true,
         },
         workspace: {
           current: record.workspace ?? null,
@@ -287,7 +299,9 @@ export function createPanelService({
       if (field === 'preset') {
         const target = typeof value === 'string' && value.trim() ? value.trim() : null;
         if (target) {
-          const presets = await presetOptions();
+          const { options: presets, failed } = await presetOptions();
+          // 读失败 = 无法对账，不能当成"没有预设"放行（设置页那条路是 fail-closed）。
+          if (failed) throw panelError('chat/preset-unavailable', '读不到 Agent Preset 列表，请稍后再试。');
           if (presets.length > 0 && !presets.some((item) => item.id === target)) {
             throw panelError('chat/unknown-preset', `当前 Host 没有这个 Agent Preset：${target}`);
           }

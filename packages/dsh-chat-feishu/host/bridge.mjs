@@ -903,6 +903,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return undefined;
     }
 
+    // 与 accept() 对齐：设置与绑定都要等 hub 读完盘，否则启动窗口内会读到空文档，
+    // 门禁退化成"无策略"把**非属主**误拒（属主因 isOwner 绕过，现象只出在别人身上）。
+    await deps.ready?.();
+
     const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
 
     /**

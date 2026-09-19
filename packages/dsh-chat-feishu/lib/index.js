@@ -127111,7 +127111,14 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
     if (effortPicker.element) elements.push(effortPicker.element);
   } else if (bound && current) {
-    elements.push({ tag: "markdown", content: "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002" });
+    const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
+    const listed = (model.options ?? []).some(
+      (item) => item.provider === current.provider && item.model === current.model
+    );
+    elements.push({
+      tag: "markdown",
+      content: catalogFailures.length > 0 || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
+    });
   } else if (bound) {
     elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
   }
@@ -127128,6 +127135,9 @@ function panelCard(state, { last = null, at = null } = {}) {
     current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
   if (presetPicker.element) elements.push(presetPicker.element);
+  if (state?.preset?.failed === true) {
+    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF0C\u6682\u65F6\u53EA\u80FD\u8DDF\u968F Host \u9ED8\u8BA4\u3002" });
+  }
   if (presetPicker.hidden > 0) {
     elements.push({
       tag: "markdown",
@@ -127847,6 +127857,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u7F3A\u5C11\u4F1A\u8BDD\u6216\u64CD\u4F5C\u8005\uFF0C\u65E0\u6CD5\u8BA4\u9886\uFF08chatId=${chatId ?? "\u65E0"} operator=${operatorId ?? "\u65E0"}\uFF09`);
       return void 0;
     }
+    await deps.ready?.();
     const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
     const formFields = Object.keys(event?.action?.formValue ?? {});
     const isFormSubmit = formFields.some((field) => /^(chk_|multi_|text_)/u.test(field));

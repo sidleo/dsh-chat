@@ -168,7 +168,21 @@ export function panelCard(state, { last = null, at = null } = {}) {
     });
     if (effortPicker.element) elements.push(effortPicker.element);
   } else if (bound && current) {
-    elements.push({ tag: 'markdown', content: '当前模型不支持调节推理等级。' });
+    /**
+     * 空 `efforts` 有两种成因，措辞不能混：① 这个模型确实没有推理等级；
+     * ② 读不到模型目录（或当前模型不在目录里）。说成①是与事实相反的断言——
+     * 同一张卡上面还列着 provider 读取失败的原因。
+     */
+    const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
+    const listed = (model.options ?? []).some(
+      (item) => item.provider === current.provider && item.model === current.model,
+    );
+    elements.push({
+      tag: 'markdown',
+      content: catalogFailures.length > 0 || !listed
+        ? '读不到模型目录，暂时列不出可选推理等级（可以手打 `/reasoning <等级>`）。'
+        : '当前模型不支持调节推理等级。',
+    });
   } else if (bound) {
     elements.push({ tag: 'markdown', content: '先选一个模型，才能调推理等级。' });
   }
@@ -187,6 +201,9 @@ export function panelCard(state, { last = null, at = null } = {}) {
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
   if (presetPicker.element) elements.push(presetPicker.element);
+  if (state?.preset?.failed === true) {
+    elements.push({ tag: 'markdown', content: '读不到 Agent Preset 列表，暂时只能跟随 Host 默认。' });
+  }
   if (presetPicker.hidden > 0) {
     elements.push({
       tag: 'markdown',

@@ -225,6 +225,8 @@ async function makeBridge({
   commands = null,
   panel = null,
   statePath = null,
+  /** true：模拟"设置还没读完盘"——ready() 之前 storage.read() 读到空文档。 */
+  holdSettings = false,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -247,6 +249,8 @@ async function makeBridge({
       return interactions.claimed;
     },
   };
+  /** holdSettings=false 时一开始就算"读完了"，与改动前行为一致。 */
+  let settingsLoaded = !holdSettings;
   const state = createFeishuStateStore({
     path: statePath ?? join(dataDir, 'state.json'), logger: silentLogger,
   });
@@ -259,11 +263,15 @@ async function makeBridge({
     channelId: 'feishu',
     dataDir,
     logger: silentLogger,
-    ready: async () => {},
+    ready: async () => { settingsLoaded = true; },
     storage: {
-      read: () => ({
-        workspace: '/ws', contextEnhancement, accessPolicy: policy, model: null, agentPreset: null,
-      }),
+      read: () => {
+        // 启动竞态：设置文档还没读进来时读到的就是空文档（门禁因此读不到访问策略）。
+        if (!settingsLoaded) return {};
+        return {
+          workspace: '/ws', contextEnhancement, accessPolicy: policy, model: null, agentPreset: null,
+        };
+      },
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
     interactions,
@@ -2662,4 +2670,97 @@ test('面板改动生效但卡片刷不出去时，toast 不能说"成功"就完
   } finally {
     await app.cleanup();
   }
+});
+
+test('卡片动作要等设置读完盘再判门禁：启动窗口内不该把被授权的非属主误拒', async () => {
+  // 群里放行 ou_member（不是属主）；holdSettings 让 ready() 之前 storage 读到空文档。
+  const policy = {
+    direct: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+    group: {
+      mode: 'allowlist',
+      open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+      allowlist: { users: [{ id: 'ou_member', canExecuteCommands: true }] },
+    },
+  };
+  const app = await makeBridge({ policy, holdSettings: true });
+  try {
+    app.interactions.claimed = true;
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_approval',
+      token: 'tk_race',
+      operator: { openId: 'ou_member' },
+      action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+    assert.equal(answer.toast.type, 'success', '放行名单里的成员不该因为"读盘没读完"被误拒');
+    assert.equal(app.interactions.offers.length, 1);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板卡：推理等级为空时要说清是"读不到目录"，不能断言"模型不支持"', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const current = { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' };
+
+  // ① 目录整体读不到（failures 有值）：选项为空是"读不到"，不是"这个模型没有推理等级"。
+  const failed = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current,
+      options: [],
+      efforts: [],
+      currentEffort: 'high',
+      failures: [{ id: 'anthropic', name: 'Anthropic', message: '连接超时' }],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(failed, /读不到模型目录/);
+  assert.doesNotMatch(failed, /当前模型不支持调节推理等级/);
+
+  // ② 目录读到了、但当前模型不在里面（比如目录变了）：同样是"列不出来"，不能反过来说不支持。
+  const missing = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current,
+      options: [{ value: 'deepseek/other', provider: 'deepseek', model: 'other', efforts: [{ id: 'low', label: '低' }] }],
+      efforts: [],
+      currentEffort: 'high',
+      failures: [],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(missing, /读不到模型目录/);
+
+  // ③ 目录里有这个模型、它确实没有 efforts：这才是"不支持调节推理等级"。
+  const noEffort = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current,
+      options: [{ value: 'deepseek/deepseek-v4.1-flash', provider: 'deepseek', model: 'deepseek-v4.1-flash', efforts: [] }],
+      efforts: [],
+      currentEffort: null,
+      failures: [],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(noEffort, /当前模型不支持调节推理等级/);
+});
+
+test('控制面板卡：预设列表读不到时如实说明，不能显示成"一个预设都没有"', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null, failures: [] },
+    preset: { current: null, options: [], failed: true },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(card, /读不到 Agent Preset 列表/);
 });

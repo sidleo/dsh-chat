@@ -2174,17 +2174,20 @@ function createPanelService({
     return { options, hostDefault, failures };
   }
   async function presetOptions() {
-    if (typeof agentPresets?.remoteExportList !== "function") return [];
+    if (typeof agentPresets?.remoteExportList !== "function") return { options: [], failed: false };
     try {
       const rows = (await agentPresets.remoteExportList())?.presets ?? [];
-      return rows.map((row) => ({
-        id: row.id,
-        label: row.name && row.name !== row.id ? `${row.id} \xB7 ${row.name}` : row.id,
-        isDefault: row.isDefault === true
-      }));
+      return {
+        options: rows.map((row) => ({
+          id: row.id,
+          label: row.name && row.name !== row.id ? `${row.id} \xB7 ${row.name}` : row.id,
+          isDefault: row.isDefault === true
+        })),
+        failed: false
+      };
     } catch (error) {
       logger.warn?.(`[dsh-chat] \u8BFB\u53D6 Agent Preset \u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
-      return [];
+      return { options: [], failed: true };
     }
   }
   return Object.freeze({
@@ -2198,7 +2201,7 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presets, selection] = await Promise.all([
+      const [catalog, presetState, selection] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: "", name: "", message: String(error?.message ?? error) }] };
@@ -2226,7 +2229,9 @@ function createPanelService({
         },
         preset: {
           current: record.agentPreset ?? null,
-          options: presets
+          options: presetState.options,
+          // 读不到列表时卡片要如实说明（否则用户看到的是"一个预设都没有"，与事实相反）。
+          failed: presetState.failed === true
         },
         workspace: {
           current: record.workspace ?? null,
@@ -2297,7 +2302,8 @@ function createPanelService({
       if (field === "preset") {
         const target = typeof value === "string" && value.trim() ? value.trim() : null;
         if (target) {
-          const presets = await presetOptions();
+          const { options: presets, failed } = await presetOptions();
+          if (failed) throw panelError("chat/preset-unavailable", "\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5\u3002");
           if (presets.length > 0 && !presets.some((item) => item.id === target)) {
             throw panelError("chat/unknown-preset", `\u5F53\u524D Host \u6CA1\u6709\u8FD9\u4E2A Agent Preset\uFF1A${target}`);
           }

@@ -41,6 +41,7 @@ function makePanel({
   selection = null,
   bound = 'session-1',
   presets = [{ id: 'standard', isDefault: true }, { id: 'yh-olap' }],
+  presetsFailing = false,
   entries = { 'p2p:ou_a': { sessionId: 'session-1', workspacePath: '/ws/from-binding' } },
 } = {}) {
   const state = { ...record };
@@ -99,7 +100,12 @@ function makePanel({
     settings,
     sessions,
     sessionStore,
-    agentPresets: { remoteExportList: async () => ({ presets }) },
+    agentPresets: {
+      remoteExportList: async () => {
+        if (presetsFailing) throw new Error('preset service down');
+        return { presets };
+      },
+    },
     logger: silentLogger,
   });
   return { panel, calls, state };
@@ -309,4 +315,22 @@ test('当前模型取 next（刚选的那个），不是 lastUsed（上一轮跑
   const call = calls.find((item) => item.method === 'selectModel');
   assert.equal(call.args.request.provider, 'deepseek');
   assert.equal(call.args.request.model, 'deepseek-v4.1-flash');
+});
+
+test('读不到预设列表：不当成"没有预设"放行，报错且不写设置', async () => {
+  const { panel, calls, state } = makePanel({ presetsFailing: true, record: {} });
+
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(view.preset.failed, true, '读失败必须如实带出来，否则卡片会显示"一个预设都没有"');
+  assert.deepEqual(view.preset.options, []);
+
+  // fail-closed：读不到列表就没法对账，不能把任意 id 写进设置（写进去只会在下次建会话时才炸）。
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'ghost',
+    }),
+    (error) => error.code === 'chat/preset-unavailable',
+  );
+  assert.equal(state.agentPreset, undefined);
+  assert.equal(calls.some((call) => call.kind === 'write'), false);
 });
