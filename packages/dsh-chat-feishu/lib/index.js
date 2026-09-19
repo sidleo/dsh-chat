@@ -11207,7 +11207,7 @@ var require_form_data = __commonJS({
     util4.inherits(FormData3, CombinedStream);
     FormData3.LINE_BREAK = "\r\n";
     FormData3.DEFAULT_CONTENT_TYPE = "application/octet-stream";
-    FormData3.prototype.append = function(field, value, options) {
+    FormData3.prototype.append = function(field2, value, options) {
       options = options || {};
       if (typeof options === "string") {
         options = { filename: options };
@@ -11220,7 +11220,7 @@ var require_form_data = __commonJS({
         this._error(new Error("Arrays are not supported."));
         return;
       }
-      var header = this._multiPartHeader(field, value, options);
+      var header = this._multiPartHeader(field2, value, options);
       var footer = this._multiPartFooter();
       append2(header);
       append2(value);
@@ -11271,7 +11271,7 @@ var require_form_data = __commonJS({
         callback("Unknown stream");
       }
     };
-    FormData3.prototype._multiPartHeader = function(field, value, options) {
+    FormData3.prototype._multiPartHeader = function(field2, value, options) {
       if (typeof options.header === "string") {
         return options.header;
       }
@@ -11280,7 +11280,7 @@ var require_form_data = __commonJS({
       var contents = "";
       var headers = {
         // add custom disposition as third element or keep it two elements if not
-        "Content-Disposition": ["form-data", 'name="' + escapeHeaderParam(field) + '"'].concat(contentDisposition || []),
+        "Content-Disposition": ["form-data", 'name="' + escapeHeaderParam(field2) + '"'].concat(contentDisposition || []),
         // if no content type. allow it to be empty array
         "Content-Type": [].concat(contentType || [])
       };
@@ -27789,11 +27789,11 @@ function buildProxyUrl(targetInfo, apiPath) {
   }
   return `${parsed.protocol}//${parsed.host}${path2}`;
 }
-function buildTokenError(field, response) {
+function buildTokenError(field2, response) {
   var _a, _b;
   const code = (_a = response === null || response === void 0 ? void 0 : response.code) !== null && _a !== void 0 ? _a : "unknown";
   const msg = (_b = response === null || response === void 0 ? void 0 : response.msg) !== null && _b !== void 0 ? _b : "no message";
-  return `failed to get ${field}, code: ${code}, msg: ${msg}`;
+  return `failed to get ${field2}, code: ${code}, msg: ${msg}`;
 }
 function assertPlainObject(value, path2) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -127028,6 +127028,8 @@ function dropdown({ name: name2, action, placeholder, items, current }) {
   const element = {
     tag: "select_static",
     name: name2,
+    // 放在 column 里时按列宽撑满（默认宽度会缩成内容宽，半栏看起来会挤成一团）。
+    width: "fill",
     placeholder: { tag: "plain_text", content: placeholder },
     /**
      * 预选当前值。两个真机坑（dsh-im 记下来的）：
@@ -127047,6 +127049,20 @@ function shortPath(path2, max = 22) {
   const tail = parts.slice(-2).join("/");
   const short = `${text.startsWith("/") ? "/" : ""}\u2026/${tail}`;
   return short.length <= max ? short : `\u2026/${parts[parts.length - 1] ?? text.slice(-max)}`;
+}
+function field(label, element) {
+  return {
+    tag: "column",
+    width: "weighted",
+    weight: 1,
+    elements: [
+      { tag: "markdown", content: `**${label}**` },
+      element
+    ]
+  };
+}
+function grid(cells) {
+  return { tag: "column_set", flex_mode: "stretch", columns: cells };
 }
 function button(label, action, type = "default") {
   return {
@@ -127087,8 +127103,9 @@ function panelCard(state, { last = null, at = null } = {}) {
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: effective ? `${effective.provider}/${effective.model}` : null
   });
+  const modelCells = [];
+  if (modelPicker.element) modelCells.push(field("\u6A21\u578B", modelPicker.element));
   if (modelPicker.element) {
-    elements.push(modelPicker.element);
   } else {
     const failures = Array.isArray(model.failures) ? model.failures : [];
     const catalogUnreadable = failures.length > 0 && failures.every((item) => !item.id);
@@ -127110,18 +127127,17 @@ function panelCard(state, { last = null, at = null } = {}) {
       name: "reasoning_pick",
       action: "reasoning_pick",
       placeholder: "\u9009\u62E9\u63A8\u7406\u7B49\u7EA7",
-      // 标签自带"推理"前缀：卡片上不再有"模型与推理"这一行标题，选完只剩一个 `high · 高`
-      // 会看不出这是什么设置。
+      // 名称由格子的「推理等级」标签给出，选项本身不用再带前缀。
       items: [
-        { value: FOLLOW_DEFAULT, label: "\u63A8\u7406 \u9ED8\u8BA4" },
+        { value: FOLLOW_DEFAULT, label: "\uFF08\u6A21\u578B\u9ED8\u8BA4\uFF09" },
         ...efforts.map((effort) => ({
           value: effort.id,
-          label: `\u63A8\u7406 ${effort.id}${effort.label && effort.label !== effort.id ? ` \xB7 ${effort.label}` : ""}`
+          label: `${effort.id}${effort.label && effort.label !== effort.id ? ` \xB7 ${effort.label}` : ""}`
         }))
       ],
       current: model.currentEffort ?? FOLLOW_DEFAULT
     });
-    if (effortPicker.element) elements.push(effortPicker.element);
+    if (effortPicker.element) modelCells.push(field("\u63A8\u7406\u7B49\u7EA7", effortPicker.element));
   } else if (effective) {
     const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
     const listed = (model.options ?? []).some(
@@ -127144,10 +127160,11 @@ function panelCard(state, { last = null, at = null } = {}) {
       });
     }
   }
+  if (modelCells.length > 0) elements.push(grid(modelCells));
   elements.push({ tag: "hr" });
   elements.push({
     tag: "markdown",
-    content: "**Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A**\u3000\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF08\u6539\u5B8C\u70B9\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF09"
+    content: "\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF08\u6539\u5B8C\u70B9\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF09"
   });
   const presetPicker = dropdown({
     name: "preset_pick",
@@ -127164,7 +127181,8 @@ function panelCard(state, { last = null, at = null } = {}) {
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
-  if (presetPicker.element) elements.push(presetPicker.element);
+  const presetCells = [];
+  if (presetPicker.element) presetCells.push(field("Agent \u9884\u8BBE", presetPicker.element));
   if (state?.preset?.failed === true) {
     elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF0C\u6682\u65F6\u53EA\u80FD\u8DDF\u968F Host \u9ED8\u8BA4\u3002" });
   }
@@ -127183,7 +127201,7 @@ function panelCard(state, { last = null, at = null } = {}) {
     current: state?.workspace?.current ?? null
   });
   if (workspacePicker.element) {
-    elements.push(workspacePicker.element);
+    presetCells.push(field("\u5DE5\u4F5C\u533A", workspacePicker.element));
     if (workspacePicker.hidden > 0) {
       elements.push({
         tag: "markdown",
@@ -127201,6 +127219,7 @@ function panelCard(state, { last = null, at = null } = {}) {
       content: "\u8FD8\u6CA1\u6709\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u586B\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u5426\u5219\u65B0\u4F1A\u8BDD\u5EFA\u4E0D\u51FA\u6765\u3002"
     });
   }
+  if (presetCells.length > 0) elements.push(grid(presetCells));
   if (last?.message) {
     elements.push({ tag: "hr" });
     elements.push({
@@ -127914,7 +127933,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     await deps.ready?.();
     const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
     const formFields = Object.keys(event?.action?.formValue ?? {});
-    const isFormSubmit = formFields.some((field) => /^(chk_|multi_|text_)/u.test(field));
+    const isFormSubmit = formFields.some((field2) => /^(chk_|multi_|text_)/u.test(field2));
     const isInteractionResponse = value.dsh === "answer" || value.dsh === "approval" || isFormSubmit;
     if (!isInteractionResponse) {
       const commandAccess = commandAccessFor({ senderId: operatorId, conversationType });
@@ -128138,15 +128157,15 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
     const formValue = event?.action?.formValue ?? {};
-    const formEntries = Object.entries(formValue).filter(([field]) => field.startsWith("chk_") || field.startsWith("multi_") || field.startsWith("text_"));
+    const formEntries = Object.entries(formValue).filter(([field2]) => field2.startsWith("chk_") || field2.startsWith("multi_") || field2.startsWith("text_"));
     const truthy = (raw) => raw === true || raw === "true" || raw === 1 || raw === "1";
     let label = "";
     let questionId;
     if (formEntries.length > 0) {
       const picked = [];
-      for (const [field, raw] of formEntries) {
-        if (field.startsWith("chk_")) {
-          const matched = /^chk_(\d+)_(.+)$/.exec(field);
+      for (const [field2, raw] of formEntries) {
+        if (field2.startsWith("chk_")) {
+          const matched = /^chk_(\d+)_(.+)$/.exec(field2);
           if (!matched || !truthy(raw)) continue;
           const [, indexText, id] = matched;
           questionId = id;
@@ -128155,8 +128174,8 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
           if (typeof optionLabel === "string" && optionLabel) picked.push(optionLabel);
           continue;
         }
-        questionId = field.slice(field.indexOf("_") + 1);
-        if (field.startsWith("multi_")) {
+        questionId = field2.slice(field2.indexOf("_") + 1);
+        if (field2.startsWith("multi_")) {
           for (const item of Array.isArray(raw) ? raw : [raw]) {
             if (typeof item === "string" && item.trim()) picked.push(item.trim());
           }

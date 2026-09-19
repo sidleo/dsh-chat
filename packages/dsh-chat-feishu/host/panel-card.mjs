@@ -58,6 +58,8 @@ function dropdown({ name, action, placeholder, items, current }) {
   const element = {
     tag: 'select_static',
     name,
+    // 放在 column 里时按列宽撑满（默认宽度会缩成内容宽，半栏看起来会挤成一团）。
+    width: 'fill',
     placeholder: { tag: 'plain_text', content: placeholder },
     /**
      * 预选当前值。两个真机坑（dsh-im 记下来的）：
@@ -88,6 +90,34 @@ function shortPath(path, max = 22) {
   const tail = parts.slice(-2).join('/');
   const short = `${text.startsWith('/') ? '/' : ''}…/${tail}`;
   return short.length <= max ? short : `…/${parts[parts.length - 1] ?? text.slice(-max)}`;
+}
+
+/**
+ * 一个"带名称的设置格"：名称在上、控件在下。
+ *
+ * 飞书的 `select_static` **没有 label 字段**（查过 Card 2.0 组件文档），所以名称只能自己放：
+ * 格子内先一行 markdown 名称，再放下拉。两格并排时一行两个设置，比"四个全宽下拉"还矮。
+ */
+function field(label, element) {
+  return {
+    tag: 'column',
+    width: 'weighted',
+    weight: 1,
+    elements: [
+      { tag: 'markdown', content: `**${label}**` },
+      element,
+    ],
+  };
+}
+
+/**
+ * 设置格子的栅格。
+ *
+ * `flex_mode: 'stretch'`：窄屏（手机）时自动变成上下堆叠，每个格子仍占满宽度——
+ * 否则半栏里的模型 id / 工作区路径会被压成几个字。
+ */
+function grid(cells) {
+  return { tag: 'column_set', flex_mode: 'stretch', columns: cells };
 }
 
 function button(label, action, type = 'default') {
@@ -159,8 +189,14 @@ export function panelCard(state, { last = null, at = null } = {}) {
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: effective ? `${effective.provider}/${effective.model}` : null,
   });
+  /**
+   * 一行两个设置格；没有控件的格子不放（说明行单独跟在下面）。
+   * 并发两个下拉时高度比"四个全宽下拉"还矮，且每个都有名称——窄屏会自己堆叠。
+   */
+  const modelCells = [];
+  if (modelPicker.element) modelCells.push(field('模型', modelPicker.element));
   if (modelPicker.element) {
-    elements.push(modelPicker.element);
+    // 推理等级与模型并排：两格都放得下（窄屏会自己堆叠）。
   } else {
     // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
     // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
@@ -195,18 +231,17 @@ export function panelCard(state, { last = null, at = null } = {}) {
       name: 'reasoning_pick',
       action: 'reasoning_pick',
       placeholder: '选择推理等级',
-      // 标签自带"推理"前缀：卡片上不再有"模型与推理"这一行标题，选完只剩一个 `high · 高`
-      // 会看不出这是什么设置。
+      // 名称由格子的「推理等级」标签给出，选项本身不用再带前缀。
       items: [
-        { value: FOLLOW_DEFAULT, label: '推理 默认' },
+        { value: FOLLOW_DEFAULT, label: '（模型默认）' },
         ...efforts.map((effort) => ({
           value: effort.id,
-          label: `推理 ${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}`,
+          label: `${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}`,
         })),
       ],
       current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
-    if (effortPicker.element) elements.push(effortPicker.element);
+    if (effortPicker.element) modelCells.push(field('推理等级', effortPicker.element));
   } else if (effective) {
     /**
      * 空 `efforts` 有两种成因，措辞不能混：① 这个模型确实没有推理等级；
@@ -242,11 +277,15 @@ export function panelCard(state, { last = null, at = null } = {}) {
     }
   }
 
+  // 模型与推理并排（放在各自的说明行之前：说明行是全宽的，不该夹在两格中间）。
+  if (modelCells.length > 0) elements.push(grid(modelCells));
+
   // ② Agent 预设与工作区（机器人级：只对新会话生效）
   elements.push({ tag: 'hr' });
+  // 名称已经写在两个格子上（Agent 预设 / 工作区），这里只说生效范围。
   elements.push({
     tag: 'markdown',
-    content: '**Agent 预设与工作区**　只对新会话生效（改完点「🆕 新会话」）',
+    content: '只对新会话生效（改完点「🆕 新会话」）',
   });
   const presetPicker = dropdown({
     name: 'preset_pick',
@@ -263,7 +302,8 @@ export function panelCard(state, { last = null, at = null } = {}) {
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
-  if (presetPicker.element) elements.push(presetPicker.element);
+  const presetCells = [];
+  if (presetPicker.element) presetCells.push(field('Agent 预设', presetPicker.element));
   if (state?.preset?.failed === true) {
     elements.push({ tag: 'markdown', content: '读不到 Agent Preset 列表，暂时只能跟随 Host 默认。' });
   }
@@ -282,7 +322,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
     current: state?.workspace?.current ?? null,
   });
   if (workspacePicker.element) {
-    elements.push(workspacePicker.element);
+    presetCells.push(field('工作区', workspacePicker.element));
     if (workspacePicker.hidden > 0) {
       // 工作区没有命令兜底：只能在设置页改，所以这里要指路。
       elements.push({
@@ -302,6 +342,8 @@ export function panelCard(state, { last = null, at = null } = {}) {
       content: '还没有工作区：先在设置页填一个绝对路径，否则新会话建不出来。',
     });
   }
+
+  if (presetCells.length > 0) elements.push(grid(presetCells));
 
   /**
    * ③ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）。

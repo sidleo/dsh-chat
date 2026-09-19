@@ -2061,6 +2061,24 @@ test('提问/审批按钮不走命令门禁：它们是交互回传，受限策�
 });
 
 /** 控制面板桩：状态可改，apply 记录调用并按需失败。 */
+/**
+ * 卡片的组件可能嵌在 `column_set` 的列里（模型/推理、预设/工作区各一行两格）：
+ * 这几条测试要能按名字找到它们。
+ */
+function cardElements(card) {
+  const out = [];
+  const walk = (list) => {
+    for (const el of list ?? []) {
+      out.push(el);
+      if (el.tag === 'column_set') for (const column of el.columns ?? []) walk(column.elements);
+    }
+  };
+  walk(card.body.elements);
+  return out;
+}
+
+const cardSelects = (card) => cardElements(card).filter((el) => el.tag === 'select_static');
+
 function makePanelStub({ fail = null } = {}) {
   const applied = [];
   const state = {
@@ -2254,7 +2272,7 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
     workspace: { current: '/ws/b', options: ['/ws/a', '/ws/b'] },
   });
 
-  const picks = card.body.elements.filter((el) => el.tag === 'select_static');
+  const picks = cardSelects(card);
   const byName = Object.fromEntries(picks.map((el) => [el.name, el]));
   assert.equal(byName.model_pick.initial_index, 1, '第一个选项 = 1（不是 0）');
   assert.equal(byName.reasoning_pick.initial_index, 3, '高 是第 3 项：默认 + 低 + 高');
@@ -2289,7 +2307,7 @@ test('控制面板卡：没有会话也能选模型——改的是"机器人默�
     preset: { current: null, options: [] },
     workspace: { current: null, options: [] },
   });
-  const names = card.body.elements.filter((el) => el.tag === 'select_static').map((el) => el.name);
+  const names = cardSelects(card).map((el) => el.name);
   assert.ok(names.includes('model_pick'), '没有会话也要能选模型（存成机器人默认模型）');
   assert.ok(names.includes('reasoning_pick'), '机器人默认模型有推理等级时也要能调');
   const body = JSON.stringify(card);
@@ -2569,7 +2587,7 @@ test('控制面板卡：下拉超出上限时不静默丢——当前项一定�
     preset: { current: null, options: [] },
     workspace: { current: null, options: [] },
   });
-  const picker = card.body.elements.find((el) => el.tag === 'select_static' && el.name === 'model_pick');
+  const picker = cardSelects(card).find((el) => el.name === 'model_pick');
   assert.ok(picker.options.some((option) => option.value === 'p/m35'), '当前项必须在列表里');
   assert.equal(picker.options[picker.initial_index - 1].value, 'p/m35', 'initial_index 要指向当前项');
   assert.ok(picker.options.length > 30, '为了带上当前项可以略微超出上限');
@@ -3021,20 +3039,41 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
     workspace: { current: '/Users/zhang3/yh_zhang3/张三bot', options: ['/Users/zhang3/yh_zhang3/张三bot'] },
   });
   const body = JSON.stringify(card);
-  const names = card.body.elements.map((el) => el.tag === 'select_static' ? el.name : el.tag);
 
   // 每个设置的当前值由它自己的下拉 ✓ 表达，不再重复一整块"当前会话/模型/预设/工作区"。
-  assert.deepEqual(names, ['model_pick', 'reasoning_pick', 'hr', 'markdown', 'preset_pick', 'workspace_pick', 'hr', 'column_set']);
   assert.doesNotMatch(body, /\*\*当前会话\*\*/);
   assert.doesNotMatch(body, /不便点下拉时/, '页脚那行手打提示是废话，已删');
 
-  // 推理等级的标签自带"推理"前缀：没有分组标题时也认得出这是什么设置。
-  const effort = card.body.elements.find((el) => el.name === 'reasoning_pick');
-  assert.equal(effort.options[effort.initial_index - 1].value, 'high');
-  assert.match(effort.options[effort.initial_index - 1].text.content, /推理 high · 高/);
+  // 顶层只剩：栅格、hr、生效范围说明、栅格、hr、按钮。
+  assert.deepEqual(
+    card.body.elements.map((el) => el.tag),
+    ['column_set', 'hr', 'markdown', 'column_set', 'hr', 'column_set'],
+  );
+
+  // 每个下拉都有自己的名称：名称是同一列里的 markdown，控件在下（select_static 没有 label 字段）。
+  const labelled = (name) => {
+    const grids = card.body.elements.filter((el) => el.tag === 'column_set');
+    for (const grid of grids) {
+      for (const column of grid.columns) {
+        const pick = column.elements.find((el) => el.name === name);
+        if (pick) return { label: column.elements[0].content, pick, flexMode: grid.flex_mode };
+      }
+    }
+    return null;
+  };
+  assert.equal(labelled('model_pick').label, '**模型**');
+  assert.equal(labelled('reasoning_pick').label, '**推理等级**');
+  assert.equal(labelled('preset_pick').label, '**Agent 预设**');
+  assert.equal(labelled('workspace_pick').label, '**工作区**');
+  assert.ok(cardSelects(card).every((el) => el.width === 'fill'), '格子里要撑满列宽');
+
+  // 并排两格 + 窄屏自动堆叠（`stretch`）：手机上半栏会压扁模型 id / 路径。
+  const grids = card.body.elements.filter((el) => el.tag === 'column_set' && el.columns.length === 2);
+  assert.equal(grids.length, 2, '两组设置各一行两格');
+  assert.ok(grids.every((el) => el.flex_mode === 'stretch'));
 
   // 长路径自己截断（飞书会从尾巴截，正好截掉目录名），取值仍是完整路径。
-  const workspace = card.body.elements.find((el) => el.name === 'workspace_pick');
+  const workspace = cardSelects(card).find((el) => el.name === 'workspace_pick');
   assert.match(workspace.options[0].text.content, /\/…\/yh_zhang3\/张三bot/);
   assert.equal(workspace.options[0].value, '/Users/zhang3/yh_zhang3/张三bot');
   assert.ok(workspace.options[0].text.content.length <= 24, '要短到飞书不再二次截断（含 ✓ 前缀）');
