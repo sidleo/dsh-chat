@@ -127087,9 +127087,10 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
   } else {
     const failures = Array.isArray(model.failures) ? model.failures : [];
+    const catalogUnreadable = failures.length > 0 && failures.every((item) => !item.id);
     elements.push({
       tag: "markdown",
-      content: failures.length > 0 ? `\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\uFF0C\u4EE5\u4E0B provider \u8BFB\u53D6\u5931\u8D25\uFF1A${failures.map((item) => `
+      content: catalogUnreadable ? `\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF1A${h(String(failures[0].message).slice(0, 120))}` : failures.length > 0 ? `\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\uFF0C\u4EE5\u4E0B provider \u8BFB\u53D6\u5931\u8D25\uFF1A${failures.map((item) => `
 \xB7 ${h(item.id || item.name)}\uFF1A${h(String(item.message).slice(0, 120))}`).join("")}` : "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002"
     });
   }
@@ -127773,7 +127774,9 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     return deps.panel.read({
       channelId: deps.channelId,
       botId: bot.id,
-      key: context.key
+      key: context.key,
+      // 工作区候选只给属主：群里的卡片所有人都能展开。
+      isOwner: context.isOwner === true
     }).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u5931\u8D25\uFF1A${error?.message ?? error}`);
       return null;

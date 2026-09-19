@@ -617,22 +617,30 @@ test('菜单：/menu（及短写 /m）带上控制面板状态，卡片据此渲
   const registry = createCommandRegistry({ logger: silentLogger, services: withPanel });
   registerBuiltinCommands(registry, { listCommands: () => registry.list() });
 
-  const result = await registry.handle(context('/menu'));
+  const result = await registry.handle(context('/menu', { isOwner: true }));
   assert.ok(result.panel, '要把面板状态带给渠道');
   assert.equal(result.panel.workspace.current, '/ws');
-  assert.deepEqual(readCalls, [{ channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound' }]);
+  // 工作区候选只给属主——群里的卡片所有人都能展开（这条也是"谁在读"传下去的证据）。
+  assert.deepEqual(readCalls, [{
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound', isOwner: true,
+  }]);
+
+  const guestMenu = await registry.handle(context('/menu', { isOwner: false }));
+  assert.deepEqual(readCalls.at(-1), {
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound', isOwner: false,
+  }, '非属主要如实传 false，由 hub 决定不给工作区候选');
   assert.ok(result.menu.length > 0, '命令清单仍然带着（卡片里作为子入口）');
   assert.match(result.reply, /可用命令/, '文本兜底仍要在（微信没有卡片）');
 
   // 短写 /m 等价。
-  const short = await registry.handle(context('/m'));
+  const short = await registry.handle(context('/m', { isOwner: true }));
   assert.ok(short.panel, '/m 与 /menu 同一条命令');
   assert.equal(short.menu.length, result.menu.length);
 
   // 没有面板能力时（旧部署/测试桩）不报错：退回纯命令清单。
   const plain = createCommandRegistry({ logger: silentLogger, services });
   registerBuiltinCommands(plain, { listCommands: () => plain.list() });
-  const fallback = await plain.handle(context('/menu'));
+  const fallback = await plain.handle(context('/menu', { isOwner: true }));
   assert.equal(fallback.panel, undefined);
   assert.ok(fallback.menu.length > 0);
 });

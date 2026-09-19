@@ -743,6 +743,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     if (typeof deps.panel?.read !== 'function') return null;
     return deps.panel.read({
       channelId: deps.channelId, botId: bot.id, key: context.key,
+      // 工作区候选只给属主：群里的卡片所有人都能展开。
+      isOwner: context.isOwner === true,
     }).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] 读取控制面板失败：${error?.message ?? error}`);
       return null;

@@ -2907,3 +2907,21 @@ test('卡片路径的失败要落 lastError：状态页里要有现场', async (
     await app.cleanup();
   }
 });
+
+test('控制面板卡：整目录读失败说"读不到模型目录"，不说"没有可用模型"', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    // hub 在整目录 RPC 失败时造的那条失败项（没有 provider id，只有显示名与原因）。
+    model: {
+      current: null, options: [], efforts: [], currentEffort: null,
+      failures: [{ id: '', name: '模型目录', message: 'RPC 超时' }],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(card, /读不到模型目录：RPC 超时/, '读失败要如实说读不到，并带上原因');
+  assert.doesNotMatch(card, /没有可用模型/, '读不到 ≠ 没有');
+  assert.doesNotMatch(card, /· ：/, '失败行不能没有名字');
+});

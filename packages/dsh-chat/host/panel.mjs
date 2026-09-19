@@ -186,17 +186,20 @@ export function createPanelService({
     /**
      * 读一次面板状态。
      *
-     * @param options - { channelId, botId, key }。
+     * @param options - { channelId, botId, key, isOwner }。
+     *   `isOwner` 决定要不要把工作区**候选清单**给出去：它来自这台机器人的所有会话绑定
+     *   （含属主其它会话/私聊的绝对路径），而群聊卡片是一条**群里所有人**都能展开的消息。
      * @returns 面板状态（只含叶子字段，可安全跨 RPC/序列化）。
      */
-    async read({ channelId, botId, key }) {
+    async read({ channelId, botId, key, isOwner = false }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const [catalog, presetState, selection] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
-          return { options: [], hostDefault: null, failures: [{ id: '', name: '', message: String(error?.message ?? error) }] };
+          // 整目录读失败：给这条失败一个显示名，卡片上才不会印出「· ：<原因>」这种无名行。
+          return { options: [], hostDefault: null, failures: [{ id: '', name: '模型目录', message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
         currentSelection(sessionId).catch((error) => {
@@ -230,7 +233,10 @@ export function createPanelService({
         },
         workspace: {
           current: record.workspace ?? null,
-          options: workspaceCandidates({ record, sessionStore, channelId, botId }),
+          // 候选清单里有属主其它会话的绝对路径：只给属主（非属主拿到空清单，卡片就不渲染这个下拉）。
+          options: isOwner === true
+            ? workspaceCandidates({ record, sessionStore, channelId, botId })
+            : [],
         },
       };
     },

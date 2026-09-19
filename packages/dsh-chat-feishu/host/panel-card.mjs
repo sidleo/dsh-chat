@@ -139,13 +139,21 @@ export function panelCard(state, { last = null, at = null } = {}) {
     // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
     // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
     const failures = Array.isArray(model.failures) ? model.failures : [];
+    /**
+     * 「一条也读不到」与「确实没有可用模型」是两回事：整目录 RPC 失败时
+     * `options` 也是空的，说成"没有可用模型"就是与事实相反的断言（CONTRACT.md 要求如实呈现）。
+     * 这种失败项没有 provider id，用它区分最省事。
+     */
+    const catalogUnreadable = failures.length > 0 && failures.every((item) => !item.id);
     elements.push({
       tag: 'markdown',
-      content: failures.length > 0
-        ? `当前没有可用模型，以下 provider 读取失败：${failures
-          .map((item) => `\n· ${h(item.id || item.name)}：${h(String(item.message).slice(0, 120))}`)
-          .join('')}`
-        : '当前 Host 没有可用模型。',
+      content: catalogUnreadable
+        ? `读不到模型目录：${h(String(failures[0].message).slice(0, 120))}`
+        : (failures.length > 0
+          ? `当前没有可用模型，以下 provider 读取失败：${failures
+            .map((item) => `\n· ${h(item.id || item.name)}：${h(String(item.message).slice(0, 120))}`)
+            .join('')}`
+          : '当前 Host 没有可用模型。'),
     });
   }
 

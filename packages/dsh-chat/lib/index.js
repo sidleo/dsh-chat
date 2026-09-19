@@ -1281,7 +1281,9 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
         panel = await context.services.panel.read({
           channelId: context.channelId,
           botId: context.botId,
-          key: context.key
+          key: context.key,
+          // 工作区候选含属主其它会话的绝对路径：非属主（比如群里被授权执行命令的成员）不给。
+          isOwner: context.isOwner === true
         }).catch((error) => {
           context.log?.warn?.(`[dsh-chat] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u72B6\u6001\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return null;
@@ -2207,17 +2209,19 @@ function createPanelService({
     /**
      * 读一次面板状态。
      *
-     * @param options - { channelId, botId, key }。
+     * @param options - { channelId, botId, key, isOwner }。
+     *   `isOwner` 决定要不要把工作区**候选清单**给出去：它来自这台机器人的所有会话绑定
+     *   （含属主其它会话/私聊的绝对路径），而群聊卡片是一条**群里所有人**都能展开的消息。
      * @returns 面板状态（只含叶子字段，可安全跨 RPC/序列化）。
      */
-    async read({ channelId, botId, key }) {
+    async read({ channelId, botId, key, isOwner = false }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const [catalog, presetState, selection] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          return { options: [], hostDefault: null, failures: [{ id: "", name: "", message: String(error?.message ?? error) }] };
+          return { options: [], hostDefault: null, failures: [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
         currentSelection(sessionId).catch((error) => {
@@ -2248,7 +2252,8 @@ function createPanelService({
         },
         workspace: {
           current: record.workspace ?? null,
-          options: workspaceCandidates({ record, sessionStore, channelId, botId })
+          // 候选清单里有属主其它会话的绝对路径：只给属主（非属主拿到空清单，卡片就不渲染这个下拉）。
+          options: isOwner === true ? workspaceCandidates({ record, sessionStore, channelId, botId }) : []
         }
       };
     },

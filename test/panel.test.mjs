@@ -125,7 +125,7 @@ test('读面板：当前值、模型选项与推理等级、预设、工作区�
     record: { workspace: '/ws/current', agentPreset: 'yh-olap' },
     selection: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
   });
-  const state = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  const state = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
 
   assert.equal(state.bound, true);
   assert.equal(state.sessionId, 'session-1');
@@ -394,4 +394,17 @@ test('机器人级字段（预设/工作区）只限属主：非属主改不动�
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: 'new',
   });
   assert.match(reasoning.message, /新会话/);
+});
+
+test('读面板：工作区候选只给属主（群卡是一条所有人可见的消息）', async () => {
+  const { panel } = makePanel({ record: { workspace: '/ws/current' } });
+
+  const owner = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.deepEqual(owner.workspace.options, ['/ws/current', '/ws/from-binding'],
+    '属主能看到候选（含这台机器人其它会话的工作区）');
+
+  // 非属主拿到空清单：卡片就不渲染那个下拉，看不到属主其它项目的绝对路径。
+  const guest = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g' });
+  assert.deepEqual(guest.workspace.options, []);
+  assert.equal(guest.workspace.current, '/ws/current', '当前值本身是机器人级设置，仍然如实显示');
 });

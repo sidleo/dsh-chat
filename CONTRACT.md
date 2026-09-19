@@ -149,9 +149,11 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
   /**
    * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
-   * read({ channelId, botId, key })   -> { sessionId, bound, model{current,hostDefault,failures,options,
-   *                                        efforts,currentEffort}, preset{current,options,failed},
+   * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,hostDefault,failures,
+   *                                        options,efforts,currentEffort}, preset{current,options,failed},
    *                                        workspace{current,options} }
+   *      `workspace.options` 是这台机器人各会话的工作区候选（含绝对路径）：**只给属主**，
+   *      非属主返回空清单——群聊卡片是一条群里所有人都能展开的消息。
    *      `model.failures` 是读不到模型的 provider 及原因，`preset.failed` 表示预设列表**读失败**
    *      （与"列表为空"是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设"。
    * apply({ channelId, botId, key, field, value, isOwner })
