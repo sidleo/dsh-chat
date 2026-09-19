@@ -260,7 +260,9 @@ export function panelCard(state, { last = null, at = null } = {}) {
  *
  * @param action - `event.action.value.action`。
  * @param options - `event.action.options`。
- * @returns `{ field, value, label }`；不是面板下拉时返回 null。
+ * @returns `{ field, value, label }`；不是面板下拉时返回 null；
+ *   **取值没认出来**时返回 `{ field, label, invalid: true }`——绝不能把它当成"恢复默认"，
+ *   否则用户点一下推理等级就把等级静默清掉、点一下预设就把预设静默清掉，卡上还画 ✅。
  */
 export function panelPick(action, options) {
   const map = {
@@ -271,8 +273,13 @@ export function panelPick(action, options) {
   };
   const target = map[action];
   if (!target) return null;
-  const picked = Array.isArray(options) ? (options[0] ?? '') : '';
-  // 哨兵 → 空串：hub 侧的空值语义是"恢复默认/清除"。
+  // 归一化后是数组；也容忍调用方直接给单个字符串。
+  const values = (Array.isArray(options) ? options : [options])
+    .filter((item) => typeof item === 'string' && item !== '');
+  // 空取值 = 没认出来（不是"恢复默认"）：交回调用方报错，别静默清状态。
+  if (values.length === 0) return { field: target.field, label: target.label, invalid: true };
+  const picked = values[0];
+  // 哨兵 → 空串：hub 侧的空值语义是"恢复默认/清除"（这个才是用户明确选的）。
   const value = picked === FOLLOW_DEFAULT ? '' : String(picked);
   return { field: target.field, value, label: target.label };
 }

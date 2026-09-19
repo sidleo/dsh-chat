@@ -2261,6 +2261,15 @@ test('控制面板卡：没有会话时不放下拉，直接说明要先建会�
 
 test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义在 hub 侧是空值）', async () => {
   const { panelPick } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  // 没认出取值 ≠ 恢复默认：必须走 invalid，调用方据此报错（否则会静默清掉等级/预设）。
+  assert.deepEqual(
+    panelPick('reasoning_pick', []),
+    { field: 'reasoning', label: '设置推理等级', invalid: true },
+  );
+  assert.deepEqual(
+    panelPick('preset_pick', ['', null]),
+    { field: 'preset', label: '设置 Agent 预设', invalid: true },
+  );
   assert.deepEqual(panelPick('reasoning_pick', ['__default__']), { field: 'reasoning', value: '', label: '设置推理等级' });
   assert.deepEqual(panelPick('preset_pick', ['__default__']), { field: 'preset', value: '', label: '设置 Agent 预设' });
   assert.deepEqual(panelPick('model_pick', ['deepseek/flash']), { field: 'model', value: 'deepseek/flash', label: '切换模型' });
@@ -2569,4 +2578,25 @@ test('控制面板卡：预设/工作区下拉被截断时也写明还有多少�
   assert.match(body, /预设下拉只列了前 30 个（还有 6 个没列出）/, '预设要写明没列出的数量');
   assert.match(body, /工作区下拉只列了前 30 个（还有 3 个没列出）/, '工作区要写明没列出的数量');
   assert.match(body, /其余的在设置页里选/, '工作区没有命令兜底，要指路设置页');
+});
+
+test('下拉取值认不出时报可见错误，而不是当成"恢复默认"静默清状态', async () => {
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_bad_pick',
+      operator: { openId: 'ou_owner' },
+      // 飞书没把选中值放进 action.option/options/form_value（归一化后就是空数组）
+      action: { tag: 'select_static', name: 'reasoning_pick', value: { action: 'reasoning_pick' } },
+    });
+    assert.equal(answer.toast.type, 'error');
+    assert.match(answer.toast.content, /没认出/);
+    assert.deepEqual(panel.applied, [], '绝不能把认不出的取值当成"恢复默认"应用下去');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 0, '也不该改动卡片');
+  } finally {
+    await app.cleanup();
+  }
 });

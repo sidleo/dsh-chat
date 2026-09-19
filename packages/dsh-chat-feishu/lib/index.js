@@ -127190,7 +127190,9 @@ function panelPick(action, options) {
   };
   const target = map[action];
   if (!target) return null;
-  const picked = Array.isArray(options) ? options[0] ?? "" : "";
+  const values = (Array.isArray(options) ? options : [options]).filter((item) => typeof item === "string" && item !== "");
+  if (values.length === 0) return { field: target.field, label: target.label, invalid: true };
+  const picked = values[0];
   const value = picked === FOLLOW_DEFAULT ? "" : String(picked);
   return { field: target.field, value, label: target.label };
 }
@@ -127885,7 +127887,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
     const pick2 = panelPick(value.action, event?.action?.options);
     if (pick2) {
-      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u4E0B\u62C9\uFF1A${value.action}=${pick2.value}\uFF08${bot.id}\uFF09`);
+      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u4E0B\u62C9\uFF1A${value.action}=${pick2.invalid ? "<\u6CA1\u8BA4\u51FA\u53D6\u503C>" : pick2.value}\uFF08${bot.id}\uFF09`);
+      if (pick2.invalid) {
+        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u4E0B\u62C9\u53D6\u503C\u6CA1\u8BA4\u51FA\u6765\uFF0C\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u4FEE\u6539\uFF08action=${value.action} options=${JSON.stringify(event?.action?.options ?? null)} \u539F\u59CB=${JSON.stringify(event?.action?.value ?? null)}\uFF09`);
+        return {
+          toast: { type: "error", content: "\u6CA1\u8BA4\u51FA\u8FD9\u6B21\u9009\u62E9\uFF0C\u8BF7\u91CD\u8BD5\uFF08\u4E5F\u53EF\u4EE5\u624B\u6253 /model \u7B49\u547D\u4EE4\uFF09\u3002" }
+        };
+      }
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
         const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";

@@ -956,7 +956,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
      */
     const pick = panelPick(value.action, event?.action?.options);
     if (pick) {
-      logger.info?.(`[dsh-chat-feishu] 控制面板下拉：${value.action}=${pick.value}（${bot.id}）`);
+      logger.info?.(`[dsh-chat-feishu] 控制面板下拉：${value.action}=${pick.invalid ? '<没认出取值>' : pick.value}（${bot.id}）`);
+      if (pick.invalid) {
+        // 认不出取值时必须报错：当成"恢复默认"会静默清掉推理等级/预设，还画一个 ✅。
+        logger.warn?.('[dsh-chat-feishu] 控制面板下拉取值没认出来，已拒绝这次修改'
+          + `（action=${value.action} options=${JSON.stringify(event?.action?.options ?? null)}`
+          + ` 原始=${JSON.stringify(event?.action?.value ?? null)}）`);
+        return {
+          toast: { type: 'error', content: '没认出这次选择，请重试（也可以手打 /model 等命令）。' },
+        };
+      }
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
