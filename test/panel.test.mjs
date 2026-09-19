@@ -404,7 +404,13 @@ test('读面板：工作区候选只给属主（群卡是一条所有人可见�
     '属主能看到候选（含这台机器人其它会话的工作区）');
 
   // 非属主拿到空清单：卡片就不渲染那个下拉，看不到属主其它项目的绝对路径。
-  const guest = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g' });
+  const guest = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_member' });
   assert.deepEqual(guest.workspace.options, []);
   assert.equal(guest.workspace.current, '/ws/current', '当前值本身是机器人级设置，仍然如实显示');
+
+  // 属主在**群里**开面板也不行：那张卡群里所有人都能展开。
+  const ownerInGroup = await panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true,
+  });
+  assert.deepEqual(ownerInGroup.workspace.options, [], '群卡不给候选，属主去私聊或设置页改');
 });

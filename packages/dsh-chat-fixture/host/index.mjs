@@ -61,6 +61,7 @@ export function apply(ctx) {
                 sessionsAsk: typeof deps.sessions?.ask === 'function',
                 sessionsBindings: typeof deps.sessions?.bindings?.adopt === 'function',
                 interactions: typeof deps.interactions?.offer === 'function',
+                panel: typeof deps.panel?.read === 'function',
               },
             },
           }),
