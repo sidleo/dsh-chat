@@ -79,7 +79,12 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **卡片下拉点了没反应怎么查**：先看 `logs/feishu.log` 里那行 `收到卡片回调 … 原始=`——
   原始体里有 `action.option`（或 `action.options`）就说明回调到了、是归一化没认；连这行都没有
   就先按上面「飞书卡片按钮没反应」的三步查订阅方式。归一化后的取值在 `event.action.options`，
-  `normalizeCardAction` 认三种形态（单选 `option` / 多选数组或逗号串 / `form_value[组件名]`）。
+  `normalizeCardAction` 认三种形态（单选 `option` / 多选数组或逗号串 / `form_value[组件名]`），
+  **单选的取值是原子的**（工作区路径里可能有逗号），只有多选/表单提交才按逗号拆。
+- **卡片动作算哪个会话**：回调里只有 `chat_id`，而**群和私聊的 `chat_id` 长得一样**，
+  所以「这张卡是我们发的」才是唯一可靠判据——发卡时用 `rememberCardConversation` 把
+  会话键记进 `state.json` 的 `cardConversations`（重启后仍在）。**新发一类卡片就要记得登记**，
+  漏了只会在「群绑定被清掉 + 点击者有自己的私聊绑定」时判错方向（按私聊判门禁 = 放宽）。
 - **设置页投递目标只显示 `oc_xxx` / `ou_xxx`**：名字解析要 `im:chat:readonly`（群名）与通讯录权限（人名），
   缺权限时卡片上会直接写明原因并给开通链接（`connection.status` 的 `nameHint`），日志里是 `读取群列表失败` / `读取用户信息失败`。
   这类失败会退避 30 分钟、期间不再重试（并发查询也合并成一次，免得把日志刷满），**开通权限后点「重新连接」即刻重取**。
