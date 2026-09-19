@@ -106,9 +106,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
     tag: 'markdown',
     content: [
       `**当前会话**　${bound ? `\`${h(state.sessionId)}\`` : '未绑定（下一条消息会新建）'}`,
-      `**模型**　${current
-        ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
-        : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认')}`,
+      // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
+      `**模型**　${model.selectionFailed === true
+        ? '读不到当前会话的模型选择（Host 暂时不可用），稍后再试'
+        : (current
+          ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
+          : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认'))}`,
       `**Agent 预设**　${state?.preset?.current ? `\`${h(state.preset.current)}\`` : '跟随 Host 默认'}`,
       // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
       // 写成"用默认目录"会让用户以为发条消息就能建会话。
@@ -197,7 +200,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
         : '当前模型不支持调节推理等级。',
     });
   } else if (bound) {
-    elements.push({ tag: 'markdown', content: '先选一个模型，才能调推理等级。' });
+    elements.push({
+      tag: 'markdown',
+      content: model.selectionFailed === true
+        ? '读不到当前会话的模型选择，暂时列不出推理等级。'
+        : '先选一个模型，才能调推理等级。',
+    });
   }
 
   // ③ 预设 + 工作区（机器人级：只对新会话生效）
@@ -244,6 +252,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
         content: `工作区下拉只列了前 ${MAX_OPTIONS} 个（还有 ${workspacePicker.hidden} 个没列出），其余的在设置页里选。`,
       });
     }
+  } else if (state?.workspace?.current) {
+    // 候选被有意扣下（群会话/非属主）：不能说成"还没有工作区"——同一张卡上面刚印出它的值。
+    elements.push({
+      tag: 'markdown',
+      content: '工作区候选只在私聊里给属主（群聊卡片所有人都能看到）：要改请到设置页。',
+    });
   } else {
     elements.push({ tag: 'markdown', content: '还没有可切换的工作区：先在设置页设一次，或换一台机器人。' });
   }

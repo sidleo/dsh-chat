@@ -73,6 +73,8 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   ① provider 在 **`groups[].id`**（不是 `provider`/`providerId`）——读错会一个选项都拼不出来，
   真机表现是控制面板写「当前 Host 没有可用模型」、`/models` 印 `undefined/xxx`；
   ② 当前模型在 **`projections.values.modelSelection.next`**（不是顶层 `provider/model`，也不是 `lastUsed`）
+  （读**失败**与"没选过"也是两回事：面板状态里 `model.selectionFailed` 为真、`/model` 会回「读不到」，
+  别把读失败显示成"跟随 Host 默认"）
   —— `next = pending ?? lastUsed`，而 `selectModel` 只写 `pending`；读 `lastUsed` 会把"刚切完的模型"
   显示成旧的、并在改推理等级时把模型静默改回去（官方 UI 读的也是 `next`）。
   `session/modelCatalog` 的 args 是 `{}`（不需要 `_request`）。

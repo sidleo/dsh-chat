@@ -349,6 +349,7 @@ test('读不到会话模型选择：记 warn 并降级，不能静默当成"没�
 
   const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
   assert.equal(view.model.current, null);
+  assert.equal(view.model.selectionFailed, true, '读失败要显式带出来，卡片才不会再谎报"跟随 Host 默认"');
   assert.equal(
     warns.some((line) => line.includes('读取会话模型选择失败')), true,
     '静默降级会让卡片显示"跟随 Host 默认"、日志里一行线索都没有',
@@ -413,4 +414,13 @@ test('读面板：工作区候选只给属主（群卡是一条所有人可见�
     channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true,
   });
   assert.deepEqual(ownerInGroup.workspace.options, [], '群卡不给候选，属主去私聊或设置页改');
+});
+
+test('读面板：会话模型选择读成功时 selectionFailed 是 false（别把它当默认值）', async () => {
+  const { panel } = makePanel({
+    selection: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
+  });
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(view.model.selectionFailed, false);
+  assert.equal(view.model.current?.model, 'deepseek-v4.1-flash');
 });

@@ -2220,24 +2220,27 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selection] = await Promise.all([
+      const [catalog, presetState, selectionState] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
-        currentSelection(sessionId).catch((error) => {
+        currentSelection(sessionId).then((selection2) => ({ selection: selection2, failed: false })).catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u6A21\u578B\u9009\u62E9\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          return null;
+          return { selection: null, failed: true };
         })
       ]);
       const options = catalog.options;
+      const selection = selectionState.selection;
       const currentModel = selection ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null : null;
       return {
         sessionId,
         bound: typeof sessionId === "string" && sessionId.length > 0,
         model: {
           current: selection,
+          // `true` = 这次读**失败**了（不是"没选过"）：卡片必须如实说读不到。
+          selectionFailed: selectionState.failed === true,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
           failures: catalog.failures ?? [],

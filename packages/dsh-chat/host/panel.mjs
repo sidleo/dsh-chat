@@ -197,20 +197,22 @@ export function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selection] = await Promise.all([
+      const [catalog, presetState, selectionState] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
           // 整目录读失败：给这条失败一个显示名，卡片上才不会印出「· ：<原因>」这种无名行。
           return { options: [], hostDefault: null, failures: [{ id: '', name: '模型目录', message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
-        currentSelection(sessionId).catch((error) => {
-          // 不能静默：读不到就退化成"跟随 Host 默认"，看起来像用户从没选过模型。
+        currentSelection(sessionId).then((selection) => ({ selection, failed: false })).catch((error) => {
+          // 不能静默：退化成"跟随 Host 默认"看起来像用户从没选过模型。除日志外还要带出
+          // `selectionFailed` —— 卡片据此如实说"读不到"，而不是断言一个与事实相反的状态。
           logger.warn?.(`[dsh-chat] 读取会话模型选择失败：${error?.message ?? error}`);
-          return null;
+          return { selection: null, failed: true };
         }),
       ]);
       const options = catalog.options;
+      const selection = selectionState.selection;
       const currentModel = selection
         ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null
         : null;
@@ -219,6 +221,8 @@ export function createPanelService({
         bound: typeof sessionId === 'string' && sessionId.length > 0,
         model: {
           current: selection,
+          // `true` = 这次读**失败**了（不是"没选过"）：卡片必须如实说读不到。
+          selectionFailed: selectionState.failed === true,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
           failures: catalog.failures ?? [],

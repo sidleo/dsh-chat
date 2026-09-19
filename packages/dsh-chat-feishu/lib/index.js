@@ -127062,7 +127062,8 @@ function panelCard(state, { last = null, at = null } = {}) {
     tag: "markdown",
     content: [
       `**\u5F53\u524D\u4F1A\u8BDD**\u3000${bound ? `\`${h(state.sessionId)}\`` : "\u672A\u7ED1\u5B9A\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u65B0\u5EFA\uFF09"}`,
-      `**\u6A21\u578B**\u3000${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+      // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
+      `**\u6A21\u578B**\u3000${model.selectionFailed === true ? "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5" : current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       `**Agent \u9884\u8BBE**\u3000${state?.preset?.current ? `\`${h(state.preset.current)}\`` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
       // 写成"用默认目录"会让用户以为发条消息就能建会话。
@@ -127124,7 +127125,10 @@ function panelCard(state, { last = null, at = null } = {}) {
       content: providerFailed || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
     });
   } else if (bound) {
-    elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
+    elements.push({
+      tag: "markdown",
+      content: model.selectionFailed === true ? "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u63A8\u7406\u7B49\u7EA7\u3002" : "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002"
+    });
   }
   elements.push({ tag: "hr" });
   elements.push({ tag: "markdown", content: "**Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A**\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF1A\u6539\u5B8C\u53D1 `/new` \u518D\u8BF4\u8BDD\uFF09" });
@@ -127168,6 +127172,11 @@ function panelCard(state, { last = null, at = null } = {}) {
         content: `\u5DE5\u4F5C\u533A\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${workspacePicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u5176\u4F59\u7684\u5728\u8BBE\u7F6E\u9875\u91CC\u9009\u3002`
       });
     }
+  } else if (state?.workspace?.current) {
+    elements.push({
+      tag: "markdown",
+      content: "\u5DE5\u4F5C\u533A\u5019\u9009\u53EA\u5728\u79C1\u804A\u91CC\u7ED9\u5C5E\u4E3B\uFF08\u7FA4\u804A\u5361\u7247\u6240\u6709\u4EBA\u90FD\u80FD\u770B\u5230\uFF09\uFF1A\u8981\u6539\u8BF7\u5230\u8BBE\u7F6E\u9875\u3002"
+    });
   } else {
     elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u53EF\u5207\u6362\u7684\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u8BBE\u4E00\u6B21\uFF0C\u6216\u6362\u4E00\u53F0\u673A\u5668\u4EBA\u3002" });
   }

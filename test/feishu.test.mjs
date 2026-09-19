@@ -2925,3 +2925,26 @@ test('控制面板卡：整目录读失败说"读不到模型目录"，不说"�
   assert.doesNotMatch(card, /没有可用模型/, '读不到 ≠ 没有');
   assert.doesNotMatch(card, /· ：/, '失败行不能没有名字');
 });
+
+test('控制面板卡：读不到模型选择 / 工作区候选被扣下时，都不能说成事实的反面', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+
+  // ① session/list 读失败：不能说"跟随 Host 默认"（用户的选择没丢，是这次读不到）。
+  const unreadable = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current: null, selectionFailed: true, options: [], efforts: [], currentEffort: null, failures: [],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: '/ws/a', options: [] },
+  }));
+  assert.match(unreadable, /读不到当前会话的模型选择/);
+  // 只否掉**模型那一行**的谎报（预设那行的"跟随 Host 默认"是事实）。
+  assert.doesNotMatch(unreadable, /模型\*\*　跟随 Host 默认/);
+  assert.match(unreadable, /读不到当前会话的模型选择，暂时列不出推理等级/);
+
+  // ② 工作区候选被扣下（群会话/非属主）：同一张卡上面刚印出工作区的值，不能说"还没有工作区"。
+  assert.match(unreadable, /工作区候选只在私聊里给属主/);
+  assert.doesNotMatch(unreadable, /还没有可切换的工作区/);
+});
