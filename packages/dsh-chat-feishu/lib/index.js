@@ -127014,13 +127014,18 @@ function mark(current, value, label) {
 }
 function dropdown({ name: name2, action, placeholder, items, current }) {
   const visible = items.slice(0, MAX_OPTIONS);
+  if (current && !visible.some((item) => item.value === current)) {
+    const found = items.find((item) => item.value === current);
+    if (found) visible.push(found);
+  }
+  const hidden = Math.max(0, items.length - visible.length);
   const list = visible.map((item) => ({
     text: { tag: "plain_text", content: mark(current, item.value, item.label).slice(0, 100) },
     value: h(item.value)
   }));
-  if (list.length === 0) return null;
+  if (list.length === 0) return { element: null, hidden: 0 };
   const index = visible.findIndex((item) => item.value === current);
-  return {
+  const element = {
     tag: "select_static",
     name: name2,
     placeholder: { tag: "plain_text", content: placeholder },
@@ -127033,6 +127038,7 @@ function dropdown({ name: name2, action, placeholder, items, current }) {
     options: list,
     behaviors: [{ type: "callback", value: { action } }]
   };
+  return { element, hidden };
 }
 function button(label, action, type = "default") {
   return {
@@ -127070,8 +127076,8 @@ function panelCard(state, { last = null, at = null } = {}) {
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: current ? `${current.provider}/${current.model}` : null
   });
-  if (modelPicker && bound) {
-    elements.push(modelPicker);
+  if (modelPicker.element && bound) {
+    elements.push(modelPicker.element);
   } else if (!bound) {
     elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u5728\u8FD9\u91CC\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u4E0B\u9762\u7684\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF0C\u4E4B\u540E\u5C31\u80FD\u9009\u6A21\u578B\u3002" });
   } else {
@@ -127080,6 +127086,12 @@ function panelCard(state, { last = null, at = null } = {}) {
       tag: "markdown",
       content: failures.length > 0 ? `\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\uFF0C\u4EE5\u4E0B provider \u8BFB\u53D6\u5931\u8D25\uFF1A${failures.map((item) => `
 \xB7 ${h(item.id || item.name)}\uFF1A${h(String(item.message).slice(0, 120))}`).join("")}` : "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002"
+    });
+  }
+  if (bound && modelPicker.hidden > 0) {
+    elements.push({
+      tag: "markdown",
+      content: `\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${modelPicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u624B\u6253 \`/model <provider/model>\`\u3002`
     });
   }
   const efforts = model.efforts ?? [];
@@ -127094,7 +127106,7 @@ function panelCard(state, { last = null, at = null } = {}) {
       ],
       current: model.currentEffort ?? FOLLOW_DEFAULT
     });
-    if (effortPicker) elements.push(effortPicker);
+    if (effortPicker.element) elements.push(effortPicker.element);
   } else if (bound && current) {
     elements.push({ tag: "markdown", content: "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002" });
   } else if (bound) {
@@ -127112,7 +127124,7 @@ function panelCard(state, { last = null, at = null } = {}) {
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
-  if (presetPicker) elements.push(presetPicker);
+  if (presetPicker.element) elements.push(presetPicker.element);
   const workspacePicker = dropdown({
     name: "workspace_pick",
     action: "workspace_pick",
@@ -127120,8 +127132,8 @@ function panelCard(state, { last = null, at = null } = {}) {
     items: (state?.workspace?.options ?? []).map((path2) => ({ value: path2, label: path2 })),
     current: state?.workspace?.current ?? null
   });
-  if (workspacePicker) {
-    elements.push(workspacePicker);
+  if (workspacePicker.element) {
+    elements.push(workspacePicker.element);
   } else {
     elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u53EF\u5207\u6362\u7684\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u8BBE\u4E00\u6B21\uFF0C\u6216\u6362\u4E00\u53F0\u673A\u5668\u4EBA\u3002" });
   }
@@ -128057,9 +128069,11 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
   async function markAnswered(event, title, content) {
     if (!event?.messageId || typeof gateway.markCardAnswered !== "function") return;
     try {
+      const openIds = event.operator?.openId ? [event.operator.openId] : null;
       await gateway.markCardAnswered({
         messageId: event.messageId,
         token: event.token ?? null,
+        openIds,
         title,
         content
       });

@@ -59,10 +59,24 @@ function makePanel({
       calls.push({ kind: 'invoke', namespace, method, args });
       if (method === 'modelCatalog') return CATALOG;
       if (method === 'list') {
-        // 真形状：modelSelection = { lastUsed, next }（不是顶层 provider/model）。
+        /**
+         * 真形状：`modelSelection = { lastUsed, next }`，`next = pending ?? lastUsed`。
+         * 桩里刻意让两者不同：`next` 是"刚选的"，`lastUsed` 是"上一轮真正跑过的" ——
+         * 读错字段就会把刚换的模型显示成旧的。
+         */
         return {
           items: selection
-            ? [{ sessionId: 'session-1', projections: { values: { modelSelection: { lastUsed: selection, next: null } } } }]
+            ? [{
+              sessionId: 'session-1',
+              projections: {
+                values: {
+                  modelSelection: {
+                    lastUsed: { provider: 'anthropic', model: 'claude-x', reasoningEffort: 'low' },
+                    next: selection,
+                  },
+                },
+              },
+            }]
             : [{ sessionId: 'session-1', projections: { values: {} } }],
         };
       }
@@ -274,4 +288,25 @@ test('工作区候选：当前值在前、用过的目录去重（与设置页�
     botId: 'bot_1',
   });
   assert.deepEqual(options, ['/ws/current', '/ws/from-binding']);
+});
+
+test('当前模型取 next（刚选的那个），不是 lastUsed（上一轮跑过的）', async () => {
+  // 桩里 lastUsed=anthropic/claude-x、next=deepseek/flash：读错字段就会显示成 claude-x。
+  const { panel, calls } = makePanel({
+    selection: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
+  });
+  const state = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.deepEqual(state.model.current, {
+    provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high',
+  });
+  // 推理等级也必须按 next 的模型给（读 lastUsed 会拿到另一个模型的 efforts）。
+  assert.deepEqual(state.model.efforts.map((effort) => effort.id), ['low', 'high']);
+
+  // 改推理等级时用的也必须是 next 的模型，否则会把用户刚选的模型静默改回去。
+  await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'reasoning', value: 'low',
+  });
+  const call = calls.find((item) => item.method === 'selectModel');
+  assert.equal(call.args.request.provider, 'deepseek');
+  assert.equal(call.args.request.model, 'deepseek-v4.1-flash');
 });

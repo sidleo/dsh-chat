@@ -72,8 +72,10 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **模型/推理相关都对不上时先查这两个字段名**（照着 `session/modelCatalog` 的 schema 读）：
   ① provider 在 **`groups[].id`**（不是 `provider`/`providerId`）——读错会一个选项都拼不出来，
   真机表现是控制面板写「当前 Host 没有可用模型」、`/models` 印 `undefined/xxx`；
-  ② 当前模型在 **`projections.values.modelSelection.lastUsed`**（不是顶层 `provider/model`）——
-  读错会永远显示"跟随 Host 默认"。`session/modelCatalog` 的 args 是 `{}`（不需要 `_request`）。
+  ② 当前模型在 **`projections.values.modelSelection.next`**（不是顶层 `provider/model`，也不是 `lastUsed`）
+  —— `next = pending ?? lastUsed`，而 `selectModel` 只写 `pending`；读 `lastUsed` 会把"刚切完的模型"
+  显示成旧的、并在改推理等级时把模型静默改回去（官方 UI 读的也是 `next`）。
+  `session/modelCatalog` 的 args 是 `{}`（不需要 `_request`）。
 - **卡片下拉点了没反应怎么查**：先看 `logs/feishu.log` 里那行 `收到卡片回调 … 原始=`——
   原始体里有 `action.option`（或 `action.options`）就说明回调到了、是归一化没认；连这行都没有
   就先按上面「飞书卡片按钮没反应」的三步查订阅方式。归一化后的取值在 `event.action.options`，

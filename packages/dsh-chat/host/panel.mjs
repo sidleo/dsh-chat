@@ -91,16 +91,20 @@ export function createPanelService({
   /**
    * 当前会话的模型选择。
    *
-   * 真形状是 `projections.values.modelSelection = { lastUsed, next }`（**不是**顶层
-   * provider/model——照顶层读会永远返回"没选过"，真机上表现为卡片总是"跟随 Host 默认"）。
-   * `next` 是排队中的下一次选择，优先用 `lastUsed` 更贴近"现在是什么"。
+   * 真形状是 `projections.values.modelSelection = { lastUsed, next }`（**不是**顶层 provider/model），
+   * 其中 `next = pending ?? lastUsed`：
+   * - `session/selectModel` 只写 `pending`，要等下一轮 `request/header` 才刷新 `lastUsed`；
+   * - 所以**刚在卡片上换完模型时 `next` 才是新值、`lastUsed` 还是旧的**（官方 UI 读的也是 `next`）。
+   *
+   * 因此必须 `next ?? lastUsed`：读反了会出现两个真机症状——刚选完模型卡片仍显示旧模型；
+   * 紧接着改推理等级时用旧的 provider/model 调 selectModel，把用户刚选的模型静默改回去。
    */
   async function currentSelection(sessionId) {
     if (!sessionId) return null;
     const listed = await sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
     const projection = item?.projections?.values?.modelSelection;
-    const selection = projection?.lastUsed ?? projection?.next ?? null;
+    const selection = projection?.next ?? projection?.lastUsed ?? null;
     if (!selection?.provider || !selection?.model) return null;
     return {
       provider: selection.provider,

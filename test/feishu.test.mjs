@@ -151,8 +151,8 @@ function createFakeGateway() {
       calls.approvalCards.push({ chatId, openId, request });
       return { messageId: 'om_approval_card' };
     },
-    async markCardAnswered({ messageId, token = null, title, content }) {
-      calls.markedCards.push({ messageId, token, title, content });
+    async markCardAnswered({ messageId, token = null, openIds = null, title, content }) {
+      calls.markedCards.push({ messageId, token, openIds, title, content });
       return { messageId };
     },
     /** 主动发文件/图片（投递用）。 */
@@ -2379,6 +2379,8 @@ test('审批按钮把回调 token 交给渠道（标记已处理的更新同样�
     // 回答按钮不替换卡片（由 hub 带"已回答"状态重渲染整张卡），所以这里验审批那条路。
     assert.equal(app.gateway.calls.markedCards.at(-1)?.token, 'tk_approval');
     assert.equal(app.gateway.calls.markedCards.at(-1)?.messageId, 'om_approval');
+    // 审批卡是 1.0：延迟更新必须带 open_ids，否则网关本地就会拒（300090）。
+    assert.deepEqual(app.gateway.calls.markedCards.at(-1)?.openIds, ['ou_owner']);
   } finally {
     await app.cleanup();
   }
@@ -2479,4 +2481,22 @@ test('返回控制面板失败时不谎报成功', async () => {
   } finally {
     await app.cleanup();
   }
+});
+
+test('控制面板卡：下拉超出上限时不静默丢——当前项一定在列表里，并写明还有多少没列出', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const options = Array.from({ length: 40 }, (_, index) => ({ value: `p/m${index}`, model: `m${index}` }));
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    // 当前模型排在第 36 个：截断时必须把它带进可见列表，并且选中它。
+    model: { current: { provider: 'p', model: 'm35' }, options, efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  });
+  const picker = card.body.elements.find((el) => el.tag === 'select_static' && el.name === 'model_pick');
+  assert.ok(picker.options.some((option) => option.value === 'p/m35'), '当前项必须在列表里');
+  assert.equal(picker.options[picker.initial_index - 1].value, 'p/m35', 'initial_index 要指向当前项');
+  assert.ok(picker.options.length > 30, '为了带上当前项可以略微超出上限');
+  assert.match(JSON.stringify(card), /还有 9 个没列出/, '要写明还有多少没列出（不静默丢）');
 });

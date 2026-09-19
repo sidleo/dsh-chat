@@ -187,12 +187,13 @@ async function modelCatalog(context) {
 /**
  * 当前会话的模型选择。
  *
- * 真形状是 `projections.values.modelSelection = { lastUsed, next }`；照顶层读 provider/model
- * 永远拿不到（`/model` 会一直说"没有显式选择"）。
+ * 真形状是 `projections.values.modelSelection = { lastUsed, next }`（照顶层读 provider/model
+ * 永远拿不到）。**取 `next`**：`next = pending ?? lastUsed`，而 `selectModel` 只写 `pending`，
+ * 要到下一轮请求才刷新 `lastUsed`——用 `lastUsed` 会把"刚切完的模型"读成旧的。
  */
 function selectionOf(item) {
   const projection = item?.projections?.values?.modelSelection;
-  return projection?.lastUsed ?? projection?.next ?? null;
+  return projection?.next ?? projection?.lastUsed ?? null;
 }
 
 function findModel(rows, token) {

@@ -70,10 +70,10 @@ function createServices({
             running: true,
             projections: {
               values: {
-                // 真形状：modelSelection = { lastUsed, next }。
+                // 真形状：next = pending ?? lastUsed；桩里让两者不同，读错字段就会被测出来。
                 modelSelection: {
-                  lastUsed: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
-                  next: null,
+                  lastUsed: { provider: 'anthropic', model: 'claude-x' },
+                  next: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
                 },
               },
             },

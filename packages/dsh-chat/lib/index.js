@@ -1216,7 +1216,7 @@ async function modelCatalog(context) {
 }
 function selectionOf(item) {
   const projection = item?.projections?.values?.modelSelection;
-  return projection?.lastUsed ?? projection?.next ?? null;
+  return projection?.next ?? projection?.lastUsed ?? null;
 }
 function findModel(rows, token) {
   const byIndex = indexOf(token);
@@ -2134,7 +2134,7 @@ function createPanelService({
     const listed = await sessions.invoke("session", "list", { _request: {} }).catch(() => null);
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
     const projection = item?.projections?.values?.modelSelection;
-    const selection = projection?.lastUsed ?? projection?.next ?? null;
+    const selection = projection?.next ?? projection?.lastUsed ?? null;
     if (!selection?.provider || !selection?.model) return null;
     return {
       provider: selection.provider,

@@ -1194,8 +1194,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     if (!event?.messageId || typeof gateway.markCardAnswered !== 'function') return;
     try {
       // 带 token：这是"用户刚点了这张卡"，更新要走延迟更新接口，否则会被客户端还原。
+      // 审批卡是 Card 1.0，而 1.0 的延迟更新**必须在 card 里带 open_ids**（否则飞书报 300090），
+      // 所以要把它操作者的 open_id 一起给网关。
+      const openIds = event.operator?.openId ? [event.operator.openId] : null;
       await gateway.markCardAnswered({
-        messageId: event.messageId, token: event.token ?? null, title, content,
+        messageId: event.messageId, token: event.token ?? null, openIds, title, content,
       });
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] 更新提问卡片失败：${error?.message ?? error}`);

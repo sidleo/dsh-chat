@@ -40,13 +40,22 @@ function mark(current, value, label) {
  */
 function dropdown({ name, action, placeholder, items, current }) {
   const visible = items.slice(0, MAX_OPTIONS);
+  /**
+   * 当前项必须在可见列表里：否则下拉看起来"什么都没选"（`initial_index` 只能是 0）。
+   * 命令清单那次教训是静默丢内容，这里同理——超出的数量交给调用方写在卡上。
+   */
+  if (current && !visible.some((item) => item.value === current)) {
+    const found = items.find((item) => item.value === current);
+    if (found) visible.push(found);
+  }
+  const hidden = Math.max(0, items.length - visible.length);
   const list = visible.map((item) => ({
     text: { tag: 'plain_text', content: mark(current, item.value, item.label).slice(0, 100) },
     value: h(item.value),
   }));
-  if (list.length === 0) return null;
+  if (list.length === 0) return { element: null, hidden: 0 };
   const index = visible.findIndex((item) => item.value === current);
-  return {
+  const element = {
     tag: 'select_static',
     name,
     placeholder: { tag: 'plain_text', content: placeholder },
@@ -59,6 +68,7 @@ function dropdown({ name, action, placeholder, items, current }) {
     options: list,
     behaviors: [{ type: 'callback', value: { action } }],
   };
+  return { element, hidden };
 }
 
 function button(label, action, type = 'default') {
@@ -114,8 +124,8 @@ export function panelCard(state, { last = null, at = null } = {}) {
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: current ? `${current.provider}/${current.model}` : null,
   });
-  if (modelPicker && bound) {
-    elements.push(modelPicker);
+  if (modelPicker.element && bound) {
+    elements.push(modelPicker.element);
   } else if (!bound) {
     elements.push({ tag: 'markdown', content: '还没有会话：先在这里发一条消息，或点下面的「🆕 新会话」，之后就能选模型。' });
   } else {
@@ -132,6 +142,13 @@ export function panelCard(state, { last = null, at = null } = {}) {
     });
   }
 
+  if (bound && modelPicker.hidden > 0) {
+    elements.push({
+      tag: 'markdown',
+      content: `下拉只列了前 ${MAX_OPTIONS} 个（还有 ${modelPicker.hidden} 个没列出），也可以手打 \`/model <provider/model>\`。`,
+    });
+  }
+
   const efforts = model.efforts ?? [];
   if (bound && current && efforts.length > 0) {
     const effortPicker = dropdown({
@@ -144,7 +161,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
       ],
       current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
-    if (effortPicker) elements.push(effortPicker);
+    if (effortPicker.element) elements.push(effortPicker.element);
   } else if (bound && current) {
     elements.push({ tag: 'markdown', content: '当前模型不支持调节推理等级。' });
   } else if (bound) {
@@ -164,7 +181,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
-  if (presetPicker) elements.push(presetPicker);
+  if (presetPicker.element) elements.push(presetPicker.element);
   const workspacePicker = dropdown({
     name: 'workspace_pick',
     action: 'workspace_pick',
@@ -172,8 +189,8 @@ export function panelCard(state, { last = null, at = null } = {}) {
     items: (state?.workspace?.options ?? []).map((path) => ({ value: path, label: path })),
     current: state?.workspace?.current ?? null,
   });
-  if (workspacePicker) {
-    elements.push(workspacePicker);
+  if (workspacePicker.element) {
+    elements.push(workspacePicker.element);
   } else {
     elements.push({ tag: 'markdown', content: '还没有可切换的工作区：先在设置页设一次，或换一台机器人。' });
   }
