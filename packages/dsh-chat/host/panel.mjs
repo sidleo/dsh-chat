@@ -218,10 +218,13 @@ export function createPanelService({
       /** 机器人默认模型：没有会话时选模型就写它，下一条消息新建的会话应用（见 bot-model.mjs）。 */
       const botDefault = normalizeBotModel(record.model);
       /**
-       * 卡片该显示"当前用的是哪个模型"：有会话就看会话选择；没有会话就看机器人默认。
+       * 卡片该显示"当前用的是哪个模型"：有会话就看**会话选择**（会话没显式选过 = 跟随 Host 默认，
+       * 机器人默认模型只影响新建的会话）；没有会话才看机器人默认。
        * **读会话失败时不能退回默认**——那会把"读不到"显示成一个具体的模型（谎报）。
        */
-      const effective = selectionState.failed ? null : (selection ?? botDefault);
+      const effective = selectionState.failed
+        ? null
+        : (selection ?? (sessionId ? null : botDefault));
       const effectiveModel = effective
         ? options.find((item) => item.provider === effective.provider && item.model === effective.model) ?? null
         : null;

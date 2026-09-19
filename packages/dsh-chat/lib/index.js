@@ -2298,7 +2298,7 @@ function createPanelService({
       const options = catalog.options;
       const selection = selectionState.selection;
       const botDefault = normalizeBotModel(record.model);
-      const effective = selectionState.failed ? null : selection ?? botDefault;
+      const effective = selectionState.failed ? null : selection ?? (sessionId ? null : botDefault);
       const effectiveModel = effective ? options.find((item) => item.provider === effective.provider && item.model === effective.model) ?? null : null;
       return {
         sessionId,

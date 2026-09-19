@@ -71,6 +71,25 @@ function dropdown({ name, action, placeholder, items, current }) {
   return { element, hidden };
 }
 
+/**
+ * 缩短路径用于下拉展示。
+ *
+ * 飞书会把过长的选项从**尾巴**截断——正好截掉目录名（真机上 27 个字符的路径就显示成
+ * `/Users/zhang3/yh_zhang3/张三b...`）。所以自己折中截断，**短到飞书不会再截**：保留开头
+ * 与最后两级；取值的仍然是完整路径。
+ */
+/*
+ * 默认 22：真机上 24 个字符左右就开始被截，留点余量。
+ */
+function shortPath(path, max = 22) {
+  const text = String(path ?? '');
+  if (text.length <= max) return text;
+  const parts = text.split('/').filter(Boolean);
+  const tail = parts.slice(-2).join('/');
+  const short = `${text.startsWith('/') ? '/' : ''}…/${tail}`;
+  return short.length <= max ? short : `…/${parts[parts.length - 1] ?? text.slice(-max)}`;
+}
+
 function button(label, action, type = 'default') {
   return {
     tag: 'button',
@@ -103,45 +122,40 @@ export function panelCard(state, { last = null, at = null } = {}) {
   const botDefault = model.botDefault ?? null;
   const hostDefault = model.hostDefault ?? null;
   /**
-   * "当前生效的模型"：有会话看会话选择，没会话看机器人默认。
+   * "当前生效的模型"：有会话看**会话选择**（会话没显式选过就是跟随 Host 默认，
+   * 机器人默认模型只影响"新建的会话"，跟已有会话无关）；没有会话才看机器人默认。
    * **读会话失败时不能退回默认**——那会把"读不到"显示成一个具体的模型。
    */
-  const effective = model.selectionFailed === true ? null : (current ?? botDefault);
+  const effective = model.selectionFailed === true
+    ? null
+    : (current ?? (bound ? null : botDefault));
 
-  // ① 当前状态
-  elements.push({
-    tag: 'markdown',
-    content: [
-      `**当前会话**　${bound ? `\`${h(state.sessionId)}\`` : '未绑定（下一条消息会新建）'}`,
-      // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
-      `**模型**　${model.selectionFailed === true
-        ? '读不到当前会话的模型选择（Host 暂时不可用），稍后再试'
-        : (current
-          ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
-          : (botDefault
-            ? `机器人默认 ${h(botDefault.provider)}/${h(botDefault.model)}`
-              + `${botDefault.reasoningEffort ? ` · 推理 ${h(botDefault.reasoningEffort)}` : ''}`
-              + '（对下一条消息新建的会话生效）'
-            : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认')))}`,
-      `**Agent 预设**　${state?.preset?.current ? `\`${h(state.preset.current)}\`` : '跟随 Host 默认'}`,
-      // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
-      // 写成"用默认目录"会让用户以为发条消息就能建会话。
-      `**工作区**　${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : '未设置（新会话会失败：先在设置页填一个绝对路径）'}`,
-    ].join('\n'),
-  });
-  elements.push({ tag: 'hr' });
+  /**
+   * 卡片只放"能改的东西 + 当前值"：每个设置的当前值由它自己的下拉 ✓ 表示，
+   * 所以不再重复一整块"当前会话 / 模型 / 预设 / 工作区"状态行（与下拉完全重复，
+   * 真机上把卡片撑到 1000+ px）。只在"下拉说不出话"的地方补一行说明。
+   */
 
-  // ② 模型 + 推理等级：有会话时改会话（立即生效）；没有会话时改**机器人默认模型**（对新会话生效）
-  elements.push({
-    tag: 'markdown',
-    content: bound
-      ? '**模型与推理**（立即生效，只影响当前会话）'
-      : '**模型与推理**（还没有会话：改的是**机器人默认模型**，只对下一条消息新建的会话生效，且只有属主能改）',
-  });
+  // ① 模型与推理：有会话时改会话（立即生效）；没有会话时改机器人默认模型（只对新会话生效）
+  if (!bound) {
+    elements.push({
+      tag: 'markdown',
+      content: '还没有会话：模型与推理改的是**机器人默认模型**（只对新会话生效、只有属主能改）',
+    });
+  } else if (model.selectionFailed === true) {
+    // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
+    elements.push({
+      tag: 'markdown',
+      content: '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。',
+    });
+  }
   const modelPicker = dropdown({
     name: 'model_pick',
     action: 'model_pick',
-    placeholder: '选择模型',
+    // 没显式选模型时把"实际会用哪个"写进占位，省掉一整行"跟随 Host 默认（…）"。
+    placeholder: hostDefault
+      ? `跟随 Host 默认（${hostDefault.provider}/${hostDefault.model}）`
+      : '选择模型',
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: effective ? `${effective.provider}/${effective.model}` : null,
   });
@@ -168,11 +182,10 @@ export function panelCard(state, { last = null, at = null } = {}) {
           : '当前 Host 没有可用模型。'),
     });
   }
-
-  if (bound && modelPicker.hidden > 0) {
+  if (modelPicker.hidden > 0) {
     elements.push({
       tag: 'markdown',
-      content: `模型下拉只列了前 ${MAX_OPTIONS} 个（还有 ${modelPicker.hidden} 个没列出），也可以手打 \`/model <provider/model>\`。`,
+      content: `还有 ${modelPicker.hidden} 个模型未列出：手打 \`/model <provider/model>\``,
     });
   }
 
@@ -182,9 +195,14 @@ export function panelCard(state, { last = null, at = null } = {}) {
       name: 'reasoning_pick',
       action: 'reasoning_pick',
       placeholder: '选择推理等级',
+      // 标签自带"推理"前缀：卡片上不再有"模型与推理"这一行标题，选完只剩一个 `high · 高`
+      // 会看不出这是什么设置。
       items: [
-        { value: FOLLOW_DEFAULT, label: '（模型默认）' },
-        ...efforts.map((effort) => ({ value: effort.id, label: `${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}` })),
+        { value: FOLLOW_DEFAULT, label: '推理 默认' },
+        ...efforts.map((effort) => ({
+          value: effort.id,
+          label: `推理 ${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}`,
+        })),
       ],
       current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
@@ -208,20 +226,28 @@ export function panelCard(state, { last = null, at = null } = {}) {
         ? '读不到模型目录，暂时列不出可选推理等级（可以手打 `/reasoning <等级>`）。'
         : '当前模型不支持调节推理等级。',
     });
-  } else if (model.selectionFailed === true) {
-    elements.push({ tag: 'markdown', content: '读不到当前会话的模型选择，暂时列不出推理等级。' });
-  } else if (bound) {
-    elements.push({ tag: 'markdown', content: '先选一个模型，才能调推理等级。' });
-  } else {
-    elements.push({
-      tag: 'markdown',
-      content: '还没有会话，也还没设过机器人默认模型：先在上面选一个模型，才能调推理等级。',
-    });
+  } else if ((model.options ?? []).length > 0) {
+    // 还有模型可选时才说"先选一个模型"；一个可选项都没有时上面那句已经解释过了，
+    // 再补一句只是噪音（真机上就是连着三行都在说"没有模型"）。
+    if (bound) {
+      // 读会话失败时上面已经如实说了，这里不能再断言"你还没选过模型"。
+      if (model.selectionFailed !== true) {
+        elements.push({ tag: 'markdown', content: '先选一个模型，才能调推理等级。' });
+      }
+    } else {
+      elements.push({
+        tag: 'markdown',
+        content: '还没有会话，也还没设过机器人默认模型：先在上面选一个模型，才能调推理等级。',
+      });
+    }
   }
 
-  // ③ 预设 + 工作区（机器人级：只对新会话生效）
+  // ② Agent 预设与工作区（机器人级：只对新会话生效）
   elements.push({ tag: 'hr' });
-  elements.push({ tag: 'markdown', content: '**Agent 预设与工作区**（只对新会话生效：改完发 `/new` 再说话）' });
+  elements.push({
+    tag: 'markdown',
+    content: '**Agent 预设与工作区**　只对新会话生效（改完点「🆕 新会话」）',
+  });
   const presetPicker = dropdown({
     name: 'preset_pick',
     action: 'preset_pick',
@@ -244,14 +270,15 @@ export function panelCard(state, { last = null, at = null } = {}) {
   if (presetPicker.hidden > 0) {
     elements.push({
       tag: 'markdown',
-      content: `预设下拉只列了前 ${MAX_OPTIONS} 个（还有 ${presetPicker.hidden} 个没列出），也可以手打 \`/preset <id>\`。`,
+      content: `还有 ${presetPicker.hidden} 个预设未列出：手打 \`/preset <id>\``,
     });
   }
   const workspacePicker = dropdown({
     name: 'workspace_pick',
     action: 'workspace_pick',
     placeholder: '选择工作区',
-    items: (state?.workspace?.options ?? []).map((path) => ({ value: path, label: path })),
+    // 长路径会被飞书从尾巴截掉（正好截掉目录名）：自己折中截断，保留开头与目录名。
+    items: (state?.workspace?.options ?? []).map((path) => ({ value: path, label: shortPath(path) })),
     current: state?.workspace?.current ?? null,
   });
   if (workspacePicker.element) {
@@ -260,21 +287,24 @@ export function panelCard(state, { last = null, at = null } = {}) {
       // 工作区没有命令兜底：只能在设置页改，所以这里要指路。
       elements.push({
         tag: 'markdown',
-        content: `工作区下拉只列了前 ${MAX_OPTIONS} 个（还有 ${workspacePicker.hidden} 个没列出），其余的在设置页里选。`,
+        content: `还有 ${workspacePicker.hidden} 个工作区未列出（其余在设置页里选）`,
       });
     }
   } else if (state?.workspace?.current) {
-    // 候选被有意扣下（群会话/非属主）：不能说成"还没有工作区"——同一张卡上面刚印出它的值。
+    // 候选被有意扣下（群会话/非属主）：不能说成"还没有工作区"——当前值仍然要看得见。
     elements.push({
       tag: 'markdown',
-      content: '工作区候选只在私聊里给属主（群聊卡片所有人都能看到）：要改请到设置页。',
+      content: `工作区 \`${h(shortPath(state.workspace.current, 40))}\`：候选只在私聊里给属主，要改请到设置页。`,
     });
   } else {
-    elements.push({ tag: 'markdown', content: '还没有可切换的工作区：先在设置页设一次，或换一台机器人。' });
+    elements.push({
+      tag: 'markdown',
+      content: '还没有工作区：先在设置页填一个绝对路径，否则新会话建不出来。',
+    });
   }
 
   /**
-   * ④ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）。
+   * ③ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）。
    *
    * 带一个 HH:MM:SS 时间戳：卡上"到底停在哪一次更新"是可核对的
    * （排查卡片被回滚这类问题时，这就是卡上的现场）。
@@ -288,7 +318,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
     });
   }
 
-  // ⑤ 操作按钮 + 数字兜底说明
+  // ④ 操作按钮（放在最后，手指不用往上找）
   elements.push({ tag: 'hr' });
   elements.push(row([
     button('🆕 新会话', 'new'),
@@ -296,10 +326,6 @@ export function panelCard(state, { last = null, at = null } = {}) {
     button('📖 命令清单', 'commands'),
     button('⏹ 停止', 'stop', 'danger'),
   ]));
-  elements.push({
-    tag: 'markdown',
-    content: '不便点下拉时也可以手打：`/model`、`/reasoning`、`/preset`、`/new`、`/status`。',
-  });
 
   return {
     schema: '2.0',

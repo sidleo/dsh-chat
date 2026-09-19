@@ -2293,9 +2293,12 @@ test('控制面板卡：没有会话也能选模型——改的是"机器人默�
   assert.ok(names.includes('model_pick'), '没有会话也要能选模型（存成机器人默认模型）');
   assert.ok(names.includes('reasoning_pick'), '机器人默认模型有推理等级时也要能调');
   const body = JSON.stringify(card);
-  assert.match(body, /机器人默认/);
-  assert.match(body, /下一条消息新建的会话/, '要写明"对新会话生效"，别让用户以为马上生效');
+  assert.match(body, /机器人默认模型/);
+  assert.match(body, /只对新会话生效/, '要写明"对新会话生效"，别让用户以为马上生效');
   assert.match(body, /只有属主能改/, '它是机器人级设置，文案要说明谁改得动');
+  // 少说废话：每个设置的当前值由它自己的下拉 ✓ 表示，不再重复一整块状态行，也不要页脚提示。
+  assert.doesNotMatch(body, /\*\*当前会话\*\*/, '不再重复状态行');
+  assert.doesNotMatch(body, /不便点下拉时/, '页脚那行手打提示已删');
 });
 
 test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义在 hub 侧是空值）', async () => {
@@ -2570,7 +2573,7 @@ test('控制面板卡：下拉超出上限时不静默丢——当前项一定�
   assert.ok(picker.options.some((option) => option.value === 'p/m35'), '当前项必须在列表里');
   assert.equal(picker.options[picker.initial_index - 1].value, 'p/m35', 'initial_index 要指向当前项');
   assert.ok(picker.options.length > 30, '为了带上当前项可以略微超出上限');
-  assert.match(JSON.stringify(card), /还有 9 个没列出/, '要写明还有多少没列出（不静默丢）');
+  assert.match(JSON.stringify(card), /还有 9 个模型未列出/, '要写明还有多少没列出（不静默丢）');
 });
 
 test('卡片→会话映射落盘：重启后群里的卡片仍被判成群，不会落到操作者私聊', async () => {
@@ -2633,9 +2636,8 @@ test('控制面板卡：预设/工作区下拉被截断时也写明还有多少�
     workspace: { current: null, options: workspaces },
   });
   const body = JSON.stringify(card);
-  assert.match(body, /预设下拉只列了前 30 个（还有 6 个没列出）/, '预设要写明没列出的数量');
-  assert.match(body, /工作区下拉只列了前 30 个（还有 3 个没列出）/, '工作区要写明没列出的数量');
-  assert.match(body, /其余的在设置页里选/, '工作区没有命令兜底，要指路设置页');
+  assert.match(body, /还有 6 个预设未列出：手打 `\/preset <id>`/, '预设要写明没列出的数量');
+  assert.match(body, /还有 3 个工作区未列出（其余在设置页里选）/, '工作区要写明数量并指路设置页');
 });
 
 test('下拉取值认不出时报可见错误，而不是当成"恢复默认"静默清状态', async () => {
@@ -2886,9 +2888,9 @@ test('控制面板卡：工作区未设置时如实说"新会话会失败"，预
   }));
 
   // 工作区为空 = 建会话会失败（chat/workspace-required），没有"默认目录"这回事。
-  assert.match(card, /未设置（新会话会失败/);
+  assert.match(card, /还没有工作区：先在设置页填一个绝对路径，否则新会话建不出来/);
   assert.doesNotMatch(card, /用默认目录/);
-  assert.match(card, /yh-olap · 有货率（Host 默认）/);
+  assert.match(card, /yh-olap · 有货率（Host 默认）/, '预设下拉用展示名并标出 Host 默认');
 });
 
 test('审批按钮先认领卡片自己的会话，再退到另一个候选', async () => {
@@ -2991,12 +2993,49 @@ test('控制面板卡：读不到模型选择 / 工作区候选被扣下时，�
     preset: { current: null, options: [] },
     workspace: { current: '/ws/a', options: [] },
   }));
-  assert.match(unreadable, /读不到当前会话的模型选择/);
-  // 只否掉**模型那一行**的谎报（预设那行的"跟随 Host 默认"是事实）。
-  assert.doesNotMatch(unreadable, /模型\*\*　跟随 Host 默认/);
-  assert.match(unreadable, /读不到当前会话的模型选择，暂时列不出推理等级/);
+  assert.match(unreadable, /读不到当前会话的模型选择（Host 暂时不可用）/);
+  // 读失败时不能退回"跟随 Host 默认"（那是与事实相反的状态）。
+  assert.doesNotMatch(unreadable, /跟随 Host 默认（deepseek/);
 
-  // ② 工作区候选被扣下（群会话/非属主）：同一张卡上面刚印出工作区的值，不能说"还没有工作区"。
-  assert.match(unreadable, /工作区候选只在私聊里给属主/);
-  assert.doesNotMatch(unreadable, /还没有可切换的工作区/);
+  // ② 工作区候选被扣下（群会话/非属主）：当前值仍要看得见，不能说"还没有工作区"。
+  assert.match(unreadable, /候选只在私聊里给属主/);
+  assert.match(unreadable, /\/ws\/a/, '被扣下候选时当前工作区仍要看得见');
+  assert.doesNotMatch(unreadable, /还没有工作区/);
+});
+
+test('控制面板卡：只放能改的东西——不重复状态行、不留页脚、路径短到不会被截', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-880fd592-b257-4527-b2be-d8535a362f75',
+    model: {
+      current: { provider: 'yh', model: 'gpt-5.5-luna', reasoningEffort: 'high' },
+      options: [{
+        value: 'yh/gpt-5.5-luna', provider: 'yh', model: 'gpt-5.5-luna', efforts: [{ id: 'high', label: '高' }],
+      }],
+      efforts: [{ id: 'high', label: '高' }],
+      currentEffort: 'high',
+      failures: [],
+    },
+    preset: { current: 'yh-olap', options: [{ id: 'yh-olap', label: 'yh-olap · 有货率', isDefault: true }] },
+    workspace: { current: '/Users/zhang3/yh_zhang3/张三bot', options: ['/Users/zhang3/yh_zhang3/张三bot'] },
+  });
+  const body = JSON.stringify(card);
+  const names = card.body.elements.map((el) => el.tag === 'select_static' ? el.name : el.tag);
+
+  // 每个设置的当前值由它自己的下拉 ✓ 表达，不再重复一整块"当前会话/模型/预设/工作区"。
+  assert.deepEqual(names, ['model_pick', 'reasoning_pick', 'hr', 'markdown', 'preset_pick', 'workspace_pick', 'hr', 'column_set']);
+  assert.doesNotMatch(body, /\*\*当前会话\*\*/);
+  assert.doesNotMatch(body, /不便点下拉时/, '页脚那行手打提示是废话，已删');
+
+  // 推理等级的标签自带"推理"前缀：没有分组标题时也认得出这是什么设置。
+  const effort = card.body.elements.find((el) => el.name === 'reasoning_pick');
+  assert.equal(effort.options[effort.initial_index - 1].value, 'high');
+  assert.match(effort.options[effort.initial_index - 1].text.content, /推理 high · 高/);
+
+  // 长路径自己截断（飞书会从尾巴截，正好截掉目录名），取值仍是完整路径。
+  const workspace = card.body.elements.find((el) => el.name === 'workspace_pick');
+  assert.match(workspace.options[0].text.content, /\/…\/yh_zhang3\/张三bot/);
+  assert.equal(workspace.options[0].value, '/Users/zhang3/yh_zhang3/张三bot');
+  assert.ok(workspace.options[0].text.content.length <= 24, '要短到飞书不再二次截断（含 ✓ 前缀）');
 });
