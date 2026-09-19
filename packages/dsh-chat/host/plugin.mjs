@@ -24,6 +24,7 @@ import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createDeliveryService } from './delivery.mjs';
 import { channelLogPath, createLogFileSink, withFileSink } from './file-log.mjs';
 import { readLogTail } from './log-tail.mjs';
+import { createPanelService, workspaceCandidates } from './panel.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
@@ -130,6 +131,14 @@ export function apply(ctx, config = {}) {
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
   const delivery = createDeliveryService({ settings, sessionStore, logger });
+  /**
+   * 控制面板：IM 卡片要的"当前值 + 可选项 + 应用某个选择"。
+   * agentPresets 是可选服务（某些部署没装），用 ctx.get 取、缺失时按"没有预设"处理。
+   */
+  const optionalAgentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined;
+  const panel = createPanelService({
+    settings, sessions, sessionStore, agentPresets: optionalAgentPresets, logger,
+  });
 
   function storageFor(channelId) {
     return Object.freeze({
@@ -198,6 +207,11 @@ export function apply(ctx, config = {}) {
       }),
       guidance,
       sessions,
+      /**
+       * 控制面板：渠道的可交互卡片用它读"当前值 + 可选项"、并应用用户的选择。
+       * `read({channelId, botId, key})` / `apply({channelId, botId, key, field, value})`。
+       */
+      panel,
       /** 渠道接入 IM 回传（提问/审批）：attach({ channelId, botId, send })。 */
       interactions: Object.freeze({
         attach: (options) => interactions.attach(options),
@@ -208,8 +222,6 @@ export function apply(ctx, config = {}) {
   });
 
   // 命令内核：命令操作的都是渠道无关的东西，因此 hub 实现一次、所有渠道复用。
-  // agentPresets 是可选服务（某些部署可能没装），用 ctx.get 取、缺失时命令给出提示。
-  const optionalAgentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined;
   const commands = createCommandRegistry({
     logger,
     services: {
@@ -220,6 +232,8 @@ export function apply(ctx, config = {}) {
       },
       channels: { list: () => registry.list() },
       agentPresets: optionalAgentPresets,
+      // `/menu` 用它取"当前值 + 可选项"，卡片据此渲染下拉、渠道不必自己拼状态。
+      panel,
     },
   });
   registerBuiltinCommands(commands, { hubVersion: HUB_VERSION, listCommands: () => commands.list() });
@@ -307,13 +321,10 @@ export function apply(ctx, config = {}) {
       const record = settings.read(payload.channelId, payload.botId);
       // 目录候选来自这台机器人**用过的**工作区（会话绑定表），而不是全机器的目录列表——
       // 少而准，且不会把别的项目的路径泄漏到无关机器人的设置页。
-      const boundPaths = Object.values(sessionStore.entries(payload.channelId, payload.botId))
-        .map((entry) => entry.workspacePath)
-        .filter((value) => typeof value === 'string' && value);
-      const workspacePaths = [...new Set([
-        ...(typeof record.workspace === 'string' && record.workspace ? [record.workspace] : []),
-        ...boundPaths,
-      ])];
+      // 与 IM 卡片上的工作区下拉共用同一个函数，避免两处逻辑漂移。
+      const workspacePaths = workspaceCandidates({
+        record, sessionStore, channelId: payload.channelId, botId: payload.botId,
+      });
       let presets = [];
       if (typeof optionalAgentPresets?.remoteExportList === 'function') {
         try {

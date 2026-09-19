@@ -11,7 +11,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-chat/host/plugin.mjs
-import { stat as stat4 } from "node:fs/promises";
+import { stat as stat5 } from "node:fs/promises";
 import { join as join5, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
@@ -1172,7 +1172,9 @@ function createCommandRegistry({ logger = console, services = {} } = {}) {
         return {
           handled: true,
           reply: typeof result.reply === "string" ? result.reply : "",
-          ...Array.isArray(result.menu) && result.menu.length > 0 ? { menu: result.menu } : {}
+          ...Array.isArray(result.menu) && result.menu.length > 0 ? { menu: result.menu } : {},
+          // 控制面板状态：渠道有卡片能力就渲染成可交互卡，没有就用 reply 里的文本。
+          ...result.panel && typeof result.panel === "object" ? { panel: result.panel } : {}
         };
       }
       return { handled: true, reply: result ?? "" };
@@ -1250,12 +1252,26 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
   }
   registry.register({
     name: "menu",
-    summary: "\u53D1\u4E00\u5F20\u53EF\u70B9\u7684\u83DC\u5355\u5361\u7247\uFF08\u5E38\u7528\u547D\u4EE4\uFF09",
-    execute: (context) => {
+    // `/m` 是常用入口的短写（dsh-im 也是这个）。
+    aliases: ["m"],
+    summary: "\u6253\u5F00\u63A7\u5236\u9762\u677F\uFF08\u9009\u6A21\u578B/\u63A8\u7406\u7B49\u7EA7/\u9884\u8BBE/\u5DE5\u4F5C\u533A\uFF09\uFF0C\u5E76\u5217\u51FA\u5168\u90E8\u547D\u4EE4",
+    execute: async (context) => {
       const rows = typeof listCommands === "function" ? listCommands() : [];
       const items = rows.filter((row) => row.name !== "menu").filter((row) => row.scope === "both" || row.scope === context.conversationType).filter((row) => context.isOwner === true || !OWNER_ONLY_COMMANDS.has(row.name)).map((row) => ({ label: `${PREFIX}${row.name}`, command: `${PREFIX}${row.name}` }));
-      if (items.length === 0) return "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u547D\u4EE4\u3002";
+      let panel = null;
+      if (typeof context.services.panel?.read === "function") {
+        panel = await context.services.panel.read({
+          channelId: context.channelId,
+          botId: context.botId,
+          key: context.key
+        }).catch((error) => {
+          context.log?.warn?.(`[dsh-chat] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u72B6\u6001\u5931\u8D25\uFF1A${error?.message ?? error}`);
+          return null;
+        });
+      }
+      if (items.length === 0 && !panel) return "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u547D\u4EE4\u3002";
       return {
+        ...panel ? { panel } : {},
         menu: items,
         // 没有卡片能力的渠道（微信）直接把这个文本列表发出去。
         reply: [
@@ -2053,6 +2069,242 @@ async function readLogTail(path, {
     modifiedAt: info.mtime.toISOString(),
     lines: raw.filter((line2) => line2.trim() !== "").slice(-maxLines)
   };
+}
+
+// packages/dsh-chat/host/panel.mjs
+import { stat as stat4 } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, resolve as resolvePath } from "node:path";
+function panelError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+function workspaceCandidates({ record, sessionStore, channelId, botId }) {
+  const boundPaths = Object.values(sessionStore?.entries?.(channelId, botId) ?? {}).map((entry) => entry?.workspacePath).filter((value) => typeof value === "string" && value);
+  return [.../* @__PURE__ */ new Set([
+    ...typeof record?.workspace === "string" && record.workspace ? [record.workspace] : [],
+    ...boundPaths
+  ])];
+}
+async function validateWorkspacePath(raw) {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw panelError("chat/workspace-invalid", "\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u3002");
+  }
+  const target = isAbsolute2(raw.trim()) ? resolvePath(raw.trim()) : resolvePath(raw.trim());
+  let info;
+  try {
+    info = await stat4(target);
+  } catch (error) {
+    throw panelError(
+      "chat/workspace-invalid",
+      `\u76EE\u5F55\u4E0D\u5B58\u5728\u6216\u8BFB\u4E0D\u5230\uFF1A${target}\uFF08${error?.code ?? error?.message}\uFF09`
+    );
+  }
+  if (!info.isDirectory()) {
+    throw panelError("chat/workspace-invalid", `\u4E0D\u662F\u76EE\u5F55\uFF1A${target}`);
+  }
+  return target;
+}
+function createPanelService({
+  settings,
+  sessions,
+  sessionStore = null,
+  agentPresets = null,
+  logger = console
+} = {}) {
+  if (typeof settings?.read !== "function") throw new TypeError("\u63A7\u5236\u9762\u677F\u9700\u8981\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E\u5B58\u50A8\u3002");
+  if (typeof sessions?.invoke !== "function") throw new TypeError("\u63A7\u5236\u9762\u677F\u9700\u8981\u4F1A\u8BDD\u6865\u3002");
+  function boundSessionId(channelId, botId, key) {
+    return sessions.bindings?.get?.(channelId, botId, key)?.sessionId ?? null;
+  }
+  async function currentSelection(sessionId) {
+    if (!sessionId) return null;
+    const listed = await sessions.invoke("session", "list", { _request: {} }).catch(() => null);
+    const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
+    const selection = item?.projections?.values?.modelSelection;
+    if (!selection?.provider || !selection?.model) return null;
+    return {
+      provider: selection.provider,
+      model: selection.model,
+      reasoningEffort: selection.reasoningEffort ?? null
+    };
+  }
+  async function modelOptions() {
+    const catalog = await sessions.invoke("session", "modelCatalog", {});
+    const options = [];
+    for (const group of catalog?.groups ?? []) {
+      const provider = group.provider ?? group.providerId;
+      for (const model of group.models ?? []) {
+        const id = model.id ?? model.model;
+        if (!provider || !id) continue;
+        options.push({
+          value: `${provider}/${id}`,
+          provider,
+          model: id,
+          name: model.name ?? id,
+          providerName: group.providerName ?? group.displayName ?? provider,
+          efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
+            id: effort.id,
+            label: effort.label ?? effort.name ?? effort.id
+          })),
+          defaultEffort: model.reasoning?.defaultEffort ?? null
+        });
+      }
+    }
+    return options;
+  }
+  async function presetOptions() {
+    if (typeof agentPresets?.remoteExportList !== "function") return [];
+    try {
+      const rows = (await agentPresets.remoteExportList())?.presets ?? [];
+      return rows.map((row) => ({
+        id: row.id,
+        label: row.name && row.name !== row.id ? `${row.id} \xB7 ${row.name}` : row.id,
+        isDefault: row.isDefault === true
+      }));
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u8BFB\u53D6 Agent Preset \u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return [];
+    }
+  }
+  return Object.freeze({
+    /**
+     * 读一次面板状态。
+     *
+     * @param options - { channelId, botId, key }。
+     * @returns 面板状态（只含叶子字段，可安全跨 RPC/序列化）。
+     */
+    async read({ channelId, botId, key }) {
+      await settings.ready?.();
+      const record = settings.read(channelId, botId) ?? {};
+      const sessionId = boundSessionId(channelId, botId, key);
+      const [options, presets, selection] = await Promise.all([
+        modelOptions().catch((error) => {
+          logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
+          return [];
+        }),
+        presetOptions(),
+        currentSelection(sessionId).catch(() => null)
+      ]);
+      const currentModel = selection ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null : null;
+      return {
+        sessionId,
+        bound: typeof sessionId === "string" && sessionId.length > 0,
+        model: {
+          current: selection,
+          options,
+          // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
+          efforts: currentModel?.efforts ?? [],
+          currentEffort: selection?.reasoningEffort ?? null
+        },
+        preset: {
+          current: record.agentPreset ?? null,
+          options: presets
+        },
+        workspace: {
+          current: record.workspace ?? null,
+          options: workspaceCandidates({ record, sessionStore, channelId, botId })
+        }
+      };
+    },
+    /**
+     * 应用一个选择。
+     *
+     * @param options - { channelId, botId, key, field, value }。
+     *   field ∈ model | reasoning | preset | workspace | session。
+     * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
+     */
+    async apply({ channelId, botId, key, field, value }) {
+      await settings.ready?.();
+      const record = settings.read(channelId, botId) ?? {};
+      const sessionId = boundSessionId(channelId, botId, key);
+      if (field === "model" || field === "reasoning") {
+        if (!sessionId) {
+          throw panelError(
+            "chat/no-session",
+            "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u300C\u65B0\u4F1A\u8BDD\u300D\u4E4B\u540E\u518D\u9009\u3002"
+          );
+        }
+        const options = await modelOptions();
+        if (field === "model") {
+          const target = options.find((item) => item.value === value);
+          if (!target) throw panelError("chat/unknown-model", `\u627E\u4E0D\u5230\u6A21\u578B ${value}\u3002`);
+          const selected2 = await sessions.invoke("session", "selectModel", {
+            request: { sessionId, provider: target.provider, model: target.model }
+          });
+          const now2 = selected2?.selected ?? {};
+          return {
+            field,
+            value: target.value,
+            message: `\u5DF2\u5207\u6362\u6A21\u578B\u4E3A ${now2.provider ?? target.provider}/${now2.model ?? target.model}\u3002`
+          };
+        }
+        const selection = await currentSelection(sessionId);
+        if (!selection) {
+          throw panelError("chat/no-model", "\u5F53\u524D\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u518D\u6539\u63A8\u7406\u7B49\u7EA7\u3002");
+        }
+        const currentModel = options.find((item) => item.provider === selection.provider && item.model === selection.model);
+        if (!currentModel) throw panelError("chat/unknown-model", `\u5F53\u524D\u6A21\u578B ${selection.provider}/${selection.model} \u4E0D\u5728\u53EF\u7528\u5217\u8868\u91CC\u3002`);
+        const wanted = String(value ?? "");
+        if (wanted !== "" && !currentModel.efforts.some((effort) => effort.id === wanted)) {
+          throw panelError(
+            "chat/unknown-effort",
+            `\u6A21\u578B ${currentModel.value} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7 ${wanted}\u3002`
+          );
+        }
+        const selected = await sessions.invoke("session", "selectModel", {
+          request: {
+            sessionId,
+            provider: selection.provider,
+            model: selection.model,
+            ...wanted ? { reasoningEffort: wanted } : {}
+          }
+        });
+        const now = selected?.selected ?? {};
+        return {
+          field,
+          value: wanted,
+          message: wanted ? `\u63A8\u7406\u7B49\u7EA7\u5DF2\u8BBE\u4E3A ${now.reasoningEffort ?? wanted}\u3002` : "\u63A8\u7406\u7B49\u7EA7\u5DF2\u6062\u590D\u6A21\u578B\u9ED8\u8BA4\u3002"
+        };
+      }
+      if (field === "preset") {
+        const target = typeof value === "string" && value.trim() ? value.trim() : null;
+        if (target) {
+          const presets = await presetOptions();
+          if (presets.length > 0 && !presets.some((item) => item.id === target)) {
+            throw panelError("chat/unknown-preset", `\u5F53\u524D Host \u6CA1\u6709\u8FD9\u4E2A Agent Preset\uFF1A${target}`);
+          }
+        }
+        await settings.write(channelId, botId, { agentPreset: target });
+        return {
+          field,
+          value: target,
+          message: target ? `Agent Preset \u5DF2\u8BBE\u4E3A ${target}\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF1A\u5148\u53D1 /new \u518D\u53D1\u6D88\u606F\uFF09\u3002` : "Agent Preset \u5DF2\u6539\u4E3A\u8DDF\u968F Host \u9ED8\u8BA4\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF09\u3002"
+        };
+      }
+      if (field === "workspace") {
+        const target = await validateWorkspacePath(value);
+        await settings.write(channelId, botId, { workspace: target });
+        return {
+          field,
+          value: target,
+          message: `\u5DE5\u4F5C\u533A\u5DF2\u8BBE\u4E3A ${target}\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF1A\u5148\u53D1 /new \u518D\u53D1\u6D88\u606F\uFF09\u3002`
+        };
+      }
+      if (field === "session") {
+        if (value === "new" || value === null || value === void 0) {
+          await sessions.reset({ channelId, botId, key });
+          return { field, value: "new", message: "\u5DF2\u89E3\u9664\u5F53\u524D\u4F1A\u8BDD\u7ED1\u5B9A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u5C06\u5F00\u542F\u65B0\u4F1A\u8BDD\u3002" };
+        }
+        const target = String(value);
+        const exists = await sessions.sessionExists(target).catch(() => false);
+        if (!exists) throw panelError("chat/unknown-session", `\u627E\u4E0D\u5230\u4F1A\u8BDD ${target}\u3002`);
+        await sessions.bindings.bind(channelId, botId, key, { sessionId: target });
+        return { field, value: target, message: `\u5DF2\u5207\u6362\u5230\u4F1A\u8BDD ${target}\u3002` };
+      }
+      throw panelError("chat/unknown-field", `\u9762\u677F\u4E0D\u652F\u6301\u8FD9\u4E2A\u64CD\u4F5C\uFF1A${field}`);
+    }
+  });
 }
 
 // packages/dsh-chat/host/guidance.mjs
@@ -3474,6 +3726,14 @@ function apply(ctx, config = {}) {
   });
   const rpc = createRpcCarrier(ctx, { logger });
   const delivery = createDeliveryService({ settings, sessionStore, logger });
+  const optionalAgentPresets = typeof ctx.get === "function" ? ctx.get("agentPresets") : void 0;
+  const panel = createPanelService({
+    settings,
+    sessions,
+    sessionStore,
+    agentPresets: optionalAgentPresets,
+    logger
+  });
   function storageFor(channelId) {
     return Object.freeze({
       read: (botId) => settings.read(channelId, botId),
@@ -3535,6 +3795,11 @@ function apply(ctx, config = {}) {
       }),
       guidance,
       sessions,
+      /**
+       * 控制面板：渠道的可交互卡片用它读"当前值 + 可选项"、并应用用户的选择。
+       * `read({channelId, botId, key})` / `apply({channelId, botId, key, field, value})`。
+       */
+      panel,
       /** 渠道接入 IM 回传（提问/审批）：attach({ channelId, botId, send })。 */
       interactions: Object.freeze({
         attach: (options) => interactions.attach(options),
@@ -3543,7 +3808,6 @@ function apply(ctx, config = {}) {
       })
     })
   });
-  const optionalAgentPresets = typeof ctx.get === "function" ? ctx.get("agentPresets") : void 0;
   const commands = createCommandRegistry({
     logger,
     services: {
@@ -3553,7 +3817,9 @@ function apply(ctx, config = {}) {
         write: (channelId, botId, patch) => settings.write(channelId, botId, patch)
       },
       channels: { list: () => registry.list() },
-      agentPresets: optionalAgentPresets
+      agentPresets: optionalAgentPresets,
+      // `/menu` 用它取"当前值 + 可选项"，卡片据此渲染下拉、渠道不必自己拼状态。
+      panel
     }
   });
   registerBuiltinCommands(commands, { hubVersion: HUB_VERSION, listCommands: () => commands.list() });
@@ -3622,11 +3888,12 @@ function apply(ctx, config = {}) {
       }
       await settings.ready();
       const record = settings.read(payload.channelId, payload.botId);
-      const boundPaths = Object.values(sessionStore.entries(payload.channelId, payload.botId)).map((entry) => entry.workspacePath).filter((value) => typeof value === "string" && value);
-      const workspacePaths = [.../* @__PURE__ */ new Set([
-        ...typeof record.workspace === "string" && record.workspace ? [record.workspace] : [],
-        ...boundPaths
-      ])];
+      const workspacePaths = workspaceCandidates({
+        record,
+        sessionStore,
+        channelId: payload.channelId,
+        botId: payload.botId
+      });
       let presets = [];
       if (typeof optionalAgentPresets?.remoteExportList === "function") {
         try {
@@ -3660,7 +3927,7 @@ function apply(ctx, config = {}) {
       const target = resolve3(raw.trim());
       let info;
       try {
-        info = await stat4(target);
+        info = await stat5(target);
       } catch (error) {
         return fail("chat/workspace-invalid", `\u76EE\u5F55\u4E0D\u5B58\u5728\u6216\u8BFB\u4E0D\u5230\uFF1A${target}\uFF08${error?.code ?? error?.message}\uFF09`);
       }

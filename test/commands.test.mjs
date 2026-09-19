@@ -580,3 +580,44 @@ test('菜单：/menu 列出当前会话可用的命令，属主专属的只给�
     assert.equal(item.label, item.command);
   }
 });
+
+test('菜单：/menu（及短写 /m）带上控制面板状态，卡片据此渲染下拉', async () => {
+  const { services } = createServices();
+  const readCalls = [];
+  const withPanel = {
+    ...services,
+    panel: {
+      async read(options) {
+        readCalls.push(options);
+        return {
+          bound: true,
+          sessionId: 'session-1',
+          model: { current: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' }, options: [], efforts: [] },
+          preset: { current: 'ptc', options: [] },
+          workspace: { current: '/ws', options: ['/ws'] },
+        };
+      },
+    },
+  };
+  const registry = createCommandRegistry({ logger: silentLogger, services: withPanel });
+  registerBuiltinCommands(registry, { listCommands: () => registry.list() });
+
+  const result = await registry.handle(context('/menu'));
+  assert.ok(result.panel, '要把面板状态带给渠道');
+  assert.equal(result.panel.workspace.current, '/ws');
+  assert.deepEqual(readCalls, [{ channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound' }]);
+  assert.ok(result.menu.length > 0, '命令清单仍然带着（卡片里作为子入口）');
+  assert.match(result.reply, /可用命令/, '文本兜底仍要在（微信没有卡片）');
+
+  // 短写 /m 等价。
+  const short = await registry.handle(context('/m'));
+  assert.ok(short.panel, '/m 与 /menu 同一条命令');
+  assert.equal(short.menu.length, result.menu.length);
+
+  // 没有面板能力时（旧部署/测试桩）不报错：退回纯命令清单。
+  const plain = createCommandRegistry({ logger: silentLogger, services });
+  registerBuiltinCommands(plain, { listCommands: () => plain.list() });
+  const fallback = await plain.handle(context('/menu'));
+  assert.equal(fallback.panel, undefined);
+  assert.ok(fallback.menu.length > 0);
+});

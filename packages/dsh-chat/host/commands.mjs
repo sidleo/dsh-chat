@@ -123,13 +123,15 @@ export function createCommandRegistry({ logger = console, services = {} } = {}) 
     };
     try {
       const result = await command.execute(context);
-      // 命令可以返回字符串（纯文本），也可以返回 `{ reply, menu }`：
+      // 命令可以返回字符串（纯文本），也可以返回 `{ reply, menu, panel }`：
       // 菜单卡片这类结构化结果要原样带出去，否则只能退化成文本。
       if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
         return {
           handled: true,
           reply: typeof result.reply === 'string' ? result.reply : '',
           ...(Array.isArray(result.menu) && result.menu.length > 0 ? { menu: result.menu } : {}),
+          // 控制面板状态：渠道有卡片能力就渲染成可交互卡，没有就用 reply 里的文本。
+          ...(result.panel && typeof result.panel === 'object' ? { panel: result.panel } : {}),
         };
       }
       return { handled: true, reply: result ?? '' };
@@ -228,8 +230,10 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
 
   registry.register({
     name: 'menu',
-    summary: '发一张可点的菜单卡片（常用命令）',
-    execute: (context) => {
+    // `/m` 是常用入口的短写（dsh-im 也是这个）。
+    aliases: ['m'],
+    summary: '打开控制面板（选模型/推理等级/预设/工作区），并列出全部命令',
+    execute: async (context) => {
       const rows = typeof listCommands === 'function' ? listCommands() : [];
       const items = rows
         // 菜单不该出现在菜单里；属主专属命令不给非属主看。
@@ -237,8 +241,23 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         .filter((row) => row.scope === 'both' || row.scope === context.conversationType)
         .filter((row) => context.isOwner === true || !OWNER_ONLY_COMMANDS.has(row.name))
         .map((row) => ({ label: `${PREFIX}${row.name}`, command: `${PREFIX}${row.name}` }));
-      if (items.length === 0) return '当前没有可用命令。';
+      /**
+       * 控制面板状态：有卡片能力的渠道（飞书）据此渲染**可交互卡**——下拉直接选模型、
+       * 推理等级、Agent 预设、工作区，选完立即生效；没有卡片能力的渠道（微信）用下面
+       * 的文本清单，行为与以前一致。
+       */
+      let panel = null;
+      if (typeof context.services.panel?.read === 'function') {
+        panel = await context.services.panel.read({
+          channelId: context.channelId, botId: context.botId, key: context.key,
+        }).catch((error) => {
+          context.log?.warn?.(`[dsh-chat] 读取控制面板状态失败：${error?.message ?? error}`);
+          return null;
+        });
+      }
+      if (items.length === 0 && !panel) return '当前没有可用命令。';
       return {
+        ...(panel ? { panel } : {}),
         menu: items,
         // 没有卡片能力的渠道（微信）直接把这个文本列表发出去。
         reply: [
