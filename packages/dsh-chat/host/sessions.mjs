@@ -7,7 +7,8 @@
  *   因此绝大多数方法都要包一层 `request`，且 `session/list` 的 wire 是 `_request`；
  * - `session/follow`、`session/control`、`workspace/follow` 是 **stream** 方法，
  *   必须用 `gateway.stream()`；
- * - 一轮结束 = `turn/end` 事件；最终答案是该轮最后一个 `assistant/message` 的 text 块；
+ * - 一轮结束 = `turn/end` 事件；最终答案是**该轮所有 `assistant/message` 的 text 块按顺序拼接**
+ *   （工具调用前后各有一段正文是常态，只取最后一段会丢内容——上游 Issue #112 同一根因）；
  * - 工具过程 = `tool/call` / `tool/result` 事件；
  * - 审批与提问不是 Remote 方法，而是 agent 作用域的 Cordis waterfall 事件
  *   （`approval/request`、`user-questions/request`），由 root 上的 listener 参与应答。
@@ -336,6 +337,60 @@ export function createSessionBridge({
     }
   }
 
+  /** 这个错误是不是"会话选中的模型没了"（模型被删/改名/下线）。 */
+  function modelUnavailableOf(error) {
+    if (error?.code !== 'session/model-unavailable') return null;
+    return {
+      provider: typeof error.details?.provider === 'string' ? error.details.provider : null,
+      model: typeof error.details?.model === 'string' ? error.details.model : null,
+    };
+  }
+
+  /**
+   * 模型没了就自救：切回一个**当前 Host 真的可用**的模型，然后把这一轮重试一次。
+   *
+   * 为什么值得做：模型是会话级设置，一旦那个模型被删/改名，这个会话**每次**都失败——
+   * 用户看到的是"机器人哑了"，而且他自己未必知道该去 `/model` 改（真机上就是这样卡住的）。
+   * 兜底后的选择写回会话（`selectModel`），所以下一轮不用再自救；同时给用户一句可见的说明。
+   *
+   * @returns `{ provider, model, reasoningEffort }` 或 null（找不到可用的替代）。
+   */
+  async function recoverUnavailableModel({ sessionId, failed, signal }) {
+    let options = [];
+    let hostDefault = null;
+    try {
+      const catalog = await invoke('session', 'modelCatalog', {}, signal);
+      hostDefault = catalog?.default?.provider && catalog?.default?.model ? catalog.default : null;
+      for (const group of catalog?.groups ?? []) {
+        const provider = group?.id;
+        for (const model of group?.models ?? []) {
+          if (provider && model?.id) options.push({ provider, model: model.id });
+        }
+      }
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] 模型自救时读不到模型目录：${error?.message ?? error}`);
+      return null;
+    }
+    const usable = (candidate) => candidate && candidate.provider && candidate.model
+      // 换一个**不一样**的：把同一个失效模型再选一次没有任何意义。
+      && !(failed?.provider && failed?.model
+        && candidate.provider === failed.provider && candidate.model === failed.model);
+    const target = [hostDefault, ...options].find(usable);
+    if (!target) return null;
+    try {
+      await invoke('session', 'selectModel', {
+        request: { sessionId, provider: target.provider, model: target.model },
+      }, signal);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] 模型自救失败（切到 ${target.provider}/${target.model}）：`
+        + `${error?.message ?? error}`);
+      return null;
+    }
+    logger.warn?.(`[dsh-chat] 会话 ${sessionId} 的模型不可用（${failed?.provider ?? '?'}/${failed?.model ?? '?'}），`
+      + `已自动切到 ${target.provider}/${target.model} 并重试这一轮`);
+    return { provider: target.provider, model: target.model };
+  }
+
   /**
    * 把"机器人默认模型"应用到刚建好的会话。
    *
@@ -505,8 +560,51 @@ export function createSessionBridge({
     } catch {
       // 前一个回合失败不该把后面的拖死。
     }
+    /**
+     * 跑一轮；如果这一轮是因为"选中的模型不可用"失败，切回可用模型**重试一次**。
+     *
+     * 两条失败形态都要认：① 提示词收据直接抛 `session/model-unavailable`；
+     * ② 事件流以 error 收尾（`reason.kind === 'error'`）。
+     */
+    let recovered = null;
     try {
-      return await runTurn();
+      const runOnce = async () => {
+        try {
+          return await runTurn();
+        } catch (error) {
+          const failed = modelUnavailableOf(error);
+          if (!failed) throw error;
+          // ensure() 已经绑定过会话，所以这里拿得到 sessionId（自救要用它 selectModel）。
+          return {
+            sessionId: store?.get?.(channelId, botId, key)?.sessionId ?? null,
+            text: '',
+            reason: { kind: 'error', error: sessionError(error) },
+            tools: [],
+            files: [],
+            aborted: false,
+            failed,
+          };
+        }
+      };
+
+      let result = await runOnce();
+      const failed = result?.failed ?? modelUnavailableOf(result?.reason?.error);
+      if (failed && typeof result?.sessionId === 'string' && result.sessionId) {
+        const target = await recoverUnavailableModel({ sessionId: result.sessionId, failed, signal });
+        if (target) {
+          recovered = { failed, target };
+          result = await runOnce();
+        }
+      }
+      if (!recovered) return result;
+      const notice = `⚠️ 会话原来选的模型 ${recovered.failed.provider ?? '?'}/${recovered.failed.model ?? '?'}`
+        + ` 已不可用，已自动切到 ${recovered.target.provider}/${recovered.target.model} 并重试了这一轮。`;
+      // 说明放在答案前面：用户必须知道这次回复换了模型（失败必须可见）。
+      return {
+        ...result,
+        text: `${notice}\n\n${result.text ?? ''}`.trim(),
+        recovered,
+      };
     } finally {
       const left = (queueDepth.get(queueKey) ?? 1) - 1;
       if (left <= 0) {
@@ -702,7 +800,20 @@ export function createSessionBridge({
             case 'turn/end': {
               const turn = event.data?.turn ?? currentTurn;
               const texts = assistantText.get(turn) ?? [];
-              const text = (texts.at(-1) ?? '').slice(0, MAX_ASSISTANT_TEXT);
+              /**
+               * 一轮里每个 step 各有一条定稿 `assistant/message`：**全部带回**，用空行隔开。
+               *
+               * 曾经只取 `texts.at(-1)`（最后一个 step），真机表现是"多步回答只剩最后一段"——
+               * 前面写在工具调用之前的正文整个丢了（上游 Issue #112 是同一个根因）。
+               * 模型偶尔会把同一段话再说一遍，所以相邻完全相同的段只留一次，不贴两遍。
+               */
+              const merged = [];
+              for (const piece of texts) {
+                const trimmed = String(piece ?? '').trim();
+                if (!trimmed || merged.at(-1) === trimmed) continue;
+                merged.push(trimmed);
+              }
+              const text = merged.join('\n\n').slice(0, MAX_ASSISTANT_TEXT);
               handlers.onTurnEnd?.(event, text);
               assistantText.delete(turn);
               if (promptSent) {

@@ -30,6 +30,14 @@ function createFakeGateway({
   pageRecords = [], frameDelayMs = 0, stuckStream = false, sessionTitles = {},
   commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
   failSelectModel = null,
+  /** 一次性让 prompt 抛错（模拟"会话选的模型被删了"这类失败）。 */
+  failPromptOnce = null,
+  /** 模型目录（自救要用它挑一个可用模型）。 */
+  catalog = { default: { provider: 'p', model: 'm' }, groups: [{ id: 'p', models: [{ id: 'm' }] }] },
+  /** 每次 invoke 的旁路回调（断言调了哪些方法）。 */
+  onInvoke = null,
+  /** true：每次都从脚本头开始（自救会开第二条 follow 流，用同一条脚本更稳定）。 */
+  repeatScript = false,
 } = {}) {
   const calls = [];
   const sessions = new Set();
@@ -46,6 +54,8 @@ function createFakeGateway({
     },
     async invoke({ namespace, method, args }) {
       calls.push({ namespace, method, args });
+      onInvoke?.({ namespace, method, args });
+      if (namespace === 'session' && method === 'modelCatalog') return catalog;
       if (namespace === 'workspace' && method === 'create') {
         const path = args?.request?.path;
         if (!knownWorkspaces.has(path)) knownWorkspaces.set(path, `ws_${knownWorkspaces.size + 1}`);
@@ -71,6 +81,11 @@ function createFakeGateway({
       if (namespace === 'session' && method === 'prompt') {
         if (args?.request?.mode !== 'queue' && args?.request?.mode !== 'steer') {
           throw remoteError('gateway/arguments-invalid');
+        }
+        if (failPromptOnce) {
+          const error = failPromptOnce;
+          failPromptOnce = null;
+          throw error;
         }
         // 真机上出现过"提示词已受理，但收据迟迟不回"的情况。
         if (stuckPrompt) return new Promise(() => {});
@@ -105,8 +120,8 @@ function createFakeGateway({
       if (namespace !== 'session' || method !== 'follow') {
         throw remoteError('gateway/method-unavailable');
       }
-      const frames = script[scriptIndex] ?? [];
-      scriptIndex += 1;
+      const frames = script[scriptIndex] ?? (repeatScript ? (script.at(-1) ?? []) : []);
+      if (!repeatScript) scriptIndex += 1;
       const iterator = (async function* iterate() {
         for (const frame of frames) {
           if (frameDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, frameDelayMs); });
@@ -947,6 +962,104 @@ test('机器人默认模型应用失败不能让会话建不出来（记 warn，
     });
     assert.ok(sessionId, '模型选不上也要把会话建出来');
     assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, sessionId);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('多 step 的正文都要带回：不是只给最后一个 step（上游 Issue #112 的同一根因）', async () => {
+  // 一轮里：工具调用前写了一段，工具调用后又写了一段，最后还有一段收尾说明。
+  const frames = [
+    { type: 'snapshot', cursor: 3, records: [], hasMore: false },
+    { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn: 1 } } },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 5,
+        data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '我先查一下数据。' }] } },
+      },
+    },
+    { type: 'event', event: { type: 'tool/call', seq: 6, data: { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' } } },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 7,
+        data: { turn: 1, step: 2, message: { content: [{ type: 'text', text: '昨天销售额 1234 万。' }] } },
+      },
+    },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 8,
+        data: { turn: 1, step: 3, message: { content: [{ type: 'text', text: '昨天销售额 1234 万。' }] } },
+      },
+    },
+    { type: 'event', event: { type: 'turn/end', seq: 9, data: { turn: 1, reason: { kind: 'completed' } } } },
+  ];
+  const app = await makeBridge({ script: [frames] });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws', content: [{ type: 'text', text: '昨天卖了多少' }], sourceGuidance: '',
+    });
+    assert.equal(result.text, '我先查一下数据。\n\n昨天销售额 1234 万。',
+      '每一段正文都要在，相邻重复的段只留一次');
+    assert.equal(result.reason.kind, 'completed');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('模型不可用自救：切回可用模型、重试一轮，并在答案前说明换了模型', async () => {
+  // 第一轮：提示词收据直接抛 session/model-unavailable；第二轮（切完模型）正常返回。
+  const calls = [];
+  const app = await makeBridge({
+    script: [turnFrames({ text: '换完模型后的答案' })],
+    repeatScript: true,
+    failPromptOnce: Object.assign(new Error('model gone'), {
+      code: 'session/model-unavailable',
+      details: { provider: 'yh', model: 'ghost' },
+    }),
+    onInvoke: (call) => calls.push(call),
+    catalog: {
+      default: { provider: 'yh', model: 'gpt-5.5-luna' },
+      groups: [{ id: 'yh', name: 'YH', models: [{ id: 'gpt-5.5-luna', name: 'Luna' }] }],
+    },
+  });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+      workspacePath: '/ws', content: [{ type: 'text', text: '你好' }], sourceGuidance: '',
+    });
+    const select = calls.filter((call) => call.method === 'selectModel');
+    assert.equal(select.length, 1, '要切一次模型（切回可用模型）');
+    assert.deepEqual(select[0].args.request,
+      { sessionId: 'session-1', provider: 'yh', model: 'gpt-5.5-luna' });
+    assert.match(result.text, /^⚠️ 会话原来选的模型 yh\/ghost 已不可用/);
+    assert.match(result.text, /已自动切到 yh\/gpt-5.5-luna/);
+    assert.match(result.text, /换完模型后的答案/, '重试那一轮的答案要在');
+    assert.equal(result.reason.kind, 'completed');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('模型不可用但不是"模型被删"以外的错误：不救援、原样抛出', async () => {
+  const app = await makeBridge({
+    script: [turnFrames()],
+    failPromptOnce: Object.assign(new Error('boom'), { code: 'session/not-found', details: {} }),
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.ask({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+        workspacePath: '/ws', content: [{ type: 'text', text: '你好' }], sourceGuidance: '',
+      }),
+      (error) => error.code === 'session/not-found',
+    );
   } finally {
     await app.cleanup();
   }

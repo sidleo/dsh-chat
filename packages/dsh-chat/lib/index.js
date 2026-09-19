@@ -3288,6 +3288,43 @@ function createSessionBridge({
       return invoke("session", "create", { request: { workspaceId } }, signal);
     }
   }
+  function modelUnavailableOf(error) {
+    if (error?.code !== "session/model-unavailable") return null;
+    return {
+      provider: typeof error.details?.provider === "string" ? error.details.provider : null,
+      model: typeof error.details?.model === "string" ? error.details.model : null
+    };
+  }
+  async function recoverUnavailableModel({ sessionId, failed, signal }) {
+    let options = [];
+    let hostDefault = null;
+    try {
+      const catalog = await invoke("session", "modelCatalog", {}, signal);
+      hostDefault = catalog?.default?.provider && catalog?.default?.model ? catalog.default : null;
+      for (const group of catalog?.groups ?? []) {
+        const provider = group?.id;
+        for (const model of group?.models ?? []) {
+          if (provider && model?.id) options.push({ provider, model: model.id });
+        }
+      }
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u6A21\u578B\u81EA\u6551\u65F6\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF1A${error?.message ?? error}`);
+      return null;
+    }
+    const usable = (candidate) => candidate && candidate.provider && candidate.model && !(failed?.provider && failed?.model && candidate.provider === failed.provider && candidate.model === failed.model);
+    const target = [hostDefault, ...options].find(usable);
+    if (!target) return null;
+    try {
+      await invoke("session", "selectModel", {
+        request: { sessionId, provider: target.provider, model: target.model }
+      }, signal);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u6A21\u578B\u81EA\u6551\u5931\u8D25\uFF08\u5207\u5230 ${target.provider}/${target.model}\uFF09\uFF1A${error?.message ?? error}`);
+      return null;
+    }
+    logger.warn?.(`[dsh-chat] \u4F1A\u8BDD ${sessionId} \u7684\u6A21\u578B\u4E0D\u53EF\u7528\uFF08${failed?.provider ?? "?"}/${failed?.model ?? "?"}\uFF09\uFF0C\u5DF2\u81EA\u52A8\u5207\u5230 ${target.provider}/${target.model} \u5E76\u91CD\u8BD5\u8FD9\u4E00\u8F6E`);
+    return { provider: target.provider, model: target.model };
+  }
   async function applyBotModel({ sessionId, botModel, signal, channelId, botId }) {
     if (!botModel) return;
     const label = `${botModel.provider}/${botModel.model}${botModel.reasoningEffort ? ` \xB7 \u63A8\u7406 ${botModel.reasoningEffort}` : ""}`;
@@ -3417,8 +3454,43 @@ function createSessionBridge({
       await previous;
     } catch {
     }
+    let recovered = null;
     try {
-      return await runTurn();
+      const runOnce = async () => {
+        try {
+          return await runTurn();
+        } catch (error) {
+          const failed2 = modelUnavailableOf(error);
+          if (!failed2) throw error;
+          return {
+            sessionId: store?.get?.(channelId, botId, key)?.sessionId ?? null,
+            text: "",
+            reason: { kind: "error", error: sessionError(error) },
+            tools: [],
+            files: [],
+            aborted: false,
+            failed: failed2
+          };
+        }
+      };
+      let result = await runOnce();
+      const failed = result?.failed ?? modelUnavailableOf(result?.reason?.error);
+      if (failed && typeof result?.sessionId === "string" && result.sessionId) {
+        const target = await recoverUnavailableModel({ sessionId: result.sessionId, failed, signal });
+        if (target) {
+          recovered = { failed, target };
+          result = await runOnce();
+        }
+      }
+      if (!recovered) return result;
+      const notice = `\u26A0\uFE0F \u4F1A\u8BDD\u539F\u6765\u9009\u7684\u6A21\u578B ${recovered.failed.provider ?? "?"}/${recovered.failed.model ?? "?"} \u5DF2\u4E0D\u53EF\u7528\uFF0C\u5DF2\u81EA\u52A8\u5207\u5230 ${recovered.target.provider}/${recovered.target.model} \u5E76\u91CD\u8BD5\u4E86\u8FD9\u4E00\u8F6E\u3002`;
+      return {
+        ...result,
+        text: `${notice}
+
+${result.text ?? ""}`.trim(),
+        recovered
+      };
     } finally {
       const left = (queueDepth.get(queueKey) ?? 1) - 1;
       if (left <= 0) {
@@ -3579,7 +3651,13 @@ function createSessionBridge({
               case "turn/end": {
                 const turn = event.data?.turn ?? currentTurn;
                 const texts = assistantText.get(turn) ?? [];
-                const text = (texts.at(-1) ?? "").slice(0, MAX_ASSISTANT_TEXT);
+                const merged = [];
+                for (const piece of texts) {
+                  const trimmed = String(piece ?? "").trim();
+                  if (!trimmed || merged.at(-1) === trimmed) continue;
+                  merged.push(trimmed);
+                }
+                const text = merged.join("\n\n").slice(0, MAX_ASSISTANT_TEXT);
                 handlers.onTurnEnd?.(event, text);
                 assistantText.delete(turn);
                 if (promptSent) {
