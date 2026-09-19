@@ -1218,6 +1218,16 @@ function selectionOf(item) {
   const projection = item?.projections?.values?.modelSelection;
   return projection?.next ?? projection?.lastUsed ?? null;
 }
+async function readSelection(context, sessionId) {
+  try {
+    const list = await context.services.sessions.invoke("session", "list", { _request: {} });
+    const item = list?.items?.find((entry) => entry.sessionId === sessionId);
+    return { selection: selectionOf(item), failed: false };
+  } catch (error) {
+    context.log?.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u6A21\u578B\u9009\u62E9\u5931\u8D25\uFF08${sessionId}\uFF09\uFF1A${error?.message ?? error}`);
+    return { selection: null, failed: true };
+  }
+}
 function findModel(rows, token) {
   const byIndex = indexOf(token);
   if (byIndex !== null) return rows[byIndex] ?? null;
@@ -1476,7 +1486,13 @@ ${result.text}` : ""}`;
         return `\u5F53\u524D\u4F1A\u8BDD\uFF1A${bound.sessionId}${running ? "\uFF08\u8FD0\u884C\u4E2D\uFF09" : ""}`;
       }
       const target = context.args[0];
-      const exists = await services.sessions.sessionExists(target).catch(() => false);
+      let exists = false;
+      try {
+        exists = await services.sessions.sessionExists(target);
+      } catch (error) {
+        context.log?.warn?.(`[dsh-chat] \u6821\u9A8C\u4F1A\u8BDD\u5931\u8D25\uFF08${target}\uFF09\uFF1A${error?.message ?? error}`);
+        return `\u6821\u9A8C\u4F1A\u8BDD\u5931\u8D25\uFF08${error?.message ?? error}\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002`;
+      }
       if (!exists) return `\u627E\u4E0D\u5230\u4F1A\u8BDD ${target}\u3002`;
       await services.sessions.bindings.bind(context.channelId, context.botId, context.key, {
         sessionId: target
@@ -1504,9 +1520,8 @@ ${result.text}` : ""}`;
       const sessionId = await boundSession(context);
       if (context.args.length === 0) {
         if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u7528 /model \u5728\u5DF2\u6709\u4F1A\u8BDD\u91CC\u5207\u6362\u3002";
-        const rows2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
-        const item = rows2?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = selectionOf(item);
+        const { selection, failed } = await readSelection(context, sessionId);
+        if (failed) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
         return selection ? `\u5F53\u524D\u6A21\u578B\uFF1A${selection.provider}/${selection.model}${selection.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${selection.reasoningEffort}\uFF09` : ""}` : "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF08\u8DDF\u968F Host \u9ED8\u8BA4\uFF09\u3002";
       }
       if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u6A21\u578B\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
@@ -1557,16 +1572,14 @@ ${result.text}` : ""}`;
       const sessionId = await boundSession(context);
       if (context.args.length === 0) {
         if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u3002";
-        const list2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
-        const item2 = list2?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection2 = selectionOf(item2);
+        const { selection: selection2, failed: failed2 } = await readSelection(context, sessionId);
+        if (failed2) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
         if (!selection2) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\u3002";
         return `\u5F53\u524D\u6A21\u578B ${selection2.provider}/${selection2.model}\uFF0C\u63A8\u7406\u7B49\u7EA7 ${selection2.reasoningEffort ?? "\uFF08\u9ED8\u8BA4\uFF09"}\u3002`;
       }
       if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u63A8\u7406\u7B49\u7EA7\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
-      const list = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
-      const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-      const selection = selectionOf(item);
+      const { selection, failed } = await readSelection(context, sessionId);
+      if (failed) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
       if (!selection) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u65E0\u6CD5\u5355\u72EC\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7\u3002";
       const { rows } = await modelCatalog(context);
       const current = rows.find((row) => row.provider === selection.provider && row.model === selection.model);

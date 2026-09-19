@@ -56,6 +56,10 @@ function createServices({
     { role: 'user', text: '帮我看看昨天的销售' },
     { role: 'assistant', text: '昨天销售额 1234 万。' },
   ],
+  /** true：`session/list` 抛错（DSH 侧不可用）——读失败不能说成"你从没选过模型"。 */
+  listFailing = false,
+  /** true：`sessionExists` 抛错（不是"会话不存在"）。 */
+  sessionExistsFailing = false,
 } = {}) {
   const calls = {
     reset: [], cancel: [], selectModel: [], bind: [], writes: [], runCommand: [], history: [],
@@ -64,6 +68,7 @@ function createServices({
     async invoke(namespace, method, args) {
       if (method === 'modelCatalog') return MODEL_CATALOG;
       if (method === 'list') {
+        if (listFailing) throw new Error('session service down');
         return {
           items: [{
             sessionId: 'session-1',
@@ -90,6 +95,7 @@ function createServices({
       return true;
     },
     async sessionExists(id) {
+      if (sessionExistsFailing) throw new Error('gateway timeout');
       return id === 'session-1';
     },
     async reset(options) {
@@ -137,8 +143,8 @@ function createServices({
   };
 }
 
-function createRegistry(services) {
-  const registry = createCommandRegistry({ logger: silentLogger, services });
+function createRegistry(services, logger = silentLogger) {
+  const registry = createCommandRegistry({ logger, services });
   registerBuiltinCommands(registry, { hubVersion: '9.9.9' });
   return registry;
 }
@@ -629,4 +635,31 @@ test('菜单：/menu（及短写 /m）带上控制面板状态，卡片据此渲
   const fallback = await plain.handle(context('/menu'));
   assert.equal(fallback.panel, undefined);
   assert.ok(fallback.menu.length > 0);
+});
+
+test('读不到会话状态时说"读不到"，不能说成"你从没选过模型"或"找不到会话"', async () => {
+  // 读失败与"没有显式选择"是两回事：混为一谈就是一句与事实相反的话，日志里还没线索。
+  const warns = [];
+  const readFailing = createServices({ listFailing: true });
+  const failing = createRegistry(readFailing.services, { ...silentLogger, warn: (line) => warns.push(line) });
+
+  const model = await failing.handle(context('/model'));
+  assert.match(model.reply, /读不到当前会话的模型选择/);
+  assert.doesNotMatch(model.reply, /没有显式选择模型/);
+
+  const reasoning = await failing.handle(context('/reasoning'));
+  assert.match(reasoning.reply, /读不到当前会话的模型选择/);
+
+  const setReasoning = await failing.handle(context('/reasoning high'));
+  assert.match(setReasoning.reply, /读不到当前会话的模型选择/);
+
+  assert.equal(warns.filter((line) => /读取会话模型选择失败/.test(line)).length, 3, '三次读失败都要留痕');
+
+  // `sessionExists` 抛错 ≠ 会话不存在。
+  const checkFailing = createServices({ sessionExistsFailing: true });
+  const checked = createRegistry(checkFailing.services, { ...silentLogger, warn: (line) => warns.push(line) });
+  const session = await checked.handle(context('/session session-9'));
+  assert.match(session.reply, /校验会话失败/);
+  assert.doesNotMatch(session.reply, /找不到会话/);
+  assert.equal(checkFailing.calls.bind.length, 0, '校验没过就不该绑定');
 });

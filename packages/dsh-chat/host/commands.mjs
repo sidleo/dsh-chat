@@ -196,6 +196,23 @@ function selectionOf(item) {
   return projection?.next ?? projection?.lastUsed ?? null;
 }
 
+/**
+ * 读某个会话的模型选择。
+ *
+ * **读失败与"没有显式选择"必须分开**：混为一谈会把一次 RPC 失败讲成"你从没选过模型"，
+ * 用户看到的是一句与事实相反的话，日志里也没有线索（仓库约定：失败必须可见）。
+ */
+async function readSelection(context, sessionId) {
+  try {
+    const list = await context.services.sessions.invoke('session', 'list', { _request: {} });
+    const item = list?.items?.find((entry) => entry.sessionId === sessionId);
+    return { selection: selectionOf(item), failed: false };
+  } catch (error) {
+    context.log?.warn?.(`[dsh-chat] 读取会话模型选择失败（${sessionId}）：${error?.message ?? error}`);
+    return { selection: null, failed: true };
+  }
+}
+
 function findModel(rows, token) {
   const byIndex = indexOf(token);
   if (byIndex !== null) return rows[byIndex] ?? null;
@@ -485,7 +502,14 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         return `当前会话：${bound.sessionId}${running ? '（运行中）' : ''}`;
       }
       const target = context.args[0];
-      const exists = await services.sessions.sessionExists(target).catch(() => false);
+      let exists = false;
+      try {
+        exists = await services.sessions.sessionExists(target);
+      } catch (error) {
+        // `sessionExists` 只把 not-found 折成 false，其余是真失败——不能说成"找不到会话"。
+        context.log?.warn?.(`[dsh-chat] 校验会话失败（${target}）：${error?.message ?? error}`);
+        return `校验会话失败（${error?.message ?? error}），稍后再试。`;
+      }
       if (!exists) return `找不到会话 ${target}。`;
       await services.sessions.bindings.bind(context.channelId, context.botId, context.key, {
         sessionId: target,
@@ -516,9 +540,8 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
       const sessionId = await boundSession(context);
       if (context.args.length === 0) {
         if (!sessionId) return '当前聊天还没有会话；先发一条消息，或用 /model 在已有会话里切换。';
-        const rows = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
-        const item = rows?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = selectionOf(item);
+        const { selection, failed } = await readSelection(context, sessionId);
+        if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
         return selection
           ? `当前模型：${selection.provider}/${selection.model}${selection.reasoningEffort ? `（推理等级 ${selection.reasoningEffort}）` : ''}`
           : '当前会话没有显式选择模型（跟随 Host 默认）。';
@@ -574,16 +597,14 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
       const sessionId = await boundSession(context);
       if (context.args.length === 0) {
         if (!sessionId) return '当前聊天还没有会话。';
-        const list = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
-        const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = selectionOf(item);
+        const { selection, failed } = await readSelection(context, sessionId);
+        if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
         if (!selection) return '当前会话没有显式选择模型。';
         return `当前模型 ${selection.provider}/${selection.model}，推理等级 ${selection.reasoningEffort ?? '（默认）'}。`;
       }
       if (!sessionId) return '当前聊天还没有会话，无法切换推理等级；先发一条消息。';
-      const list = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
-      const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-      const selection = selectionOf(item);
+      const { selection, failed } = await readSelection(context, sessionId);
+      if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
       if (!selection) return '当前会话没有显式选择模型，无法单独设置推理等级。';
       const { rows } = await modelCatalog(context);
       const current = rows.find((row) => row.provider === selection.provider && row.model === selection.model);
