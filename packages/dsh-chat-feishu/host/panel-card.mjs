@@ -127,7 +127,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
   if (modelPicker.element && bound) {
     elements.push(modelPicker.element);
   } else if (!bound) {
-    elements.push({ tag: 'markdown', content: '还没有会话：先在这里发一条消息，或点下面的「🆕 新会话」，之后就能选模型。' });
+    // 别写成"点新会话就能选模型"：「新会话」只清绑定，会话要等第一条消息才由 ensure() 建立。
+    elements.push({
+      tag: 'markdown',
+      content: '还没有会话：**发一条消息**就会建立会话，之后就能在这里选模型。'
+        + '（「🆕 新会话」只是清掉当前绑定，点完仍要发一条消息。）',
+    });
   } else {
     // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
     // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
@@ -145,7 +150,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
   if (bound && modelPicker.hidden > 0) {
     elements.push({
       tag: 'markdown',
-      content: `下拉只列了前 ${MAX_OPTIONS} 个（还有 ${modelPicker.hidden} 个没列出），也可以手打 \`/model <provider/model>\`。`,
+      content: `模型下拉只列了前 ${MAX_OPTIONS} 个（还有 ${modelPicker.hidden} 个没列出），也可以手打 \`/model <provider/model>\`。`,
     });
   }
 
@@ -182,6 +187,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
   if (presetPicker.element) elements.push(presetPicker.element);
+  if (presetPicker.hidden > 0) {
+    elements.push({
+      tag: 'markdown',
+      content: `预设下拉只列了前 ${MAX_OPTIONS} 个（还有 ${presetPicker.hidden} 个没列出），也可以手打 \`/preset <id>\`。`,
+    });
+  }
   const workspacePicker = dropdown({
     name: 'workspace_pick',
     action: 'workspace_pick',
@@ -191,6 +202,13 @@ export function panelCard(state, { last = null, at = null } = {}) {
   });
   if (workspacePicker.element) {
     elements.push(workspacePicker.element);
+    if (workspacePicker.hidden > 0) {
+      // 工作区没有命令兜底：只能在设置页改，所以这里要指路。
+      elements.push({
+        tag: 'markdown',
+        content: `工作区下拉只列了前 ${MAX_OPTIONS} 个（还有 ${workspacePicker.hidden} 个没列出），其余的在设置页里选。`,
+      });
+    }
   } else {
     elements.push({ tag: 'markdown', content: '还没有可切换的工作区：先在设置页设一次，或换一台机器人。' });
   }

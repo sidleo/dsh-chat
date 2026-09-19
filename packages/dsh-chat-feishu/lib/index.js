@@ -127079,7 +127079,10 @@ function panelCard(state, { last = null, at = null } = {}) {
   if (modelPicker.element && bound) {
     elements.push(modelPicker.element);
   } else if (!bound) {
-    elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u5728\u8FD9\u91CC\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u4E0B\u9762\u7684\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF0C\u4E4B\u540E\u5C31\u80FD\u9009\u6A21\u578B\u3002" });
+    elements.push({
+      tag: "markdown",
+      content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A**\u53D1\u4E00\u6761\u6D88\u606F**\u5C31\u4F1A\u5EFA\u7ACB\u4F1A\u8BDD\uFF0C\u4E4B\u540E\u5C31\u80FD\u5728\u8FD9\u91CC\u9009\u6A21\u578B\u3002\uFF08\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\u53EA\u662F\u6E05\u6389\u5F53\u524D\u7ED1\u5B9A\uFF0C\u70B9\u5B8C\u4ECD\u8981\u53D1\u4E00\u6761\u6D88\u606F\u3002\uFF09"
+    });
   } else {
     const failures = Array.isArray(model.failures) ? model.failures : [];
     elements.push({
@@ -127091,7 +127094,7 @@ function panelCard(state, { last = null, at = null } = {}) {
   if (bound && modelPicker.hidden > 0) {
     elements.push({
       tag: "markdown",
-      content: `\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${modelPicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u624B\u6253 \`/model <provider/model>\`\u3002`
+      content: `\u6A21\u578B\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${modelPicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u624B\u6253 \`/model <provider/model>\`\u3002`
     });
   }
   const efforts = model.efforts ?? [];
@@ -127125,6 +127128,12 @@ function panelCard(state, { last = null, at = null } = {}) {
     current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
   if (presetPicker.element) elements.push(presetPicker.element);
+  if (presetPicker.hidden > 0) {
+    elements.push({
+      tag: "markdown",
+      content: `\u9884\u8BBE\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${presetPicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u4E5F\u53EF\u4EE5\u624B\u6253 \`/preset <id>\`\u3002`
+    });
+  }
   const workspacePicker = dropdown({
     name: "workspace_pick",
     action: "workspace_pick",
@@ -127134,6 +127143,12 @@ function panelCard(state, { last = null, at = null } = {}) {
   });
   if (workspacePicker.element) {
     elements.push(workspacePicker.element);
+    if (workspacePicker.hidden > 0) {
+      elements.push({
+        tag: "markdown",
+        content: `\u5DE5\u4F5C\u533A\u4E0B\u62C9\u53EA\u5217\u4E86\u524D ${MAX_OPTIONS} \u4E2A\uFF08\u8FD8\u6709 ${workspacePicker.hidden} \u4E2A\u6CA1\u5217\u51FA\uFF09\uFF0C\u5176\u4F59\u7684\u5728\u8BBE\u7F6E\u9875\u91CC\u9009\u3002`
+      });
+    }
   } else {
     elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u53EF\u5207\u6362\u7684\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u8BBE\u4E00\u6B21\uFF0C\u6216\u6362\u4E00\u53F0\u673A\u5668\u4EBA\u3002" });
   }
@@ -127507,7 +127522,8 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         }
         if (command.menu?.length && message.chat_id) {
           try {
-            await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+            const sent = await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+            rememberCardConversation(sent?.messageId, conversationKey);
           } catch (error) {
             logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u9000\u56DE\u6587\u672C\uFF1A${error?.message ?? error}`);
             if (command.reply) {

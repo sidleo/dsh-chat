@@ -2255,7 +2255,8 @@ test('控制面板卡：没有会话时不放下拉，直接说明要先建会�
   });
   const names = card.body.elements.filter((el) => el.tag === 'select_static').map((el) => el.name);
   assert.ok(!names.includes('model_pick'), '没有会话时不给模型下拉（点了也改不了）');
-  assert.match(JSON.stringify(card), /先在这里发一条消息/);
+  assert.match(JSON.stringify(card), /发一条消息/, '要写明"发一条消息就会建立会话"');
+  assert.match(JSON.stringify(card), /只是清掉当前绑定/, '别把「新会话」说成能建会话');
 });
 
 test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义在 hub 侧是空值）', async () => {
@@ -2551,4 +2552,21 @@ test('卡片→会话映射落盘：重启后群里的卡片仍被判成群，�
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
+});
+
+test('控制面板卡：预设/工作区下拉被截断时也写明还有多少没列出（工作区还要指路设置页）', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const presetOptions = Array.from({ length: 35 }, (_, index) => ({ id: `preset-${index}` }));
+  const workspaces = Array.from({ length: 33 }, (_, index) => `/ws/${index}`);
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: presetOptions },
+    workspace: { current: null, options: workspaces },
+  });
+  const body = JSON.stringify(card);
+  assert.match(body, /预设下拉只列了前 30 个（还有 6 个没列出）/, '预设要写明没列出的数量');
+  assert.match(body, /工作区下拉只列了前 30 个（还有 3 个没列出）/, '工作区要写明没列出的数量');
+  assert.match(body, /其余的在设置页里选/, '工作区没有命令兜底，要指路设置页');
 });

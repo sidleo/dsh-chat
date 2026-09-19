@@ -235,8 +235,9 @@ export function createPanelService({
 
       if (field === 'model' || field === 'reasoning') {
         if (!sessionId) {
+          // 措辞要与实际行为一致：「新会话」只清绑定，会话要等第一条消息才建立。
           throw panelError('chat/no-session',
-            '当前聊天还没有会话：先发一条消息，或点「新会话」之后再选。');
+            '当前聊天还没有会话：先发一条消息建立会话，然后就能选（「新会话」只是清掉绑定）。');
         }
         const { options } = await modelCatalog();
         if (field === 'model') {

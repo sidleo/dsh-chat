@@ -433,7 +433,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         }
         if (command.menu?.length && message.chat_id) {
           try {
-            await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+            const sent = await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
+            // 这张卡也要记住会话：否则它的按钮回调只能靠启发式，群里可能被判成私聊。
+            rememberCardConversation(sent?.messageId, conversationKey);
           } catch (error) {
             // 卡片发不出去不能把菜单吞掉：退回文本列表。
             logger.warn?.(`[dsh-chat-feishu] 菜单卡片发送失败，退回文本：${error?.message ?? error}`);
