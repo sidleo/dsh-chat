@@ -2276,6 +2276,7 @@ function createPanelService({
   sessions,
   sessionStore = null,
   agentPresets = null,
+  channelRpc = null,
   logger = console
 } = {}) {
   if (typeof settings?.read !== "function") throw new TypeError("\u63A7\u5236\u9762\u677F\u9700\u8981\u6BCF\u673A\u5668\u4EBA\u8BBE\u7F6E\u5B58\u50A8\u3002");
@@ -2294,6 +2295,52 @@ function createPanelService({
       provider: selection.provider,
       model: selection.model,
       reasoningEffort: selection.reasoningEffort ?? null
+    };
+  }
+  const BUILT_IN_FIELDS = /* @__PURE__ */ new Set(["model", "reasoning", "preset", "workspace", "session"]);
+  async function channelPanelFields({ channelId, botId, key, conversationType }) {
+    if (typeof channelRpc !== "function") return { fields: [], failed: false };
+    try {
+      const result = await channelRpc(channelId, "panel.fields", {
+        botId,
+        key: key ?? null,
+        conversationType: conversationType ?? null
+      });
+      if (result?.ok !== true) throw new Error(result?.error?.message ?? "\u8BFB\u53D6\u5931\u8D25");
+      const fields = Array.isArray(result.value?.fields) ? result.value.fields : [];
+      return {
+        fields: fields.filter((item) => typeof item?.field === "string" && item.field && Array.isArray(item.options) && item.options.length > 0),
+        failed: false
+      };
+    } catch (error) {
+      if (error?.code === "chat/unknown-method" || /不支持/.test(String(error?.message))) {
+        return { fields: [], failed: false };
+      }
+      logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6E20\u9053\u9762\u677F\u5B57\u6BB5\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return { fields: [], failed: true };
+    }
+  }
+  async function applyChannelField({ channelId, botId, key, conversationType, field, value }) {
+    if (typeof channelRpc !== "function") {
+      throw panelError("chat/unknown-field", `\u9762\u677F\u4E0D\u652F\u6301\u8FD9\u4E2A\u64CD\u4F5C\uFF1A${field}`);
+    }
+    const result = await channelRpc(channelId, "panel.apply", {
+      botId,
+      key: key ?? null,
+      conversationType: conversationType ?? null,
+      field,
+      value
+    });
+    if (result?.ok !== true) {
+      throw panelError(
+        result?.error?.code ?? "chat/channel-field-failed",
+        result?.error?.message ?? `\u6E20\u9053\u6CA1\u80FD\u6539 ${field}\u3002`
+      );
+    }
+    return {
+      field,
+      value: result.value?.value ?? value,
+      message: result.value?.message ?? "\u5DF2\u751F\u6548\u3002"
     };
   }
   function sinceLabel(updatedAt) {
@@ -2372,11 +2419,11 @@ function createPanelService({
      *   属主在私聊里或设置页改工作区。
      * @returns 面板状态（只含叶子字段，可安全跨 RPC/序列化）。
      */
-    async read({ channelId, botId, key, isOwner = false }) {
+    async read({ channelId, botId, key, isOwner = false, conversationType = null }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState, sessionState] = await Promise.all([
+      const [catalog, presetState, selectionState, sessionState, channelFieldState] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }] };
@@ -2392,7 +2439,8 @@ function createPanelService({
           key,
           currentSessionId: sessionId,
           workspace: record.workspace
-        })
+        }),
+        channelPanelFields({ channelId, botId, key, conversationType })
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -2416,6 +2464,9 @@ function createPanelService({
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null
         },
+        // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
+        fields: channelFieldState.fields,
+        fieldsFailed: channelFieldState.failed === true,
         // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
         session: {
           current: sessionId,
@@ -2451,11 +2502,21 @@ function createPanelService({
      *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value, isOwner = false }) {
+    async apply({ channelId, botId, key, field, value, isOwner = false, conversationType = null }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const botDefault = normalizeBotModel(record.model);
+      if (!BUILT_IN_FIELDS.has(field)) {
+        return applyChannelField({
+          channelId,
+          botId,
+          key,
+          conversationType,
+          field,
+          value
+        });
+      }
       if (field === "model" || field === "reasoning") {
         if (!sessionId) {
           if (isOwner !== true) {
@@ -4037,7 +4098,12 @@ function apply(ctx, config = {}) {
     sessions,
     sessionStore,
     agentPresets: optionalAgentPresets,
-    logger
+    logger,
+    /**
+     * 渠道自带的面板字段（飞书的「任务过程展示」）走这条：hub 不认识渠道语义，
+     * 只把 `panel.fields` / `panel.apply` 透传给渠道，渠道没实现就当没有这类设置。
+     */
+    channelRpc: (channelId, method, payload) => registry.handleRpc(channelId, method, payload)
   });
   function storageFor(channelId) {
     return Object.freeze({

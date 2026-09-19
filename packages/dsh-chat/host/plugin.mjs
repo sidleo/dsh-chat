@@ -139,6 +139,11 @@ export function apply(ctx, config = {}) {
   const optionalAgentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined;
   const panel = createPanelService({
     settings, sessions, sessionStore, agentPresets: optionalAgentPresets, logger,
+    /**
+     * 渠道自带的面板字段（飞书的「任务过程展示」）走这条：hub 不认识渠道语义，
+     * 只把 `panel.fields` / `panel.apply` 透传给渠道，渠道没实现就当没有这类设置。
+     */
+    channelRpc: (channelId, method, payload) => registry.handleRpc(channelId, method, payload),
   });
 
   function storageFor(channelId) {

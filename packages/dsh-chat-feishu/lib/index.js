@@ -127237,6 +127237,19 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
   }
   if (presetCells.length > 0) elements.push(grid(presetCells));
+  for (const item of state?.fields ?? []) {
+    const picker = dropdown({
+      name: `panel_field_${item.field}`,
+      action: `panel_field_${item.field}`,
+      placeholder: `\u9009\u62E9${item.label ?? item.field}`,
+      items: (item.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+      current: item.value ?? null
+    });
+    if (picker.element) elements.push(grid([field(item.label ?? item.field, picker.element)]));
+  }
+  if (state?.fieldsFailed === true) {
+    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u8BBE\u7F6E\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });
+  }
   if (last?.message) {
     elements.push({ tag: "hr" });
     elements.push({
@@ -127275,7 +127288,8 @@ function panelPick(action, options) {
     preset_pick: { field: "preset", label: "\u8BBE\u7F6E Agent \u9884\u8BBE" },
     workspace_pick: { field: "workspace", label: "\u5207\u6362\u5DE5\u4F5C\u533A" }
   };
-  const target = map[action];
+  const dynamic = typeof action === "string" && action.startsWith("panel_field_") ? { field: action.slice("panel_field_".length), label: "\u6E20\u9053\u8BBE\u7F6E" } : null;
+  const target = map[action] ?? dynamic;
   if (!target) return null;
   const values = (Array.isArray(options) ? options : [options]).filter((item) => typeof item === "string" && item !== "");
   if (values.length === 0) return { field: target.field, label: target.label, invalid: true };
@@ -127853,7 +127867,9 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       botId: bot.id,
       key: context.key,
       // 工作区候选只给属主：群里的卡片所有人都能展开。
-      isOwner: context.isOwner === true
+      isOwner: context.isOwner === true,
+      // 渠道自带字段（任务过程展示）要按私聊/群聊分别取值。
+      conversationType: context.conversationType ?? null
     }).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u5931\u8D25\uFF1A${error?.message ?? error}`);
       return null;
@@ -129709,6 +129725,14 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       )))
     });
   }
+  const STEP_PUSH_FIELD_OPTIONS = Object.freeze([
+    { value: "off", label: "\u4E0D\u663E\u793A\u8FC7\u7A0B\uFF08\u53EA\u56DE\u6700\u7EC8\u7B54\u6848\uFF09" },
+    { value: "streaming_card", label: "\u5B9E\u65F6\u8FC7\u7A0B\u5361\uFF08\u4E00\u5F20\u5361\u52A8\u6001\u66F4\u65B0\uFF09" },
+    { value: "post", label: "\u9010\u6B65\u76F4\u64AD\uFF08\u6BCF\u6B65\u4E00\u6761\u6D88\u606F\uFF09" }
+  ]);
+  function stepPushScope(conversationType) {
+    return conversationType === "group" ? "group" : "direct";
+  }
   function patchRuntime(botId, patch) {
     const record = runtimes.get(botId);
     if (record) record.bot = Object.freeze({ ...record.bot, ...patch });
@@ -130009,6 +130033,79 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         return { ok: true, value: { removed: true, botId: payload.botId } };
       },
       /** 任务过程展示：私聊/群聊两份，原子保存并立即生效。 */
+      /**
+       * 渠道自带的面板字段（hub 的 `panel.read` 调这里）。
+       *
+       * 只报**当前会话类型**那一份：卡片是发给某个会话的，同时暴露私聊+群聊两份会让人改错。
+       */
+      "panel.fields": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId) {
+          return { ok: false, error: { code: "chat/bad-request", message: "panel.fields \u9700\u8981 botId\u3002", details: {} } };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        }
+        const scope = stepPushScope(payload.conversationType);
+        return {
+          ok: true,
+          value: {
+            fields: [{
+              field: "stepPush",
+              label: `\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\uFF08${scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\uFF09`,
+              value: scope === "group" ? bot.stepPushGroup : bot.stepPushDirect,
+              options: STEP_PUSH_FIELD_OPTIONS
+            }]
+          }
+        };
+      },
+      /** 改渠道自带的面板字段（hub 的 `panel.apply` 调这里）。 */
+      "panel.apply": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId || typeof payload?.field !== "string") {
+          return { ok: false, error: { code: "chat/bad-request", message: "panel.apply \u9700\u8981 botId \u4E0E field\u3002", details: {} } };
+        }
+        if (payload.field !== "stepPush") {
+          return {
+            ok: false,
+            error: { code: "chat/unknown-field", message: `\u98DE\u4E66\u9762\u677F\u4E0D\u652F\u6301 ${payload.field}\u3002`, details: {} }
+          };
+        }
+        const allowed = STEP_PUSH_FIELD_OPTIONS.map((item) => item.value);
+        if (!allowed.includes(payload.value)) {
+          return {
+            ok: false,
+            error: {
+              code: "chat/bad-request",
+              message: `\u8FC7\u7A0B\u5C55\u793A\u53EA\u80FD\u662F ${allowed.join(" / ")}\u3002`,
+              details: {}
+            }
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        }
+        const scope = stepPushScope(payload.conversationType);
+        const next = {
+          direct: scope === "direct" ? payload.value : bot.stepPushDirect,
+          group: scope === "group" ? payload.value : bot.stepPushGroup
+        };
+        const saved = await configStore.setStepPush(payload.botId, next);
+        patchRuntime(payload.botId, {
+          stepPushDirect: saved.stepPushDirect,
+          stepPushGroup: saved.stepPushGroup
+        });
+        const label = STEP_PUSH_FIELD_OPTIONS.find((item) => item.value === payload.value)?.label ?? payload.value;
+        return {
+          ok: true,
+          value: {
+            value: payload.value,
+            message: `${scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\u8FC7\u7A0B\u5C55\u793A\u5DF2\u8BBE\u4E3A\u300C${label}\u300D\uFF0C\u7ACB\u5373\u751F\u6548\u3002`
+          }
+        };
+      },
       "bot.step-push.set": async (payload) => {
         const modes = payload?.stepPush;
         if (typeof payload?.botId !== "string" || !payload.botId || modes === null || typeof modes !== "object" || Array.isArray(modes) || Object.keys(modes).length !== 2 || typeof modes.direct !== "string" || typeof modes.group !== "string") {

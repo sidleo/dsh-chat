@@ -187,6 +187,23 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   }
 
   /** 更新运行中机器人的本地配置（保存后立即生效，不需要重连）。 */
+  /**
+   * 任务过程展示的三态（与设置页同一份文案）。
+   *
+   * 渠道把它作为「面板字段」交给 hub：hub 不认识"过程展示"，只负责画一行下拉、
+   * 把选择透传回这里的 `panel.apply`。
+   */
+  const STEP_PUSH_FIELD_OPTIONS = Object.freeze([
+    { value: 'off', label: '不显示过程（只回最终答案）' },
+    { value: 'streaming_card', label: '实时过程卡（一张卡动态更新）' },
+    { value: 'post', label: '逐步直播（每步一条消息）' },
+  ]);
+
+  /** 过程展示是"按会话类型"存的：卡片里只改**当前会话类型**的那一份。 */
+  function stepPushScope(conversationType) {
+    return conversationType === 'group' ? 'group' : 'direct';
+  }
+
   function patchRuntime(botId, patch) {
     const record = runtimes.get(botId);
     if (record) record.bot = Object.freeze({ ...record.bot, ...patch });
@@ -567,6 +584,82 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       },
 
       /** 任务过程展示：私聊/群聊两份，原子保存并立即生效。 */
+      /**
+       * 渠道自带的面板字段（hub 的 `panel.read` 调这里）。
+       *
+       * 只报**当前会话类型**那一份：卡片是发给某个会话的，同时暴露私聊+群聊两份会让人改错。
+       */
+      'panel.fields': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId) {
+          return { ok: false, error: { code: 'chat/bad-request', message: 'panel.fields 需要 botId。', details: {} } };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        }
+        const scope = stepPushScope(payload.conversationType);
+        return {
+          ok: true,
+          value: {
+            fields: [{
+              field: 'stepPush',
+              label: `任务过程展示（${scope === 'group' ? '群聊' : '私聊'}）`,
+              value: scope === 'group' ? bot.stepPushGroup : bot.stepPushDirect,
+              options: STEP_PUSH_FIELD_OPTIONS,
+            }],
+          },
+        };
+      },
+
+      /** 改渠道自带的面板字段（hub 的 `panel.apply` 调这里）。 */
+      'panel.apply': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId || typeof payload?.field !== 'string') {
+          return { ok: false, error: { code: 'chat/bad-request', message: 'panel.apply 需要 botId 与 field。', details: {} } };
+        }
+        if (payload.field !== 'stepPush') {
+          return {
+            ok: false,
+            error: { code: 'chat/unknown-field', message: `飞书面板不支持 ${payload.field}。`, details: {} },
+          };
+        }
+        const allowed = STEP_PUSH_FIELD_OPTIONS.map((item) => item.value);
+        if (!allowed.includes(payload.value)) {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: `过程展示只能是 ${allowed.join(' / ')}。`,
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        }
+        const scope = stepPushScope(payload.conversationType);
+        const next = {
+          direct: scope === 'direct' ? payload.value : bot.stepPushDirect,
+          group: scope === 'group' ? payload.value : bot.stepPushGroup,
+        };
+        const saved = await configStore.setStepPush(payload.botId, next);
+        // 立刻生效：运行期那份 bot 对象要被就地改掉（与设置页那条路一致）。
+        patchRuntime(payload.botId, {
+          stepPushDirect: saved.stepPushDirect,
+          stepPushGroup: saved.stepPushGroup,
+        });
+        const label = STEP_PUSH_FIELD_OPTIONS.find((item) => item.value === payload.value)?.label ?? payload.value;
+        return {
+          ok: true,
+          value: {
+            value: payload.value,
+            message: `${scope === 'group' ? '群聊' : '私聊'}过程展示已设为「${label}」，立即生效。`,
+          },
+        };
+      },
+
       'bot.step-push.set': async (payload) => {
         const modes = payload?.stepPush;
         if (typeof payload?.botId !== 'string' || !payload.botId

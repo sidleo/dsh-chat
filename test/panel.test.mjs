@@ -42,6 +42,8 @@ function makePanel({
   bound = 'session-1',
   presets = [{ id: 'standard', isDefault: true }, { id: 'yh-olap' }],
   presetsFailing = false,
+  /** 渠道自带的面板字段（飞书的「任务过程展示」）：注入后 hub 会读它并透传 apply。 */
+  channelRpc = null,
   /** true：`session/list` 直接抛错（DSH 侧不可用）——读失败不能说成"从没选过模型"。 */
   listFailing = false,
   sessionCheckFailing = false,
@@ -118,6 +120,7 @@ function makePanel({
         return { presets };
       },
     },
+    ...(channelRpc ? { channelRpc } : {}),
     logger: { ...silentLogger, warn: (...args) => warns.push(args.join(' ')) },
   });
   return { panel, calls, state, warns };
@@ -549,4 +552,68 @@ test('应用：会话下拉的空值（哨兵翻译回来）等于"新会话"，
   assert.match(result.message, /新会话/);
   assert.equal(calls.some((call) => call.method === 'sessionExists'), false, '空值不该去校验会话存在');
   assert.ok(calls.some((call) => call.kind === 'reset'));
+});
+
+test('渠道自带的面板字段：读得到就带出来，apply 透传给渠道；渠道没实现就当没有', async () => {
+  const calls = [];
+  const withFields = makePanel({
+    channelRpc: async (channelId, method, payload) => {
+      calls.push({ channelId, method, payload });
+      if (method === 'panel.fields') {
+        return { ok: true, value: { fields: [{
+          field: 'stepPush',
+          label: '任务过程展示（私聊）',
+          value: 'post',
+          options: [{ value: 'off', label: '不显示' }, { value: 'post', label: '逐步直播' }],
+        }] } };
+      }
+      return { ok: true, value: { value: payload.value, message: '已生效。' } };
+    },
+  });
+  const view = await withFields.panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', conversationType: 'direct',
+  });
+  assert.deepEqual(view.fields.map((item) => item.field), ['stepPush']);
+  assert.equal(calls[0].method, 'panel.fields');
+  assert.equal(calls[0].payload.conversationType, 'direct', '按会话类型取值（私聊/群聊各一份）');
+
+  const applied = await withFields.panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', conversationType: 'direct',
+    field: 'stepPush', value: 'off',
+  });
+  assert.equal(applied.message, '已生效。');
+  assert.equal(calls.at(-1).method, 'panel.apply');
+  assert.equal(calls.at(-1).payload.field, 'stepPush');
+
+  // 渠道没实现（老版本渠道/这渠道没有这类设置）：当没有，不当失败。
+  const warns = [];
+  const noFields = makePanel({
+    channelRpc: async () => {
+      const error = new Error('渠道 feishu 不支持 panel.fields。');
+      error.code = 'chat/unknown-method';
+      throw error;
+    },
+  });
+  noFields.warns.push(...warns);
+  const plain = await noFields.panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.deepEqual(plain.fields, []);
+  assert.equal(plain.fieldsFailed, false);
+  assert.deepEqual(noFields.warns, [], '渠道没实现不该刷日志');
+
+  // 渠道报错（真的失败）：fieldsFailed + warn，用户能看到。
+  const failing = makePanel({
+    channelRpc: async () => ({ ok: false, error: { code: 'feishu/boom', message: '渠道炸了' } }),
+  });
+  const broken = await failing.panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.deepEqual(broken.fields, []);
+  assert.equal(broken.fieldsFailed, true);
+  assert.ok(failing.warns.some((line) => line.includes('渠道面板字段')), '真失败要留痕');
+
+  // apply 失败要抛带 code 的可见错误。
+  await assert.rejects(
+    () => failing.panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'stepPush', value: 'off',
+    }),
+    (error) => error.code === 'feishu/boom' && /渠道炸了/.test(error.message),
+  );
 });

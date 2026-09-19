@@ -367,6 +367,25 @@ export function panelCard(state, { last = null, at = null } = {}) {
   if (presetCells.length > 0) elements.push(grid(presetCells));
 
   /**
+   * 渠道自带字段（飞书：任务过程展示）：一行一个。
+   *
+   * 标签与选项都由渠道给（`panel.fields`），hub 只负责画——这样新增这类设置不用改 hub。
+   */
+  for (const item of state?.fields ?? []) {
+    const picker = dropdown({
+      name: `panel_field_${item.field}`,
+      action: `panel_field_${item.field}`,
+      placeholder: `选择${item.label ?? item.field}`,
+      items: (item.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+      current: item.value ?? null,
+    });
+    if (picker.element) elements.push(grid([field(item.label ?? item.field, picker.element)]));
+  }
+  if (state?.fieldsFailed === true) {
+    elements.push({ tag: 'markdown', content: '读不到渠道设置，稍后再试。' });
+  }
+
+  /**
    * ③ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）。
    *
    * 带一个 HH:MM:SS 时间戳：卡上"到底停在哪一次更新"是可核对的
@@ -426,7 +445,14 @@ export function panelPick(action, options) {
     preset_pick: { field: 'preset', label: '设置 Agent 预设' },
     workspace_pick: { field: 'workspace', label: '切换工作区' },
   };
-  const target = map[action];
+  /**
+   * 渠道自带字段（如飞书的「任务过程展示」）：动作名是 `panel_field_<字段名>`。
+   * 名称由渠道自己给出（`panel.fields` 里的 label），hub 只负责翻译回 field。
+   */
+  const dynamic = typeof action === 'string' && action.startsWith('panel_field_')
+    ? { field: action.slice('panel_field_'.length), label: '渠道设置' }
+    : null;
+  const target = map[action] ?? dynamic;
   if (!target) return null;
   // 归一化后是数组；也容忍调用方直接给单个字符串。
   const values = (Array.isArray(options) ? options : [options])

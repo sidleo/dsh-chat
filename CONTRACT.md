@@ -152,7 +152,8 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,botDefault,hostDefault,
    *                                        failures,options,efforts,currentEffort,selectionFailed},
    *                                        session{current,options,failed}, preset{current,options,failed},
-   *                                        workspace{current,options} }
+   *                                        workspace{current,options},
+   *                                        fields[{field,label,value,options}], fieldsFailed }
    *      `workspace.options` 是这台机器人各会话的工作区候选（含绝对路径）：**只给属主，
    *      且只在私聊**（`key` 不带 `group:` 前缀）；群聊卡片是一条群里所有人都能展开的消息，
    *      属主也要在私聊或设置页改工作区。
@@ -164,8 +165,14 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      `session.options` 是**可以切过去的会话**（`[{id,label}]`，label 含标题与相对时间）：
    *      同一工作目录的会话 ∪ 这台机器人其它聊天绑定过的会话，排除空会话与子代理会话；
    *      `session.failed` 表示会话列表**读失败**（此时 options 只含当前绑定，不能显示成"没绑定"）。
+   *      `fields` 是**渠道自带的面板字段**（渠道相关设置，如飞书的「任务过程展示」）：
+   *      渠道实现可选方法 `panel.fields` 就多一行下拉，hub 只做形状校验与透传——
+   *      hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
    * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session
+   *      **不在内置字段表（model/reasoning/preset/workspace/session）里的 field 一律透传给渠道**：
+   *      调渠道的 `panel.apply({botId,key,conversationType,field,value}) -> {value,message}`，
+   *      渠道返回 `ok:false` 时原样抛它的 code/message（失败必须可见）。
    *      `field: 'session'` 的值：会话 id = 切换绑定；**`''` / `'new'` / null = 解除绑定**
    *      （下一条消息开新会话）——渠道下拉的哨兵值翻译回来就是空串。
    *      **model / reasoning 的落点看有没有会话**：有会话 → 会话级（`session/selectModel`，立即生效）；

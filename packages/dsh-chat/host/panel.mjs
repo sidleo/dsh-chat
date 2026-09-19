@@ -128,7 +128,7 @@ export async function validateWorkspacePath(raw) {
  * @returns `{ read, apply }`。
  */
 export function createPanelService({
-  settings, sessions, sessionStore = null, agentPresets = null, logger = console,
+  settings, sessions, sessionStore = null, agentPresets = null, channelRpc = null, logger = console,
 } = {}) {
   if (typeof settings?.read !== 'function') throw new TypeError('控制面板需要每机器人设置存储。');
   if (typeof sessions?.invoke !== 'function') throw new TypeError('控制面板需要会话桥。');
@@ -161,6 +161,59 @@ export function createPanelService({
       provider: selection.provider,
       model: selection.model,
       reasoningEffort: selection.reasoningEffort ?? null,
+    };
+  }
+
+  /** 面板内置字段：其它字段一律交给**渠道自己**处理（如飞书的「任务过程展示」）。 */
+  const BUILT_IN_FIELDS = new Set(['model', 'reasoning', 'preset', 'workspace', 'session']);
+
+  /**
+   * 渠道自带的面板字段（渠道相关的设置，如飞书的「任务过程展示」）。
+   *
+   * 渠道实现 `panel.fields` 就多一行下拉，不实现就当没有——**hub 不认识渠道语义**，
+   * 所以这里只做形状校验与透传（渠道返回 `{ field, label, value, options }`）。
+   */
+  async function channelPanelFields({ channelId, botId, key, conversationType }) {
+    if (typeof channelRpc !== 'function') return { fields: [], failed: false };
+    try {
+      const result = await channelRpc(channelId, 'panel.fields', {
+        botId, key: key ?? null, conversationType: conversationType ?? null,
+      });
+      if (result?.ok !== true) throw new Error(result?.error?.message ?? '读取失败');
+      const fields = Array.isArray(result.value?.fields) ? result.value.fields : [];
+      return {
+        fields: fields.filter((item) => typeof item?.field === 'string' && item.field
+          && Array.isArray(item.options) && item.options.length > 0),
+        failed: false,
+      };
+    } catch (error) {
+      // 渠道没实现这个方法（老版本渠道、或这渠道本来就没有这类设置）不算失败，别刷日志。
+      if (error?.code === 'chat/unknown-method' || /不支持/.test(String(error?.message))) {
+        return { fields: [], failed: false };
+      }
+      logger.warn?.(`[dsh-chat] 读取渠道面板字段失败：${error?.message ?? error}`);
+      return { fields: [], failed: true };
+    }
+  }
+
+  /** 改渠道自带的面板字段：透传给渠道落盘，失败照旧抛可见错误。 */
+  async function applyChannelField({ channelId, botId, key, conversationType, field, value }) {
+    if (typeof channelRpc !== 'function') {
+      throw panelError('chat/unknown-field', `面板不支持这个操作：${field}`);
+    }
+    const result = await channelRpc(channelId, 'panel.apply', {
+      botId, key: key ?? null, conversationType: conversationType ?? null, field, value,
+    });
+    if (result?.ok !== true) {
+      throw panelError(
+        result?.error?.code ?? 'chat/channel-field-failed',
+        result?.error?.message ?? `渠道没能改 ${field}。`,
+      );
+    }
+    return {
+      field,
+      value: result.value?.value ?? value,
+      message: result.value?.message ?? '已生效。',
     };
   }
 
@@ -279,11 +332,11 @@ export function createPanelService({
      *   属主在私聊里或设置页改工作区。
      * @returns 面板状态（只含叶子字段，可安全跨 RPC/序列化）。
      */
-    async read({ channelId, botId, key, isOwner = false }) {
+    async read({ channelId, botId, key, isOwner = false, conversationType = null }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState, sessionState] = await Promise.all([
+      const [catalog, presetState, selectionState, sessionState, channelFieldState] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
           // 整目录读失败：给这条失败一个显示名，卡片上才不会印出「· ：<原因>」这种无名行。
@@ -299,6 +352,7 @@ export function createPanelService({
         sessionOptions({
           channelId, botId, key, currentSessionId: sessionId, workspace: record.workspace,
         }),
+        channelPanelFields({ channelId, botId, key, conversationType }),
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -332,6 +386,9 @@ export function createPanelService({
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null,
         },
+        // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
+        fields: channelFieldState.fields,
+        fieldsFailed: channelFieldState.failed === true,
         // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
         session: {
           current: sessionId,
@@ -370,7 +427,7 @@ export function createPanelService({
      *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value, isOwner = false }) {
+    async apply({ channelId, botId, key, field, value, isOwner = false, conversationType = null }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
@@ -381,6 +438,13 @@ export function createPanelService({
        * （`session/create` 没有模型参数），所以未绑定时的落点就是机器人设置。
        */
       const botDefault = normalizeBotModel(record.model);
+      // 渠道自带字段：交给渠道自己落盘（hub 不认识过程展示之类的语义）。
+      if (!BUILT_IN_FIELDS.has(field)) {
+        return applyChannelField({
+          channelId, botId, key, conversationType, field, value,
+        });
+      }
+
       if (field === 'model' || field === 'reasoning') {
         if (!sessionId) {
           // 未绑定 = 改机器人级设置：与预设/工作区同一条口径，只限属主。

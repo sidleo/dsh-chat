@@ -836,6 +836,37 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
     assert.equal(onDisk.bots[0].stepPushGroup, 'streaming_card');
 
+    /**
+     * 渠道自带的面板字段：hub 的 panel.read/apply 调这两个，卡片上就能改过程展示。
+     * 只报**当前会话类型**那一份（群卡里给私聊的取值会让人改错）。
+     */
+    const fields = await controller.endpoints['panel.fields']({ botId: 'bot_ctl', conversationType: 'direct' });
+    assert.equal(fields.ok, true);
+    assert.equal(fields.value.fields[0].field, 'stepPush');
+    assert.match(fields.value.fields[0].label, /私聊/);
+    assert.equal(fields.value.fields[0].value, 'off', '私聊那份刚被改成 off');
+    const groupFields = await controller.endpoints['panel.fields']({ botId: 'bot_ctl', conversationType: 'group' });
+    assert.equal(groupFields.value.fields[0].value, 'streaming_card', '群聊那份是另一份设置');
+
+    const applied = await controller.endpoints['panel.apply']({
+      botId: 'bot_ctl', field: 'stepPush', value: 'post', conversationType: 'direct',
+    });
+    assert.equal(applied.ok, true);
+    assert.equal(applied.value.value, 'post');
+    assert.match(applied.value.message, /私聊过程展示已设为/);
+    const afterApply = await controller.endpoints['connection.status']({});
+    assert.deepEqual(afterApply.value.bots[0].stepPush, { direct: 'post', group: 'streaming_card' },
+      '改完要立刻生效（运行期那份 bot 对象就地改掉）');
+
+    const badValue = await controller.endpoints['panel.apply']({
+      botId: 'bot_ctl', field: 'stepPush', value: 'nope', conversationType: 'direct',
+    });
+    assert.equal(badValue.ok, false);
+    const unknownField = await controller.endpoints['panel.apply']({
+      botId: 'bot_ctl', field: 'ghost', value: 'x',
+    });
+    assert.equal(unknownField.error.code, 'chat/unknown-field');
+
     // 非法载荷与未知机器人。
     const bad = await controller.endpoints['bot.step-push.set']({ botId: 'bot_ctl', stepPush: { direct: 'post' } });
     assert.equal(bad.ok, false);
