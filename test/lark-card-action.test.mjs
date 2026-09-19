@@ -188,3 +188,22 @@ test('归一化：下拉（select_static）选中的值三种形态都要认', (
   });
   assert.deepEqual(none.action.options, []);
 });
+
+test('归一化：带出延迟更新 token（更新交互卡片的唯一凭证）', () => {
+  const event = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    token: 'tk_delayed_update',
+    action: { tag: 'button', value: { dsh_panel: 'status' } },
+    context: { open_chat_id: 'oc_chat', open_message_id: 'om_card' },
+  });
+  assert.equal(event.token, 'tk_delayed_update');
+  assert.equal(event.messageId, 'om_card');
+
+  // 没带 token 时是 undefined（调用方据此退回 patchCard / 新发一张），而不是空串。
+  const withoutToken = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'button', value: {} },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.equal(withoutToken.token, undefined);
+});

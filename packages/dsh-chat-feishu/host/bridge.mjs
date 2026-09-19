@@ -751,7 +751,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    *   `key` 是会话键（p2p:… / group:…），用于复用同一张卡；`messageId` 是用户刚点的那张卡。
    */
   async function renderPanel({
-    chatId, key = null, messageId = null, panel, last = null, source = 'unknown',
+    chatId, key = null, messageId = null, panel, last = null, source = 'unknown', token = null,
   }) {
     // 标题带上本次渲染时间：聊天里可能有多张面板卡（旧卡、重启前的卡），
     // "哪张是刚更新的"必须一眼可辨，否则用户会以为卡片"变回去了"。
@@ -761,9 +761,28 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     const targets = [messageId, messageId ? null : known].filter(Boolean);
     // 每次渲染都留痕：卡上"停在哪一次更新"与日志能对上（排查"卡片被回滚"这类问题时唯一现场）。
     logger.info?.(`[dsh-chat-feishu] 渲染控制面板 source=${source}`
-      + ` key=${key ?? '无'} 目标=${targets[0] ?? '新发'}`
+      + ` key=${key ?? '无'} 目标=${targets[0] ?? '新发'} token=${token ? '有' : '无'}`
       + ` last=${last?.label ?? '无'}${last?.at ? `@${last.at}` : ''}`
       + ` 字节=${JSON.stringify(card).length}`);
+    /**
+     * 交互驱动（有点击回调带来的 token）→ 必须走延迟更新接口。
+     *
+     * 这不是风格问题：飞书要求一次卡片交互里的更新用回调的 token 调
+     * `/interactive/v1/card/update`，用 `message.patch` 会被客户端还原
+     * ——真机上就是"卡片变了一下又变回去"。token 只有 2 次机会、30 分钟有效，
+     * 失败（用完了）就退回 patchCard，再不行新发一张。
+     */
+    if (token && messageId) {
+      const updated = await gateway.updateCard({ token, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 控制面板延迟更新失败（token 路径）：${error?.message ?? error}`);
+        return false;
+      });
+      if (updated) {
+        if (key) panelCards.set(key, messageId);
+        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（token 路径 ${messageId}）`);
+        return true;
+      }
+    }
     for (const target of targets) {
       const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败（${target}）：${error?.message ?? error}`);
@@ -771,7 +790,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       });
       if (patched) {
         if (key) panelCards.set(key, target);
-        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（${bot.id} ${target}）`);
+        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（patch 路径 ${target}）`);
         return true;
       }
     }
@@ -885,6 +904,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         chatId, key, messageId: event.messageId ?? null, panel: state,
         last: last ? { at: panelClock(), ...last } : null,
         source,
+        // 用回调带来的延迟更新 token —— 交互后的卡片更新只能走这条路。
+        token: event.token ?? null,
       });
     }
 
@@ -928,14 +949,23 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       if (action.menu) {
         const items = await menuItemsFor(commandContext);
         if (items.length > 0 && event.messageId) {
-          const patched = await gateway.patchCard({
+          // 同样是交互驱动的更新：优先延迟更新 token，退回 patchCard。
+          const viaToken = event.token
+            ? await gateway.updateCard({ token: event.token, card: menuCard(items) })
+              .then(() => true).catch((error) => {
+                logger.warn?.(`[dsh-chat-feishu] 命令清单延迟更新失败：${error?.message ?? error}`);
+                return false;
+              })
+            : false;
+          const patched = viaToken || await gateway.patchCard({
             messageId: event.messageId, card: menuCard(items),
           }).then(() => true).catch((error) => {
             logger.warn?.(`[dsh-chat-feishu] 命令清单就地更新失败：${error?.message ?? error}`);
             return false;
           });
           if (patched) {
-            logger.info?.(`[dsh-chat-feishu] 已切到命令清单（${bot.id} 命令数=${items.length}）`);
+            logger.info?.(`[dsh-chat-feishu] 已切到命令清单（${bot.id} 命令数=${items.length}`
+              + `${viaToken ? '，token 路径' : '，patch 路径'}）`);
             return { toast: { type: 'info', content: '已切到命令清单' } };
           }
         }
@@ -1110,7 +1140,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   async function markAnswered(event, title, content) {
     if (!event?.messageId || typeof gateway.markCardAnswered !== 'function') return;
     try {
-      await gateway.markCardAnswered({ messageId: event.messageId, title, content });
+      // 带 token：这是"用户刚点了这张卡"，更新要走延迟更新接口，否则会被客户端还原。
+      await gateway.markCardAnswered({
+        messageId: event.messageId, token: event.token ?? null, title, content,
+      });
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] 更新提问卡片失败：${error?.message ?? error}`);
     }

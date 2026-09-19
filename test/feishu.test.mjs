@@ -46,7 +46,7 @@ const TINY_PNG = Buffer.from(
 function createFakeGateway() {
   const calls = {
     replies: [], texts: [], cards: [], patches: [], resources: [], files: [], images: [],
-    deliverables: [], deliverableImages: [],
+    deliverables: [], deliverableImages: [], tokenUpdates: [],
     questionCards: [], approvalCards: [], markedCards: [], reactions: [], removedReactions: [],
     connects: 0, disconnects: 0,
   };
@@ -98,6 +98,15 @@ function createFakeGateway() {
       calls.patches.push({ messageId, card });
       return { messageId };
     },
+    /**
+     * 交互驱动的卡片更新（飞书延迟更新 token 路径）。
+     * 真机上用 message.patch 更新交互卡片会被客户端还原，所以交互必须走这里。
+     */
+    async updateCard({ token, card }) {
+      calls.tokenUpdates.push({ token, card });
+      if (gatewayState.failures.updateCard) throw gatewayState.failures.updateCard;
+      return { updated: true };
+    },
     /** 假资源下载：默认给一张 1x1 PNG，可由用例替换成失败/超限。 */
     async downloadResource({ messageId, fileKey, type }) {
       calls.resources.push({ messageId, fileKey, type });
@@ -142,8 +151,8 @@ function createFakeGateway() {
       calls.approvalCards.push({ chatId, openId, request });
       return { messageId: 'om_approval_card' };
     },
-    async markCardAnswered({ messageId, title, content }) {
-      calls.markedCards.push({ messageId, title, content });
+    async markCardAnswered({ messageId, token = null, title, content }) {
+      calls.markedCards.push({ messageId, token, title, content });
       return { messageId };
     },
     /** 主动发文件/图片（投递用）。 */
@@ -2273,6 +2282,97 @@ test('控制面板：再次 /menu 复用同一张卡，不再堆新卡（聊天�
     // 标题带渲染时间：多张卡时"哪张最新"一眼可辨。
     const title = app.gateway.calls.patches.at(-1).card.header.title.content;
     assert.match(title, /^机器人控制面板 · \d{2}:\d{2}:\d{2}$/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互驱动的卡片更新走延迟更新 token（用 message.patch 会被客户端还原）', async () => {
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_click_1',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
+    });
+    assert.equal(answer.toast.type, 'success');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1, '要走延迟更新接口');
+    assert.equal(app.gateway.calls.tokenUpdates[0].token, 'tk_click_1');
+    assert.match(app.gateway.calls.tokenUpdates[0].card.header.title.content, /机器人控制面板/);
+    assert.equal(app.gateway.calls.patches.length, 0, '不能再走 message.patch');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('token 用掉/过期时退回 message.patch，不能让卡片就此不更新', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ panel, commands });
+  try {
+    app.gateway.setFailure('updateCard', Object.assign(new Error('token expired'), { code: 200340 }));
+    await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_used',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'status' } },
+    });
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1, '先试 token 路径');
+    assert.ok(app.gateway.calls.patches.length >= 1, '失败后仍要 patch 兜底');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('命令清单切换同样优先走 token 路径', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      return { handled: true, reply: 'x' };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_menu',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'commands' } },
+    });
+    assert.equal(answer.toast.type, 'info');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1);
+    assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /机器人菜单/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('审批按钮把回调 token 交给渠道（标记已处理的更新同样不能被还原）', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimed = true;
+    await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_approval',
+      token: 'tk_approval',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+    // 回答按钮不替换卡片（由 hub 带"已回答"状态重渲染整张卡），所以这里验审批那条路。
+    assert.equal(app.gateway.calls.markedCards.at(-1)?.token, 'tk_approval');
+    assert.equal(app.gateway.calls.markedCards.at(-1)?.messageId, 'om_approval');
   } finally {
     await app.cleanup();
   }

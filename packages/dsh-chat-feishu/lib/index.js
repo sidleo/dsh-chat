@@ -127725,12 +127725,24 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     messageId = null,
     panel,
     last = null,
-    source = "unknown"
+    source = "unknown",
+    token = null
   }) {
     const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
     const known = key ? panelCards.get(key) : null;
     const targets = [messageId, messageId ? null : known].filter(Boolean);
-    logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} key=${key ?? "\u65E0"} \u76EE\u6807=${targets[0] ?? "\u65B0\u53D1"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
+    logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} key=${key ?? "\u65E0"} \u76EE\u6807=${targets[0] ?? "\u65B0\u53D1"} token=${token ? "\u6709" : "\u65E0"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
+    if (token && messageId) {
+      const updated = await gateway.updateCard({ token, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF08token \u8DEF\u5F84\uFF09\uFF1A${error?.message ?? error}`);
+        return false;
+      });
+      if (updated) {
+        if (key) panelCards.set(key, messageId);
+        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08token \u8DEF\u5F84 ${messageId}\uFF09`);
+        return true;
+      }
+    }
     for (const target of targets) {
       const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF08${target}\uFF09\uFF1A${error?.message ?? error}`);
@@ -127738,7 +127750,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       });
       if (patched) {
         if (key) panelCards.set(key, target);
-        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08${bot.id} ${target}\uFF09`);
+        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08patch \u8DEF\u5F84 ${target}\uFF09`);
         return true;
       }
     }
@@ -127817,7 +127829,9 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         messageId: event.messageId ?? null,
         panel: state2,
         last: last ? { at: panelClock(), ...last } : null,
-        source
+        source,
+        // 用回调带来的延迟更新 token —— 交互后的卡片更新只能走这条路。
+        token: event.token ?? null
       });
     }
     const pick2 = panelPick(value.action, event?.action?.options);
@@ -127847,7 +127861,11 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       if (action.menu) {
         const items = await menuItemsFor(commandContext);
         if (items.length > 0 && event.messageId) {
-          const patched = await gateway.patchCard({
+          const viaToken = event.token ? await gateway.updateCard({ token: event.token, card: menuCard(items) }).then(() => true).catch((error) => {
+            logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u6E05\u5355\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
+            return false;
+          }) : false;
+          const patched = viaToken || await gateway.patchCard({
             messageId: event.messageId,
             card: menuCard(items)
           }).then(() => true).catch((error) => {
@@ -127855,7 +127873,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
             return false;
           });
           if (patched) {
-            logger.info?.(`[dsh-chat-feishu] \u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355\uFF08${bot.id} \u547D\u4EE4\u6570=${items.length}\uFF09`);
+            logger.info?.(`[dsh-chat-feishu] \u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355\uFF08${bot.id} \u547D\u4EE4\u6570=${items.length}${viaToken ? "\uFF0Ctoken \u8DEF\u5F84" : "\uFF0Cpatch \u8DEF\u5F84"}\uFF09`);
             return { toast: { type: "info", content: "\u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355" } };
           }
         }
@@ -128005,7 +128023,12 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
   async function markAnswered(event, title, content) {
     if (!event?.messageId || typeof gateway.markCardAnswered !== "function") return;
     try {
-      await gateway.markCardAnswered({ messageId: event.messageId, title, content });
+      await gateway.markCardAnswered({
+        messageId: event.messageId,
+        token: event.token ?? null,
+        title,
+        content
+      });
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] \u66F4\u65B0\u63D0\u95EE\u5361\u7247\u5931\u8D25\uFF1A${error?.message ?? error}`);
     }
@@ -128217,10 +128240,18 @@ function normalizeCardAction(raw) {
   const messageId = context.open_message_id ?? raw.open_message_id ?? raw.messageId;
   const chatId = context.open_chat_id ?? raw.open_chat_id ?? raw.chatId;
   const openId = operator.open_id ?? operator.openId;
+  const token = raw.token ?? context.token ?? raw.event?.token;
   if (typeof chatId !== "string" || !chatId || typeof openId !== "string" || !openId) return null;
   return Object.freeze({
     messageId: typeof messageId === "string" ? messageId : void 0,
     chatId,
+    /**
+     * 延迟更新 token（`card.action.trigger` 自带，30 分钟内最多用 2 次）。
+     *
+     * **它是更新这张卡片的唯一正路**：交互之后必须用它调 `updateCard`，
+     * 否则（用 message.patch）客户端会把卡片还原成原样。
+     */
+    token: typeof token === "string" && token ? token : void 0,
     operator: Object.freeze({ openId }),
     action: Object.freeze({
       tag: action.tag ?? "unknown",
@@ -128287,6 +128318,16 @@ function createLarkGateway({
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 @larksuiteoapi/node-sdk\u3002");
   if (!appId || !appSecret) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 appId \u4E0E appSecret\u3002");
+  const cardSchemas = /* @__PURE__ */ new Map();
+  const CARD_SCHEMA_MEMORY = 200;
+  function rememberCardSchema(messageId, card) {
+    if (typeof messageId !== "string" || !messageId || card === null || typeof card !== "object") return;
+    cardSchemas.set(messageId, card.schema === "2.0" ? "2.0" : "1.0");
+    if (cardSchemas.size > CARD_SCHEMA_MEMORY) {
+      const oldest = cardSchemas.keys().next().value;
+      cardSchemas.delete(oldest);
+    }
+  }
   const clientOptions = {
     appId,
     appSecret,
@@ -128912,19 +128953,44 @@ function createLarkGateway({
       return { removed: true };
     },
     /** 把卡片替换成"已处理"的静态卡片（点击后再也点不动，避免重复回答）。 */
-    async markCardAnswered({ messageId, title, content }) {
+    /**
+     * 把一张提问/审批卡标成"已回答"。
+     *
+     * 两个坑都在真机上踩过：
+     * - **schema 必须与原来那张一致**：2.0 的卡用 1.0 内容回写会被拒
+     *   （`230099 schemaV2 card can not change schemaV1`），所以发出时记下 schema；
+     * - **交互驱动的更新要走延迟更新 token**：用 `message.patch` 会被客户端还原
+     *   （"点了又变回去"）。有 token 就先走 token 路径，没有才退回 patch。
+     *
+     * @param options - { messageId, token?, title, content }。
+     */
+    async markCardAnswered({ messageId, token = null, title, content }) {
+      const schema = cardSchemas.get(messageId) ?? "1.0";
+      const header = { template: "green", title: { tag: "plain_text", content: String(title).slice(0, 100) } };
+      const text = String(content);
+      const card = schema === "2.0" ? {
+        schema: "2.0",
+        config: { update_multi: true, width_mode: "default" },
+        header,
+        body: { direction: "vertical", elements: [{ tag: "markdown", content: text }] }
+      } : {
+        config: { wide_screen_mode: true, update_multi: true },
+        header,
+        elements: [{ tag: "div", text: { tag: "lark_md", content: text } }]
+      };
+      if (token) {
+        const updated = await this.updateCard({ token, card }).then(() => true).catch((error) => {
+          logger.warn?.(`[dsh-chat-feishu] \u63D0\u95EE\u5361\u7247\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF0C\u9000\u56DE patch\uFF1A${error?.message ?? error}`);
+          return false;
+        });
+        if (updated) return { messageId, via: "token" };
+      }
       const response = await client.im.v1.message.patch({
         path: { message_id: messageId },
-        data: {
-          content: JSON.stringify({
-            config: { wide_screen_mode: true, update_multi: true },
-            header: { template: "green", title: { tag: "plain_text", content: String(title).slice(0, 100) } },
-            elements: [{ tag: "div", text: { tag: "lark_md", content: String(content) } }]
-          })
-        }
+        data: { content: JSON.stringify(card) }
       });
       assertSuccess("\u98DE\u4E66\u66F4\u65B0\u63D0\u95EE\u5361\u7247", response);
-      return { messageId };
+      return { messageId, via: "patch" };
     },
     /** 发一张交互卡片。 */
     async sendCard({ chatId, card }) {
@@ -128933,7 +128999,9 @@ function createLarkGateway({
         data: { receive_id: chatId, msg_type: "interactive", content: JSON.stringify(card) }
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u5361\u7247", response);
-      return { messageId: response?.data?.message_id };
+      const messageId = response?.data?.message_id;
+      rememberCardSchema(messageId, card);
+      return { messageId };
     },
     /** 回复一张交互卡片。 */
     async replyCard({ messageId, card, replyInThread = false }) {
@@ -128946,9 +129014,17 @@ function createLarkGateway({
         }
       });
       assertSuccess("\u98DE\u4E66\u56DE\u590D\u5361\u7247", response);
-      return { messageId: response?.data?.message_id, threadId: response?.data?.thread_id };
+      const sentId = response?.data?.message_id;
+      rememberCardSchema(sentId, card);
+      return { messageId: sentId, threadId: response?.data?.thread_id };
     },
-    /** 原地更新一张卡片（过程卡的实时刷新靠它）。 */
+    /**
+     * 原地更新一张卡片（过程卡的实时刷新靠它）。
+     *
+     * **只用于非交互驱动的更新**（agent 跑任务时刷新过程卡）。用户点了卡片之后要更新它，
+     * 必须走 `updateCard`（延迟更新 token）——用 `message.patch` 会被客户端回滚成原样，
+     * 真机现象就是"卡片变了一下又变回去"。
+     */
     async patchCard({ messageId, card }) {
       const response = await client.im.v1.message.patch({
         path: { message_id: messageId },
@@ -128956,6 +129032,34 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u66F4\u65B0\u5361\u7247", response);
       return { messageId };
+    },
+    /**
+     * 更新"用户刚交互的那张卡片"（飞书**延迟更新**接口）。
+     *
+     * 为什么不能用 `message.patch`：卡片回传（`card.action.trigger`）会带一个
+     * **延迟更新 token**，飞书要求在一次交互里对卡片的更新走
+     * `POST /open-apis/interactive/v1/card/update { token, card }`；
+     * 用 `message.patch` 改会被客户端还原（真机上反复出现"变了又变回去"）。
+     *
+     * 约束（飞书官方）：token 有效期 30 分钟、**最多用 2 次**；`card` 必须是**完整**卡片 JSON，
+     * 不支持增量更新。token 用完/过期会报错，调用方应退回 `patchCard` 或新发一张。
+     *
+     * @param options - { token, card }。
+     * @returns `{ updated: true }`。
+     */
+    async updateCard({ token, card }) {
+      if (typeof token !== "string" || !token) {
+        const error = new Error("\u4EA4\u4E92\u5361\u7247\u66F4\u65B0\u9700\u8981\u56DE\u8C03\u91CC\u7684 token\uFF08\u5EF6\u8FDF\u66F4\u65B0\u51ED\u8BC1\uFF09\u3002");
+        error.code = "feishu/no-card-token";
+        throw error;
+      }
+      const response = await client.request({
+        method: "POST",
+        url: `${client.domain}/open-apis/interactive/v1/card/update`,
+        data: { token, card }
+      });
+      assertSuccess("\u98DE\u4E66\u66F4\u65B0\u4EA4\u4E92\u5361\u7247", response);
+      return { updated: true };
     },
     /**
      * 下载消息里的资源（图片/文件）。
