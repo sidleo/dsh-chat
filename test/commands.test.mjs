@@ -702,6 +702,39 @@ test('没有会话时 /model 与 /reasoning 改的是机器人默认模型（只
   assert.match(status.reply, /机器人默认 opencode-go\/deepseek-v4.1-flash · 推理 high/);
 });
 
+test('/retitle：只限属主；把历史绑定会话逐个补上渠道前缀并汇总结果', async () => {
+  const outcomes = ['renamed', 'skipped', 'no-title', 'failed'];
+  const seen = [];
+  const services = {
+    ...createServices().services,
+    sessions: {
+      ...createServices().services.sessions,
+      boundSessions: (channelId, botId) => {
+        assert.equal(channelId, 'feishu');
+        assert.equal(botId, 'bot_1');
+        return outcomes.map((_outcome, index) => ({ key: `p2p:ou_${index}`, sessionId: `session-${index}` }));
+      },
+      markSessionChannel: async (sessionId, label) => {
+        seen.push({ sessionId, label });
+        return outcomes[Number(sessionId.split('-')[1])];
+      },
+    },
+  };
+  const registry = createRegistry(services);
+
+  const denied = await registry.handle(context('/retitle', { isOwner: false }));
+  assert.match(denied.reply, /只限属主/);
+  assert.equal(seen.length, 0, '非属主不该动任何会话');
+
+  const report = await registry.handle(context('/retitle', { isOwner: true }));
+  assert.match(report.reply, /检查了 4 个绑定会话/);
+  assert.match(report.reply, /补上 1 个/);
+  assert.match(report.reply, /已有前缀 1 个/);
+  assert.match(report.reply, /还没有标题 1 个/);
+  assert.match(report.reply, /失败 1 个/);
+  assert.deepEqual(seen.map((row) => row.label), ['飞书', '飞书', '飞书', '飞书'], '用渠道名做前缀');
+});
+
 test('/diag：只有属主能看；把连接状态、最近错误与日志尾部拼成可读文本', async () => {
   const services = {
     ...createServices().services,

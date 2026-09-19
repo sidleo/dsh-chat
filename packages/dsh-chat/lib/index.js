@@ -1123,7 +1123,7 @@ function line(text) {
   const value = String(text ?? "").replace(/\s+$/u, "");
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}\u2026` : value;
 }
-var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny", "diag"]);
+var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny", "diag", "retitle"]);
 var MAX_HISTORY_CHARS = 160;
 function clip(text) {
   const value = String(text ?? "").replace(/\s+/gu, " ").trim();
@@ -1575,6 +1575,34 @@ ${result.text}` : ""}`;
         sessionId: target
       });
       return `\u5DF2\u5207\u6362\u5230\u4F1A\u8BDD ${target}\u3002`;
+    }
+  });
+  registry.register({
+    name: "retitle",
+    aliases: ["fixtitles"],
+    summary: "\u7ED9\u5386\u53F2\u4F1A\u8BDD\u8865\u4E0A\u300C\u6E20\u9053 \xB7\u300D\u6807\u9898\u524D\u7F00\uFF08\u4EC5\u5C5E\u4E3B\uFF09",
+    execute: async (context) => {
+      if (context.isOwner !== true) return "\u6539\u4F1A\u8BDD\u6807\u9898\u53EA\u9650\u5C5E\u4E3B\u3002";
+      if (typeof context.services.sessions?.boundSessions !== "function" || typeof context.services.sessions?.markSessionChannel !== "function") {
+        return "\u8FD9\u4E2A\u90E8\u7F72\u4E0D\u652F\u6301\u6279\u91CF\u56DE\u586B\u4F1A\u8BDD\u6807\u9898\u3002";
+      }
+      const channelLabel2 = String(context.channelLabel ?? "").trim();
+      if (!channelLabel2) return "\u62FF\u4E0D\u5230\u6E20\u9053\u540D\uFF0C\u65E0\u6CD5\u56DE\u586B\u6807\u9898\u3002";
+      const rows = context.services.sessions.boundSessions(context.channelId, context.botId);
+      if (rows.length === 0) return "\u8FD9\u53F0\u673A\u5668\u4EBA\u8FD8\u6CA1\u6709\u7ED1\u5B9A\u8FC7\u4EFB\u4F55\u4F1A\u8BDD\u3002";
+      const counts = { renamed: 0, skipped: 0, "no-title": 0, failed: 0 };
+      for (const row of rows) {
+        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, channelLabel2);
+        if (Object.hasOwn(counts, outcome ?? "")) counts[outcome] += 1;
+      }
+      context.log?.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u56DE\u586B\uFF1A${JSON.stringify(counts)}`);
+      const detail = [
+        counts.renamed > 0 ? `\u8865\u4E0A ${counts.renamed} \u4E2A` : null,
+        counts.skipped > 0 ? `\u5DF2\u6709\u524D\u7F00 ${counts.skipped} \u4E2A` : null,
+        counts["no-title"] > 0 ? `\u8FD8\u6CA1\u6709\u6807\u9898 ${counts["no-title"]} \u4E2A\uFF08\u7B49\u5B83\u8DD1\u5B8C\u4E00\u8F6E\u518D\u6267\u884C\u4E00\u6B21\uFF09` : null,
+        counts.failed > 0 ? `\u5931\u8D25 ${counts.failed} \u4E2A\uFF08\u7EC6\u8282\u89C1\u65E5\u5FD7\uFF09` : null
+      ].filter(Boolean).join("\u3001");
+      return `\u68C0\u67E5\u4E86 ${rows.length} \u4E2A\u7ED1\u5B9A\u4F1A\u8BDD\uFF1A${detail || "\u6CA1\u6709\u9700\u8981\u5904\u7406\u7684"}\u3002`;
     }
   });
   registry.register({
@@ -3170,22 +3198,32 @@ function createSessionBridge({
   const namedSessions = /* @__PURE__ */ new Set();
   async function markSessionChannel(sessionId, channelLabel2, signal) {
     const label = typeof channelLabel2 === "string" ? channelLabel2.trim() : "";
-    if (!label || namedSessions.has(sessionId)) return;
+    if (!label || namedSessions.has(sessionId)) return "skipped";
     try {
       const listed = await invoke("session", "list", { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
-      if (typeof title !== "string" || !title.trim()) return;
+      if (typeof title !== "string" || !title.trim()) return "no-title";
       if (title.startsWith(`${label} \xB7 `)) {
         namedSessions.add(sessionId);
-        return;
+        return "skipped";
       }
       await invoke("session", "rename", { request: { sessionId, title: `${label} \xB7 ${title}` } }, signal);
       namedSessions.add(sessionId);
       logger.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u5DF2\u6807\u6E20\u9053\uFF1A${sessionId} \u2192 ${label} \xB7 ${title}`);
+      return "renamed";
     } catch (error) {
       logger.warn?.(`[dsh-chat] \u6807\u8BB0\u4F1A\u8BDD\u6E20\u9053\u5931\u8D25\uFF1A${sessionId} ${error?.message ?? error}`);
+      return "failed";
     }
+  }
+  function boundSessions(channelId, botId) {
+    const entries = store?.entries?.(channelId, botId) ?? {};
+    return Object.entries(entries).map(([key, entry]) => ({
+      key,
+      sessionId: entry?.sessionId ?? null,
+      workspacePath: entry?.workspacePath ?? null
+    })).filter((row) => typeof row.sessionId === "string" && row.sessionId);
   }
   async function invoke(namespace, method, args = {}, signal) {
     const request = { namespace, method, args };
@@ -3791,6 +3829,7 @@ function createSessionBridge({
     isRunning,
     rename: rename3,
     markSessionChannel,
+    boundSessions,
     reset,
     history,
     runCommand,

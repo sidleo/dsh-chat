@@ -25,7 +25,7 @@ function line(text) {
 }
 
 /** 只有属主能用的命令（菜单里对非属主隐藏；执行时仍会再判一次）。 */
-const OWNER_ONLY_COMMANDS = new Set(['allow', 'deny', 'diag']);
+const OWNER_ONLY_COMMANDS = new Set(['allow', 'deny', 'diag', 'retitle']);
 
 /** 历史回看里每条消息的字符上限（避免一条命令刷屏）。 */
 const MAX_HISTORY_CHARS = 160;
@@ -587,6 +587,46 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         sessionId: target,
       });
       return `已切换到会话 ${target}。`;
+    },
+  });
+
+  /**
+   * `/retitle`：给这台机器人**历史绑定过的**会话补上「渠道 ·」前缀。
+   *
+   * 前缀是 P6 加的，只对"下一次发消息"的会话生效——长期不说话的旧会话标题一直是旧的。
+   * 这是个一次性动作（幂等），放在命令里而不是启动时自动跑：什么时候动用户的历史会话，
+   * 应该由用户自己决定。
+   */
+  registry.register({
+    name: 'retitle',
+    aliases: ['fixtitles'],
+    summary: '给历史会话补上「渠道 ·」标题前缀（仅属主）',
+    execute: async (context) => {
+      if (context.isOwner !== true) return '改会话标题只限属主。';
+      if (typeof context.services.sessions?.boundSessions !== 'function'
+        || typeof context.services.sessions?.markSessionChannel !== 'function') {
+        return '这个部署不支持批量回填会话标题。';
+      }
+      const channelLabel = String(context.channelLabel ?? '').trim();
+      if (!channelLabel) return '拿不到渠道名，无法回填标题。';
+      const rows = context.services.sessions.boundSessions(context.channelId, context.botId);
+      if (rows.length === 0) return '这台机器人还没有绑定过任何会话。';
+
+      const counts = { renamed: 0, skipped: 0, 'no-title': 0, failed: 0 };
+      for (const row of rows) {
+        // 串行：一次 rename 就够轻，串行能避免把 DSH 的会话列表打满。
+        // eslint-disable-next-line no-await-in-loop
+        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, channelLabel);
+        if (Object.hasOwn(counts, outcome ?? '')) counts[outcome] += 1;
+      }
+      context.log?.info?.(`[dsh-chat] 会话标题回填：${JSON.stringify(counts)}`);
+      const detail = [
+        counts.renamed > 0 ? `补上 ${counts.renamed} 个` : null,
+        counts.skipped > 0 ? `已有前缀 ${counts.skipped} 个` : null,
+        counts['no-title'] > 0 ? `还没有标题 ${counts['no-title']} 个（等它跑完一轮再执行一次）` : null,
+        counts.failed > 0 ? `失败 ${counts.failed} 个（细节见日志）` : null,
+      ].filter(Boolean).join('、');
+      return `检查了 ${rows.length} 个绑定会话：${detail || '没有需要处理的'}。`;
     },
   });
 

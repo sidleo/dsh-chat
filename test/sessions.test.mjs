@@ -887,13 +887,20 @@ test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮
     store: null, settings: { read: () => ({}) },
   });
 
-  // 第一次：标题还没生成 —— 不能记成"已标记"。
-  await bridge.markSessionChannel?.('session-1', '飞书');
+  // 第一次：标题还没生成 —— 不能记成"已标记"（返回值给 /retitle 那条路用）。
+  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'no-title');
   assert.deepEqual(renamed, [], '标题没生成时不该重命名');
   // 第二次（标题已生成）——要补上前缀。
   titleReady = true;
-  await bridge.markSessionChannel?.('session-1', '飞书');
+  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'renamed');
   assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
+  // 第三次：已经有前缀 → skipped（幂等，不重复改）。
+  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'skipped');
+  assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
+
+  // 一次性回填要用到的绑定清单：只列这台机器人自己的会话。
+  const bound = bridge.boundSessions?.('feishu', 'bot_1');
+  assert.ok(Array.isArray(bound), 'boundSessions 要可用');
   await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 

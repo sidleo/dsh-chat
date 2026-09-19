@@ -185,9 +185,16 @@ export function createSessionBridge({
    * @param sessionId - 会话 id。
    * @param channelLabel - 渠道中文名（如 `飞书`）。
    */
+  /**
+   * 给会话标题补上「渠道 ·」前缀（幂等）。
+   *
+   * @returns 'renamed'（补上了）/ 'skipped'（已经有前缀或这次已经处理过）/
+   *   'no-title'（会话还没有标题，等下一轮）/ 'failed'（失败，只留日志，下轮会再试）。
+   *   返回值给 `/retitle` 那条一次性回填用；正常消息链路不看它。
+   */
   async function markSessionChannel(sessionId, channelLabel, signal) {
     const label = typeof channelLabel === 'string' ? channelLabel.trim() : '';
-    if (!label || namedSessions.has(sessionId)) return;
+    if (!label || namedSessions.has(sessionId)) return 'skipped';
     try {
       // 标题只有 `session/list` 的投影里有（`session/page` 不带投影）。
       const listed = await invoke('session', 'list', { _request: {} }, signal);
@@ -195,18 +202,32 @@ export function createSessionBridge({
       const title = item?.projections?.values?.title;
       // 标题要等第一轮跑完才生成：这时**不能**记成"已标记"，否则同一个会话
       // 在这个进程里再也不会重试，前缀就永远补不上了。
-      if (typeof title !== 'string' || !title.trim()) return;
+      if (typeof title !== 'string' || !title.trim()) return 'no-title';
       if (title.startsWith(`${label} · `)) {
         namedSessions.add(sessionId);
-        return;
+        return 'skipped';
       }
       await invoke('session', 'rename', { request: { sessionId, title: `${label} · ${title}` } }, signal);
       namedSessions.add(sessionId);
       logger.info?.(`[dsh-chat] 会话标题已标渠道：${sessionId} → ${label} · ${title}`);
+      return 'renamed';
     } catch (error) {
       // 命名是锦上添花：失败只留日志、且不记"已标记"，下一轮还会再试，绝不影响消息处理。
       logger.warn?.(`[dsh-chat] 标记会话渠道失败：${sessionId} ${error?.message ?? error}`);
+      return 'failed';
     }
+  }
+
+  /**
+   * 这台机器人绑定过的会话（`/retitle` 这类"对历史会话补一刀"的动作要用）。
+   *
+   * @returns `[{ key, sessionId, workspacePath }]`。
+   */
+  function boundSessions(channelId, botId) {
+    const entries = store?.entries?.(channelId, botId) ?? {};
+    return Object.entries(entries).map(([key, entry]) => ({
+      key, sessionId: entry?.sessionId ?? null, workspacePath: entry?.workspacePath ?? null,
+    })).filter((row) => typeof row.sessionId === 'string' && row.sessionId);
   }
 
   /**
@@ -985,6 +1006,7 @@ export function createSessionBridge({
     isRunning,
     rename,
     markSessionChannel,
+    boundSessions,
     reset,
     history,
     runCommand,
