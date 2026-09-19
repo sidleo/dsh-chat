@@ -14,18 +14,25 @@ import { createPanelService, workspaceCandidates } from '../packages/dsh-chat/ho
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
+/**
+ * 真形状（照 `session/modelCatalog` 的 schema 写）：
+ * `{ default, routableProviders, groups: [{ id, name, models: [{ id, name, reasoning }] }] }`。
+ * provider 是 `group.id`、effort 的展示名是 `name`——这两个字段名写错，测试就该红。
+ */
 const CATALOG = {
+  default: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' },
+  routableProviders: ['deepseek', 'anthropic'],
   groups: [
     {
-      provider: 'deepseek',
-      providerName: 'DeepSeek',
+      id: 'deepseek',
+      name: 'DeepSeek',
       models: [{
         id: 'deepseek-v4.1-flash',
         name: 'V4.1 Flash',
-        reasoning: { efforts: [{ id: 'low', label: '低' }, { id: 'high', label: '高' }], defaultEffort: 'low' },
+        reasoning: { efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }], defaultEffort: 'low' },
       }],
     },
-    { provider: 'anthropic', providerName: 'Anthropic', models: [{ id: 'claude-x', name: 'Claude X' }] },
+    { id: 'anthropic', name: 'Anthropic', models: [{ id: 'claude-x', name: 'Claude X' }] },
   ],
 };
 
@@ -52,9 +59,10 @@ function makePanel({
       calls.push({ kind: 'invoke', namespace, method, args });
       if (method === 'modelCatalog') return CATALOG;
       if (method === 'list') {
+        // 真形状：modelSelection = { lastUsed, next }（不是顶层 provider/model）。
         return {
           items: selection
-            ? [{ sessionId: 'session-1', projections: { values: { modelSelection: selection } } }]
+            ? [{ sessionId: 'session-1', projections: { values: { modelSelection: { lastUsed: selection, next: null } } } }]
             : [{ sessionId: 'session-1', projections: { values: {} } }],
         };
       }
@@ -98,6 +106,9 @@ test('读面板：当前值、模型选项与推理等级、预设、工作区�
   });
   // 推理等级跟着当前模型走（另一个模型没有 efforts）。
   assert.deepEqual(state.model.efforts.map((effort) => effort.id), ['low', 'high']);
+  assert.deepEqual(state.model.hostDefault, {
+    provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'low',
+  }, 'Host 默认模型要带出来（卡片在"跟随默认"时写明具体是哪个）');
   assert.equal(state.model.currentEffort, 'high');
   assert.equal(state.preset.current, 'yh-olap');
   assert.deepEqual(state.preset.options.map((item) => item.id), ['standard', 'yh-olap']);

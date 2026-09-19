@@ -1948,22 +1948,23 @@ test('菜单卡片：命令一个都不能少（曾经 slice(0,12) 把后半截�
     const card = app.gateway.calls.cards.at(-1)?.card;
     assert.ok(card, '要发一张菜单卡片');
 
-    const rows = card.elements.filter((element) => element.tag === 'action');
-    const commandButtons = rows.flatMap((row) => row.actions)
-      .filter((button) => typeof button.value?.dsh_menu === 'string');
+    assert.equal(card.schema, '2.0', '命令清单卡也必须是 2.0（否则 patch 会报 schemaV2 can not change schemaV1）');
+    const rows = card.body.elements.filter((element) => element.tag === 'column_set');
+    const buttons = rows.flatMap((row) => row.columns.flatMap((column) => column.elements));
+    const commandButtons = buttons
+      .filter((button) => typeof button.behaviors?.[0]?.value?.dsh_menu === 'string');
     assert.deepEqual(
-      commandButtons.map((button) => button.value.dsh_menu),
+      commandButtons.map((button) => button.behaviors[0].value.dsh_menu),
       names.map((name) => `/${name}`),
       '每个命令都要有按钮，且顺序不变',
     );
     assert.ok(rows.length > 1, '命令多的时候要分行，而不是截断');
-    // 除最后那条"返回控制面板"外，每行不超过 6 个命令按钮。
-    assert.ok(rows.every((row) => row.actions.length > 0 && row.actions.length <= 6), '每行不超过 6 个');
+    assert.ok(rows.every((row) => row.columns.length > 0 && row.columns.length <= 4), '每行不超过 4 个');
     // 每个命令按钮都要带命令行本身（点它等于手打）。
     assert.ok(commandButtons.every((button) => button.tag === 'button'
-      && button.value.dsh_menu.startsWith('/')));
+      && button.behaviors[0].value.dsh_menu.startsWith('/')));
     // 从控制面板点进来的用户要能回去。
-    assert.ok(rows.flatMap((row) => row.actions).some((button) => button.value?.dsh_panel === 'panel'),
+    assert.ok(buttons.some((button) => button.behaviors?.[0]?.value?.dsh_panel === 'panel'),
       '命令清单卡上要有「返回控制面板」');
   } finally {
     await app.cleanup();
@@ -2223,7 +2224,13 @@ test('控制面板卡：没有会话时不放下拉，直接说明要先建会�
   const card = panelCard({
     bound: false,
     sessionId: null,
-    model: { current: null, options: [{ value: 'deepseek/flash', model: 'flash' }], efforts: [], currentEffort: null },
+    model: {
+      current: null,
+      hostDefault: { provider: 'deepseek', model: 'flash' },
+      options: [{ value: 'deepseek/flash', model: 'flash' }],
+      efforts: [],
+      currentEffort: null,
+    },
     preset: { current: null, options: [] },
     workspace: { current: null, options: [] },
   });

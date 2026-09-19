@@ -155,22 +155,44 @@ async function boundSession(context) {
   return services.sessions?.bindings?.get?.(channelId, botId, key)?.sessionId ?? null;
 }
 
+/**
+ * 模型目录（`session/modelCatalog`）。
+ *
+ * 真形状：`{ default, routableProviders, groups: [{ id, name, models: [{ id, name,
+ * reasoning?: { efforts: [{ id, name }], defaultEffort } }] }] }`。
+ * **provider 是 `group.id`**——曾经照 `group.provider`/`providerId` 读，结果 rows 里
+ * provider 全是 undefined（`/models` 会印出 `undefined/xxx`，控制面板则一个选项都拼不出来）。
+ */
 async function modelCatalog(context) {
   const catalog = await context.services.sessions.invoke('session', 'modelCatalog', {});
   const rows = [];
   for (const group of catalog?.groups ?? []) {
+    const provider = group.id ?? group.provider ?? group.providerId;
     for (const model of group.models ?? []) {
       rows.push({
-        provider: group.provider ?? group.providerId,
-        providerName: group.providerName ?? group.displayName ?? group.provider,
+        provider,
+        providerName: group.name ?? group.providerName ?? group.displayName ?? provider,
         model: model.id ?? model.model,
         name: model.name ?? model.id,
-        efforts: model.reasoning?.efforts ?? [],
+        efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
+          id: effort.id, label: effort.name ?? effort.label ?? effort.id,
+        })),
         defaultEffort: model.reasoning?.defaultEffort ?? null,
       });
     }
   }
   return { catalog, rows };
+}
+
+/**
+ * 当前会话的模型选择。
+ *
+ * 真形状是 `projections.values.modelSelection = { lastUsed, next }`；照顶层读 provider/model
+ * 永远拿不到（`/model` 会一直说"没有显式选择"）。
+ */
+function selectionOf(item) {
+  const projection = item?.projections?.values?.modelSelection;
+  return projection?.lastUsed ?? projection?.next ?? null;
 }
 
 function findModel(rows, token) {
@@ -495,7 +517,7 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         if (!sessionId) return '当前聊天还没有会话；先发一条消息，或用 /model 在已有会话里切换。';
         const rows = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
         const item = rows?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = item?.projections?.values?.modelSelection;
+        const selection = selectionOf(item);
         return selection
           ? `当前模型：${selection.provider}/${selection.model}${selection.reasoningEffort ? `（推理等级 ${selection.reasoningEffort}）` : ''}`
           : '当前会话没有显式选择模型（跟随 Host 默认）。';
@@ -553,14 +575,14 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         if (!sessionId) return '当前聊天还没有会话。';
         const list = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
         const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = item?.projections?.values?.modelSelection;
+        const selection = selectionOf(item);
         if (!selection) return '当前会话没有显式选择模型。';
         return `当前模型 ${selection.provider}/${selection.model}，推理等级 ${selection.reasoningEffort ?? '（默认）'}。`;
       }
       if (!sessionId) return '当前聊天还没有会话，无法切换推理等级；先发一条消息。';
       const list = await context.services.sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
       const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-      const selection = item?.projections?.values?.modelSelection;
+      const selection = selectionOf(item);
       if (!selection) return '当前会话没有显式选择模型，无法单独设置推理等级。';
       const { rows } = await modelCatalog(context);
       const current = rows.find((row) => row.provider === selection.provider && row.model === selection.model);

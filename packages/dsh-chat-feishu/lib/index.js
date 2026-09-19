@@ -127051,11 +127051,12 @@ function panelCard(state, { last = null } = {}) {
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
+  const hostDefault = model.hostDefault ?? null;
   elements.push({
     tag: "markdown",
     content: [
       `**\u5F53\u524D\u4F1A\u8BDD**\u3000${bound ? `\`${h(state.sessionId)}\`` : "\u672A\u7ED1\u5B9A\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u65B0\u5EFA\uFF09"}`,
-      `**\u6A21\u578B**\u3000${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+      `**\u6A21\u578B**\u3000${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       `**Agent \u9884\u8BBE**\u3000${state?.preset?.current ? `\`${h(state.preset.current)}\`` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       `**\u5DE5\u4F5C\u533A**\u3000${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : "\u672A\u8BBE\u7F6E\uFF08\u7528\u9ED8\u8BA4\u76EE\u5F55\uFF09"}`
     ].join("\n")
@@ -127186,7 +127187,25 @@ function messageText(message) {
   }
 }
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-var MENU_ROW_SIZE = 6;
+var MENU_ROW_SIZE = 4;
+function buttonRow(items) {
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    columns: items.map((item) => ({
+      tag: "column",
+      width: "weighted",
+      weight: 1,
+      elements: [{
+        tag: "button",
+        type: item.type ?? "default",
+        width: "fill",
+        text: { tag: "plain_text", content: item.label },
+        behaviors: [{ type: "callback", value: item.value }]
+      }]
+    }))
+  };
+}
 function sniffImageMediaType(bytes, contentType) {
   const declared = String(contentType ?? "").split(";")[0].trim().toLowerCase();
   if (SUPPORTED_IMAGE_TYPES.has(declared)) return declared;
@@ -127647,44 +127666,28 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     }
   }
   function menuCard(items, last = null) {
-    const buttons = items.map((item) => ({
-      tag: "button",
-      type: "default",
-      text: { tag: "plain_text", content: item.label },
-      value: { dsh_menu: item.command }
-    }));
     const elements = [
-      { tag: "div", text: { tag: "lark_md", content: "\u70B9\u6309\u94AE\u6267\u884C\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002" } }
+      { tag: "markdown", content: "\u70B9\u6309\u94AE\u6267\u884C\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002" }
     ];
     if (last?.command) {
       const reply = String(last.reply ?? "").trim();
       const shown = reply.length > 800 ? `${reply.slice(0, 800)}\u2026` : reply;
       elements.push({ tag: "hr" });
-      elements.push({
-        tag: "div",
-        text: {
-          tag: "lark_md",
-          content: `**${last.command}**
-${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
-        }
-      });
+      elements.push({ tag: "markdown", content: `**${last.command}**
+${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
-    for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
-      elements.push({ tag: "action", actions: buttons.slice(index, index + MENU_ROW_SIZE) });
+    for (let index = 0; index < items.length; index += MENU_ROW_SIZE) {
+      elements.push(buttonRow(items.slice(index, index + MENU_ROW_SIZE).map((item) => ({
+        label: item.label,
+        value: { dsh_menu: item.command }
+      }))));
     }
-    elements.push({
-      tag: "action",
-      actions: [{
-        tag: "button",
-        type: "primary",
-        text: { tag: "plain_text", content: "\u2B05 \u8FD4\u56DE\u63A7\u5236\u9762\u677F" },
-        value: { dsh_panel: "panel" }
-      }]
-    });
+    elements.push(buttonRow([{ label: "\u2B05 \u8FD4\u56DE\u63A7\u5236\u9762\u677F", value: { dsh_panel: "panel" }, type: "primary" }]));
     return {
-      config: { wide_screen_mode: true },
+      schema: "2.0",
+      config: { update_multi: true, width_mode: "default" },
       header: { template: "blue", title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u83DC\u5355" } },
-      elements
+      body: { direction: "vertical", elements }
     };
   }
   async function menuItemsFor(context) {
@@ -127712,12 +127715,16 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u6539\u4E3A\u65B0\u53D1\u4E00\u5F20\uFF1A${error?.message ?? error}`);
         return false;
       });
-      if (patched) return true;
+      if (patched) {
+        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08${bot.id}\uFF09`);
+        return true;
+      }
     }
     const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u53D1\u9001\u5931\u8D25\uFF1A${error?.message ?? error}`);
       return false;
     });
+    if (sent) logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u65B0\u53D1\u4E00\u5F20\uFF08${bot.id}\uFF09`);
     return sent;
   }
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
@@ -127785,6 +127792,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
     }
     const pick2 = panelPick(value.action, event?.action?.options);
     if (pick2) {
+      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u4E0B\u62C9\uFF1A${value.action}=${pick2.value}\uFF08${bot.id}\uFF09`);
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
         const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
@@ -127800,6 +127808,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
     let fromPanel = false;
     if (typeof value.dsh_panel === "string") {
       const action = panelButton(value.dsh_panel);
+      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u6309\u94AE\uFF1A${value.dsh_panel} \u2192 ${JSON.stringify(action ?? null)}\uFF08${bot.id}\uFF09`);
       if (!action) return { toast: { type: "error", content: "\u8FD9\u4E2A\u6309\u94AE\u5DF2\u7ECF\u5931\u6548\u4E86\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
       if (action.panel) {
         await repaintPanel(null);

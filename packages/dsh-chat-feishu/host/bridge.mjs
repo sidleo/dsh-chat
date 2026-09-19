@@ -29,8 +29,33 @@ function messageText(message) {
 /** DSH 只认这四种图片类型；其余一律按"不支持"处理。 */
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
-/** 菜单卡片一行放几个按钮（超出的换到下一行 `action`，绝不截断命令）。 */
-const MENU_ROW_SIZE = 6;
+/** 命令清单卡一行放几个按钮（超出的换到下一行，绝不截断命令）。 */
+const MENU_ROW_SIZE = 4;
+
+/**
+ * 一行按钮（Card 2.0）：按钮必须放在 `column_set` 的列里，1.0 那套 `tag: 'action'` 不适用。
+ *
+ * @param items - `[{ label, value, type? }]`。
+ * @returns column_set 元素。
+ */
+function buttonRow(items) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    columns: items.map((item) => ({
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [{
+        tag: 'button',
+        type: item.type ?? 'default',
+        width: 'fill',
+        text: { tag: 'plain_text', content: item.label },
+        behaviors: [{ type: 'callback', value: item.value }],
+      }],
+    })),
+  };
+}
 
 /**
  * 判定图片类型：优先看响应头，再用魔数兜底。
@@ -626,61 +651,47 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
-   * 菜单卡片：把命令渲染成一排按钮。
+   * 命令清单卡（Card 2.0）：把命令渲染成一组按钮。
    *
    * 按钮里带的是**命令行**，点击后走与"用户手打"完全同一条命令路径，
    * 因此按钮与文本不会出现两套行为。
+   *
+   * 必须是 2.0：控制面板也是 2.0，飞书**不允许 patch 时换 schema**
+   * （真机报 `230099 schemaV2 card can not change schemaV1`），
+   * 所以两张卡用同一套 schema 才能互相切换。
    *
    * `last`（`{ command, reply }`）是"上一次点了什么、结果是什么"：点完就地更新时把它
    * 渲染进卡片正文——否则点一下只多了条新消息，用户看不出自己点到了没有（真机反馈过）。
    */
   function menuCard(items, last = null) {
-    const buttons = items.map((item) => ({
-      tag: 'button',
-      type: 'default',
-      text: { tag: 'plain_text', content: item.label },
-      value: { dsh_menu: item.command },
-    }));
     const elements = [
-      { tag: 'div', text: { tag: 'lark_md', content: '点按钮执行，也可以直接发文字命令。' } },
+      { tag: 'markdown', content: '点按钮执行，也可以直接发文字命令。' },
     ];
     if (last?.command) {
       // 输出可能很长（/status 之类）：截断，免得一张卡片刷满整屏。
       const reply = String(last.reply ?? '').trim();
       const shown = reply.length > 800 ? `${reply.slice(0, 800)}…` : reply;
       elements.push({ tag: 'hr' });
-      elements.push({
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: `**${last.command}**\n${shown || '（没有输出）'}`,
-        },
-      });
+      elements.push({ tag: 'markdown', content: `**${last.command}**\n${shown || '（没有输出）'}` });
     }
     /**
-     * 一行放几个按钮。
-     *
-     * 以前是 `items.slice(0, 12)`——恰好把字母序后半截命令**静默丢掉**：真机上 17 个命令
-     * 只列出 12 个，`/session` `/status` `/stop` `/version` `/whoami` 在卡片上根本找不到
-     * （只能手打）。宁可多开几行 `action`，也不能少命令。
+     * 一行放几个按钮。以前是 `items.slice(0, 12)`——恰好把字母序后半截命令**静默丢掉**：
+     * 真机上 17 个命令只列出 12 个，`/session` `/status` `/stop` `/version` `/whoami`
+     * 在卡片上根本找不到（只能手打）。宁可多开几行，也不能少命令。
      */
-    for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
-      elements.push({ tag: 'action', actions: buttons.slice(index, index + MENU_ROW_SIZE) });
+    for (let index = 0; index < items.length; index += MENU_ROW_SIZE) {
+      elements.push(buttonRow(items.slice(index, index + MENU_ROW_SIZE).map((item) => ({
+        label: item.label,
+        value: { dsh_menu: item.command },
+      }))));
     }
     // 从控制面板点「命令清单」进来时，卡上要有一条回去的路（否则用户只能重发 /menu）。
-    elements.push({
-      tag: 'action',
-      actions: [{
-        tag: 'button',
-        type: 'primary',
-        text: { tag: 'plain_text', content: '⬅ 返回控制面板' },
-        value: { dsh_panel: 'panel' },
-      }],
-    });
+    elements.push(buttonRow([{ label: '⬅ 返回控制面板', value: { dsh_panel: 'panel' }, type: 'primary' }]));
     return {
-      config: { wide_screen_mode: true },
+      schema: '2.0',
+      config: { update_multi: true, width_mode: 'default' },
       header: { template: 'blue', title: { tag: 'plain_text', content: '机器人菜单' } },
-      elements,
+      body: { direction: 'vertical', elements },
     };
   }
 
@@ -722,12 +733,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败，改为新发一张：${error?.message ?? error}`);
         return false;
       });
-      if (patched) return true;
+      if (patched) {
+        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（${bot.id}）`);
+        return true;
+      }
     }
     const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] 控制面板发送失败：${error?.message ?? error}`);
       return false;
     });
+    if (sent) logger.info?.(`[dsh-chat-feishu] 控制面板已新发一张（${bot.id}）`);
     return sent;
   }
 
@@ -836,6 +851,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
      */
     const pick = panelPick(value.action, event?.action?.options);
     if (pick) {
+      logger.info?.(`[dsh-chat-feishu] 控制面板下拉：${value.action}=${pick.value}（${bot.id}）`);
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
@@ -858,6 +874,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     let fromPanel = false;
     if (typeof value.dsh_panel === 'string') {
       const action = panelButton(value.dsh_panel);
+      logger.info?.(`[dsh-chat-feishu] 控制面板按钮：${value.dsh_panel} → ${JSON.stringify(action ?? null)}（${bot.id}）`);
       if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
       if (action.panel) {
         await repaintPanel(null);

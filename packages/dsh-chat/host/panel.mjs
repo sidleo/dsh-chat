@@ -83,12 +83,19 @@ export function createPanelService({
     return sessions.bindings?.get?.(channelId, botId, key)?.sessionId ?? null;
   }
 
-  /** 当前会话的模型选择（显式选择才返回；没选过就是跟随 Host 默认）。 */
+  /**
+   * 当前会话的模型选择。
+   *
+   * 真形状是 `projections.values.modelSelection = { lastUsed, next }`（**不是**顶层
+   * provider/model——照顶层读会永远返回"没选过"，真机上表现为卡片总是"跟随 Host 默认"）。
+   * `next` 是排队中的下一次选择，优先用 `lastUsed` 更贴近"现在是什么"。
+   */
   async function currentSelection(sessionId) {
     if (!sessionId) return null;
     const listed = await sessions.invoke('session', 'list', { _request: {} }).catch(() => null);
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
-    const selection = item?.projections?.values?.modelSelection;
+    const projection = item?.projections?.values?.modelSelection;
+    const selection = projection?.lastUsed ?? projection?.next ?? null;
     if (!selection?.provider || !selection?.model) return null;
     return {
       provider: selection.provider,
@@ -97,11 +104,19 @@ export function createPanelService({
     };
   }
 
-  async function modelOptions() {
+  /**
+   * 模型目录。
+   *
+   * 真形状（`session/modelCatalog` 的 schema）：`{ default, routableProviders, groups:
+   * [{ id, name, models: [{ id, name, reasoning?: { efforts: [{ id, name }], defaultEffort } }] }] }`
+   * ——**provider 是 `group.id`**（不是 `provider`/`providerId`；照那些字段读会一个选项都拼不出来，
+   * 真机上就是"当前 Host 没有可用模型"）。
+   */
+  async function modelCatalog() {
     const catalog = await sessions.invoke('session', 'modelCatalog', {});
     const options = [];
     for (const group of catalog?.groups ?? []) {
-      const provider = group.provider ?? group.providerId;
+      const provider = group.id ?? group.provider ?? group.providerId;
       for (const model of group.models ?? []) {
         const id = model.id ?? model.model;
         if (!provider || !id) continue;
@@ -110,15 +125,15 @@ export function createPanelService({
           provider,
           model: id,
           name: model.name ?? id,
-          providerName: group.providerName ?? group.displayName ?? provider,
+          providerName: group.name ?? group.providerName ?? provider,
           efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
-            id: effort.id, label: effort.label ?? effort.name ?? effort.id,
+            id: effort.id, label: effort.name ?? effort.label ?? effort.id,
           })),
           defaultEffort: model.reasoning?.defaultEffort ?? null,
         });
       }
     }
-    return options;
+    return { options, hostDefault: catalog?.default ?? null };
   }
 
   async function presetOptions() {
@@ -146,14 +161,15 @@ export function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [options, presets, selection] = await Promise.all([
-        modelOptions().catch((error) => {
+      const [catalog, presets, selection] = await Promise.all([
+        modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
-          return [];
+          return { options: [], hostDefault: null };
         }),
         presetOptions(),
         currentSelection(sessionId).catch(() => null),
       ]);
+      const options = catalog.options;
       const currentModel = selection
         ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null
         : null;
@@ -162,6 +178,8 @@ export function createPanelService({
         bound: typeof sessionId === 'string' && sessionId.length > 0,
         model: {
           current: selection,
+          // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
+          hostDefault: catalog.hostDefault,
           options,
           // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
           efforts: currentModel?.efforts ?? [],
@@ -195,7 +213,7 @@ export function createPanelService({
           throw panelError('chat/no-session',
             '当前聊天还没有会话：先发一条消息，或点「新会话」之后再选。');
         }
-        const options = await modelOptions();
+        const { options } = await modelCatalog();
         if (field === 'model') {
           const target = options.find((item) => item.value === value);
           if (!target) throw panelError('chat/unknown-model', `找不到模型 ${value}。`);

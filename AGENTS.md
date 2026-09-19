@@ -69,6 +69,11 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **"回合跑完但用户没收到"怎么查**：在日志里对齐四行——hub 的 `发送提示词` → hub 的 `回合结束` → 渠道的 `回合结束，准备回复` → 渠道的 `最终答案投递方式`。
   第 2 行有、第 3 行没有 = 结果没交回渠道（`ask()` 的返回路径被卡住：关流或提示词收据永不落地，二者都必须有界，见 `sessions.mjs`）；
   第 3 行有、第 4 行是 `failed` = 呈现层发不出去（会同时写进 `connection.status.lastError`）。
+- **模型/推理相关都对不上时先查这两个字段名**（照着 `session/modelCatalog` 的 schema 读）：
+  ① provider 在 **`groups[].id`**（不是 `provider`/`providerId`）——读错会一个选项都拼不出来，
+  真机表现是控制面板写「当前 Host 没有可用模型」、`/models` 印 `undefined/xxx`；
+  ② 当前模型在 **`projections.values.modelSelection.lastUsed`**（不是顶层 `provider/model`）——
+  读错会永远显示"跟随 Host 默认"。`session/modelCatalog` 的 args 是 `{}`（不需要 `_request`）。
 - **卡片下拉点了没反应怎么查**：先看 `logs/feishu.log` 里那行 `收到卡片回调 … 原始=`——
   原始体里有 `action.option`（或 `action.options`）就说明回调到了、是归一化没认；连这行都没有
   就先按上面「飞书卡片按钮没反应」的三步查订阅方式。归一化后的取值在 `event.action.options`，

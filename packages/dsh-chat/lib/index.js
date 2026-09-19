@@ -1197,18 +1197,26 @@ async function modelCatalog(context) {
   const catalog = await context.services.sessions.invoke("session", "modelCatalog", {});
   const rows = [];
   for (const group of catalog?.groups ?? []) {
+    const provider = group.id ?? group.provider ?? group.providerId;
     for (const model of group.models ?? []) {
       rows.push({
-        provider: group.provider ?? group.providerId,
-        providerName: group.providerName ?? group.displayName ?? group.provider,
+        provider,
+        providerName: group.name ?? group.providerName ?? group.displayName ?? provider,
         model: model.id ?? model.model,
         name: model.name ?? model.id,
-        efforts: model.reasoning?.efforts ?? [],
+        efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
+          id: effort.id,
+          label: effort.name ?? effort.label ?? effort.id
+        })),
         defaultEffort: model.reasoning?.defaultEffort ?? null
       });
     }
   }
   return { catalog, rows };
+}
+function selectionOf(item) {
+  const projection = item?.projections?.values?.modelSelection;
+  return projection?.lastUsed ?? projection?.next ?? null;
 }
 function findModel(rows, token) {
   const byIndex = indexOf(token);
@@ -1498,7 +1506,7 @@ ${result.text}` : ""}`;
         if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u7528 /model \u5728\u5DF2\u6709\u4F1A\u8BDD\u91CC\u5207\u6362\u3002";
         const rows2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
         const item = rows2?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection = item?.projections?.values?.modelSelection;
+        const selection = selectionOf(item);
         return selection ? `\u5F53\u524D\u6A21\u578B\uFF1A${selection.provider}/${selection.model}${selection.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${selection.reasoningEffort}\uFF09` : ""}` : "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF08\u8DDF\u968F Host \u9ED8\u8BA4\uFF09\u3002";
       }
       if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u6A21\u578B\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
@@ -1551,14 +1559,14 @@ ${result.text}` : ""}`;
         if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u3002";
         const list2 = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
         const item2 = list2?.items?.find((entry) => entry.sessionId === sessionId);
-        const selection2 = item2?.projections?.values?.modelSelection;
+        const selection2 = selectionOf(item2);
         if (!selection2) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\u3002";
         return `\u5F53\u524D\u6A21\u578B ${selection2.provider}/${selection2.model}\uFF0C\u63A8\u7406\u7B49\u7EA7 ${selection2.reasoningEffort ?? "\uFF08\u9ED8\u8BA4\uFF09"}\u3002`;
       }
       if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u63A8\u7406\u7B49\u7EA7\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
       const list = await context.services.sessions.invoke("session", "list", { _request: {} }).catch(() => null);
       const item = list?.items?.find((entry) => entry.sessionId === sessionId);
-      const selection = item?.projections?.values?.modelSelection;
+      const selection = selectionOf(item);
       if (!selection) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u65E0\u6CD5\u5355\u72EC\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7\u3002";
       const { rows } = await modelCatalog(context);
       const current = rows.find((row) => row.provider === selection.provider && row.model === selection.model);
@@ -2121,7 +2129,8 @@ function createPanelService({
     if (!sessionId) return null;
     const listed = await sessions.invoke("session", "list", { _request: {} }).catch(() => null);
     const item = listed?.items?.find((entry) => entry.sessionId === sessionId);
-    const selection = item?.projections?.values?.modelSelection;
+    const projection = item?.projections?.values?.modelSelection;
+    const selection = projection?.lastUsed ?? projection?.next ?? null;
     if (!selection?.provider || !selection?.model) return null;
     return {
       provider: selection.provider,
@@ -2129,11 +2138,11 @@ function createPanelService({
       reasoningEffort: selection.reasoningEffort ?? null
     };
   }
-  async function modelOptions() {
+  async function modelCatalog2() {
     const catalog = await sessions.invoke("session", "modelCatalog", {});
     const options = [];
     for (const group of catalog?.groups ?? []) {
-      const provider = group.provider ?? group.providerId;
+      const provider = group.id ?? group.provider ?? group.providerId;
       for (const model of group.models ?? []) {
         const id = model.id ?? model.model;
         if (!provider || !id) continue;
@@ -2142,16 +2151,16 @@ function createPanelService({
           provider,
           model: id,
           name: model.name ?? id,
-          providerName: group.providerName ?? group.displayName ?? provider,
+          providerName: group.name ?? group.providerName ?? provider,
           efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
             id: effort.id,
-            label: effort.label ?? effort.name ?? effort.id
+            label: effort.name ?? effort.label ?? effort.id
           })),
           defaultEffort: model.reasoning?.defaultEffort ?? null
         });
       }
     }
-    return options;
+    return { options, hostDefault: catalog?.default ?? null };
   }
   async function presetOptions() {
     if (typeof agentPresets?.remoteExportList !== "function") return [];
@@ -2178,20 +2187,23 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [options, presets, selection] = await Promise.all([
-        modelOptions().catch((error) => {
+      const [catalog, presets, selection] = await Promise.all([
+        modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          return [];
+          return { options: [], hostDefault: null };
         }),
         presetOptions(),
         currentSelection(sessionId).catch(() => null)
       ]);
+      const options = catalog.options;
       const currentModel = selection ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null : null;
       return {
         sessionId,
         bound: typeof sessionId === "string" && sessionId.length > 0,
         model: {
           current: selection,
+          // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
+          hostDefault: catalog.hostDefault,
           options,
           // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
           efforts: currentModel?.efforts ?? [],
@@ -2225,7 +2237,7 @@ function createPanelService({
             "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u300C\u65B0\u4F1A\u8BDD\u300D\u4E4B\u540E\u518D\u9009\u3002"
           );
         }
-        const options = await modelOptions();
+        const { options } = await modelCatalog2();
         if (field === "model") {
           const target = options.find((item) => item.value === value);
           if (!target) throw panelError("chat/unknown-model", `\u627E\u4E0D\u5230\u6A21\u578B ${value}\u3002`);

@@ -87,13 +87,16 @@ export function panelCard(state, { last = null } = {}) {
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
+  const hostDefault = model.hostDefault ?? null;
 
   // ① 当前状态
   elements.push({
     tag: 'markdown',
     content: [
       `**当前会话**　${bound ? `\`${h(state.sessionId)}\`` : '未绑定（下一条消息会新建）'}`,
-      `**模型**　${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}` : '跟随 Host 默认'}`,
+      `**模型**　${current
+        ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
+        : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认')}`,
       `**Agent 预设**　${state?.preset?.current ? `\`${h(state.preset.current)}\`` : '跟随 Host 默认'}`,
       `**工作区**　${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : '未设置（用默认目录）'}`,
     ].join('\n'),

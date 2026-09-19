@@ -22,15 +22,18 @@ import { join } from 'node:path';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
+/** 真形状：provider 在 `group.id`；effort 的展示名是 `name`。 */
 const MODEL_CATALOG = {
+  default: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' },
+  routableProviders: ['opencode-go'],
   groups: [{
-    provider: 'opencode-go',
-    providerName: 'OpenCode Go',
+    id: 'opencode-go',
+    name: 'OpenCode Go',
     models: [
       {
         id: 'deepseek-v4.1-flash',
         name: 'DeepSeek V4.1 Flash',
-        reasoning: { defaultEffort: 'high', efforts: [{ id: 'low' }, { id: 'high' }] },
+        reasoning: { defaultEffort: 'high', efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] },
       },
       { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash' },
     ],
@@ -66,7 +69,13 @@ function createServices({
             sessionId: 'session-1',
             running: true,
             projections: {
-              values: { modelSelection: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' } },
+              values: {
+                // 真形状：modelSelection = { lastUsed, next }。
+                modelSelection: {
+                  lastUsed: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
+                  next: null,
+                },
+              },
             },
           }],
         };
