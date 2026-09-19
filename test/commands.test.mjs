@@ -701,3 +701,42 @@ test('没有会话时 /model 与 /reasoning 改的是机器人默认模型（只
   const status = await registry.handle(context('/status', { isOwner: true }));
   assert.match(status.reply, /机器人默认 opencode-go\/deepseek-v4.1-flash · 推理 high/);
 });
+
+test('/diag：只有属主能看；把连接状态、最近错误与日志尾部拼成可读文本', async () => {
+  const services = {
+    ...createServices().services,
+    diagnostics: {
+      read: async () => ({
+        dataDir: '/tmp/data',
+        logDir: '/tmp/data/logs',
+        channels: [{
+          id: 'feishu',
+          label: '飞书',
+          status: 'running',
+          error: null,
+          bots: [{
+            botId: 'bot_1', name: '张三', connected: true, handled: 12,
+            lastHandledAt: '2026-09-19T15:40:02.000Z', errorMessage: null,
+          }],
+        }],
+        logs: [
+          { path: '/tmp/data/logs/hub.log', exists: true, lines: ['INFO 正常一行', 'WARN 读不到模型列表', 'ERROR 卡片更新失败'] },
+          { path: '/tmp/data/logs/feishu.log', exists: false, lines: [] },
+        ],
+      }),
+    },
+  };
+  const registry = createRegistry(services);
+
+  const denied = await registry.handle(context('/diag', { isOwner: false }));
+  assert.match(denied.reply, /只有属主/);
+
+  const report = await registry.handle(context('/diag', { isOwner: true }));
+  assert.match(report.reply, /🩺 诊断/);
+  assert.match(report.reply, /渠道 飞书：running/);
+  assert.match(report.reply, /张三 已连接 · 已处理 12 条/);
+  assert.match(report.reply, /hub\.log（最近 2 条 WARN\/ERROR）/, '有问题只回 WARN/ERROR');
+  assert.match(report.reply, /ERROR 卡片更新失败/);
+  assert.doesNotMatch(report.reply, /INFO 正常一行/, '正常行不占篇幅');
+  assert.match(report.reply, /feishu\.log：还没有日志文件/);
+});

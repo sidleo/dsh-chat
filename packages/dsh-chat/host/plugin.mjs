@@ -232,6 +232,8 @@ export function apply(ctx, config = {}) {
       },
       channels: { list: () => registry.list() },
       agentPresets: optionalAgentPresets,
+      // `/diag`：把设置页那份诊断现场用文字回出来（手机上排查不必开电脑）。
+      diagnostics: { read: () => collectDiagnostics() },
       // `/menu` 用它取"当前值 + 可选项"，卡片据此渲染下拉、渠道不必自己拼状态。
       panel,
     },
@@ -245,6 +247,36 @@ export function apply(ctx, config = {}) {
    * @param payload - 载荷。
    * @returns RPC 结果。
    */
+  /**
+   * 自助排查的"一屏现场"：每台机器人的连接状态与最近错误 + 日志尾部。
+   *
+   * 抽成函数是因为**两条路要用同一份数据**：设置页的 `diagnostics.read` 与聊天里的 `/diag`
+   * （手机上排查时不想开电脑）。只取叶子字段，前端/命令都不碰 host 的活对象。
+   */
+  async function collectDiagnostics() {
+    const entries = registry.list();
+    const channels = await Promise.all(entries.map(async (entry) => {
+      const result = await registry.handleRpc(entry.id, 'connection.status', {});
+      return {
+        id: entry.id,
+        label: entry.label,
+        version: entry.version ?? null,
+        status: entry.status,
+        error: entry.error ?? null,
+        bots: result?.ok === true ? (result.value?.bots ?? []) : [],
+        statusError: result?.ok === true ? null : (result.error?.message ?? '状态读取失败'),
+      };
+    }));
+    const logs = await Promise.all(['hub', ...entries.map((entry) => entry.id)]
+      .map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+    return {
+      dataDir: hubDataDir(config.dataDir),
+      logDir: logsDir,
+      channels,
+      logs,
+    };
+  }
+
   async function controlHandler(method, payload) {
     if (method === 'channel.list') {
       if (payload !== null && (typeof payload !== 'object' || Array.isArray(payload)
@@ -266,29 +298,8 @@ export function apply(ctx, config = {}) {
         || Object.keys(payload).length > 0)) {
         return fail('chat/bad-request', 'diagnostics.read 不接受参数。');
       }
-      // 自助排查的"一屏现场"：每台机器人的连接状态与最近错误 + 日志尾部。
-      // 只取叶子字段（前端不碰 host 的活对象）；日志读不到不算失败。
-      const entries = registry.list();
-      const channels = await Promise.all(entries.map(async (entry) => {
-        const result = await registry.handleRpc(entry.id, 'connection.status', {});
-        return {
-          id: entry.id,
-          label: entry.label,
-          version: entry.version ?? null,
-          status: entry.status,
-          error: entry.error ?? null,
-          bots: result?.ok === true ? (result.value?.bots ?? []) : [],
-          statusError: result?.ok === true ? null : (result.error?.message ?? '状态读取失败'),
-        };
-      }));
-      const logs = await Promise.all(['hub', ...entries.map((entry) => entry.id)]
-        .map((logName) => readLogTail(channelLogPath(logsDir, logName))));
-      return ok({
-        dataDir: hubDataDir(config.dataDir),
-        logDir: logsDir,
-        channels,
-        logs,
-      });
+      // 日志读不到不算失败（只返回 exists:false 的那一项）。
+      return ok(await collectDiagnostics());
     }
     if (method === 'bot.settings.get') {
       if (!validBotPayload(payload)) return fail('chat/bad-request', 'bot.settings.get 需要 channelId 与 botId。');

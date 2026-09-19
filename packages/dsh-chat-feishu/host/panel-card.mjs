@@ -387,6 +387,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
     button('🆕 新会话', 'new'),
     button('📊 状态', 'status'),
     button('📖 命令清单', 'commands'),
+    button('🩺 诊断', 'diag'),
   ]));
   elements.push(row([
     button('📜 历史', 'history'),
@@ -449,6 +450,8 @@ export function panelButton(action) {
     // 历史/压缩：输出是文本、压缩还可能跑很久（超过回调应答的 3 秒）——
     // 排在应答之后执行，结果用一条文字消息回，不往面板卡上写（历史可能几十行）。
     history: { command: '/history', label: '历史', asText: true },
+    // 诊断同样是"文本输出"：走 asText 那条路（不往卡片上写）。
+    diag: { command: '/diag', label: '诊断', asText: true },
     compact: { command: '/compact', label: '压缩', asText: true },
     // 命令清单卡上的返回按钮。
     panel: { panel: true, label: '控制面板' },

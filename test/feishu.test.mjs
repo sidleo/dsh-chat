@@ -3054,9 +3054,9 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
     .filter((el) => el.tag === 'column_set' && el.columns[0].elements[0].tag === 'button')
     .map((el) => el.columns.map((column) => column.elements[0].text.content));
   assert.deepEqual(buttonLabels, [
-    ['🆕 新会话', '📊 状态', '📖 命令清单'],
+    ['🆕 新会话', '📊 状态', '📖 命令清单', '🩺 诊断'],
     ['📜 历史', '🗜 压缩', '⏹ 停止'],
-  ], '6 个按钮分两行，一行 3 个');
+  ], '7 个按钮分两行（4 + 3）');
 
   // 每个下拉都有自己的名称：名称是同一列里的 markdown，控件在下（select_static 没有 label 字段）。
   const labelled = (name) => {
@@ -3101,6 +3101,7 @@ test('会话下拉：映射到 field=session，空值 = 新会话；历史/压�
 
   // 历史/压缩：输出是文本、压缩还可能超过回调应答的 3 秒 → 排在应答之后，用文字消息回。
   assert.deepEqual(panelButton('history'), { command: '/history', label: '历史', asText: true });
+  assert.deepEqual(panelButton('diag'), { command: '/diag', label: '诊断', asText: true });
   assert.deepEqual(panelButton('compact'), { command: '/compact', label: '压缩', asText: true });
 });
 

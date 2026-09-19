@@ -127249,7 +127249,8 @@ ${h(last.message)}`
   elements.push(row([
     button("\u{1F195} \u65B0\u4F1A\u8BDD", "new"),
     button("\u{1F4CA} \u72B6\u6001", "status"),
-    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands")
+    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands"),
+    button("\u{1FA7A} \u8BCA\u65AD", "diag")
   ]));
   elements.push(row([
     button("\u{1F4DC} \u5386\u53F2", "history"),
@@ -127292,6 +127293,8 @@ function panelButton(action) {
     // 历史/压缩：输出是文本、压缩还可能跑很久（超过回调应答的 3 秒）——
     // 排在应答之后执行，结果用一条文字消息回，不往面板卡上写（历史可能几十行）。
     history: { command: "/history", label: "\u5386\u53F2", asText: true },
+    // 诊断同样是"文本输出"：走 asText 那条路（不往卡片上写）。
+    diag: { command: "/diag", label: "\u8BCA\u65AD", asText: true },
     compact: { command: "/compact", label: "\u538B\u7F29", asText: true },
     // 命令清单卡上的返回按钮。
     panel: { panel: true, label: "\u63A7\u5236\u9762\u677F" }

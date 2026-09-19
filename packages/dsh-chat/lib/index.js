@@ -1123,7 +1123,7 @@ function line(text) {
   const value = String(text ?? "").replace(/\s+$/u, "");
   return value.length > MAX_LINE ? `${value.slice(0, MAX_LINE)}\u2026` : value;
 }
-var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny"]);
+var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny", "diag"]);
 var MAX_HISTORY_CHARS = 160;
 function clip(text) {
   const value = String(text ?? "").replace(/\s+/gu, " ").trim();
@@ -1259,6 +1259,11 @@ async function readSelection(context, sessionId) {
 function botModelOf(context) {
   return normalizeBotModel(context.services.bots?.read?.(context.channelId, context.botId)?.model);
 }
+var DIAG_LOG_LINES = 8;
+function clipText(value, max = 160) {
+  const text = String(value ?? "").replace(/\s+/gu, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}\u2026` : text;
+}
 function findModel(rows, token) {
   const byIndex = indexOf(token);
   if (byIndex !== null) return rows[byIndex] ?? null;
@@ -1331,6 +1336,45 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
           "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u53D1\u6587\u5B57\u547D\u4EE4\u3002"
         ].join("\n")
       };
+    }
+  });
+  registry.register({
+    name: "diag",
+    summary: "\u67E5\u770B\u8FDE\u63A5\u72B6\u6001\u3001\u6700\u8FD1\u9519\u8BEF\u4E0E\u65E5\u5FD7\u5C3E\u90E8\uFF08\u4EC5\u5C5E\u4E3B\uFF09",
+    execute: async (context) => {
+      if (context.isOwner !== true) return "\u8BCA\u65AD\u91CC\u6709\u673A\u5668\u4EBA id \u4E0E\u65E5\u5FD7\u5185\u5BB9\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u770B\u3002";
+      if (typeof context.services.diagnostics?.read !== "function") return "\u8FD9\u4E2A\u90E8\u7F72\u6CA1\u6709\u5F00\u542F\u8BCA\u65AD\u3002";
+      let data;
+      try {
+        data = await context.services.diagnostics.read();
+      } catch (error) {
+        context.log?.warn?.(`[dsh-chat] \u8BCA\u65AD\u8BFB\u53D6\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        return `\u8BCA\u65AD\u8BFB\u53D6\u5931\u8D25\uFF1A${error?.message ?? error}`;
+      }
+      const lines = ["\u{1FA7A} \u8BCA\u65AD"];
+      if (data?.dataDir) lines.push(`\u6570\u636E\u76EE\u5F55\uFF1A${data.dataDir}`);
+      for (const channel of data?.channels ?? []) {
+        lines.push("", `\u6E20\u9053 ${channel.label ?? channel.id}\uFF1A${channel.status ?? "\u672A\u77E5"}${channel.error ? `\uFF08\u6700\u8FD1\u9519\u8BEF\uFF1A${clipText(channel.error)}\uFF09` : ""}`);
+        if (channel.statusError) lines.push(`  \u26A0\uFE0F \u72B6\u6001\u8BFB\u53D6\u5931\u8D25\uFF1A${clipText(channel.statusError)}`);
+        for (const bot of channel.bots ?? []) {
+          const handled = Number.isFinite(bot.handled) ? ` \xB7 \u5DF2\u5904\u7406 ${bot.handled} \u6761` : "";
+          const last = bot.lastHandledAt ? ` \xB7 \u6700\u540E ${clipText(bot.lastHandledAt)}` : "";
+          const bad = bot.errorMessage ?? bot.error ?? null;
+          lines.push(`  \xB7 ${bot.name ?? bot.botId ?? "\u672A\u547D\u540D"} ${bot.connected === true ? "\u5DF2\u8FDE\u63A5" : "\u672A\u8FDE\u63A5"}${handled}${last}${bad ? ` \xB7 \u26A0\uFE0F ${clipText(bad)}` : ""}`);
+        }
+      }
+      for (const log of data?.logs ?? []) {
+        const name2 = String(log?.path ?? "").split("/").pop() ?? "log";
+        if (!log?.exists) {
+          lines.push("", `${name2}\uFF1A\u8FD8\u6CA1\u6709\u65E5\u5FD7\u6587\u4EF6`);
+          continue;
+        }
+        const bad = (log.lines ?? []).filter((row) => /\b(WARN|ERROR)\b/.test(row));
+        const picked = (bad.length > 0 ? bad : log.lines ?? []).slice(-DIAG_LOG_LINES);
+        lines.push("", `${name2}${bad.length > 0 ? `\uFF08\u6700\u8FD1 ${picked.length} \u6761 WARN/ERROR\uFF09` : "\uFF08\u5C3E\u90E8\uFF09"}\uFF1A`);
+        for (const row of picked) lines.push(`  ${clipText(row)}`);
+      }
+      return lines.join("\n");
     }
   });
   registry.register({
@@ -4076,11 +4120,35 @@ function apply(ctx, config = {}) {
       },
       channels: { list: () => registry.list() },
       agentPresets: optionalAgentPresets,
+      // `/diag`：把设置页那份诊断现场用文字回出来（手机上排查不必开电脑）。
+      diagnostics: { read: () => collectDiagnostics() },
       // `/menu` 用它取"当前值 + 可选项"，卡片据此渲染下拉、渠道不必自己拼状态。
       panel
     }
   });
   registerBuiltinCommands(commands, { hubVersion: HUB_VERSION, listCommands: () => commands.list() });
+  async function collectDiagnostics() {
+    const entries = registry.list();
+    const channels = await Promise.all(entries.map(async (entry) => {
+      const result = await registry.handleRpc(entry.id, "connection.status", {});
+      return {
+        id: entry.id,
+        label: entry.label,
+        version: entry.version ?? null,
+        status: entry.status,
+        error: entry.error ?? null,
+        bots: result?.ok === true ? result.value?.bots ?? [] : [],
+        statusError: result?.ok === true ? null : result.error?.message ?? "\u72B6\u6001\u8BFB\u53D6\u5931\u8D25"
+      };
+    }));
+    const logs = await Promise.all(["hub", ...entries.map((entry) => entry.id)].map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+    return {
+      dataDir: hubDataDir(config.dataDir),
+      logDir: logsDir,
+      channels,
+      logs
+    };
+  }
   async function controlHandler(method, payload) {
     if (method === "channel.list") {
       if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {
@@ -4100,26 +4168,7 @@ function apply(ctx, config = {}) {
       if (payload !== null && (typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length > 0)) {
         return fail("chat/bad-request", "diagnostics.read \u4E0D\u63A5\u53D7\u53C2\u6570\u3002");
       }
-      const entries = registry.list();
-      const channels = await Promise.all(entries.map(async (entry) => {
-        const result = await registry.handleRpc(entry.id, "connection.status", {});
-        return {
-          id: entry.id,
-          label: entry.label,
-          version: entry.version ?? null,
-          status: entry.status,
-          error: entry.error ?? null,
-          bots: result?.ok === true ? result.value?.bots ?? [] : [],
-          statusError: result?.ok === true ? null : result.error?.message ?? "\u72B6\u6001\u8BFB\u53D6\u5931\u8D25"
-        };
-      }));
-      const logs = await Promise.all(["hub", ...entries.map((entry) => entry.id)].map((logName) => readLogTail(channelLogPath(logsDir, logName))));
-      return ok({
-        dataDir: hubDataDir(config.dataDir),
-        logDir: logsDir,
-        channels,
-        logs
-      });
+      return ok(await collectDiagnostics());
     }
     if (method === "bot.settings.get") {
       if (!validBotPayload(payload)) return fail("chat/bad-request", "bot.settings.get \u9700\u8981 channelId \u4E0E botId\u3002");

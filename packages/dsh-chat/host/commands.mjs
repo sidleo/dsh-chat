@@ -25,7 +25,7 @@ function line(text) {
 }
 
 /** 只有属主能用的命令（菜单里对非属主隐藏；执行时仍会再判一次）。 */
-const OWNER_ONLY_COMMANDS = new Set(['allow', 'deny']);
+const OWNER_ONLY_COMMANDS = new Set(['allow', 'deny', 'diag']);
 
 /** 历史回看里每条消息的字符上限（避免一条命令刷屏）。 */
 const MAX_HISTORY_CHARS = 160;
@@ -225,6 +225,15 @@ function botModelOf(context) {
   return normalizeBotModel(context.services.bots?.read?.(context.channelId, context.botId)?.model);
 }
 
+/** `/diag` 每个日志最多回几行：一屏能看完，细节去设置页的诊断面板。 */
+const DIAG_LOG_LINES = 8;
+
+/** 诊断文本里的单行截断（日志行可能很长，别把消息撑爆）。 */
+function clipText(value, max = 160) {
+  const text = String(value ?? '').replace(/\s+/gu, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 function findModel(rows, token) {
   const byIndex = indexOf(token);
   if (byIndex !== null) return rows[byIndex] ?? null;
@@ -320,6 +329,55 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
           '也可以直接发文字命令。',
         ].join('\n'),
       };
+    },
+  });
+
+  /**
+   * `/diag`：把「一屏现场」用文字回出来。
+   *
+   * 与设置页的 `diagnostics.read` 同一份数据（连接状态 + 最近错误 + 日志尾部）——
+   * 手机上排查时不必去开电脑；只给属主，里面有机器人 id 与日志内容。
+   */
+  registry.register({
+    name: 'diag',
+    summary: '查看连接状态、最近错误与日志尾部（仅属主）',
+    execute: async (context) => {
+      if (context.isOwner !== true) return '诊断里有机器人 id 与日志内容，只有属主能看。';
+      if (typeof context.services.diagnostics?.read !== 'function') return '这个部署没有开启诊断。';
+      let data;
+      try {
+        data = await context.services.diagnostics.read();
+      } catch (error) {
+        context.log?.warn?.(`[dsh-chat] 诊断读取失败：${error?.message ?? error}`);
+        return `诊断读取失败：${error?.message ?? error}`;
+      }
+      const lines = ['🩺 诊断'];
+      if (data?.dataDir) lines.push(`数据目录：${data.dataDir}`);
+      for (const channel of data?.channels ?? []) {
+        lines.push('', `渠道 ${channel.label ?? channel.id}：${channel.status ?? '未知'}`
+          + `${channel.error ? `（最近错误：${clipText(channel.error)}）` : ''}`);
+        if (channel.statusError) lines.push(`  ⚠️ 状态读取失败：${clipText(channel.statusError)}`);
+        for (const bot of channel.bots ?? []) {
+          const handled = Number.isFinite(bot.handled) ? ` · 已处理 ${bot.handled} 条` : '';
+          const last = bot.lastHandledAt ? ` · 最后 ${clipText(bot.lastHandledAt)}` : '';
+          const bad = bot.errorMessage ?? bot.error ?? null;
+          lines.push(`  · ${bot.name ?? bot.botId ?? '未命名'} ${bot.connected === true ? '已连接' : '未连接'}`
+            + `${handled}${last}${bad ? ` · ⚠️ ${clipText(bad)}` : ''}`);
+        }
+      }
+      // 日志只挑 WARN/ERROR（一屏能看完）；一条都没有时给最后几行当"还活着"的证据。
+      for (const log of data?.logs ?? []) {
+        const name = String(log?.path ?? '').split('/').pop() ?? 'log';
+        if (!log?.exists) {
+          lines.push('', `${name}：还没有日志文件`);
+          continue;
+        }
+        const bad = (log.lines ?? []).filter((row) => /\b(WARN|ERROR)\b/.test(row));
+        const picked = (bad.length > 0 ? bad : (log.lines ?? [])).slice(-DIAG_LOG_LINES);
+        lines.push('', `${name}${bad.length > 0 ? `（最近 ${picked.length} 条 WARN/ERROR）` : '（尾部）'}：`);
+        for (const row of picked) lines.push(`  ${clipText(row)}`);
+      }
+      return lines.join('\n');
     },
   });
 
