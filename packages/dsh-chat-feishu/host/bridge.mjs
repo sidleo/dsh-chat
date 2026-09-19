@@ -223,7 +223,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         final,
         messageId: existing,
       });
-      if (sent?.messageId) questionCards.set(key, sent.messageId);
+      if (sent?.messageId) {
+        questionCards.set(key, sent.messageId);
+        // 记下"这张卡是发给哪个会话的"：回调里只有 chatId，而群和私聊的 chat_id 长得一样，
+        // 缺了这条映射就只能在"群已解绑 + 点击者有私聊绑定"时判错方向，把群卡按私聊放行。
+        rememberCardConversation(sent.messageId, key);
+      }
       if (final) {
         questionCards.delete(key);
         questionBatches.delete(key);
@@ -231,7 +236,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     },
     sendApproval: async ({ key, request }) => {
       try {
-        await gateway.sendApprovalCard({ ...routeOf(key), request });
+        const sent = await gateway.sendApprovalCard({ ...routeOf(key), request });
+        // 同提问卡：审批卡也要留下会话映射，否则身份门禁可能按错的会话类型判。
+        if (sent?.messageId) rememberCardConversation(sent.messageId, key);
       } catch (error) {
         logger.warn?.(`[dsh-chat-feishu] 审批卡片发送失败，回退为文本：${error?.message ?? error}`);
         await sendToConversation({ key, text: '⚠️ 需要授权：回复「允许」执行一次，或「拒绝」取消。' });
@@ -813,16 +820,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
-   * 命令权限判定：**手打文字与卡片动作共用同一条**。
-   *
-   * 为什么要共用（真机上的洞）：一开始只有"手打文字"这条路过了门禁，卡片按钮直接执行命令
-   * ——群聊里任何能看到卡片的人点一下按钮就能跑命令，绕过了命令权限。卡片上的每个动作
-   * 与手打同权，这是 dsh-im 的做法（`evaluateInboundAccess(..., isCommand: true)`）。
-   *
-   * @param options - { senderId, conversationType, accessPolicy }。
-   *   `accessPolicy` 由调用方先读过时可直接传入，省一次读盘。
-   */
-  /**
    * 交互回传的身份门禁：**只免命令权限**，其余照判（谁能替属主批准/回答）。
    * 与手打同样内容走的是同一条放行规则，避免"文字被挡、点按钮却能过"。
    */
@@ -837,6 +834,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     });
   }
 
+  /**
+   * 命令权限判定：**手打文字与卡片动作共用同一条**。
+   *
+   * 为什么要共用（真机上的洞）：一开始只有"手打文字"这条路过了门禁，卡片按钮直接执行命令
+   * ——群聊里任何能看到卡片的人点一下按钮就能跑命令，绕过了命令权限。卡片上的每个动作
+   * 与手打同权，这是 dsh-im 的做法（`evaluateInboundAccess(..., isCommand: true)`）。
+   *
+   * @param options - { senderId, conversationType, accessPolicy }。
+   *   `accessPolicy` 由调用方先读过时可直接传入，省一次读盘。
+   */
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
     const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
     return deps.accessPolicy.evaluateAccess({

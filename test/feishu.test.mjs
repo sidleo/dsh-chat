@@ -2764,3 +2764,45 @@ test('控制面板卡：预设列表读不到时如实说明，不能显示成"�
   }));
   assert.match(card, /读不到 Agent Preset 列表/);
 });
+
+test('提问/审批卡片也要登记会话映射：群卡不能在群解绑后被当成私聊', async () => {
+  const app = await makeBridge();
+  try {
+    const attach = app.attached[0];
+
+    // 审批卡：发出去时就记下"这张卡属于 group:oc_group"。
+    await attach.sendApproval({ key: 'group:oc_group', request: { toolName: 'bash' } });
+    assert.equal(
+      app.state.cardConversation('om_approval_card'), 'group:oc_group',
+      '审批卡不登记映射，就只能在"群已解绑 + 点击者有私聊绑定"时按私聊判门禁',
+    );
+
+    // 提问卡：同样是"我们发的卡"，也要记。
+    await attach.sendQuestions({
+      key: 'group:oc_group',
+      questions: [{ id: 'q1', question: '选哪个', options: ['A', 'B'], type: 'single' }],
+      answered: {},
+      final: false,
+    });
+    assert.equal(app.state.cardConversation('om_question_card'), 'group:oc_group');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板卡：工作区未设置时如实说"新会话会失败"，预设下拉带展示名', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null, failures: [] },
+    // hub 算好的展示名与默认标记要出现在卡片上（只有裸 id 认不出是哪个预设）。
+    preset: { current: null, options: [{ id: 'yh-olap', label: 'yh-olap · 有货率', isDefault: true }] },
+    workspace: { current: null, options: [] },
+  }));
+
+  // 工作区为空 = 建会话会失败（chat/workspace-required），没有"默认目录"这回事。
+  assert.match(card, /未设置（新会话会失败/);
+  assert.doesNotMatch(card, /用默认目录/);
+  assert.match(card, /yh-olap · 有货率（Host 默认）/);
+});

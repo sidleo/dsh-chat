@@ -223,3 +223,28 @@ test('归一化：单选值不按逗号拆（工作区路径里可能有逗号�
   });
   assert.deepEqual(multi.action.options, ['a', 'b'], '多选是逗号串，要拆');
 });
+
+test('归一化：form_value 里的单选取值也不拆逗号，按钮提交里的多选才拆', () => {
+  // 单选取值落在 form_value（某些版本的形状）：逗号是路径的一部分。
+  const single = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: {
+      tag: 'select_static',
+      name: 'workspace_pick',
+      form_value: { workspace_pick: '/Users/x/A, B/报表' },
+    },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(
+    single.action.options, ['/Users/x/A, B/报表'],
+    '按逗号拆会把工作区路径切成两段，面板会去校验一个不存在的目录',
+  );
+
+  // 表单提交（tag=button）里的多选是逗号串，照旧拆。
+  const form = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'button', name: 'multi_x', form_value: { multi_x: 'a, b' } },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(form.action.options, ['a', 'b']);
+});

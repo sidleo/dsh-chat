@@ -56,6 +56,12 @@ const FILE_TYPES = new Map(Object.entries({
  *   ——工作区路径里就可能有逗号，拆了会静默换成另一个目录。默认拆（多选语义）。
  * @returns 字符串数组（已去空、去重）。
  */
+/**
+ * 单选类组件：取值是**原子值**，不能按逗号拆（工作区路径里就可能带逗号）。
+ * 表单提交（那时 `action.tag` 是 `button`）不在此列——那种形态下的多选是逗号串，要拆。
+ */
+const SINGLE_SELECT_TAGS = new Set(['select_static', 'select', 'single_select']);
+
 export function normalizeOptionValues(value, { splitCommas = true } = {}) {
   const flat = [];
   const push = (item) => {
@@ -133,9 +139,14 @@ export function normalizeCardAction(raw) {
       options: Object.freeze([
         // 单选是原子值（路径里可能有逗号）：不拆。
         ...normalizeOptionValues(action.option, { splitCommas: false }),
-        // 多选与表单值按逗号串处理。
+        // 多选是逗号串（官方 Card 2.0 就是这个形状），要拆。
         ...normalizeOptionValues(action.options),
-        ...normalizeOptionValues((action.form_value ?? action.formValue ?? {})[action.name]),
+        // 某些版本把选中值只塞进 form_value[组件名]：**按组件类型决定要不要拆**——
+        // 单选的取值是原子的（工作区路径里可能有逗号），一律按逗号拆会把路径切成两段。
+        ...normalizeOptionValues(
+          (action.form_value ?? action.formValue ?? {})[action.name],
+          { splitCommas: !SINGLE_SELECT_TAGS.has(action.tag) },
+        ),
       ].filter((item, index, list) => item !== '' && list.indexOf(item) === index)),
       ...(action.name === undefined ? {} : { name: action.name }),
     }),

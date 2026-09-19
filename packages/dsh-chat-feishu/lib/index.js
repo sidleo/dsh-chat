@@ -127064,7 +127064,9 @@ function panelCard(state, { last = null, at = null } = {}) {
       `**\u5F53\u524D\u4F1A\u8BDD**\u3000${bound ? `\`${h(state.sessionId)}\`` : "\u672A\u7ED1\u5B9A\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u65B0\u5EFA\uFF09"}`,
       `**\u6A21\u578B**\u3000${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       `**Agent \u9884\u8BBE**\u3000${state?.preset?.current ? `\`${h(state.preset.current)}\`` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
-      `**\u5DE5\u4F5C\u533A**\u3000${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : "\u672A\u8BBE\u7F6E\uFF08\u7528\u9ED8\u8BA4\u76EE\u5F55\uFF09"}`
+      // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
+      // 写成"用默认目录"会让用户以为发条消息就能建会话。
+      `**\u5DE5\u4F5C\u533A**\u3000${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : "\u672A\u8BBE\u7F6E\uFF08\u65B0\u4F1A\u8BDD\u4F1A\u5931\u8D25\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u586B\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\uFF09"}`
     ].join("\n")
   });
   elements.push({ tag: "hr" });
@@ -127130,7 +127132,12 @@ function panelCard(state, { last = null, at = null } = {}) {
     placeholder: "\u9009\u62E9 Agent \u9884\u8BBE",
     items: [
       { value: FOLLOW_DEFAULT, label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
-      ...(state?.preset?.options ?? []).map((item) => ({ value: item.id, label: item.id }))
+      // 用 hub 算好的展示名（`id · name`），并标出哪个是 Host 默认——只有 id 的话
+      // 一排相近的 id（yh-olap / yh-olap-2）认不出，也看不出当前跟着谁。
+      ...(state?.preset?.options ?? []).map((item) => ({
+        value: item.id,
+        label: `${item.label ?? item.id}${item.isDefault ? "\uFF08Host \u9ED8\u8BA4\uFF09" : ""}`
+      }))
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
@@ -127351,7 +127358,10 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         final,
         messageId: existing
       });
-      if (sent?.messageId) questionCards.set(key, sent.messageId);
+      if (sent?.messageId) {
+        questionCards.set(key, sent.messageId);
+        rememberCardConversation(sent.messageId, key);
+      }
       if (final) {
         questionCards.delete(key);
         questionBatches.delete(key);
@@ -127359,7 +127369,8 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     },
     sendApproval: async ({ key, request }) => {
       try {
-        await gateway.sendApprovalCard({ ...routeOf(key), request });
+        const sent = await gateway.sendApprovalCard({ ...routeOf(key), request });
+        if (sent?.messageId) rememberCardConversation(sent.messageId, key);
       } catch (error) {
         logger.warn?.(`[dsh-chat-feishu] \u5BA1\u6279\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
         await sendToConversation({ key, text: "\u26A0\uFE0F \u9700\u8981\u6388\u6743\uFF1A\u56DE\u590D\u300C\u5141\u8BB8\u300D\u6267\u884C\u4E00\u6B21\uFF0C\u6216\u300C\u62D2\u7EDD\u300D\u53D6\u6D88\u3002" });
@@ -128325,6 +128336,7 @@ var FILE_TYPES = new Map(Object.entries({
   ppt: "ppt",
   pptx: "ppt"
 }));
+var SINGLE_SELECT_TAGS = /* @__PURE__ */ new Set(["select_static", "select", "single_select"]);
 function normalizeOptionValues(value, { splitCommas = true } = {}) {
   const flat = [];
   const push = (item) => {
@@ -128385,9 +128397,14 @@ function normalizeCardAction(raw) {
       options: Object.freeze([
         // 单选是原子值（路径里可能有逗号）：不拆。
         ...normalizeOptionValues(action.option, { splitCommas: false }),
-        // 多选与表单值按逗号串处理。
+        // 多选是逗号串（官方 Card 2.0 就是这个形状），要拆。
         ...normalizeOptionValues(action.options),
-        ...normalizeOptionValues((action.form_value ?? action.formValue ?? {})[action.name])
+        // 某些版本把选中值只塞进 form_value[组件名]：**按组件类型决定要不要拆**——
+        // 单选的取值是原子的（工作区路径里可能有逗号），一律按逗号拆会把路径切成两段。
+        ...normalizeOptionValues(
+          (action.form_value ?? action.formValue ?? {})[action.name],
+          { splitCommas: !SINGLE_SELECT_TAGS.has(action.tag) }
+        )
       ].filter((item, index, list) => item !== "" && list.indexOf(item) === index)),
       ...action.name === void 0 ? {} : { name: action.name }
     }),

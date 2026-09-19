@@ -110,7 +110,9 @@ export function panelCard(state, { last = null, at = null } = {}) {
         ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
         : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认')}`,
       `**Agent 预设**　${state?.preset?.current ? `\`${h(state.preset.current)}\`` : '跟随 Host 默认'}`,
-      `**工作区**　${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : '未设置（用默认目录）'}`,
+      // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
+      // 写成"用默认目录"会让用户以为发条消息就能建会话。
+      `**工作区**　${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : '未设置（新会话会失败：先在设置页填一个绝对路径）'}`,
     ].join('\n'),
   });
   elements.push({ tag: 'hr' });
@@ -196,7 +198,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
     placeholder: '选择 Agent 预设',
     items: [
       { value: FOLLOW_DEFAULT, label: '跟随 Host 默认' },
-      ...(state?.preset?.options ?? []).map((item) => ({ value: item.id, label: item.id })),
+      // 用 hub 算好的展示名（`id · name`），并标出哪个是 Host 默认——只有 id 的话
+      // 一排相近的 id（yh-olap / yh-olap-2）认不出，也看不出当前跟着谁。
+      ...(state?.preset?.options ?? []).map((item) => ({
+        value: item.id,
+        label: `${item.label ?? item.id}${item.isDefault ? '（Host 默认）' : ''}`,
+      })),
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
