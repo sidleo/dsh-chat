@@ -127804,6 +127804,16 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
     return Boolean(sent);
   }
+  function evaluateInteractionAccess({ senderId, conversationType }) {
+    const policy = deps.storage?.read?.(bot.id)?.accessPolicy;
+    return deps.accessPolicy.evaluateAccess({
+      policy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: false,
+      isOwner: isOwner(deps.accessPolicy, bot, senderId)
+    });
+  }
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
     const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
     return deps.accessPolicy.evaluateAccess({
@@ -127897,8 +127907,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
         const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
-        await repaintPanel({ label: pick2.label, message, ok: true }, `pick:${value.action}`);
-        return { toast: { type: "success", content: message.slice(0, 80) } };
+        const painted = await repaintPanel({ label: pick2.label, message, ok: true }, `pick:${value.action}`);
+        return {
+          toast: {
+            type: painted ? "success" : "warning",
+            content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}\uFF08\u5361\u7247\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\uFF09`
+          }
+        };
       } catch (error) {
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09\uFF1A${error?.message ?? error}`);
         const message = error?.message ?? String(error);
@@ -127944,8 +127959,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
           try {
             const applied = await deps.panel.apply({ ...panelContext, field: "session", value: action.value });
             const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
-            await repaintPanel({ label: action.label, message, ok: true }, "button:new");
-            return { toast: { type: "success", content: message.slice(0, 80) } };
+            const painted = await repaintPanel({ label: action.label, message, ok: true }, "button:new");
+            return {
+              toast: {
+                type: painted ? "success" : "warning",
+                content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}\uFF08\u5361\u7247\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\uFF09`
+              }
+            };
           } catch (error) {
             logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08session=new\uFF09\uFF1A${error?.message ?? error}`);
             const message = error?.message ?? String(error);
@@ -127999,16 +128019,32 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
     if (value.dsh === "approval") {
       const decision = value.decision === "allowed-once" ? "allowed-once" : "rejected";
+      const answer = decision === "allowed-once" ? "\u5141\u8BB8" : "\u62D2\u7EDD";
+      const allowed = evaluateInteractionAccess({
+        senderId: operatorId,
+        conversationType
+      }).allowed;
+      if (!allowed) {
+        logger.warn?.(`[dsh-chat-feishu] \u5BA1\u6279\u6309\u94AE\u88AB\u8EAB\u4EFD\u95E8\u7981\u62D2\u7EDD\uFF1A${bot.id} sender=${operatorId}`);
+        if (event.messageId) {
+          await gateway.replyText({
+            messageId: event.messageId,
+            text: "\u4F60\u6CA1\u6709\u5904\u7406\u8FD9\u6B21\u6388\u6743\u7684\u6743\u9650\u3002"
+          }).catch(() => {
+          });
+        }
+        return { toast: { type: "error", content: "\u4F60\u6CA1\u6709\u5904\u7406\u8FD9\u6B21\u6388\u6743\u7684\u6743\u9650\u3002" } };
+      }
       const claimed = deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
         key: `p2p:${operatorId}`,
-        text: decision === "allowed-once" ? "\u5141\u8BB8" : "\u62D2\u7EDD"
+        text: answer
       }) || deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
         key: `group:${chatId}`,
-        text: decision === "allowed-once" ? "\u5141\u8BB8" : "\u62D2\u7EDD"
+        text: answer
       });
       if (!claimed) {
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u6CA1\u6709\u5339\u914D\u7684\u5F85\u5BA1\u6279\uFF08${bot.id} ${operatorId}\uFF09`);

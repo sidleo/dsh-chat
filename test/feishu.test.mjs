@@ -236,6 +236,7 @@ async function makeBridge({
     claimed: false,
     claimKey: null,
     attached,
+    offers,
     attach(options) {
       attached.push(options);
       return () => { options.detached = true; };
@@ -2596,6 +2597,68 @@ test('下拉取值认不出时报可见错误，而不是当成"恢复默认"静
     assert.match(answer.toast.content, /没认出/);
     assert.deepEqual(panel.applied, [], '绝不能把认不出的取值当成"恢复默认"应用下去');
     assert.equal(app.gateway.calls.tokenUpdates.length, 0, '也不该改动卡片');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('审批按钮要过身份门禁：群聊 allowlist 下未授权成员不能替属主批准', async () => {
+  // 群里只允许 ou_owner；ou_other 既不是属主也不在名单里。
+  const policy = {
+    direct: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+    group: {
+      mode: 'allowlist',
+      open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+      allowlist: { users: [{ id: 'ou_owner', canExecuteCommands: true }] },
+    },
+  };
+  const app = await makeBridge({ policy });
+  try {
+    app.interactions.claimed = true;
+    const denied = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_approval',
+      token: 'tk_a',
+      operator: { openId: 'ou_other' },
+      action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+    assert.equal(denied.toast.type, 'error');
+    assert.match(denied.toast.content, /权限/);
+    assert.deepEqual(app.interactions.offers, [], '未授权者不该触发任何认领');
+    assert.equal(app.gateway.calls.markedCards.length, 0, '卡片也不该被标成已允许');
+
+    // 属主自己点：照常放行。
+    const allowed = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_approval',
+      token: 'tk_b',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+    assert.equal(allowed.toast.type, 'success');
+    assert.equal(app.interactions.offers.at(-1)?.text, '允许');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('面板改动生效但卡片刷不出去时，toast 不能说"成功"就完了', async () => {
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel });
+  try {
+    app.gateway.setFailure('updateCard', new Error('token 用完'));
+    app.gateway.setFailure('patchCard', new Error('卡片被删'));
+    app.gateway.setFailure('sendCard', new Error('发不出去'));
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_x',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
+    });
+    assert.notEqual(answer.toast.type, 'success', '卡片没刷出去就不能只报成功');
+    assert.match(answer.toast.content, /卡片更新失败/);
+    assert.equal(panel.applied.length, 1, '改动本身是生效的（所以要如实说"生效了但卡片没刷新"）');
   } finally {
     await app.cleanup();
   }

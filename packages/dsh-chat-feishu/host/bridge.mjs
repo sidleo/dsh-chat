@@ -822,6 +822,21 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * @param options - { senderId, conversationType, accessPolicy }。
    *   `accessPolicy` 由调用方先读过时可直接传入，省一次读盘。
    */
+  /**
+   * 交互回传的身份门禁：**只免命令权限**，其余照判（谁能替属主批准/回答）。
+   * 与手打同样内容走的是同一条放行规则，避免"文字被挡、点按钮却能过"。
+   */
+  function evaluateInteractionAccess({ senderId, conversationType }) {
+    const policy = deps.storage?.read?.(bot.id)?.accessPolicy;
+    return deps.accessPolicy.evaluateAccess({
+      policy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: false,
+      isOwner: isOwner(deps.accessPolicy, bot, senderId),
+    });
+  }
+
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
     const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
     return deps.accessPolicy.evaluateAccess({
@@ -891,10 +906,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
 
     /**
-     * 门禁：卡片动作等同于命令，先判权限再动手。
+     * 门禁：非交互的卡片动作等同于命令，先判权限再动手。
      *
-     * 提问/审批按钮是"人在环回传"，不是命令（dsh-im 同样把它们排除在外）——
+     * 提问/审批按钮是"人在环回传"，不走命令门禁（dsh-im 同样把它们排除在外）——
      * 它们本来只对已经进得来的消息负责，加命令门禁反而会让提问卡点不动。
+     * 但**审批不只免命令权限**：谁能替属主批准是另一回事，见下面 `value.dsh === 'approval'` 处的身份门禁。
      */
     /**
      * 交互回传的三种形态：
@@ -969,8 +985,14 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
-        await repaintPanel({ label: pick.label, message, ok: true }, `pick:${value.action}`);
-        return { toast: { type: 'success', content: message.slice(0, 80) } };
+        const painted = await repaintPanel({ label: pick.label, message, ok: true }, `pick:${value.action}`);
+        // 生效了但卡片没刷出去也要说：否则用户看到的是旧值与旧 ✓，只会反复点。
+        return {
+          toast: {
+            type: painted ? 'success' : 'warning',
+            content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}（卡片更新失败，请重发 /menu）`,
+          },
+        };
       } catch (error) {
         // 失败必须可见：日志 + 卡片上的 ❌ 一行 + 错误 toast。
         logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（${pick.field}=${pick.value}）：`
@@ -1029,8 +1051,13 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           try {
             const applied = await deps.panel.apply({ ...panelContext, field: 'session', value: action.value });
             const message = applied?.message ?? '已生效。';
-            await repaintPanel({ label: action.label, message, ok: true }, 'button:new');
-            return { toast: { type: 'success', content: message.slice(0, 80) } };
+            const painted = await repaintPanel({ label: action.label, message, ok: true }, 'button:new');
+            return {
+              toast: {
+                type: painted ? 'success' : 'warning',
+                content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}（卡片更新失败，请重发 /menu）`,
+              },
+            };
           } catch (error) {
             logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（session=new）：${error?.message ?? error}`);
             const message = error?.message ?? String(error);
@@ -1097,16 +1124,39 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     // 审批卡片：直接按按钮里的结论回答
     if (value.dsh === 'approval') {
       const decision = value.decision === 'allowed-once' ? 'allowed-once' : 'rejected';
+      const answer = decision === 'allowed-once' ? '允许' : '拒绝';
+      /**
+       * 身份门禁：审批按钮只免**命令权限**，不免"谁能替属主批准"。
+       *
+       * 提问那条路在认领前逐个候选键判 `evaluateAccess(isCommand: false)`；审批以前直接
+       * `offer`，于是群聊 allowlist 策略下任何能看到审批卡的人都能点「允许一次」替属主
+       * 批准工具执行（而同一句话当文字发出来会被 accept() 的门禁丢掉）。
+       */
+      // 按**这张卡实际所在的会话类型**判（`conversationType` 已由卡片映射算出），
+      // 不能"两个作用域任一放行就算过"——群卡片用私聊作用域的宽松策略放行正是这个洞。
+      const allowed = evaluateInteractionAccess({
+        senderId: operatorId, conversationType,
+      }).allowed;
+      if (!allowed) {
+        logger.warn?.(`[dsh-chat-feishu] 审批按钮被身份门禁拒绝：${bot.id} sender=${operatorId}`);
+        if (event.messageId) {
+          await gateway.replyText({
+            messageId: event.messageId,
+            text: '你没有处理这次授权的权限。',
+          }).catch(() => {});
+        }
+        return { toast: { type: 'error', content: '你没有处理这次授权的权限。' } };
+      }
       const claimed = deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
         key: `p2p:${operatorId}`,
-        text: decision === 'allowed-once' ? '允许' : '拒绝',
+        text: answer,
       }) || deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
         key: `group:${chatId}`,
-        text: decision === 'allowed-once' ? '允许' : '拒绝',
+        text: answer,
       });
       if (!claimed) {
         logger.info?.(`[dsh-chat-feishu] 卡片回调没有匹配的待审批（${bot.id} ${operatorId}）`);
