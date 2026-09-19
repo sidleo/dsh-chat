@@ -238,11 +238,14 @@ export function createPanelService({
     /**
      * 应用一个选择。
      *
-     * @param options - { channelId, botId, key, field, value }。
+     * @param options - { channelId, botId, key, field, value, isOwner }。
      *   field ∈ model | reasoning | preset | workspace | session。
+     *   `isOwner` 由渠道判定后传入：**机器人级**字段（preset / workspace）只限属主——
+     *   它们改的是整台机器人的设置，且工作区候选来自这台机器人的**所有**会话
+     *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value }) {
+    async apply({ channelId, botId, key, field, value, isOwner = false }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
@@ -300,6 +303,17 @@ export function createPanelService({
             ? `推理等级已设为 ${now.reasoningEffort ?? wanted}。`
             : '推理等级已恢复模型默认。',
         };
+      }
+
+      /**
+       * 机器人级字段只限属主。
+       *
+       * 与设置页同一条口径（`bot.agent-preset.set` / 工作区那条都是属主专属），
+       * 否则在 open + 可执行命令的策略下，任何能聊天的成员都能把工作区改到
+       * 属主其它项目的目录里——改完 `/new` 再发一条消息，agent 就在那里起会话。
+       */
+      if ((field === 'preset' || field === 'workspace') && isOwner !== true) {
+        throw panelError('chat/owner-only', '工作区与 Agent 预设是机器人级设置，只有属主能改。');
       }
 
       if (field === 'preset') {

@@ -2067,8 +2067,8 @@ function makePanelStub({ fail = null } = {}) {
     async read() {
       return state;
     },
-    async apply({ field, value, key }) {
-      applied.push({ field, value, key });
+    async apply({ field, value, key, isOwner }) {
+      applied.push({ field, value, key, isOwner });
       if (fail && fail.field === field) throw Object.assign(new Error(fail.message), { code: fail.code });
       return { field, value, message: `已应用 ${field}=${value}` };
     },
@@ -2860,6 +2860,48 @@ test('审批按钮先认领卡片自己的会话，再退到另一个候选', as
     assert.deepEqual(
       app.interactions.offers.map((item) => item.key), ['group:oc_group'],
       '第一个候选必须是这张卡真实所在的会话（映射给出来的 key），私聊那轮不该被顺手决定',
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('面板动作把 isOwner 传下去：非属主改机器人级设置由 hub 拒（渠道不自己判）', async () => {
+  // 策略 open：成员能执行命令（过得了命令门禁），但 preset/workspace 是机器人级的。
+  const policy = {
+    direct: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+    group: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+  };
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel, policy });
+  try {
+    await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_panel',
+      token: 'tk_owner_flag',
+      operator: { openId: 'ou_member' },
+      action: { tag: 'select_static', name: 'workspace_pick', options: ['/ws/b'], value: { action: 'workspace_pick' } },
+    });
+    assert.equal(app.panel.applied.at(-1)?.isOwner, false, '非属主要如实传 false，由 hub 落 chat/owner-only');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('卡片路径的失败要落 lastError：状态页里要有现场', async () => {
+  const panel = makePanelStub({ fail: { field: 'model', message: '网关超时', code: 'chat/model-selection-unavailable' } });
+  const app = await makeBridge({ panel });
+  try {
+    await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_fail',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: ['deepseek/deepseek-v4.1-flash'], value: { action: 'model_pick' } },
+    });
+    assert.match(
+      String(app.bridge.status().lastError), /网关超时/,
+      '只写日志的话，connection.status 上看不到"点了卡片没反应"的原因',
     );
   } finally {
     await app.cleanup();

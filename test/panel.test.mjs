@@ -216,33 +216,33 @@ test('应用：预设与工作区落盘，且都说明只对新会话生效', as
   try {
     const { panel, state } = makePanel();
     const preset = await panel.apply({
-      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'yh-olap',
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'yh-olap', isOwner: true,
     });
     assert.equal(state.agentPreset, 'yh-olap');
     assert.match(preset.message, /只对新会话生效/);
 
     const cleared = await panel.apply({
-      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: '',
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: '', isOwner: true,
     });
     assert.equal(state.agentPreset, null, '空值 = 跟随 Host 默认');
     assert.match(cleared.message, /Host 默认/);
 
     await assert.rejects(
       () => panel.apply({
-        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'nope',
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'nope', isOwner: true,
       }),
       (error) => error.code === 'chat/unknown-preset',
     );
 
     const workspace = await panel.apply({
-      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: dir,
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: dir, isOwner: true,
     });
     assert.equal(state.workspace, dir);
     assert.match(workspace.message, /只对新会话生效/);
 
     await assert.rejects(
       () => panel.apply({
-        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: join(dir, 'nope'),
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: join(dir, 'nope'), isOwner: true,
       }),
       (error) => error.code === 'chat/workspace-invalid',
     );
@@ -252,7 +252,7 @@ test('应用：预设与工作区落盘，且都说明只对新会话生效', as
     await writeFile(file, 'x');
     await assert.rejects(
       () => panel.apply({
-        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: file,
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'workspace', value: file, isOwner: true,
       }),
       (error) => error.code === 'chat/workspace-invalid' && /不是目录/.test(error.message),
     );
@@ -336,7 +336,7 @@ test('读不到预设列表：不当成"没有预设"放行，报错且不写设
   // fail-closed：读不到列表就没法对账，不能把任意 id 写进设置（写进去只会在下次建会话时才炸）。
   await assert.rejects(
     () => panel.apply({
-      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'ghost',
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'preset', value: 'ghost', isOwner: true,
     }),
     (error) => error.code === 'chat/preset-unavailable',
   );
@@ -371,4 +371,27 @@ test('切换会话时校验失败不能说成"找不到会话"', async () => {
     }),
     (error) => error.code === 'chat/session-check-failed' && /gateway timeout/.test(error.message),
   );
+});
+
+test('机器人级字段（预设/工作区）只限属主：非属主改不动，也写不进设置', async () => {
+  const { panel, calls, state } = makePanel({ record: { workspace: '/ws/owner-project' } });
+
+  for (const [field, value] of [['workspace', '/ws/other'], ['preset', 'yh-olap']]) {
+    await assert.rejects(
+      () => panel.apply({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_member', field, value,
+      }),
+      (error) => error.code === 'chat/owner-only',
+      `${field} 是机器人级设置，非属主不能改`,
+    );
+  }
+  assert.equal(state.workspace, '/ws/owner-project', '被拒后设置必须原样');
+  assert.equal(state.agentPreset, undefined);
+  assert.equal(calls.some((call) => call.kind === 'write'), false);
+
+  // 会话级字段不受这条影响（它只作用于当前聊天）。
+  const reasoning = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: 'new',
+  });
+  assert.match(reasoning.message, /新会话/);
 });

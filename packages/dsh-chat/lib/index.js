@@ -2255,11 +2255,14 @@ function createPanelService({
     /**
      * 应用一个选择。
      *
-     * @param options - { channelId, botId, key, field, value }。
+     * @param options - { channelId, botId, key, field, value, isOwner }。
      *   field ∈ model | reasoning | preset | workspace | session。
+     *   `isOwner` 由渠道判定后传入：**机器人级**字段（preset / workspace）只限属主——
+     *   它们改的是整台机器人的设置，且工作区候选来自这台机器人的**所有**会话
+     *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value }) {
+    async apply({ channelId, botId, key, field, value, isOwner = false }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
@@ -2316,6 +2319,9 @@ function createPanelService({
           value: wanted,
           message: wanted ? `\u63A8\u7406\u7B49\u7EA7\u5DF2\u8BBE\u4E3A ${now.reasoningEffort ?? wanted}\u3002` : "\u63A8\u7406\u7B49\u7EA7\u5DF2\u6062\u590D\u6A21\u578B\u9ED8\u8BA4\u3002"
         };
+      }
+      if ((field === "preset" || field === "workspace") && isOwner !== true) {
+        throw panelError("chat/owner-only", "\u5DE5\u4F5C\u533A\u4E0E Agent \u9884\u8BBE\u662F\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002");
       }
       if (field === "preset") {
         const target = typeof value === "string" && value.trim() ? value.trim() : null;

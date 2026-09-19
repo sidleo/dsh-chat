@@ -184,6 +184,17 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   const activePresenters = new Map();
 
 
+  /**
+   * 卡片路径的失败也要落 `lastError`。
+   *
+   * `connection.status` 是排查"点了卡片没反应"的第一站（排查顺序见 AGENTS.md），
+   * 只写日志等于现场只留在一个地方——"发了没反应"这类故障已经栽过两次。
+   */
+  function noteCardError(what, reason) {
+    lastError = `${what}：${reason}`;
+    logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+  }
+
   /** 会话键 → 收发所需的 route（卡片交互要用同一个会话键把答案认领回来）。 */
   function routeOf(key) {
     const separator = key.indexOf(':');
@@ -240,7 +251,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         // 同提问卡：审批卡也要留下会话映射，否则身份门禁可能按错的会话类型判。
         if (sent?.messageId) rememberCardConversation(sent.messageId, key);
       } catch (error) {
-        logger.warn?.(`[dsh-chat-feishu] 审批卡片发送失败，回退为文本：${error?.message ?? error}`);
+        noteCardError('审批卡片发送失败，已回退为文本', error?.message ?? error);
         await sendToConversation({ key, text: '⚠️ 需要授权：回复「允许」执行一次，或「拒绝」取消。' });
       }
     },
@@ -765,6 +776,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     // 标题带上本次渲染时间：聊天里可能有多张面板卡（旧卡、重启前的卡），
     // "哪张是刚更新的"必须一眼可辨，否则用户会以为卡片"变回去了"。
     const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    /** 三条路都失败才算渲染失败：中间失败有兜底，不该把状态页写成"出错了"。 */
+    const renderErrors = [];
     // 用户交互总是优先更新"他点的那张"；`/menu` 之类没有具体卡片时，复用本会话记住的那张。
     const known = key ? panelCards.get(key) : null;
     const targets = [messageId, messageId ? null : known].filter(Boolean);
@@ -783,6 +796,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
      */
     if (token && messageId) {
       const updated = await gateway.updateCard({ token, card }).then(() => true).catch((error) => {
+        renderErrors.push(`token 路径 ${error?.message ?? error}`);
         logger.warn?.(`[dsh-chat-feishu] 控制面板延迟更新失败（token 路径）：${error?.message ?? error}`);
         return false;
       });
@@ -795,6 +809,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
     for (const target of targets) {
       const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
+        renderErrors.push(`patch ${target} ${error?.message ?? error}`);
         logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败（${target}）：${error?.message ?? error}`);
         return false;
       });
@@ -806,6 +821,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       }
     }
     const sent = await gateway.sendCard({ chatId, card }).then((result) => result ?? {}).catch((error) => {
+      renderErrors.push(`新发 ${error?.message ?? error}`);
       logger.warn?.(`[dsh-chat-feishu] 控制面板发送失败：${error?.message ?? error}`);
       return null;
     });
@@ -816,6 +832,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       }
       logger.info?.(`[dsh-chat-feishu] 控制面板已新发一张（${bot.id} ${sent.messageId ?? '未知id'}）`);
     }
+    if (!sent) noteCardError('控制面板渲染失败', renderErrors.join('；') || '未知原因');
     return Boolean(sent);
   }
 
@@ -949,13 +966,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
 
     // 控制面板：一个共用上下文（读状态、应用选择、重画卡片、执行命令都用它）。
+    const viewerIsOwner = isOwner(deps.accessPolicy, bot, operatorId);
     const panelContext = {
       channelId: deps.channelId, botId: bot.id, key, conversationType,
+      // 面板要按属主判机器人级字段（preset / workspace）。
+      isOwner: viewerIsOwner,
     };
     const commandContext = {
       ...panelContext,
       senderId: operatorId,
-      isOwner: isOwner(deps.accessPolicy, bot, operatorId),
+      isOwner: viewerIsOwner,
       botLabel: bot.botName ?? bot.id,
       channelLabel: '飞书',
     };
@@ -1006,8 +1026,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         };
       } catch (error) {
         // 失败必须可见：日志 + 卡片上的 ❌ 一行 + 错误 toast。
-        logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（${pick.field}=${pick.value}）：`
-          + `${error?.message ?? error}`);
+        noteCardError(`控制面板应用失败（${pick.field}=${pick.value}）`, error?.message ?? error);
         const message = error?.message ?? String(error);
         await repaintPanel({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
         return { toast: { type: 'error', content: message.slice(0, 80) } };
@@ -1070,7 +1089,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
               },
             };
           } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（session=new）：${error?.message ?? error}`);
+            noteCardError('控制面板应用失败（session=new）', error?.message ?? error);
             const message = error?.message ?? String(error);
             await repaintPanel({ label: action.label, message, ok: false }, 'button:new(失败)');
             return { toast: { type: 'error', content: message.slice(0, 80) } };

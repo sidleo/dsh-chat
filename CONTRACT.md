@@ -154,11 +154,14 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *                                        workspace{current,options} }
    *      `model.failures` 是读不到模型的 provider 及原因，`preset.failed` 表示预设列表**读失败**
    *      （与"列表为空"是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设"。
-   * apply({ channelId, botId, key, field, value })
+   * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session
+   *      `isOwner` 由渠道判定后传入：**preset / workspace 是机器人级设置，只限属主**
+   *      （非属主改会拿到 chat/owner-only；工作区候选来自这台机器人所有会话，不能给普通成员改）
    *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
    *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /
    *         chat/unknown-session / chat/session-check-failed / chat/model-selection-unavailable /
+   *         chat/owner-only /
    *         chat/unknown-field），渠道把 message 原样给用户看。
    * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**。
    */

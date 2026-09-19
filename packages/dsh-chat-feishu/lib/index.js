@@ -127326,6 +127326,10 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
   const activePresenters = /* @__PURE__ */ new Map();
+  function noteCardError(what, reason) {
+    lastError = `${what}\uFF1A${reason}`;
+    logger.error?.(`[dsh-chat-feishu] ${lastError}`);
+  }
   function routeOf(key) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -127373,7 +127377,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         const sent = await gateway.sendApprovalCard({ ...routeOf(key), request });
         if (sent?.messageId) rememberCardConversation(sent.messageId, key);
       } catch (error) {
-        logger.warn?.(`[dsh-chat-feishu] \u5BA1\u6279\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u6587\u672C\uFF1A${error?.message ?? error}`);
+        noteCardError("\u5BA1\u6279\u5361\u7247\u53D1\u9001\u5931\u8D25\uFF0C\u5DF2\u56DE\u9000\u4E3A\u6587\u672C", error?.message ?? error);
         await sendToConversation({ key, text: "\u26A0\uFE0F \u9700\u8981\u6388\u6743\uFF1A\u56DE\u590D\u300C\u5141\u8BB8\u300D\u6267\u884C\u4E00\u6B21\uFF0C\u6216\u300C\u62D2\u7EDD\u300D\u53D6\u6D88\u3002" });
       }
     }
@@ -127786,11 +127790,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     token = null
   }) {
     const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    const renderErrors = [];
     const known = key ? panelCards.get(key) : null;
     const targets = [messageId, messageId ? null : known].filter(Boolean);
     logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} key=${key ?? "\u65E0"} \u76EE\u6807=${targets[0] ?? "\u65B0\u53D1"} token=${token ? "\u6709" : "\u65E0"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
     if (token && messageId) {
       const updated = await gateway.updateCard({ token, card }).then(() => true).catch((error) => {
+        renderErrors.push(`token \u8DEF\u5F84 ${error?.message ?? error}`);
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF08token \u8DEF\u5F84\uFF09\uFF1A${error?.message ?? error}`);
         return false;
       });
@@ -127803,6 +127809,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
     for (const target of targets) {
       const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
+        renderErrors.push(`patch ${target} ${error?.message ?? error}`);
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF08${target}\uFF09\uFF1A${error?.message ?? error}`);
         return false;
       });
@@ -127814,6 +127821,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       }
     }
     const sent = await gateway.sendCard({ chatId, card }).then((result) => result ?? {}).catch((error) => {
+      renderErrors.push(`\u65B0\u53D1 ${error?.message ?? error}`);
       logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u53D1\u9001\u5931\u8D25\uFF1A${error?.message ?? error}`);
       return null;
     });
@@ -127824,6 +127832,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       }
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u65B0\u53D1\u4E00\u5F20\uFF08${bot.id} ${sent.messageId ?? "\u672A\u77E5id"}\uFF09`);
     }
+    if (!sent) noteCardError("\u63A7\u5236\u9762\u677F\u6E32\u67D3\u5931\u8D25", renderErrors.join("\uFF1B") || "\u672A\u77E5\u539F\u56E0");
     return Boolean(sent);
   }
   function evaluateInteractionAccess({ senderId, conversationType }) {
@@ -127888,16 +127897,19 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         return { toast: { type: "error", content: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002" } };
       }
     }
+    const viewerIsOwner = isOwner(deps.accessPolicy, bot, operatorId);
     const panelContext = {
       channelId: deps.channelId,
       botId: bot.id,
       key,
-      conversationType
+      conversationType,
+      // 面板要按属主判机器人级字段（preset / workspace）。
+      isOwner: viewerIsOwner
     };
     const commandContext = {
       ...panelContext,
       senderId: operatorId,
-      isOwner: isOwner(deps.accessPolicy, bot, operatorId),
+      isOwner: viewerIsOwner,
       botLabel: bot.botName ?? bot.id,
       channelLabel: "\u98DE\u4E66"
     };
@@ -127938,7 +127950,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
           }
         };
       } catch (error) {
-        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09\uFF1A${error?.message ?? error}`);
+        noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09`, error?.message ?? error);
         const message = error?.message ?? String(error);
         await repaintPanel({ label: pick2.label, message, ok: false }, `pick:${value.action}(\u5931\u8D25)`);
         return { toast: { type: "error", content: message.slice(0, 80) } };
@@ -127990,7 +128002,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
               }
             };
           } catch (error) {
-            logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08session=new\uFF09\uFF1A${error?.message ?? error}`);
+            noteCardError("\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08session=new\uFF09", error?.message ?? error);
             const message = error?.message ?? String(error);
             await repaintPanel({ label: action.label, message, ok: false }, "button:new(\u5931\u8D25)");
             return { toast: { type: "error", content: message.slice(0, 80) } };
