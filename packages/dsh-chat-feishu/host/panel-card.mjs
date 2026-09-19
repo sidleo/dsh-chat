@@ -179,9 +179,12 @@ export function panelCard(state, { last = null, at = null } = {}) {
     const listed = (model.options ?? []).some(
       (item) => item.provider === current.provider && item.model === current.model,
     );
+    // 只看**与当前模型相关**的失败：别的 provider 拉不到模型不代表这个模型列不出等级，
+    // 拿它当理由就会把"这个模型确实没有推理等级"说成"读不到目录"（又是一句与事实相反的话）。
+    const providerFailed = catalogFailures.some((item) => item.id === current.provider);
     elements.push({
       tag: 'markdown',
-      content: catalogFailures.length > 0 || !listed
+      content: providerFailed || !listed
         ? '读不到模型目录，暂时列不出可选推理等级（可以手打 `/reasoning <等级>`）。'
         : '当前模型不支持调节推理等级。',
     });

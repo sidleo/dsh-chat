@@ -127117,9 +127117,10 @@ function panelCard(state, { last = null, at = null } = {}) {
     const listed = (model.options ?? []).some(
       (item) => item.provider === current.provider && item.model === current.model
     );
+    const providerFailed = catalogFailures.some((item) => item.id === current.provider);
     elements.push({
       tag: "markdown",
-      content: catalogFailures.length > 0 || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
+      content: providerFailed || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
     });
   } else if (bound) {
     elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
@@ -128057,17 +128058,19 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         }
         return { toast: { type: "error", content: "\u4F60\u6CA1\u6709\u5904\u7406\u8FD9\u6B21\u6388\u6743\u7684\u6743\u9650\u3002" } };
       }
-      const claimed = deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: `p2p:${operatorId}`,
-        text: answer
-      }) || deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: `group:${chatId}`,
-        text: answer
-      });
+      const candidates = [key, conversationType === "group" ? `p2p:${operatorId}` : `group:${chatId}`];
+      let claimed = false;
+      for (const candidate of candidates) {
+        if (deps.interactions?.offer?.({
+          channelId: deps.channelId,
+          botId: bot.id,
+          key: candidate,
+          text: answer
+        })) {
+          claimed = true;
+          break;
+        }
+      }
       if (!claimed) {
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u6CA1\u6709\u5339\u914D\u7684\u5F85\u5BA1\u6279\uFF08${bot.id} ${operatorId}\uFF09`);
         return { toast: { type: "info", content: "\u8FD9\u6B21\u6388\u6743\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };

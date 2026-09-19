@@ -2751,6 +2751,38 @@ test('控制面板卡：推理等级为空时要说清是"读不到目录"，不
     workspace: { current: null, options: [] },
   }));
   assert.match(noEffort, /当前模型不支持调节推理等级/);
+
+  // ④ 别的 provider 读失败，但这个模型在目录里且确实没有 efforts → 仍是"不支持"，不能借别人的失败说"读不到"。
+  const otherFailed = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current,
+      options: [{ value: 'deepseek/deepseek-v4.1-flash', provider: 'deepseek', model: 'deepseek-v4.1-flash', efforts: [] }],
+      efforts: [],
+      currentEffort: null,
+      failures: [{ id: 'anthropic', name: 'Anthropic', message: '连接超时' }],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(otherFailed, /当前模型不支持调节推理等级/);
+
+  // ⑤ 当前模型**自己**的 provider 读失败才说"读不到"。
+  const ownFailed = JSON.stringify(panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current,
+      options: [],
+      efforts: [],
+      currentEffort: null,
+      failures: [{ id: 'deepseek', name: 'DeepSeek', message: '连接超时' }],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  }));
+  assert.match(ownFailed, /读不到模型目录/);
 });
 
 test('控制面板卡：预设列表读不到时如实说明，不能显示成"一个预设都没有"', async () => {
@@ -2805,4 +2837,31 @@ test('控制面板卡：工作区未设置时如实说"新会话会失败"，预
   assert.match(card, /未设置（新会话会失败/);
   assert.doesNotMatch(card, /用默认目录/);
   assert.match(card, /yh-olap · 有货率（Host 默认）/);
+});
+
+test('审批按钮先认领卡片自己的会话，再退到另一个候选', async () => {
+  const app = await makeBridge();
+  try {
+    // 先让机器人往群 `oc_group` 发一张审批卡（登记了卡片→会话映射）。
+    const attach = app.attached[0];
+    await attach.sendApproval({ key: 'group:oc_group', request: { toolName: 'bash' } });
+
+    // 只让"群那个 waiter"认领：旧实现固定先试 p2p，会把私聊那轮先决定掉。
+    app.interactions.claimKey = 'group:oc_group';
+    const response = await app.bridge.handleCardAction({
+      messageId: 'om_approval_card',
+      chatId: 'oc_group',
+      token: 'tk_scope',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
+    });
+
+    assert.equal(response.toast.type, 'success');
+    assert.deepEqual(
+      app.interactions.offers.map((item) => item.key), ['group:oc_group'],
+      '第一个候选必须是这张卡真实所在的会话（映射给出来的 key），私聊那轮不该被顺手决定',
+    );
+  } finally {
+    await app.cleanup();
+  }
 });

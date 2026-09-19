@@ -1158,17 +1158,26 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         }
         return { toast: { type: 'error', content: '你没有处理这次授权的权限。' } };
       }
-      const claimed = deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: `p2p:${operatorId}`,
-        text: answer,
-      }) || deps.interactions?.offer?.({
-        channelId: deps.channelId,
-        botId: bot.id,
-        key: `group:${chatId}`,
-        text: answer,
-      });
+      /**
+       * 先认领**这张卡真实所在的那个会话**，认不到再退到另一个候选。
+       *
+       * 以前是固定"先私聊再群"：同一机器人在群和私聊里同时各有一轮在等审批时，在群卡片上
+       * 点「允许一次」会先把私聊那轮决定掉，而群里的审批仍挂着（卡片却已被刷成"已允许"），
+       * 用户看到的是"点了允许，任务还在等"。`key` 是发卡时登记、落盘的权威判据。
+       */
+      const candidates = [key, conversationType === 'group' ? `p2p:${operatorId}` : `group:${chatId}`];
+      let claimed = false;
+      for (const candidate of candidates) {
+        if (deps.interactions?.offer?.({
+          channelId: deps.channelId,
+          botId: bot.id,
+          key: candidate,
+          text: answer,
+        })) {
+          claimed = true;
+          break;
+        }
+      }
       if (!claimed) {
         logger.info?.(`[dsh-chat-feishu] 卡片回调没有匹配的待审批（${bot.id} ${operatorId}）`);
         return { toast: { type: 'info', content: '这次授权已经处理过了。' } };
