@@ -2286,7 +2286,7 @@ test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义
   assert.equal(panelPick('other_pick', ['x']), null, '不是面板下拉就返回 null（别把别人的回调当自己的）');
 });
 
-test('控制面板：再次 /menu 复用同一张卡，不再堆新卡（聊天里多张卡片会让人以为"变回去了"）', async () => {
+test('控制面板：手打 /menu 每次新发一张卡（复用老卡 = 聊天里一条新消息都没有）', async () => {
   const panel = makePanelStub();
   const commands = {
     async handle(request) {
@@ -2301,15 +2301,19 @@ test('控制面板：再次 /menu 复用同一张卡，不再堆新卡（聊天�
     await app.bridge.accept(messageEvent({ messageId: 'om_m1', text: '/menu' }));
     assert.equal(app.gateway.calls.cards.length, 1, '第一次 /menu 发一张');
 
-    // 第二次 /menu：同一会话已有面板卡 → 应就地更新它，而不是再发一张。
+    /**
+     * 第二次 /menu：**要新发一张**。
+     *
+     * 曾经这里复用了本会话记住的那张卡并 patch 它——真机上的后果是：卡片滚到上面看不见之后，
+     * 用户再发 /menu 时聊天底部**一条新消息都没有**（卡片确实在历史里被就地更新了），
+     * 看起来就是"发 /menu 没反应、连卡片都不给了"。
+     */
     await app.bridge.accept(messageEvent({ messageId: 'om_m2', text: '/menu' }));
-    assert.equal(app.gateway.calls.cards.length, 1, '不该堆第二张卡');
-    const patched = app.gateway.calls.patches.at(-1);
-    // 假 gateway 的 sendCard 固定回 om_card：记住的应是"发出去那张"的 id。
-    assert.equal(patched.messageId, 'om_card', '更新的是先前那张卡');
+    assert.equal(app.gateway.calls.cards.length, 2, '手打 /menu 要在聊天底部新发一张');
+    assert.equal(app.gateway.calls.patches.length, 0, '不能偷偷 patch 那张可能已经滚走的老卡');
 
     // 标题带渲染时间：多张卡时"哪张最新"一眼可辨。
-    const title = app.gateway.calls.patches.at(-1).card.header.title.content;
+    const title = app.gateway.calls.cards.at(-1).card.header.title.content;
     assert.match(title, /^机器人控制面板 · \d{2}:\d{2}:\d{2}$/);
   } finally {
     await app.cleanup();

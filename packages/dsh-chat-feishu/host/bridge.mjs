@@ -442,6 +442,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         if (command.panel && message.chat_id) {
           const sent = await renderPanel({
             chatId: message.chat_id, key: conversationKey, panel: command.panel, source: 'menu',
+            // 手打 /menu：新发一张，别把老卡（可能已经滚到看不到的地方）当成回应。
+            fresh: true,
           });
           if (sent) {
             lastHandledAt = new Date().toISOString();
@@ -774,15 +776,23 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    */
   async function renderPanel({
     chatId, key = null, messageId = null, panel, last = null, source = 'unknown', token = null,
+    fresh = false,
   }) {
     // 标题带上本次渲染时间：聊天里可能有多张面板卡（旧卡、重启前的卡），
     // "哪张是刚更新的"必须一眼可辨，否则用户会以为卡片"变回去了"。
     const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
     /** 三条路都失败才算渲染失败：中间失败有兜底，不该把状态页写成"出错了"。 */
     const renderErrors = [];
-    // 用户交互总是优先更新"他点的那张"；`/menu` 之类没有具体卡片时，复用本会话记住的那张。
+    /**
+     * 目标消息的挑选，按"谁发起"分两种：
+     *
+     * - **手打 `/menu`（`fresh`）→ 新发一张**。用户刚发了一条消息，就期待下面出现回应；
+     *   复用并 patch 上面那张老卡会让聊天里**一条新消息都没有**，真机上就是"发 /menu 没反应"
+     *   （卡片其实在历史里被就地更新了）。
+     * - **卡片交互 → 更新被点的那张**（有 `messageId`）；回调没带 messageId 时退回复用本会话记住的那张。
+     */
     const known = key ? panelCards.get(key) : null;
-    const targets = [messageId, messageId ? null : known].filter(Boolean);
+    const targets = fresh ? [] : [messageId, messageId ? null : known].filter(Boolean);
     // 每次渲染都留痕：卡上"停在哪一次更新"与日志能对上（排查"卡片被回滚"这类问题时唯一现场）。
     logger.info?.(`[dsh-chat-feishu] 渲染控制面板 source=${source}`
       + ` key=${key ?? '无'} 目标=${targets[0] ?? '新发'} token=${token ? '有' : '无'}`

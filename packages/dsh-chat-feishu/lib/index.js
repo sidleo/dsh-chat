@@ -127550,7 +127550,9 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
             chatId: message.chat_id,
             key: conversationKey,
             panel: command.panel,
-            source: "menu"
+            source: "menu",
+            // 手打 /menu：新发一张，别把老卡（可能已经滚到看不到的地方）当成回应。
+            fresh: true
           });
           if (sent) {
             lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -127799,12 +127801,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     panel,
     last = null,
     source = "unknown",
-    token = null
+    token = null,
+    fresh = false
   }) {
     const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
     const renderErrors = [];
     const known = key ? panelCards.get(key) : null;
-    const targets = [messageId, messageId ? null : known].filter(Boolean);
+    const targets = fresh ? [] : [messageId, messageId ? null : known].filter(Boolean);
     logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} key=${key ?? "\u65E0"} \u76EE\u6807=${targets[0] ?? "\u65B0\u53D1"} token=${token ? "\u6709" : "\u65E0"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
     if (token && messageId) {
       const updated = await gateway.updateCard({ token, card }).then(() => true).catch((error) => {
