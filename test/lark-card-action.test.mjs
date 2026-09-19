@@ -147,3 +147,44 @@ test('卡片控件：单选给按钮、多选给复选框+提交、自由文本�
   assert.match(done, /"expanded":false/, '全部答完默认收起');
   assert.match(done, /❓ 3\/3 已回答/, '提问容器标题简化为 N/M 已回答');
 });
+
+test('归一化：下拉（select_static）选中的值三种形态都要认', () => {
+  // ① 单选下拉：Card 2.0 的 behaviors.callback 回调，选中值在 action.option。
+  const single = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'select_static', name: 'model_pick', option: 'deepseek/deepseek-v4', value: { action: 'model_pick' } },
+    context: { open_chat_id: 'oc_chat', open_message_id: 'om_card' },
+  });
+  assert.deepEqual(single.action.options, ['deepseek/deepseek-v4']);
+  assert.deepEqual(single.action.value, { action: 'model_pick' });
+
+  // ② 多选：数组或逗号串（官方 Card 2.0 现在给的是逗号串）。
+  const multi = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'multi_select_static', name: 'watch_add', options: ['a', 'b'] },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(multi.action.options, ['a', 'b']);
+  const comma = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'multi_select_static', name: 'watch_add', options: 'a, b ,a' },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(comma.action.options, ['a', 'b'], '逗号串要去空去重');
+
+  // ③ 有的版本塞进 form_value[组件名]（可能是 { value } 包装）。
+  const inForm = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'select_static', name: 'workspace_pick', form_value: { workspace_pick: { value: '/tmp/ws' } } },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(inForm.action.options, ['/tmp/ws']);
+
+  // 没有任何取值时是空数组，而不是 undefined（调用方少一处判空）。
+  const none = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'button', value: { dsh: 'answer' } },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(none.action.options, []);
+});

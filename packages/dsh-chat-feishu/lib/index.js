@@ -127253,12 +127253,10 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       if (!text) return;
     }
     if (text) {
-      const commandAccess = deps.accessPolicy.evaluateAccess({
-        policy: accessPolicy,
+      const commandAccess = commandAccessFor({
+        senderId,
         conversationType,
-        senderIds: [senderId],
-        isCommand: true,
-        isOwner: isOwner(deps.accessPolicy, bot, senderId)
+        accessPolicy
       });
       if (!commandAccess.allowed && text.startsWith("/")) {
         logger.info?.(`[dsh-chat-feishu] \u547D\u4EE4\u88AB\u62D2\u7EDD\uFF1A${bot.id} sender=${senderId}\uFF08${commandAccess.reason}\uFF09`);
@@ -127510,6 +127508,22 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
     });
     return result?.menu?.length ? result.menu : [];
   }
+  function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
+    const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
+    return deps.accessPolicy.evaluateAccess({
+      policy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: true,
+      isOwner: isOwner(deps.accessPolicy, bot, senderId)
+    });
+  }
+  function conversationForCard(chatId, operatorId) {
+    const groupKey = `group:${chatId}`;
+    const bound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
+    const conversationType = bound ? "group" : "direct";
+    return { conversationType, key: conversationType === "group" ? groupKey : `p2p:${operatorId}` };
+  }
   async function handleCardAction(event) {
     const value = event?.action?.value ?? {};
     const operatorId = event?.operator?.openId;
@@ -127518,10 +127532,23 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
       logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u7F3A\u5C11\u4F1A\u8BDD\u6216\u64CD\u4F5C\u8005\uFF0C\u65E0\u6CD5\u8BA4\u9886\uFF08chatId=${chatId ?? "\u65E0"} operator=${operatorId ?? "\u65E0"}\uFF09`);
       return void 0;
     }
+    const { conversationType, key } = conversationForCard(chatId, operatorId);
+    const isInteractionResponse = value.dsh === "answer" || value.dsh === "approval";
+    if (!isInteractionResponse) {
+      const commandAccess = commandAccessFor({ senderId: operatorId, conversationType });
+      if (!commandAccess.allowed) {
+        logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u52A8\u4F5C\u88AB\u547D\u4EE4\u95E8\u7981\u62D2\u7EDD\uFF1A${bot.id} sender=${operatorId}\uFF08${commandAccess.reason}\uFF09`);
+        if (event.messageId) {
+          await gateway.replyText({
+            messageId: event.messageId,
+            text: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002"
+          }).catch(() => {
+          });
+        }
+        return { toast: { type: "error", content: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002" } };
+      }
+    }
     if (typeof value.dsh_menu === "string" && value.dsh_menu.startsWith("/")) {
-      const groupKey = `group:${chatId}`;
-      const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey) ? "group" : "direct";
-      const key = conversationType === "group" ? groupKey : `p2p:${operatorId}`;
       const commandContext = {
         channelId: deps.channelId,
         botId: bot.id,
@@ -127831,6 +127858,27 @@ var FILE_TYPES = new Map(Object.entries({
   ppt: "ppt",
   pptx: "ppt"
 }));
+function normalizeOptionValues(value) {
+  const flat = [];
+  const push = (item) => {
+    if (typeof item === "string") {
+      for (const part of item.split(",")) {
+        const text = part.trim();
+        if (text) flat.push(text);
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const entry of item) push(entry);
+      return;
+    }
+    if (item !== null && typeof item === "object") {
+      if (item.value !== void 0) push(item.value);
+    }
+  };
+  push(value);
+  return [...new Set(flat)];
+}
 function normalizeCardAction(raw) {
   if (raw === null || typeof raw !== "object") return null;
   const context = raw.context ?? {};
@@ -127849,6 +127897,16 @@ function normalizeCardAction(raw) {
       value: action.value ?? {},
       // 表单（form）内组件的值在这里：action.form_value[组件name]。
       formValue: action.form_value ?? action.formValue ?? {},
+      /**
+       * 下拉（`select_static`）选中的值：单选在 `action.option`，多选在 `action.options`。
+       * 卡片上的下拉靠 `behaviors.callback` 直接回调，选中值就落在这两个字段里——
+       * 漏了它们，用户点下拉就是"没反应"（而这在真机上是静默的）。
+       */
+      options: Object.freeze(normalizeOptionValues([
+        action.option,
+        action.options,
+        (action.form_value ?? action.formValue ?? {})[action.name]
+      ].filter((item) => item !== void 0))),
       ...action.name === void 0 ? {} : { name: action.name }
     }),
     raw

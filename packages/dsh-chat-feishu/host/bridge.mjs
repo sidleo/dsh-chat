@@ -355,12 +355,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
 
     // 命令优先：命令不进入模型、也不做上下文增强（图片消息没有文本，直接跳过）。
     if (text) {
-      const commandAccess = deps.accessPolicy.evaluateAccess({
-        policy: accessPolicy,
+      const commandAccess = commandAccessFor({
+        senderId,
         conversationType,
-        senderIds: [senderId],
-        isCommand: true,
-        isOwner: isOwner(deps.accessPolicy, bot, senderId),
+        accessPolicy,
       });
       if (!commandAccess.allowed && text.startsWith('/')) {
         logger.info?.(`[dsh-chat-feishu] 命令被拒绝：${bot.id} sender=${senderId}（${commandAccess.reason}）`);
@@ -678,6 +676,39 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
+   * 命令权限判定：**手打文字与卡片动作共用同一条**。
+   *
+   * 为什么要共用（真机上的洞）：一开始只有"手打文字"这条路过了门禁，卡片按钮直接执行命令
+   * ——群聊里任何能看到卡片的人点一下按钮就能跑命令，绕过了命令权限。卡片上的每个动作
+   * 与手打同权，这是 dsh-im 的做法（`evaluateInboundAccess(..., isCommand: true)`）。
+   *
+   * @param options - { senderId, conversationType, accessPolicy }。
+   *   `accessPolicy` 由调用方先读过时可直接传入，省一次读盘。
+   */
+  function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
+    const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
+    return deps.accessPolicy.evaluateAccess({
+      policy,
+      conversationType,
+      senderIds: [senderId],
+      isCommand: true,
+      isOwner: isOwner(deps.accessPolicy, bot, senderId),
+    });
+  }
+
+  /**
+   * 卡片动作属于哪个会话（群还是私聊）以及会话键。
+   *
+   * 与手打消息同一套判定：以已有的会话绑定为准（群里没有绑定时按群处理——卡片本来就在群里）。
+   */
+  function conversationForCard(chatId, operatorId) {
+    const groupKey = `group:${chatId}`;
+    const bound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
+    const conversationType = bound ? 'group' : 'direct';
+    return { conversationType, key: conversationType === 'group' ? groupKey : `p2p:${operatorId}` };
+  }
+
+  /**
    * 处理一次卡片点击：把按钮里的答案交给 hub 的交互服务认领。
    *
    * 与"用户手打文字"共用同一条认领路径（`offer`），所以按钮与文本不会有两套行为。
@@ -697,13 +728,32 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return undefined;
     }
 
+    const { conversationType, key } = conversationForCard(chatId, operatorId);
+
+    /**
+     * 门禁：卡片动作等同于命令，先判权限再动手。
+     *
+     * 提问/审批按钮是"人在环回传"，不是命令（dsh-im 同样把它们排除在外）——
+     * 它们本来只对已经进得来的消息负责，加命令门禁反而会让提问卡点不动。
+     */
+    const isInteractionResponse = value.dsh === 'answer' || value.dsh === 'approval';
+    if (!isInteractionResponse) {
+      const commandAccess = commandAccessFor({ senderId: operatorId, conversationType });
+      if (!commandAccess.allowed) {
+        logger.warn?.(`[dsh-chat-feishu] 卡片动作被命令门禁拒绝：${bot.id}`
+          + ` sender=${operatorId}（${commandAccess.reason}）`);
+        if (event.messageId) {
+          await gateway.replyText({
+            messageId: event.messageId,
+            text: '你没有执行机器人命令的权限。',
+          }).catch(() => {});
+        }
+        return { toast: { type: 'error', content: '你没有执行机器人命令的权限。' } };
+      }
+    }
+
     // 菜单卡片：按钮里带的是命令行，走与"用户手打"同一条路径。
     if (typeof value.dsh_menu === 'string' && value.dsh_menu.startsWith('/')) {
-      const groupKey = `group:${chatId}`;
-      // 这个会话是群还是私聊：以已有的会话绑定为准（没有绑定时按私聊处理）。
-      const conversationType = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey)
-        ? 'group' : 'direct';
-      const key = conversationType === 'group' ? groupKey : `p2p:${operatorId}`;
       const commandContext = {
         channelId: deps.channelId,
         botId: bot.id,

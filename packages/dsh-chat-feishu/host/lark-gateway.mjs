@@ -44,6 +44,41 @@ const FILE_TYPES = new Map(Object.entries({
 }));
 
 /**
+ * 归一化下拉/多选控件的取值。
+ *
+ * 飞书这套字段在不同 SDK 版本与不同控件上形态都不一样，真机上全见过：
+ * 单选下拉给字符串（`action.option`）、多选给数组或**逗号串**（`action.options`）、
+ * 有的版本把它塞进 `form_value[组件名]`，还有的给 `{ value }` 对象。
+ * 少认一种，用户点了下拉就"没反应"——而这类失败在真机上是静默的，所以这里全部认。
+ *
+ * @param value - 任意形态。
+ * @returns 字符串数组（已去空、去重）。
+ */
+export function normalizeOptionValues(value) {
+  const flat = [];
+  const push = (item) => {
+    if (typeof item === 'string') {
+      // 逗号串（Card 2.0 的多选就是这个形状）。
+      for (const part of item.split(',')) {
+        const text = part.trim();
+        if (text) flat.push(text);
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const entry of item) push(entry);
+      return;
+    }
+    if (item !== null && typeof item === 'object') {
+      // `{ value }` / `{ text, value }` 这类包装。
+      if (item.value !== undefined) push(item.value);
+    }
+  };
+  push(value);
+  return [...new Set(flat)];
+}
+
+/**
  * 把飞书卡片回调归一化成一种形状。
  *
  * 为什么必须做：我们注册在**裸 EventDispatcher** 上，拿到的是原始回调体
@@ -74,6 +109,16 @@ export function normalizeCardAction(raw) {
       value: action.value ?? {},
       // 表单（form）内组件的值在这里：action.form_value[组件name]。
       formValue: action.form_value ?? action.formValue ?? {},
+      /**
+       * 下拉（`select_static`）选中的值：单选在 `action.option`，多选在 `action.options`。
+       * 卡片上的下拉靠 `behaviors.callback` 直接回调，选中值就落在这两个字段里——
+       * 漏了它们，用户点下拉就是"没反应"（而这在真机上是静默的）。
+       */
+      options: Object.freeze(normalizeOptionValues([
+        action.option,
+        action.options,
+        (action.form_value ?? action.formValue ?? {})[action.name],
+      ].filter((item) => item !== undefined))),
       ...(action.name === undefined ? {} : { name: action.name }),
     }),
     raw,

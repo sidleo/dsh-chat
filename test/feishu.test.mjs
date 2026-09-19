@@ -1958,3 +1958,54 @@ test('菜单卡片：命令一个都不能少（曾经 slice(0,12) 把后半截�
     await app.cleanup();
   }
 });
+
+/** 只有名单里的 ou_listed 能执行命令；其余人连卡片按钮都不许点。 */
+const restrictCommands = {
+  direct: { mode: 'open', open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+  group: { mode: 'open', open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] }, allowlist: { users: [] } },
+};
+
+test('卡片动作过命令门禁：非授权者点菜单按钮不执行命令（此前是个洞）', async () => {
+  const calls = [];
+  const commands = {
+    async handle(request) {
+      calls.push(request.text);
+      return { handled: true, reply: '不该走到这里' };
+    },
+  };
+  const app = await makeBridge({ commands, policy: restrictCommands });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_menu',
+      operator: { openId: 'ou_other' },
+      action: { tag: 'button', value: { dsh_menu: '/whoami' } },
+    });
+
+    assert.deepEqual(calls, [], '命令一次都不该执行');
+    assert.equal(app.gateway.calls.patches.length, 0, '卡片不该被更新');
+    assert.equal(answer.toast.type, 'error');
+    assert.match(answer.toast.content, /权限/);
+    assert.match(app.gateway.calls.replies.at(-1)?.text ?? '', /权限/, '群里要留一条可见的拒绝');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('提问/审批按钮不走命令门禁：它们是交互回传，受限策略下照样能点', async () => {
+  const app = await makeBridge({ policy: restrictCommands });
+  try {
+    app.interactions.claimed = true;
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_q',
+      operator: { openId: 'ou_other' },
+      action: { tag: 'button', value: { dsh: 'answer', questionId: 'q1', label: '选项一', index: '1' } },
+    });
+    assert.ok(answer, '应该被认领而不是被门禁拒掉');
+    assert.equal(answer.toast.type, 'success');
+    assert.equal(app.gateway.calls.replies.length, 0, '不该出现"没有权限"的回复');
+  } finally {
+    await app.cleanup();
+  }
+});
