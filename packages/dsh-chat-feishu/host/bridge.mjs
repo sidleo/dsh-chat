@@ -10,6 +10,7 @@
 import { stat } from 'node:fs/promises';
 
 import { createTurnPresenter } from './turn-presenter.mjs';
+import { panelButton, panelCard, panelPick } from './panel-card.mjs';
 
 /** 交付文件的单文件上限（与主动投递一致：飞书上传超过这个量既慢又容易失败）。 */
 const MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
@@ -384,6 +385,18 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         return null;
       });
       if (command?.handled) {
+        /**
+         * 控制面板优先：`/menu` 在飞书发的是**可交互卡**（下拉直接选模型/推理/预设/工作区），
+         * 发不出去再退回命令清单卡，最后退回文本——一层层退，绝不静默。
+         */
+        if (command.panel && message.chat_id) {
+          const sent = await renderPanel({ chatId: message.chat_id, panel: command.panel });
+          if (sent) {
+            lastHandledAt = new Date().toISOString();
+            await clearWorking(message, workingReaction);
+            return;
+          }
+        }
         if (command.menu?.length && message.chat_id) {
           try {
             await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
@@ -654,6 +667,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
       elements.push({ tag: 'action', actions: buttons.slice(index, index + MENU_ROW_SIZE) });
     }
+    // 从控制面板点「命令清单」进来时，卡上要有一条回去的路（否则用户只能重发 /menu）。
+    elements.push({
+      tag: 'action',
+      actions: [{
+        tag: 'button',
+        type: 'primary',
+        text: { tag: 'plain_text', content: '⬅ 返回控制面板' },
+        value: { dsh_panel: 'panel' },
+      }],
+    });
     return {
       config: { wide_screen_mode: true },
       header: { template: 'blue', title: { tag: 'plain_text', content: '机器人菜单' } },
@@ -673,6 +696,39 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return null;
     });
     return result?.menu?.length ? result.menu : [];
+  }
+
+  /** 读一次控制面板状态；拿不到就返回 null（调用方退回命令清单/文本）。 */
+  async function readPanel(context) {
+    if (typeof deps.panel?.read !== 'function') return null;
+    return deps.panel.read({
+      channelId: deps.channelId, botId: bot.id, key: context.key,
+    }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] 读取控制面板失败：${error?.message ?? error}`);
+      return null;
+    });
+  }
+
+  /**
+   * 画一次控制面板：优先就地更新（`messageId`），否则新发一张。
+   *
+   * 失败一定留痕：patch 失败先 warn，再尝试新发；新发也失败就返回 false，
+   * 由调用方退回文本（"点了没反应"是本项目最怕的故障形态）。
+   */
+  async function renderPanel({ chatId, messageId = null, panel, last = null }) {
+    const card = panelCard(panel, { last });
+    if (messageId) {
+      const patched = await gateway.patchCard({ messageId, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败，改为新发一张：${error?.message ?? error}`);
+        return false;
+      });
+      if (patched) return true;
+    }
+    const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] 控制面板发送失败：${error?.message ?? error}`);
+      return false;
+    });
+    return sent;
   }
 
   /**
@@ -752,24 +808,115 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       }
     }
 
+    // 控制面板：一个共用上下文（读状态、应用选择、重画卡片、执行命令都用它）。
+    const panelContext = {
+      channelId: deps.channelId, botId: bot.id, key, conversationType,
+    };
+    const commandContext = {
+      ...panelContext,
+      senderId: operatorId,
+      isOwner: isOwner(deps.accessPolicy, bot, operatorId),
+      botLabel: bot.botName ?? bot.id,
+      channelLabel: '飞书',
+    };
+    /** 重画控制面板：读最新状态，并把"上一次做了什么、结果如何"画上去。 */
+    async function repaintPanel(last = null) {
+      const state = await readPanel(commandContext);
+      if (!state) return false;
+      return renderPanel({
+        chatId, messageId: event.messageId ?? null, panel: state, last,
+      });
+    }
+
+    /**
+     * 下拉（select_static）：`behaviors.callback` 直接回调，选中值在 `event.action.options`。
+     *
+     * 这是这次改造的核心：选完立即生效并把同一张卡片重画（成功 ✅、失败 ❌ 带原因），
+     * 不需要再点提交、也不需要用户记命令。
+     */
+    const pick = panelPick(value.action, event?.action?.options);
+    if (pick) {
+      try {
+        const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
+        const message = applied?.message ?? '已生效。';
+        await repaintPanel({ label: pick.label, message, ok: true });
+        return { toast: { type: 'success', content: message.slice(0, 80) } };
+      } catch (error) {
+        // 失败必须可见：日志 + 卡片上的 ❌ 一行 + 错误 toast。
+        logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（${pick.field}=${pick.value}）：`
+          + `${error?.message ?? error}`);
+        const message = error?.message ?? String(error);
+        await repaintPanel({ label: pick.label, message, ok: false });
+        return { toast: { type: 'error', content: message.slice(0, 80) } };
+      }
+    }
+
+    /**
+     * 面板按钮：新会话就地生效并重画；命令清单切到命令卡（卡上有「返回控制面板」）；
+     * 状态/停止复用命令行，输出画回面板。
+     */
+    let fromPanel = false;
+    if (typeof value.dsh_panel === 'string') {
+      const action = panelButton(value.dsh_panel);
+      if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
+      if (action.panel) {
+        await repaintPanel(null);
+        return { toast: { type: 'info', content: '已回到控制面板' } };
+      }
+      if (action.menu) {
+        const items = await menuItemsFor(commandContext);
+        if (items.length > 0 && event.messageId) {
+          const patched = await gateway.patchCard({
+            messageId: event.messageId, card: menuCard(items),
+          }).then(() => true).catch((error) => {
+            logger.warn?.(`[dsh-chat-feishu] 命令清单就地更新失败：${error?.message ?? error}`);
+            return false;
+          });
+          if (patched) return { toast: { type: 'info', content: '已切到命令清单' } };
+        }
+        value.dsh_menu = '/help';
+        fromPanel = true;
+      } else {
+        // 新会话：直接调面板（面板里它就是 field=session），不必绕命令行。
+        if (action.field === 'session') {
+          try {
+            const applied = await deps.panel.apply({ ...panelContext, field: 'session', value: action.value });
+            const message = applied?.message ?? '已生效。';
+            await repaintPanel({ label: action.label, message, ok: true });
+            return { toast: { type: 'success', content: message.slice(0, 80) } };
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（session=new）：${error?.message ?? error}`);
+            const message = error?.message ?? String(error);
+            await repaintPanel({ label: action.label, message, ok: false });
+            return { toast: { type: 'error', content: message.slice(0, 80) } };
+          }
+        }
+        value.dsh_menu = action.command;
+        fromPanel = true;
+      }
+    }
+
     // 菜单卡片：按钮里带的是命令行，走与"用户手打"同一条路径。
     if (typeof value.dsh_menu === 'string' && value.dsh_menu.startsWith('/')) {
-      const commandContext = {
-        channelId: deps.channelId,
-        botId: bot.id,
-        key,
-        conversationType,
-        senderId: operatorId,
-        isOwner: isOwner(deps.accessPolicy, bot, operatorId),
-        botLabel: bot.botName ?? bot.id,
-        channelLabel: '飞书',
-      };
       const command = await deps.commands?.handle?.({ ...commandContext, text: value.dsh_menu })
         .catch((error) => {
           logger.warn?.(`[dsh-chat-feishu] 菜单命令失败：${error?.message ?? error}`);
           return null;
         });
       if (!command?.handled) return { toast: { type: 'error', content: '命令没有执行。' } };
+      /**
+       * 从控制面板点进来的命令（状态/停止）：输出画回**面板**，不把面板换成命令卡——
+       * 用户的上下文是"我在面板上调设置"，不该被一次查询打断。
+       */
+      if (fromPanel) {
+        const reply = String(command.reply ?? '');
+        const painted = await repaintPanel({
+          label: value.dsh_menu,
+          message: reply || '（没有输出）',
+          ok: !reply.startsWith('命令执行失败'),
+        });
+        if (painted) return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
+      }
       // 就地更新：把"点了哪个命令 + 输出"画回同一张卡片，按钮保持可用。
       // 取不到卡片 messageId 时退回原路（回文字），行为不变。
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);

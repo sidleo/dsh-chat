@@ -214,6 +214,7 @@ async function makeBridge({
   askResult = { text: '最终答案', reason: { kind: 'completed' }, tools: [] },
   onAsk = () => {},
   commands = null,
+  panel = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -256,6 +257,7 @@ async function makeBridge({
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     ...(commands ? { commands } : {}),
+    ...(panel ? { panel } : {}),
     sessions: {
       ensure: async ({ key }) => ({ sessionId: `session-${key}`, created: false }),
       uploadFile: async (options) => {
@@ -1947,13 +1949,22 @@ test('菜单卡片：命令一个都不能少（曾经 slice(0,12) 把后半截�
     assert.ok(card, '要发一张菜单卡片');
 
     const rows = card.elements.filter((element) => element.tag === 'action');
-    const commands2 = rows.flatMap((row) => row.actions.map((button) => button.value.dsh_menu));
-    assert.deepEqual(commands2, names.map((name) => `/${name}`), '每个命令都要有按钮，且顺序不变');
+    const commandButtons = rows.flatMap((row) => row.actions)
+      .filter((button) => typeof button.value?.dsh_menu === 'string');
+    assert.deepEqual(
+      commandButtons.map((button) => button.value.dsh_menu),
+      names.map((name) => `/${name}`),
+      '每个命令都要有按钮，且顺序不变',
+    );
     assert.ok(rows.length > 1, '命令多的时候要分行，而不是截断');
+    // 除最后那条"返回控制面板"外，每行不超过 6 个命令按钮。
     assert.ok(rows.every((row) => row.actions.length > 0 && row.actions.length <= 6), '每行不超过 6 个');
-    // 每个按钮都要带命令行本身（点它等于手打）。
-    assert.ok(rows.every((row) => row.actions.every((button) => button.tag === 'button'
-      && button.value.dsh_menu.startsWith('/'))));
+    // 每个命令按钮都要带命令行本身（点它等于手打）。
+    assert.ok(commandButtons.every((button) => button.tag === 'button'
+      && button.value.dsh_menu.startsWith('/')));
+    // 从控制面板点进来的用户要能回去。
+    assert.ok(rows.flatMap((row) => row.actions).some((button) => button.value?.dsh_panel === 'panel'),
+      '命令清单卡上要有「返回控制面板」');
   } finally {
     await app.cleanup();
   }
@@ -2008,4 +2019,211 @@ test('提问/审批按钮不走命令门禁：它们是交互回传，受限策�
   } finally {
     await app.cleanup();
   }
+});
+
+/** 控制面板桩：状态可改，apply 记录调用并按需失败。 */
+function makePanelStub({ fail = null } = {}) {
+  const applied = [];
+  const state = {
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' },
+      options: [
+        { value: 'deepseek/deepseek-v4.1-flash', provider: 'deepseek', model: 'deepseek-v4.1-flash' },
+        { value: 'anthropic/claude-x', provider: 'anthropic', model: 'claude-x' },
+      ],
+      efforts: [{ id: 'low', label: '低' }, { id: 'high', label: '高' }],
+      currentEffort: 'low',
+    },
+    preset: { current: null, options: [{ id: 'standard' }] },
+    workspace: { current: '/ws/a', options: ['/ws/a', '/ws/b'] },
+  };
+  return {
+    applied,
+    async read() {
+      return state;
+    },
+    async apply({ field, value }) {
+      applied.push({ field, value });
+      if (fail && fail.field === field) throw Object.assign(new Error(fail.message), { code: fail.code });
+      return { field, value, message: `已应用 ${field}=${value}` };
+    },
+  };
+}
+
+test('控制面板：/menu 发可交互卡（下拉直接选，选完立即生效并就地重画）', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令：…', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      return { handled: true, reply: 'x' };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    await app.bridge.accept(messageEvent({ text: '/menu' }));
+    const card = JSON.stringify(app.gateway.calls.cards.at(-1)?.card);
+    assert.match(card, /机器人控制面板/);
+    assert.match(card, /select_static/, '要有下拉，而不是只有命令按钮');
+    assert.match(card, /model_pick/);
+    assert.match(card, /"depth"|"initial_index"/);
+
+    // 下拉回调：选中值在 action.options（网关归一化的字段名）。
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
+    });
+    assert.deepEqual(panel.applied, [{ field: 'model', value: 'anthropic/claude-x' }]);
+    assert.equal(answer.toast.type, 'success');
+    assert.match(answer.toast.content, /claude-x/);
+
+    const patched = app.gateway.calls.patches.at(-1);
+    assert.equal(patched.messageId, 'om_panel', '要重画被操作的那张卡片');
+    assert.match(JSON.stringify(patched.card), /✅/, '卡上要留下"刚做了什么、结果如何"');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板：应用失败就地写明原因（❌），并且不假装成功', async () => {
+  const panel = makePanelStub({
+    fail: { field: 'workspace', code: 'chat/workspace-invalid', message: '目录不存在或读不到：/ws/nope' },
+  });
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'workspace_pick', options: '/ws/nope', value: { action: 'workspace_pick' } },
+    });
+    assert.equal(answer.toast.type, 'error');
+    const card = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
+    assert.match(card, /❌/);
+    assert.match(card, /目录不存在/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板：无会话时选模型 → 面板自己说清楚要先建会话', async () => {
+  const panel = makePanelStub({
+    fail: { field: 'model', code: 'chat/no-session', message: '当前聊天还没有会话：先发一条消息。' },
+  });
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: 'deepseek/deepseek-v4.1-flash', value: { action: 'model_pick' } },
+    });
+    assert.equal(answer.toast.type, 'error');
+    assert.match(answer.toast.content, /还没有会话/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状态画回面板', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      if (request.text === '/status') return { handled: true, reply: '渠道：飞书' };
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    // 新会话：直接调面板（field=session），不绕命令行。
+    const fresh = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'new' } },
+    });
+    assert.deepEqual(panel.applied, [{ field: 'session', value: 'new' }]);
+    assert.equal(fresh.toast.type, 'success');
+    assert.match(JSON.stringify(app.gateway.calls.patches.at(-1)?.card), /机器人控制面板/);
+
+    // 命令清单：切成命令卡，卡上有返回控制面板的按钮。
+    const list = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'commands' } },
+    });
+    assert.equal(list.toast.type, 'info');
+    const listCard = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
+    assert.match(listCard, /机器人菜单/);
+    assert.match(listCard, /返回控制面板/);
+
+    // 状态：命令输出画回面板（不把面板换成命令卡）。
+    const status = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'status' } },
+    });
+    assert.equal(status.toast.type, 'success');
+    const statusCard = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
+    assert.match(statusCard, /机器人控制面板/);
+    assert.match(statusCard, /渠道：飞书/);
+
+    // 返回面板。
+    const back = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'panel' } },
+    });
+    assert.equal(back.toast.type, 'info');
+    assert.match(JSON.stringify(app.gateway.calls.patches.at(-1)?.card), /机器人控制面板/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.selected（230099 的坑）', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current: { provider: 'deepseek', model: 'flash', reasoningEffort: 'high' },
+      options: [
+        { value: 'deepseek/flash', model: 'flash' },
+        { value: 'anthropic/claude-x', model: 'claude-x' },
+      ],
+      efforts: [{ id: 'low', label: '低' }, { id: 'high', label: '高' }],
+      currentEffort: 'high',
+    },
+    preset: { current: 'standard', options: [{ id: 'standard' }, { id: 'yh-olap' }] },
+    workspace: { current: '/ws/b', options: ['/ws/a', '/ws/b'] },
+  });
+
+  const picks = card.body.elements.filter((el) => el.tag === 'select_static');
+  const byName = Object.fromEntries(picks.map((el) => [el.name, el]));
+  assert.equal(byName.model_pick.initial_index, 1, '第一个选项 = 1（不是 0）');
+  assert.equal(byName.reasoning_pick.initial_index, 3, '高 是第 3 项：默认 + 低 + 高');
+  assert.equal(byName.preset_pick.initial_index, 2, '当前预设 standard 是第 2 项（第 1 项是「跟随 Host 默认」）');
+  assert.equal(byName.workspace_pick.initial_index, 2);
+  assert.ok(picks.every((el) => el.options.every((option) => option.selected === undefined)),
+    'options 上不能有 selected（会 230099）');
+  // 当前值要有 ✓ 标记，用户一眼看到现在是什么。
+  assert.match(byName.model_pick.options[0].text.content, /^✓ /);
+});
+
+test('控制面板卡：没有会话时不放下拉，直接说明要先建会话', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = panelCard({
+    bound: false,
+    sessionId: null,
+    model: { current: null, options: [{ value: 'deepseek/flash', model: 'flash' }], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  });
+  const names = card.body.elements.filter((el) => el.tag === 'select_static').map((el) => el.name);
+  assert.ok(!names.includes('model_pick'), '没有会话时不给模型下拉（点了也改不了）');
+  assert.match(JSON.stringify(card), /先在这里发一条消息/);
 });

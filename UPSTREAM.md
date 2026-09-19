@@ -28,6 +28,18 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 
 移植进来的文件必须在文件头写明来源与 MIT 许可，并在 `THIRD_PARTY_NOTICES.md` 登记。
 
+## 参考过的具体实现（逐条对照）
+
+| 本仓库 | dsh-im 出处 | 对照点 |
+|---|---|---|
+| `packages/dsh-chat-feishu/host/panel-card.mjs` | `src/channels/feishu/feishu-cards.mjs` 的 `menuCard` / `modelCard` / `button` / `initialIndex`（commit `34a370b`） | 可交互控制卡：`schema:'2.0'` + `select_static` + `behaviors:[{type:'callback',value:{action}}]` 让下拉选中即回调；`initial_index` 是 **1 起**、`options` 上不能写 `selected`（会报 230099）——这两条都是他们踩出来的 |
+| 同上 | `src/channels/feishu/bridge.mjs` 的 `onCardAction`（`_pick` 归一化） | 单选值在 `action.option`、多选在 `action.options`（可能是逗号串）、有的版本在 `form_value[组件名]`；我们把三种都归一化进 `action.options` |
+| `bridge.mjs` 的 `commandAccessFor` | 同上 `evaluateInboundAccess(..., isCommand: true)` | **卡片动作与手打同一条命令门禁**；提问/审批按钮是交互回传、不走命令门禁 |
+| `packages/dsh-chat/host/panel.mjs` | `bridge.mjs` 的 `#handleModelSelect` / `#switchWorkspace` / `#bindSession` | 语义分层：模型/推理是会话级、工作区/预设是机器人级（只对新会话生效） |
+
+不移植的部分：dsh-im 用内存 `#cardKeys`（messageId → 会话）做路由，重启后旧卡提示"菜单已过期，
+请回复 /m 重开"；我们从回调里的 chatId + operator 反推会话键，**重启后卡片仍可用**。
+
 ## 行为比对流程
 
 同一批机器人凭据与同一批数据目录可以同时被两边读取（但**不能同时运行**）。

@@ -11875,9 +11875,9 @@ var init_InterceptorManager = __esm({
         syncHandlerEntries(this, internals);
         internals.iterationDepth++;
         try {
-          utils_default.forEach(this.handlers, function forEachHandler(h) {
-            if (h !== null) {
-              fn(h);
+          utils_default.forEach(this.handlers, function forEachHandler(h2) {
+            if (h2 !== null) {
+              fn(h2);
             }
           });
         } finally {
@@ -12506,8 +12506,8 @@ var require_ms = __commonJS({
   "node_modules/.pnpm/ms@2.1.3/node_modules/ms/index.js"(exports, module) {
     var s = 1e3;
     var m = s * 60;
-    var h = m * 60;
-    var d = h * 24;
+    var h2 = m * 60;
+    var d = h2 * 24;
     var w = d * 7;
     var y = d * 365.25;
     module.exports = function(val, options) {
@@ -12555,7 +12555,7 @@ var require_ms = __commonJS({
         case "hrs":
         case "hr":
         case "h":
-          return n * h;
+          return n * h2;
         case "minutes":
         case "minute":
         case "mins":
@@ -12583,8 +12583,8 @@ var require_ms = __commonJS({
       if (msAbs >= d) {
         return Math.round(ms / d) + "d";
       }
-      if (msAbs >= h) {
-        return Math.round(ms / h) + "h";
+      if (msAbs >= h2) {
+        return Math.round(ms / h2) + "h";
       }
       if (msAbs >= m) {
         return Math.round(ms / m) + "m";
@@ -12599,8 +12599,8 @@ var require_ms = __commonJS({
       if (msAbs >= d) {
         return plural(ms, msAbs, d, "day");
       }
-      if (msAbs >= h) {
-        return plural(ms, msAbs, h, "hour");
+      if (msAbs >= h2) {
+        return plural(ms, msAbs, h2, "hour");
       }
       if (msAbs >= m) {
         return plural(ms, msAbs, m, "minute");
@@ -14682,13 +14682,13 @@ var init_shouldBypassProxy = __esm({
       if (typeof host !== "string" || !host || host.indexOf(":") !== -1) {
         return host;
       }
-      let h = host;
-      if (h.charAt(0) === "[" && h.charAt(h.length - 1) === "]") {
-        h = h.slice(1, -1);
+      let h2 = host;
+      if (h2.charAt(0) === "[" && h2.charAt(h2.length - 1) === "]") {
+        h2 = h2.slice(1, -1);
       }
-      h = trimTrailingDots(h);
-      if (!/^[0-9.xXa-fA-F]+$/.test(h)) return host;
-      const parts = h.split(".");
+      h2 = trimTrailingDots(h2);
+      if (!/^[0-9.xXa-fA-F]+$/.test(h2)) return host;
+      const parts = h2.split(".");
       if (parts.some((p) => p === "")) return host;
       if (parts.length === 4) {
         const octets = parts.map(parseIPv4Octet);
@@ -25124,7 +25124,7 @@ var require_websocket_server = __commonJS({
       socket.once("finish", socket.destroy);
       socket.end(
         `HTTP/1.1 ${code} ${http4.STATUS_CODES[code]}\r
-` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join("\r\n") + "\r\n\r\n" + message
+` + Object.keys(headers).map((h2) => `${h2}: ${headers[h2]}`).join("\r\n") + "\r\n\r\n" + message
       );
     }
     function abortHandshakeOrEmitwsClientError(server, req, socket, code, message, headers) {
@@ -28693,19 +28693,19 @@ function millisToDatetime(ms) {
   const y = d.getUTCFullYear();
   const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
-  const h = String(d.getUTCHours()).padStart(2, "0");
+  const h2 = String(d.getUTCHours()).padStart(2, "0");
   const mi = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${y}-${mo}-${day} ${h}:${mi}`;
+  return `${y}-${mo}-${day} ${h2}:${mi}`;
 }
 function formatRFC3339Beijing(ms) {
   const d = new Date(ms + 8 * 36e5);
   const y = d.getUTCFullYear();
   const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
-  const h = String(d.getUTCHours()).padStart(2, "0");
+  const h2 = String(d.getUTCHours()).padStart(2, "0");
   const mi = String(d.getUTCMinutes()).padStart(2, "0");
   const s = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${y}-${mo}-${day}T${h}:${mi}:${s}+08:00`;
+  return `${y}-${mo}-${day}T${h2}:${mi}:${s}+08:00`;
 }
 function indentLines(text, indent) {
   return text.split("\n").map((line) => `${indent}${line}`).join("\n");
@@ -126408,9 +126408,9 @@ ${lines.join("\n")}
               return;
             const actionId = cardActionId(evt.action);
             yield this.safety.pushAction(`card:${evt.messageId}:${evt.operator.openId}:${actionId}`, evt.chatId, () => __awaiter(this, void 0, void 0, function* () {
-              const h = this.handlers.cardAction;
-              if (h)
-                yield h(evt);
+              const h2 = this.handlers.cardAction;
+              if (h2)
+                yield h2(evt);
             }));
           }),
           // Reactions — dedup only
@@ -126456,9 +126456,9 @@ ${lines.join("\n")}
             if (!evt)
               return;
             yield this.safety.pushAction(`comment:${evt.fileToken}:${evt.commentId}:${(_g = evt.replyId) !== null && _g !== void 0 ? _g : ""}`, evt.fileToken, () => __awaiter(this, void 0, void 0, function* () {
-              const h = this.handlers.comment;
-              if (h)
-                yield h(evt);
+              const h2 = this.handlers.comment;
+              if (h2)
+                yield h2(evt);
             }));
           })
         });
@@ -126602,8 +126602,8 @@ function todoRows(args) {
     const content = firstLine(todo?.content);
     if (!content) continue;
     const status = todo?.status;
-    const mark = status === "completed" ? "\u2705" : status === "in_progress" ? "\u{1F504}" : "\u2B1C";
-    rows.push(`${mark} ${clamp(content, 60)}`);
+    const mark2 = status === "completed" ? "\u2705" : status === "in_progress" ? "\u{1F504}" : "\u2B1C";
+    rows.push(`${mark2} ${clamp(content, 60)}`);
   }
   if (rows.length === 0) return null;
   const done = todos.filter((todo) => todo?.status === "completed").length;
@@ -126640,7 +126640,7 @@ function renderStepCard({
     const inner = [];
     for (const item of panelItems) {
       if (item?.kind === "ask") {
-        const asked = clampBudget(item.rows.map((row) => `\xB7 ${row.text}`).join("\n"));
+        const asked = clampBudget(item.rows.map((row2) => `\xB7 ${row2.text}`).join("\n"));
         if (!asked) continue;
         inner.push({
           tag: "collapsible_panel",
@@ -126659,7 +126659,7 @@ function renderStepCard({
         });
         continue;
       }
-      const body = clampBudget((item?.rows ?? []).map((row) => `\xB7 ${row}`).join("\n"));
+      const body = clampBudget((item?.rows ?? []).map((row2) => `\xB7 ${row2}`).join("\n"));
       if (body) inner.push({ tag: "markdown", content: body });
     }
     if (inner.length > 0) {
@@ -126905,13 +126905,13 @@ function createTurnPresenter({
      * @param call - { name, arguments }。
      */
     tool(call) {
-      const row = toolRow(call);
-      putEntry({ kind: "tool", text: row });
+      const row2 = toolRow(call);
+      putEntry({ kind: "tool", text: row2 });
       if (call?.name === "todo_write") {
         const parsed = todoRows(call.arguments);
         if (parsed) todos = parsed;
       }
-      return push(row);
+      return push(row2);
     },
     /**
      * 记录一段思考（模型的推理），与工具调用同处一个折叠面板。
@@ -126919,9 +126919,9 @@ function createTurnPresenter({
      * @param text - 推理文本。
      */
     think(text) {
-      const row = thinkRow(text);
-      putEntry({ kind: "think", text: row });
-      return push(row);
+      const row2 = thinkRow(text);
+      putEntry({ kind: "think", text: row2 });
+      return push(row2);
     },
     /**
      * 同步一批提问：已答的变成面板里的一行，没答的元素留在面板外做交互。
@@ -126946,8 +126946,8 @@ function createTurnPresenter({
           answered,
           final: payload?.final === true
         });
-        for (const row of rendered.rows ?? []) {
-          putEntry({ key: `ask:${row.id}`, kind: "ask", batch: batchKey, text: row.text });
+        for (const row2 of rendered.rows ?? []) {
+          putEntry({ key: `ask:${row2.id}`, kind: "ask", batch: batchKey, text: row2.text });
         }
         currentQuestion = Array.isArray(rendered.elements) ? rendered.elements : [];
         const current = rendered.current;
@@ -127003,6 +127003,173 @@ function createTurnPresenter({
       });
     }
   };
+}
+
+// packages/dsh-chat-feishu/host/panel-card.mjs
+var MAX_OPTIONS = 30;
+var h = (value) => String(value ?? "");
+function mark(current, value, label) {
+  return `${current === value ? "\u2713 " : ""}${label}`;
+}
+function dropdown({ name: name2, action, placeholder, items, current }) {
+  const visible = items.slice(0, MAX_OPTIONS);
+  const list = visible.map((item) => ({
+    text: { tag: "plain_text", content: mark(current, item.value, item.label).slice(0, 100) },
+    value: h(item.value)
+  }));
+  if (list.length === 0) return null;
+  const index = visible.findIndex((item) => item.value === current);
+  return {
+    tag: "select_static",
+    name: name2,
+    placeholder: { tag: "plain_text", content: placeholder },
+    /**
+     * 预选当前值。两个真机坑（dsh-im 记下来的）：
+     * - `initial_index` 是 **1 起**（0 = 不预选），写成 0 起的下标就会选错一项；
+     * - `options` 上**不能**写 `selected`/`selected_index`，会直接报 230099 解析错误。
+     */
+    initial_index: index >= 0 ? index + 1 : 0,
+    options: list,
+    behaviors: [{ type: "callback", value: { action } }]
+  };
+}
+function button(label, action, type = "default") {
+  return {
+    tag: "button",
+    type,
+    width: "fill",
+    text: { tag: "plain_text", content: label },
+    behaviors: [{ type: "callback", value: { dsh_panel: action } }]
+  };
+}
+function row(elements) {
+  return { tag: "column_set", flex_mode: "none", columns: elements.map((el) => ({ tag: "column", width: "weighted", weight: 1, elements: [el] })) };
+}
+function panelCard(state, { last = null } = {}) {
+  const elements = [];
+  const bound = state?.bound === true;
+  const model = state?.model ?? {};
+  const current = model.current ?? null;
+  elements.push({
+    tag: "markdown",
+    content: [
+      `**\u5F53\u524D\u4F1A\u8BDD**\u3000${bound ? `\`${h(state.sessionId)}\`` : "\u672A\u7ED1\u5B9A\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u65B0\u5EFA\uFF09"}`,
+      `**\u6A21\u578B**\u3000${current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+      `**Agent \u9884\u8BBE**\u3000${state?.preset?.current ? `\`${h(state.preset.current)}\`` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+      `**\u5DE5\u4F5C\u533A**\u3000${state?.workspace?.current ? `\`${h(state.workspace.current)}\`` : "\u672A\u8BBE\u7F6E\uFF08\u7528\u9ED8\u8BA4\u76EE\u5F55\uFF09"}`
+    ].join("\n")
+  });
+  elements.push({ tag: "hr" });
+  elements.push({ tag: "markdown", content: "**\u6A21\u578B\u4E0E\u63A8\u7406**\uFF08\u7ACB\u5373\u751F\u6548\uFF0C\u53EA\u5F71\u54CD\u5F53\u524D\u4F1A\u8BDD\uFF09" });
+  const modelPicker = dropdown({
+    name: "model_pick",
+    action: "model_pick",
+    placeholder: bound ? "\u9009\u62E9\u6A21\u578B" : "\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF09",
+    items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
+    current: current ? `${current.provider}/${current.model}` : null
+  });
+  if (modelPicker && bound) {
+    elements.push(modelPicker);
+  } else if (!bound) {
+    elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u5728\u8FD9\u91CC\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u4E0B\u9762\u7684\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF0C\u4E4B\u540E\u5C31\u80FD\u9009\u6A21\u578B\u3002" });
+  } else {
+    elements.push({ tag: "markdown", content: "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002" });
+  }
+  const efforts = model.efforts ?? [];
+  if (bound && current && efforts.length > 0) {
+    const effortPicker = dropdown({
+      name: "reasoning_pick",
+      action: "reasoning_pick",
+      placeholder: "\u9009\u62E9\u63A8\u7406\u7B49\u7EA7",
+      items: [
+        { value: "", label: "\uFF08\u6A21\u578B\u9ED8\u8BA4\uFF09" },
+        ...efforts.map((effort) => ({ value: effort.id, label: `${effort.id}${effort.label && effort.label !== effort.id ? ` \xB7 ${effort.label}` : ""}` }))
+      ],
+      current: model.currentEffort ?? ""
+    });
+    if (effortPicker) elements.push(effortPicker);
+  } else if (bound && current) {
+    elements.push({ tag: "markdown", content: "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002" });
+  } else if (bound) {
+    elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
+  }
+  elements.push({ tag: "hr" });
+  elements.push({ tag: "markdown", content: "**Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A**\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF1A\u6539\u5B8C\u53D1 `/new` \u518D\u8BF4\u8BDD\uFF09" });
+  const presetPicker = dropdown({
+    name: "preset_pick",
+    action: "preset_pick",
+    placeholder: "\u9009\u62E9 Agent \u9884\u8BBE",
+    items: [
+      { value: "", label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
+      ...(state?.preset?.options ?? []).map((item) => ({ value: item.id, label: item.id }))
+    ],
+    current: state?.preset?.current ?? ""
+  });
+  if (presetPicker) elements.push(presetPicker);
+  const workspacePicker = dropdown({
+    name: "workspace_pick",
+    action: "workspace_pick",
+    placeholder: "\u9009\u62E9\u5DE5\u4F5C\u533A",
+    items: (state?.workspace?.options ?? []).map((path2) => ({ value: path2, label: path2 })),
+    current: state?.workspace?.current ?? null
+  });
+  if (workspacePicker) {
+    elements.push(workspacePicker);
+  } else {
+    elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u53EF\u5207\u6362\u7684\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u8BBE\u4E00\u6B21\uFF0C\u6216\u6362\u4E00\u53F0\u673A\u5668\u4EBA\u3002" });
+  }
+  if (last?.message) {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "markdown",
+      content: `${last.ok === false ? "\u274C" : "\u2705"} **${h(last.label)}**
+${h(last.message)}`
+    });
+  }
+  elements.push({ tag: "hr" });
+  elements.push(row([
+    button("\u{1F195} \u65B0\u4F1A\u8BDD", "new"),
+    button("\u{1F4CA} \u72B6\u6001", "status"),
+    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands"),
+    button("\u23F9 \u505C\u6B62", "stop", "danger")
+  ]));
+  elements.push({
+    tag: "markdown",
+    content: "\u4E0D\u4FBF\u70B9\u4E0B\u62C9\u65F6\u4E5F\u53EF\u4EE5\u624B\u6253\uFF1A`/model`\u3001`/reasoning`\u3001`/preset`\u3001`/new`\u3001`/status`\u3002"
+  });
+  return {
+    schema: "2.0",
+    config: { update_multi: true, width_mode: "default" },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u63A7\u5236\u9762\u677F" }
+    },
+    body: { direction: "vertical", elements }
+  };
+}
+function panelPick(action, options) {
+  const map = {
+    model_pick: { field: "model", label: "\u5207\u6362\u6A21\u578B" },
+    reasoning_pick: { field: "reasoning", label: "\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7" },
+    preset_pick: { field: "preset", label: "\u8BBE\u7F6E Agent \u9884\u8BBE" },
+    workspace_pick: { field: "workspace", label: "\u5207\u6362\u5DE5\u4F5C\u533A" }
+  };
+  const target = map[action];
+  if (!target) return null;
+  const value = Array.isArray(options) ? options[0] ?? "" : "";
+  return { field: target.field, value: String(value), label: target.label };
+}
+function panelButton(action) {
+  const map = {
+    new: { field: "session", value: "new", label: "\u65B0\u4F1A\u8BDD" },
+    status: { command: "/status", label: "\u72B6\u6001" },
+    // 命令清单是另一张卡（命令按钮），卡上有「⬅ 返回控制面板」。
+    commands: { menu: true, label: "\u547D\u4EE4\u6E05\u5355" },
+    stop: { command: "/stop", label: "\u505C\u6B62" },
+    // 命令清单卡上的返回按钮。
+    panel: { panel: true, label: "\u63A7\u5236\u9762\u677F" }
+  };
+  return map[action] ?? null;
 }
 
 // packages/dsh-chat-feishu/host/bridge.mjs
@@ -127282,6 +127449,14 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         return null;
       });
       if (command?.handled) {
+        if (command.panel && message.chat_id) {
+          const sent = await renderPanel({ chatId: message.chat_id, panel: command.panel });
+          if (sent) {
+            lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
+            await clearWorking(message, workingReaction);
+            return;
+          }
+        }
         if (command.menu?.length && message.chat_id) {
           try {
             await gateway.sendCard({ chatId: message.chat_id, card: menuCard(command.menu) });
@@ -127495,6 +127670,15 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
     for (let index = 0; index < buttons.length; index += MENU_ROW_SIZE) {
       elements.push({ tag: "action", actions: buttons.slice(index, index + MENU_ROW_SIZE) });
     }
+    elements.push({
+      tag: "action",
+      actions: [{
+        tag: "button",
+        type: "primary",
+        text: { tag: "plain_text", content: "\u2B05 \u8FD4\u56DE\u63A7\u5236\u9762\u677F" },
+        value: { dsh_panel: "panel" }
+      }]
+    });
     return {
       config: { wide_screen_mode: true },
       header: { template: "blue", title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u83DC\u5355" } },
@@ -127507,6 +127691,32 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
       return null;
     });
     return result?.menu?.length ? result.menu : [];
+  }
+  async function readPanel(context) {
+    if (typeof deps.panel?.read !== "function") return null;
+    return deps.panel.read({
+      channelId: deps.channelId,
+      botId: bot.id,
+      key: context.key
+    }).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return null;
+    });
+  }
+  async function renderPanel({ chatId, messageId = null, panel, last = null }) {
+    const card = panelCard(panel, { last });
+    if (messageId) {
+      const patched = await gateway.patchCard({ messageId, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u6539\u4E3A\u65B0\u53D1\u4E00\u5F20\uFF1A${error?.message ?? error}`);
+        return false;
+      });
+      if (patched) return true;
+    }
+    const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u53D1\u9001\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return false;
+    });
+    return sent;
   }
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
     const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
@@ -127548,22 +127758,98 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}`
         return { toast: { type: "error", content: "\u4F60\u6CA1\u6709\u6267\u884C\u673A\u5668\u4EBA\u547D\u4EE4\u7684\u6743\u9650\u3002" } };
       }
     }
+    const panelContext = {
+      channelId: deps.channelId,
+      botId: bot.id,
+      key,
+      conversationType
+    };
+    const commandContext = {
+      ...panelContext,
+      senderId: operatorId,
+      isOwner: isOwner(deps.accessPolicy, bot, operatorId),
+      botLabel: bot.botName ?? bot.id,
+      channelLabel: "\u98DE\u4E66"
+    };
+    async function repaintPanel(last = null) {
+      const state2 = await readPanel(commandContext);
+      if (!state2) return false;
+      return renderPanel({
+        chatId,
+        messageId: event.messageId ?? null,
+        panel: state2,
+        last
+      });
+    }
+    const pick2 = panelPick(value.action, event?.action?.options);
+    if (pick2) {
+      try {
+        const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
+        const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
+        await repaintPanel({ label: pick2.label, message, ok: true });
+        return { toast: { type: "success", content: message.slice(0, 80) } };
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09\uFF1A${error?.message ?? error}`);
+        const message = error?.message ?? String(error);
+        await repaintPanel({ label: pick2.label, message, ok: false });
+        return { toast: { type: "error", content: message.slice(0, 80) } };
+      }
+    }
+    let fromPanel = false;
+    if (typeof value.dsh_panel === "string") {
+      const action = panelButton(value.dsh_panel);
+      if (!action) return { toast: { type: "error", content: "\u8FD9\u4E2A\u6309\u94AE\u5DF2\u7ECF\u5931\u6548\u4E86\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
+      if (action.panel) {
+        await repaintPanel(null);
+        return { toast: { type: "info", content: "\u5DF2\u56DE\u5230\u63A7\u5236\u9762\u677F" } };
+      }
+      if (action.menu) {
+        const items = await menuItemsFor(commandContext);
+        if (items.length > 0 && event.messageId) {
+          const patched = await gateway.patchCard({
+            messageId: event.messageId,
+            card: menuCard(items)
+          }).then(() => true).catch((error) => {
+            logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u6E05\u5355\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
+            return false;
+          });
+          if (patched) return { toast: { type: "info", content: "\u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355" } };
+        }
+        value.dsh_menu = "/help";
+        fromPanel = true;
+      } else {
+        if (action.field === "session") {
+          try {
+            const applied = await deps.panel.apply({ ...panelContext, field: "session", value: action.value });
+            const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
+            await repaintPanel({ label: action.label, message, ok: true });
+            return { toast: { type: "success", content: message.slice(0, 80) } };
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08session=new\uFF09\uFF1A${error?.message ?? error}`);
+            const message = error?.message ?? String(error);
+            await repaintPanel({ label: action.label, message, ok: false });
+            return { toast: { type: "error", content: message.slice(0, 80) } };
+          }
+        }
+        value.dsh_menu = action.command;
+        fromPanel = true;
+      }
+    }
     if (typeof value.dsh_menu === "string" && value.dsh_menu.startsWith("/")) {
-      const commandContext = {
-        channelId: deps.channelId,
-        botId: bot.id,
-        key,
-        conversationType,
-        senderId: operatorId,
-        isOwner: isOwner(deps.accessPolicy, bot, operatorId),
-        botLabel: bot.botName ?? bot.id,
-        channelLabel: "\u98DE\u4E66"
-      };
       const command = await deps.commands?.handle?.({ ...commandContext, text: value.dsh_menu }).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u547D\u4EE4\u5931\u8D25\uFF1A${error?.message ?? error}`);
         return null;
       });
       if (!command?.handled) return { toast: { type: "error", content: "\u547D\u4EE4\u6CA1\u6709\u6267\u884C\u3002" } };
+      if (fromPanel) {
+        const reply = String(command.reply ?? "");
+        const painted = await repaintPanel({
+          label: value.dsh_menu,
+          message: reply || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09",
+          ok: !reply.startsWith("\u547D\u4EE4\u6267\u884C\u5931\u8D25")
+        });
+        if (painted) return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
+      }
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
       if (items.length > 0 && event.messageId) {
         const patched = await gateway.patchCard({
@@ -128349,7 +128635,7 @@ function createLarkGateway({
           },
           elements: [{
             tag: "markdown",
-            content: rows.map((row) => `\xB7 ${row.text}`).join("\n")
+            content: rows.map((row2) => `\xB7 ${row2.text}`).join("\n")
           }]
         });
       }

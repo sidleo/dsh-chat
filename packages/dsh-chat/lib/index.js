@@ -4135,7 +4135,12 @@ function apply(ctx, config = {}) {
       publish: (sessionId, text) => guidance.publish(sessionId, text),
       forget: (sessionId) => guidance.forget(sessionId)
     }),
-    sessions
+    sessions,
+    /**
+     * 控制面板（服务面同样暴露一份）：渠道的可交互卡片用它读"当前值 + 可选项"、
+     * 并应用用户的选择。`read({channelId,botId,key})` / `apply({channelId,botId,key,field,value})`。
+     */
+    panel
   });
   ctx.effect(() => {
     const disposeProvide = provideService(ctx, HOST_SERVICE, service);

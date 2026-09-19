@@ -147,6 +147,18 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   contextEnhancement: { /* §4 全部导出，见 CONTRACT 附录 A */ },
   guidance: { publish(sessionId, text), forget(sessionId) },
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
+  /**
+   * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
+   * read({ channelId, botId, key })   -> { sessionId, bound, model{current,options,efforts,currentEffort},
+   *                                        preset{current,options}, workspace{current,options} }
+   * apply({ channelId, botId, key, field, value })
+   *      field ∈ model | reasoning | preset | workspace | session
+   *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
+   *         chat/unknown-effort / chat/unknown-preset / chat/workspace-invalid / chat/unknown-session /
+   *         chat/unknown-field），渠道把 message 原样给用户看。
+   * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**。
+   */
+  panel: { read, apply },
 }
 ```
 
@@ -258,9 +270,12 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 
 ### 命令内核（hub 实现，渠道只负责把文本交进来、把回复发出去）
 
-命令可以返回字符串（纯文本），也可以返回 `{ reply, menu }`：`menu` 是
-`[{ label, command }]`，渠道有卡片能力就渲染成按钮（**按钮值就是命令行**，点击后走与
-"用户手打"完全同一条路径），没有卡片能力就用 `reply` 的文本兜底。
+命令可以返回字符串（纯文本），也可以返回 `{ reply, menu, panel }`：
+
+- `menu` = `[{ label, command }]`：命令清单（**按钮值就是命令行**，点击走与"用户手打"完全同一条路径）；
+- `panel` = 上面 `panel.read()` 的状态：渠道有卡片能力就渲染成**可交互卡**（下拉直接选模型/推理
+  等级/预设/工作区），没有卡片能力就用 `reply` 的文本兜底；
+- `reply`：文本兜底（微信等）。
 
 | 命令 | 作用 |
 |---|---|
@@ -269,7 +284,20 @@ const value = chatUi.unwrapRpc(result);   // 失败时抛 Error（带 code/detai
 | `/presets` `/preset` | Agent Preset（**对新会话生效**） |
 | `/whoami` | 你的平台 id、是否属主、本次消息的放行判定 |
 | `/allow [平台id] [--commands]` `/deny <平台id>` | 维护当前会话类型的访问名单（**仅属主**） |
-| `/menu` | 发一张可点的菜单卡片 |
+| `/menu`（别名 `/m`） | 打开控制面板：飞书是可交互卡，其它渠道是命令清单文本 |
+
+**卡片动作 = 命令，必须过同一条门禁**：手打文字与卡片点击都走 `accessPolicy.evaluateAccess(...,
+isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，不走命令门禁。
+
+可交互卡的线格式（飞书）：
+
+- 下拉：`{ tag: 'select_static', name, initial_index, options: [{ text, value }], behaviors: [{ type: 'callback', value: { action } }] }`
+  —— 选中即回调；`initial_index` 是 **1 起**（0 = 不预选），且 `options` 上**不能**写 `selected`（会报 230099）；
+- 回调到达时的取值字段是 `action.option`（多选 `action.options`，也可能是逗号串或
+  `form_value[组件名]`）——渠道的 `normalizeCardAction` 统一归一化成 `action.options: string[]`；
+- 动作：`model_pick` / `reasoning_pick` / `preset_pick` / `workspace_pick`（值即选项 `value`），
+  按钮 `value.dsh_panel ∈ new | status | commands | stop | panel`。
+
 
 同一会话的多个回合在 hub 里**串行**：DSH 的 `session/prompt` 虽然会排队，但渠道侧每条消息
 各自开一条 `follow` 流、会在飞的时候互相抢答案。`ask()` 因此按会话键排队，并支持
