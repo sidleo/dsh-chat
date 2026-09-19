@@ -726,8 +726,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 失败一定留痕：patch 失败先 warn，再尝试新发；新发也失败就返回 false，
    * 由调用方退回文本（"点了没反应"是本项目最怕的故障形态）。
    */
-  async function renderPanel({ chatId, messageId = null, panel, last = null }) {
+  async function renderPanel({ chatId, messageId = null, panel, last = null, source = 'unknown' }) {
     const card = panelCard(panel, { last });
+    // 每次渲染都留痕：卡上"停在哪一次更新"与日志能对上（排查"卡片被回滚"这类问题时唯一现场）。
+    logger.info?.(`[dsh-chat-feishu] 渲染控制面板 source=${source}`
+      + ` patch=${messageId ?? '无'} last=${last?.label ?? '无'}${last?.at ? `@${last.at}` : ''}`
+      + ` 字节=${JSON.stringify(card).length}`);
     if (messageId) {
       const patched = await gateway.patchCard({ messageId, card }).then(() => true).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败，改为新发一张：${error?.message ?? error}`);
@@ -835,12 +839,24 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       channelLabel: '飞书',
     };
     /** 重画控制面板：读最新状态，并把"上一次做了什么、结果如何"画上去。 */
-    async function repaintPanel(last = null) {
+    async function repaintPanel(last = null, source = 'unknown') {
       const state = await readPanel(commandContext);
-      if (!state) return false;
+      if (!state) {
+        logger.warn?.(`[dsh-chat-feishu] 控制面板状态读取失败，无法重画（source=${source}）`);
+        return false;
+      }
       return renderPanel({
-        chatId, messageId: event.messageId ?? null, panel: state, last,
+        chatId, messageId: event.messageId ?? null, panel: state,
+        last: last ? { at: panelClock(), ...last } : null,
+        source,
       });
+    }
+
+    /** 卡片上的时间戳（本地时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
+    function panelClock() {
+      const now = new Date();
+      const pad = (value) => String(value).padStart(2, '0');
+      return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
     /**
@@ -855,14 +871,14 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
-        await repaintPanel({ label: pick.label, message, ok: true });
+        await repaintPanel({ label: pick.label, message, ok: true }, `pick:${value.action}`);
         return { toast: { type: 'success', content: message.slice(0, 80) } };
       } catch (error) {
         // 失败必须可见：日志 + 卡片上的 ❌ 一行 + 错误 toast。
         logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（${pick.field}=${pick.value}）：`
           + `${error?.message ?? error}`);
         const message = error?.message ?? String(error);
-        await repaintPanel({ label: pick.label, message, ok: false });
+        await repaintPanel({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
         return { toast: { type: 'error', content: message.slice(0, 80) } };
       }
     }
@@ -877,7 +893,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       logger.info?.(`[dsh-chat-feishu] 控制面板按钮：${value.dsh_panel} → ${JSON.stringify(action ?? null)}（${bot.id}）`);
       if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
       if (action.panel) {
-        await repaintPanel(null);
+        await repaintPanel(null, 'button:panel');
         return { toast: { type: 'info', content: '已回到控制面板' } };
       }
       if (action.menu) {
@@ -889,7 +905,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
             logger.warn?.(`[dsh-chat-feishu] 命令清单就地更新失败：${error?.message ?? error}`);
             return false;
           });
-          if (patched) return { toast: { type: 'info', content: '已切到命令清单' } };
+          if (patched) {
+            logger.info?.(`[dsh-chat-feishu] 已切到命令清单（${bot.id} 命令数=${items.length}）`);
+            return { toast: { type: 'info', content: '已切到命令清单' } };
+          }
         }
         value.dsh_menu = '/help';
         fromPanel = true;
@@ -899,12 +918,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           try {
             const applied = await deps.panel.apply({ ...panelContext, field: 'session', value: action.value });
             const message = applied?.message ?? '已生效。';
-            await repaintPanel({ label: action.label, message, ok: true });
+            await repaintPanel({ label: action.label, message, ok: true }, 'button:new');
             return { toast: { type: 'success', content: message.slice(0, 80) } };
           } catch (error) {
             logger.warn?.(`[dsh-chat-feishu] 控制面板应用失败（session=new）：${error?.message ?? error}`);
             const message = error?.message ?? String(error);
-            await repaintPanel({ label: action.label, message, ok: false });
+            await repaintPanel({ label: action.label, message, ok: false }, 'button:new(失败)');
             return { toast: { type: 'error', content: message.slice(0, 80) } };
           }
         }
@@ -931,7 +950,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           label: value.dsh_menu,
           message: reply || '（没有输出）',
           ok: !reply.startsWith('命令执行失败'),
-        });
+        }, `command-from-panel:${value.dsh_menu}`);
         if (painted) return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
       }
       // 就地更新：把"点了哪个命令 + 输出"画回同一张卡片，按钮保持可用。

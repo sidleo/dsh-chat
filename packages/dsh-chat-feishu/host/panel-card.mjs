@@ -166,12 +166,18 @@ export function panelCard(state, { last = null } = {}) {
     elements.push({ tag: 'markdown', content: '还没有可切换的工作区：先在设置页设一次，或换一台机器人。' });
   }
 
-  // ④ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）
+  /**
+   * ④ 上一次动作的结果（成功与失败都留在卡上：toast 会消失，卡不会）。
+   *
+   * 带一个 HH:MM:SS 时间戳：卡上"到底停在哪一次更新"是可核对的
+   * （排查卡片被回滚这类问题时，这就是卡上的现场）。
+   */
   if (last?.message) {
     elements.push({ tag: 'hr' });
     elements.push({
       tag: 'markdown',
-      content: `${last.ok === false ? '❌' : '✅'} **${h(last.label)}**\n${h(last.message)}`,
+      content: `${last.ok === false ? '❌' : '✅'} **${h(last.label)}**`
+        + `${last.at ? `（${h(last.at)}）` : ''}\n${h(last.message)}`,
     });
   }
 

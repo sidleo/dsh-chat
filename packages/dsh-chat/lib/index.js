@@ -2141,6 +2141,11 @@ function createPanelService({
   async function modelCatalog2() {
     const catalog = await sessions.invoke("session", "modelCatalog", {});
     const options = [];
+    const failures = (catalog?.failures ?? []).map((item) => ({
+      id: item?.id ?? "",
+      name: item?.name ?? item?.id ?? "",
+      message: item?.message ?? ""
+    }));
     for (const group of catalog?.groups ?? []) {
       const provider = group.id ?? group.provider ?? group.providerId;
       for (const model of group.models ?? []) {
@@ -2160,7 +2165,9 @@ function createPanelService({
         });
       }
     }
-    return { options, hostDefault: catalog?.default ?? null };
+    const rawDefault = catalog?.default;
+    const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
+    return { options, hostDefault, failures };
   }
   async function presetOptions() {
     if (typeof agentPresets?.remoteExportList !== "function") return [];
@@ -2190,7 +2197,7 @@ function createPanelService({
       const [catalog, presets, selection] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          return { options: [], hostDefault: null };
+          return { options: [], hostDefault: null, failures: [{ id: "", name: "", message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
         currentSelection(sessionId).catch(() => null)
@@ -2204,6 +2211,7 @@ function createPanelService({
           current: selection,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
+          failures: catalog.failures ?? [],
           options,
           // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
           efforts: currentModel?.efforts ?? [],

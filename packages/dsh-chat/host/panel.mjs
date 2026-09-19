@@ -115,6 +115,14 @@ export function createPanelService({
   async function modelCatalog() {
     const catalog = await sessions.invoke('session', 'modelCatalog', {});
     const options = [];
+    /**
+     * 目录里的失败清单（`session/modelCatalog` 会为每个拿不到模型的 provider 给一条
+     * `failures: [{ id, name, message }]`）。**必须带出去**：否则前端只能显示
+     * "当前 Host 没有可用模型"，用户和排查的人都不知道为什么（真机上就是这么卡住的）。
+     */
+    const failures = (catalog?.failures ?? []).map((item) => ({
+      id: item?.id ?? '', name: item?.name ?? item?.id ?? '', message: item?.message ?? '',
+    }));
     for (const group of catalog?.groups ?? []) {
       const provider = group.id ?? group.provider ?? group.providerId;
       for (const model of group.models ?? []) {
@@ -133,7 +141,10 @@ export function createPanelService({
         });
       }
     }
-    return { options, hostDefault: catalog?.default ?? null };
+    // `default` 在 Host 没设默认时是 `{}`（schema 是 `{...currentSelection()}`）：补全成 null。
+    const rawDefault = catalog?.default;
+    const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
+    return { options, hostDefault, failures };
   }
 
   async function presetOptions() {
@@ -164,7 +175,7 @@ export function createPanelService({
       const [catalog, presets, selection] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
-          return { options: [], hostDefault: null };
+          return { options: [], hostDefault: null, failures: [{ id: '', name: '', message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
         currentSelection(sessionId).catch(() => null),
@@ -180,6 +191,7 @@ export function createPanelService({
           current: selection,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
+          failures: catalog.failures ?? [],
           options,
           // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
           efforts: currentModel?.efforts ?? [],
