@@ -2247,3 +2247,33 @@ test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义
   assert.deepEqual(panelPick('workspace_pick', ['/ws/a']), { field: 'workspace', value: '/ws/a', label: '切换工作区' });
   assert.equal(panelPick('other_pick', ['x']), null, '不是面板下拉就返回 null（别把别人的回调当自己的）');
 });
+
+test('控制面板：再次 /menu 复用同一张卡，不再堆新卡（聊天里多张卡片会让人以为"变回去了"）', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      return { handled: true, reply: 'x' };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    await app.bridge.accept(messageEvent({ messageId: 'om_m1', text: '/menu' }));
+    assert.equal(app.gateway.calls.cards.length, 1, '第一次 /menu 发一张');
+
+    // 第二次 /menu：同一会话已有面板卡 → 应就地更新它，而不是再发一张。
+    await app.bridge.accept(messageEvent({ messageId: 'om_m2', text: '/menu' }));
+    assert.equal(app.gateway.calls.cards.length, 1, '不该堆第二张卡');
+    const patched = app.gateway.calls.patches.at(-1);
+    // 假 gateway 的 sendCard 固定回 om_card：记住的应是"发出去那张"的 id。
+    assert.equal(patched.messageId, 'om_card', '更新的是先前那张卡');
+
+    // 标题带渲染时间：多张卡时"哪张最新"一眼可辨。
+    const title = app.gateway.calls.patches.at(-1).card.header.title.content;
+    assert.match(title, /^机器人控制面板 · \d{2}:\d{2}:\d{2}$/);
+  } finally {
+    await app.cleanup();
+  }
+});

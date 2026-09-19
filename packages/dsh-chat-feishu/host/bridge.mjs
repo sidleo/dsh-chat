@@ -32,6 +32,13 @@ const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 
 /** 命令清单卡一行放几个按钮（超出的换到下一行，绝不截断命令）。 */
 const MENU_ROW_SIZE = 4;
 
+/** 卡片上的时间戳（本地 时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
+function panelClock() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
 /**
  * 一行按钮（Card 2.0）：按钮必须放在 `column_set` 的列里，1.0 那套 `tag: 'action'` 不适用。
  *
@@ -415,7 +422,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
          * 发不出去再退回命令清单卡，最后退回文本——一层层退，绝不静默。
          */
         if (command.panel && message.chat_id) {
-          const sent = await renderPanel({ chatId: message.chat_id, panel: command.panel });
+          const sent = await renderPanel({
+            chatId: message.chat_id, key: conversationKey, panel: command.panel, source: 'menu',
+          });
           if (sent) {
             lastHandledAt = new Date().toISOString();
             await clearWorking(message, workingReaction);
@@ -726,28 +735,55 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    * 失败一定留痕：patch 失败先 warn，再尝试新发；新发也失败就返回 false，
    * 由调用方退回文本（"点了没反应"是本项目最怕的故障形态）。
    */
-  async function renderPanel({ chatId, messageId = null, panel, last = null, source = 'unknown' }) {
-    const card = panelCard(panel, { last });
+  /**
+   * 每个会话"当前那张控制面板卡"的消息 id。
+   *
+   * 为什么要记：不记的话每次 `/m` 都新发一张，聊天里就堆着好几张几乎一样的卡
+   * （真机上就是这么把用户绕晕的：他点的是一张，看到的却是另一张，看起来像"变回去了"）。
+   * 记的是进程内存，重启后失效——那时 patch 会失败，我们新发一张并重新记住。
+   */
+  const panelCards = new Map(); // 会话键 → messageId
+
+  /**
+   * 画一次控制面板：优先更新"本会话已有的那张"，其次 patch 调用方给的消息 id，最后新发。
+   *
+   * @param options - { chatId, key, messageId?, panel, last?, source }。
+   *   `key` 是会话键（p2p:… / group:…），用于复用同一张卡；`messageId` 是用户刚点的那张卡。
+   */
+  async function renderPanel({
+    chatId, key = null, messageId = null, panel, last = null, source = 'unknown',
+  }) {
+    // 标题带上本次渲染时间：聊天里可能有多张面板卡（旧卡、重启前的卡），
+    // "哪张是刚更新的"必须一眼可辨，否则用户会以为卡片"变回去了"。
+    const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    // 用户交互总是优先更新"他点的那张"；`/menu` 之类没有具体卡片时，复用本会话记住的那张。
+    const known = key ? panelCards.get(key) : null;
+    const targets = [messageId, messageId ? null : known].filter(Boolean);
     // 每次渲染都留痕：卡上"停在哪一次更新"与日志能对上（排查"卡片被回滚"这类问题时唯一现场）。
     logger.info?.(`[dsh-chat-feishu] 渲染控制面板 source=${source}`
-      + ` patch=${messageId ?? '无'} last=${last?.label ?? '无'}${last?.at ? `@${last.at}` : ''}`
+      + ` key=${key ?? '无'} 目标=${targets[0] ?? '新发'}`
+      + ` last=${last?.label ?? '无'}${last?.at ? `@${last.at}` : ''}`
       + ` 字节=${JSON.stringify(card).length}`);
-    if (messageId) {
-      const patched = await gateway.patchCard({ messageId, card }).then(() => true).catch((error) => {
-        logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败，改为新发一张：${error?.message ?? error}`);
+    for (const target of targets) {
+      const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 控制面板就地更新失败（${target}）：${error?.message ?? error}`);
         return false;
       });
       if (patched) {
-        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（${bot.id}）`);
+        if (key) panelCards.set(key, target);
+        logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（${bot.id} ${target}）`);
         return true;
       }
     }
-    const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
+    const sent = await gateway.sendCard({ chatId, card }).then((result) => result ?? {}).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] 控制面板发送失败：${error?.message ?? error}`);
-      return false;
+      return null;
     });
-    if (sent) logger.info?.(`[dsh-chat-feishu] 控制面板已新发一张（${bot.id}）`);
-    return sent;
+    if (sent) {
+      if (key && typeof sent.messageId === 'string' && sent.messageId) panelCards.set(key, sent.messageId);
+      logger.info?.(`[dsh-chat-feishu] 控制面板已新发一张（${bot.id} ${sent.messageId ?? '未知id'}）`);
+    }
+    return Boolean(sent);
   }
 
   /**
@@ -846,17 +882,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         return false;
       }
       return renderPanel({
-        chatId, messageId: event.messageId ?? null, panel: state,
+        chatId, key, messageId: event.messageId ?? null, panel: state,
         last: last ? { at: panelClock(), ...last } : null,
         source,
       });
-    }
-
-    /** 卡片上的时间戳（本地时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
-    function panelClock() {
-      const now = new Date();
-      const pad = (value) => String(value).padStart(2, '0');
-      return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
     /**

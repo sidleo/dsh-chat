@@ -127046,7 +127046,7 @@ function button(label, action, type = "default") {
 function row(elements) {
   return { tag: "column_set", flex_mode: "none", columns: elements.map((el) => ({ tag: "column", width: "weighted", weight: 1, elements: [el] })) };
 }
-function panelCard(state, { last = null } = {}) {
+function panelCard(state, { last = null, at = null } = {}) {
   const elements = [];
   const bound = state?.bound === true;
   const model = state?.model ?? {};
@@ -127144,7 +127144,7 @@ ${h(last.message)}`
     config: { update_multi: true, width_mode: "default" },
     header: {
       template: "blue",
-      title: { tag: "plain_text", content: "\u673A\u5668\u4EBA\u63A7\u5236\u9762\u677F" }
+      title: { tag: "plain_text", content: `\u673A\u5668\u4EBA\u63A7\u5236\u9762\u677F${at ? ` \xB7 ${at}` : ""}` }
     },
     body: { direction: "vertical", elements }
   };
@@ -127188,6 +127188,11 @@ function messageText(message) {
 }
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var MENU_ROW_SIZE = 4;
+function panelClock() {
+  const now = /* @__PURE__ */ new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
 function buttonRow(items) {
   return {
     tag: "column_set",
@@ -127471,7 +127476,12 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       });
       if (command?.handled) {
         if (command.panel && message.chat_id) {
-          const sent = await renderPanel({ chatId: message.chat_id, panel: command.panel });
+          const sent = await renderPanel({
+            chatId: message.chat_id,
+            key: conversationKey,
+            panel: command.panel,
+            source: "menu"
+          });
           if (sent) {
             lastHandledAt = (/* @__PURE__ */ new Date()).toISOString();
             await clearWorking(message, workingReaction);
@@ -127708,25 +127718,39 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       return null;
     });
   }
-  async function renderPanel({ chatId, messageId = null, panel, last = null, source = "unknown" }) {
-    const card = panelCard(panel, { last });
-    logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} patch=${messageId ?? "\u65E0"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
-    if (messageId) {
-      const patched = await gateway.patchCard({ messageId, card }).then(() => true).catch((error) => {
-        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u6539\u4E3A\u65B0\u53D1\u4E00\u5F20\uFF1A${error?.message ?? error}`);
+  const panelCards = /* @__PURE__ */ new Map();
+  async function renderPanel({
+    chatId,
+    key = null,
+    messageId = null,
+    panel,
+    last = null,
+    source = "unknown"
+  }) {
+    const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    const known = key ? panelCards.get(key) : null;
+    const targets = [messageId, messageId ? null : known].filter(Boolean);
+    logger.info?.(`[dsh-chat-feishu] \u6E32\u67D3\u63A7\u5236\u9762\u677F source=${source} key=${key ?? "\u65E0"} \u76EE\u6807=${targets[0] ?? "\u65B0\u53D1"} last=${last?.label ?? "\u65E0"}${last?.at ? `@${last.at}` : ""} \u5B57\u8282=${JSON.stringify(card).length}`);
+    for (const target of targets) {
+      const patched = await gateway.patchCard({ messageId: target, card }).then(() => true).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF08${target}\uFF09\uFF1A${error?.message ?? error}`);
         return false;
       });
       if (patched) {
-        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08${bot.id}\uFF09`);
+        if (key) panelCards.set(key, target);
+        logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08${bot.id} ${target}\uFF09`);
         return true;
       }
     }
-    const sent = await gateway.sendCard({ chatId, card }).then(() => true).catch((error) => {
+    const sent = await gateway.sendCard({ chatId, card }).then((result) => result ?? {}).catch((error) => {
       logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u53D1\u9001\u5931\u8D25\uFF1A${error?.message ?? error}`);
-      return false;
+      return null;
     });
-    if (sent) logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u65B0\u53D1\u4E00\u5F20\uFF08${bot.id}\uFF09`);
-    return sent;
+    if (sent) {
+      if (key && typeof sent.messageId === "string" && sent.messageId) panelCards.set(key, sent.messageId);
+      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u65B0\u53D1\u4E00\u5F20\uFF08${bot.id} ${sent.messageId ?? "\u672A\u77E5id"}\uFF09`);
+    }
+    return Boolean(sent);
   }
   function commandAccessFor({ senderId, conversationType, accessPolicy: knownPolicy }) {
     const policy = knownPolicy ?? deps.storage?.read?.(bot.id)?.accessPolicy;
@@ -127789,16 +127813,12 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       }
       return renderPanel({
         chatId,
+        key,
         messageId: event.messageId ?? null,
         panel: state2,
         last: last ? { at: panelClock(), ...last } : null,
         source
       });
-    }
-    function panelClock() {
-      const now = /* @__PURE__ */ new Date();
-      const pad = (value2) => String(value2).padStart(2, "0");
-      return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
     const pick2 = panelPick(value.action, event?.action?.options);
     if (pick2) {

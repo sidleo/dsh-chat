@@ -79,10 +79,12 @@ function row(elements) {
  * 渲染控制面板卡片。
  *
  * @param state - hub `panel.read()` 的返回值。
- * @param options - { last }：上一次动作的结果 `{ label, message, ok }`（失败也要留在卡上）。
+ * @param options - { last, at }：`last` 是上一次动作的结果 `{ label, message, ok }`（失败也要留在卡上）；
+ *   `at` 是本次渲染的时间（HH:MM:SS），写进标题栏——聊天里可能躺着不止一张面板卡
+ *   （旧卡、重启前的卡），**标题上的时间就是"哪张是最新的"最直接的判据**。
  * @returns Card 2.0 对象。
  */
-export function panelCard(state, { last = null } = {}) {
+export function panelCard(state, { last = null, at = null } = {}) {
   const elements = [];
   const bound = state?.bound === true;
   const model = state?.model ?? {};
@@ -199,7 +201,7 @@ export function panelCard(state, { last = null } = {}) {
     config: { update_multi: true, width_mode: 'default' },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: '机器人控制面板' },
+      title: { tag: 'plain_text', content: `机器人控制面板${at ? ` · ${at}` : ''}` },
     },
     body: { direction: 'vertical', elements },
   };
