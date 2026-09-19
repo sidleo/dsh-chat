@@ -251,6 +251,11 @@ async function makeBridge({
   };
   /** holdSettings=false 时一开始就算"读完了"，与改动前行为一致。 */
   let settingsLoaded = !holdSettings;
+  /**
+   * 交互回传的卡片更新要排在**回调应答之后**（先更新再应答会被客户端还原）。
+   * 测试里把那些任务收集起来，由 `flushPaints()` 跑完——从而能显式断言顺序。
+   */
+  const paints = [];
   const state = createFeishuStateStore({
     path: statePath ?? join(dataDir, 'state.json'), logger: silentLogger,
   });
@@ -264,6 +269,8 @@ async function makeBridge({
     dataDir,
     logger: silentLogger,
     ready: async () => { settingsLoaded = true; },
+    // 注入调度器：**只收集、不立刻执行**——真实环境里它们在回调应答之后才发生。
+    scheduleAfterResponse: (task) => { paints.push(task); },
     storage: {
       read: () => {
         // 启动竞态：设置文档还没读进来时读到的就是空文档（门禁因此读不到访问策略）。
@@ -314,6 +321,12 @@ async function makeBridge({
     offers,
     uploads,
     setUploadFailure(error) { uploadFailure = error; },
+    paints,
+    /** 跑完所有"排在应答之后"的卡片更新（真实环境里它们在应答发出后才发生）。 */
+    async flushPaints() {
+      for (let index = 0; index < paints.length; index += 1) await paints[index]();
+      paints.length = 0;
+    },
     dataDir,
     async cleanup() {
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -1906,7 +1919,9 @@ test('菜单卡片：点按钮就地更新同一张卡（显示点了什么 + �
     assert.deepEqual(calls, ['/status', '/menu'], '执行被点的命令，并重取一次菜单');
     assert.equal(answer.toast.type, 'success');
     assert.match(answer.toast.content, /\/status/);
+    assert.equal(app.gateway.calls.patches.length, 0, '卡片更新必须排在回调应答之后（先更新会被客户端还原）');
 
+    await app.flushPaints();
     const patch = app.gateway.calls.patches.at(-1);
     assert.equal(patch.messageId, 'om_menu', '要更新的是被点的那张卡片');
     const json = JSON.stringify(patch.card);
@@ -1936,6 +1951,7 @@ test('菜单卡片：就地更新失败时退回回文字，用户不会什么�
       action: { tag: 'button', value: { dsh_menu: '/status' } },
     });
     assert.equal(answer.toast.type, 'success');
+    await app.flushPaints();
     assert.equal(app.gateway.calls.replies.at(-1)?.text, '输出：/status', '退回"回复文字"这条路');
   } finally {
     await app.cleanup();
@@ -2107,7 +2123,9 @@ test('控制面板：/menu 发可交互卡（下拉直接选，选完立即生�
     );
     assert.equal(answer.toast.type, 'success');
     assert.match(answer.toast.content, /claude-x/);
+    assert.equal(app.gateway.calls.patches.length, 0, '重画排在应答之后');
 
+    await app.flushPaints();
     const patched = app.gateway.calls.patches.at(-1);
     assert.equal(patched.messageId, 'om_panel', '要重画被操作的那张卡片');
     assert.match(JSON.stringify(patched.card), /✅/, '卡上要留下"刚做了什么、结果如何"');
@@ -2129,6 +2147,7 @@ test('控制面板：应用失败就地写明原因（❌），并且不假装�
       action: { tag: 'select_static', name: 'workspace_pick', options: '/ws/nope', value: { action: 'workspace_pick' } },
     });
     assert.equal(answer.toast.type, 'error');
+    await app.flushPaints();
     const card = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
     assert.match(card, /❌/);
     assert.match(card, /目录不存在/);
@@ -2179,6 +2198,7 @@ test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状
       [{ field: 'session', value: 'new' }],
     );
     assert.equal(fresh.toast.type, 'success');
+    await app.flushPaints();
     assert.match(JSON.stringify(app.gateway.calls.patches.at(-1)?.card), /机器人控制面板/);
 
     // 命令清单：切成命令卡，卡上有返回控制面板的按钮。
@@ -2187,6 +2207,7 @@ test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状
       action: { tag: 'button', value: { dsh_panel: 'commands' } },
     });
     assert.equal(list.toast.type, 'info');
+    await app.flushPaints();
     const listCard = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
     assert.match(listCard, /机器人菜单/);
     assert.match(listCard, /返回控制面板/);
@@ -2197,6 +2218,7 @@ test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状
       action: { tag: 'button', value: { dsh_panel: 'status' } },
     });
     assert.equal(status.toast.type, 'success');
+    await app.flushPaints();
     const statusCard = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
     assert.match(statusCard, /机器人控制面板/);
     assert.match(statusCard, /渠道：飞书/);
@@ -2207,6 +2229,7 @@ test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状
       action: { tag: 'button', value: { dsh_panel: 'panel' } },
     });
     assert.equal(back.toast.type, 'info');
+    await app.flushPaints();
     assert.match(JSON.stringify(app.gateway.calls.patches.at(-1)?.card), /机器人控制面板/);
   } finally {
     await app.cleanup();
@@ -2332,6 +2355,14 @@ test('交互驱动的卡片更新走延迟更新 token（用 message.patch 会�
       action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
     });
     assert.equal(answer.toast.type, 'success');
+    /**
+     * 关键顺序：应答发出去之前**不能**动卡片。
+     *
+     * 飞书客户端在回调应答落地时会把卡片还原成"点击前"的快照——先更新再应答 = 更新被还原，
+     * 真机表现就是"卡片闪一下又变回原样"（日志里那次 update 还是成功的，所以只看日志会误判）。
+     */
+    assert.equal(app.gateway.calls.tokenUpdates.length, 0, '卡片更新必须排在应答之后');
+    await app.flushPaints();
     assert.equal(app.gateway.calls.tokenUpdates.length, 1, '要走延迟更新接口');
     assert.equal(app.gateway.calls.tokenUpdates[0].token, 'tk_click_1');
     assert.match(app.gateway.calls.tokenUpdates[0].card.header.title.content, /机器人控制面板/);
@@ -2358,6 +2389,7 @@ test('token 用掉/过期时退回 message.patch，不能让卡片就此不更�
       operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { dsh_panel: 'status' } },
     });
+    await app.flushPaints();
     assert.equal(app.gateway.calls.tokenUpdates.length, 1, '先试 token 路径');
     assert.ok(app.gateway.calls.patches.length >= 1, '失败后仍要 patch 兜底');
   } finally {
@@ -2385,6 +2417,7 @@ test('命令清单切换同样优先走 token 路径', async () => {
       action: { tag: 'button', value: { dsh_panel: 'commands' } },
     });
     assert.equal(answer.toast.type, 'info');
+    await app.flushPaints();
     assert.equal(app.gateway.calls.tokenUpdates.length, 1);
     assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /机器人菜单/);
   } finally {
@@ -2404,6 +2437,7 @@ test('审批按钮把回调 token 交给渠道（标记已处理的更新同样�
       action: { tag: 'button', value: { dsh: 'approval', decision: 'allowed-once' } },
     });
     // 回答按钮不替换卡片（由 hub 带"已回答"状态重渲染整张卡），所以这里验审批那条路。
+    await app.flushPaints();
     assert.equal(app.gateway.calls.markedCards.at(-1)?.token, 'tk_approval');
     assert.equal(app.gateway.calls.markedCards.at(-1)?.messageId, 'om_approval');
     // 审批卡是 1.0：延迟更新必须带 open_ids，否则网关本地就会拒（300090）。
@@ -2482,6 +2516,7 @@ test('命令清单卡上点命令也走延迟更新 token（否则输出会被�
       action: { tag: 'button', value: { dsh_menu: '/status' } },
     });
     assert.equal(answer.toast.type, 'success');
+    await app.flushPaints();
     assert.equal(app.gateway.calls.tokenUpdates.length, 1, '要走 token 路径');
     assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /\/status/);
   } finally {
@@ -2489,7 +2524,7 @@ test('命令清单卡上点命令也走延迟更新 token（否则输出会被�
   }
 });
 
-test('返回控制面板失败时不谎报成功', async () => {
+test('返回控制面板失败时不谎报成功：toast 不宣称已完成，失败落 lastError', async () => {
   const panel = makePanelStub();
   const app = await makeBridge({ panel });
   try {
@@ -2503,8 +2538,11 @@ test('返回控制面板失败时不谎报成功', async () => {
       operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { dsh_panel: 'panel' } },
     });
-    assert.equal(answer.toast.type, 'error');
-    assert.match(answer.toast.content, /失败/);
+    // 重画排在应答之后，所以此刻只能说"正在返回"，不能说"已回到"。
+    assert.equal(answer.toast.type, 'info');
+    assert.match(answer.toast.content, /正在返回/);
+    await app.flushPaints();
+    assert.match(String(app.bridge.status().lastError), /控制面板应答后重画失败/, '失败要落 lastError');
   } finally {
     await app.cleanup();
   }
@@ -2654,7 +2692,7 @@ test('审批按钮要过身份门禁：群聊 allowlist 下未授权成员不能
   }
 });
 
-test('面板改动生效但卡片刷不出去时，toast 不能说"成功"就完了', async () => {
+test('面板改动生效但卡片刷不出去时，失败要落进 lastError（toast 只承诺设置已生效）', async () => {
   const panel = makePanelStub();
   const app = await makeBridge({ panel });
   try {
@@ -2668,9 +2706,12 @@ test('面板改动生效但卡片刷不出去时，toast 不能说"成功"就完
       operator: { openId: 'ou_owner' },
       action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
     });
-    assert.notEqual(answer.toast.type, 'success', '卡片没刷出去就不能只报成功');
-    assert.match(answer.toast.content, /卡片更新失败/);
-    assert.equal(panel.applied.length, 1, '改动本身是生效的（所以要如实说"生效了但卡片没刷新"）');
+    // toast 说的是"设置已生效"（这是真的）；卡片没刷出去这件事必须有落盘现场。
+    assert.equal(answer.toast.type, 'success');
+    assert.match(answer.toast.content, /claude-x/);
+    assert.equal(panel.applied.length, 1, '改动本身是生效的');
+    await app.flushPaints();
+    assert.match(String(app.bridge.status().lastError), /重画失败/, '卡片没刷出去要在状态里看到');
   } finally {
     await app.cleanup();
   }

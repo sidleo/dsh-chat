@@ -127250,6 +127250,7 @@ function messageText(message) {
 }
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var MENU_ROW_SIZE = 4;
+var RESPONSE_SETTLE_MS = 50;
 function panelClock() {
   const now = /* @__PURE__ */ new Date();
   const pad = (value) => String(value).padStart(2, "0");
@@ -127945,6 +127946,52 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         token: event.token ?? null
       });
     }
+    function afterResponse(task) {
+      if (typeof deps.scheduleAfterResponse === "function") {
+        deps.scheduleAfterResponse(task);
+        return;
+      }
+      const timer = setTimeout(() => {
+        void task();
+      }, RESPONSE_SETTLE_MS);
+      timer.unref?.();
+    }
+    function repaintAfterResponse(last, source) {
+      afterResponse(() => repaintPanel(last, source).then((ok) => {
+        if (!ok) noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7B54\u540E\u91CD\u753B\u5931\u8D25\uFF08${source}\uFF09`, "\u672A\u753B\u51FA\uFF0C\u89C1\u4E0A\u9762\u7684 warn");
+      }).catch((error) => {
+        noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7B54\u540E\u91CD\u753B\u5931\u8D25\uFF08${source}\uFF09`, error?.message ?? error);
+      }));
+    }
+    function refreshCardAfterResponse({ card, label: label2, fallbackText = "" }) {
+      afterResponse(async () => {
+        const fallback = async () => {
+          if (!fallbackText) return;
+          await gateway.replyText({ messageId: event.messageId, text: fallbackText }).catch(() => {
+          });
+        };
+        if (typeof event.token === "string" && event.token) {
+          try {
+            await gateway.updateCard({ token: event.token, card, openIds: [operatorId] });
+            logger.info?.(`[dsh-chat-feishu] ${label2}\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08token \u8DEF\u5F84\uFF09`);
+            return;
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-feishu] ${label2}\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF0C\u6539\u7528 patch\uFF1A${error?.message ?? error}`);
+          }
+        }
+        if (!event.messageId) {
+          await fallback();
+          return;
+        }
+        try {
+          await gateway.patchCard({ messageId: event.messageId, card });
+          logger.info?.(`[dsh-chat-feishu] ${label2}\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08patch \u8DEF\u5F84\uFF09`);
+        } catch (error) {
+          noteCardError(`${label2}\u5C31\u5730\u66F4\u65B0\u5931\u8D25`, error?.message ?? error);
+          await fallback();
+        }
+      });
+    }
     const pick2 = panelPick(value.action, event?.action?.options);
     if (pick2) {
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u4E0B\u62C9\uFF1A${value.action}=${pick2.invalid ? "<\u6CA1\u8BA4\u51FA\u53D6\u503C>" : pick2.value}\uFF08${bot.id}\uFF09`);
@@ -127957,17 +128004,12 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
         const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
-        const painted = await repaintPanel({ label: pick2.label, message, ok: true }, `pick:${value.action}`);
-        return {
-          toast: {
-            type: painted ? "success" : "warning",
-            content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}\uFF08\u5361\u7247\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\uFF09`
-          }
-        };
+        repaintAfterResponse({ label: pick2.label, message, ok: true }, `pick:${value.action}`);
+        return { toast: { type: "success", content: message.slice(0, 80) } };
       } catch (error) {
         noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09`, error?.message ?? error);
         const message = error?.message ?? String(error);
-        await repaintPanel({ label: pick2.label, message, ok: false }, `pick:${value.action}(\u5931\u8D25)`);
+        repaintAfterResponse({ label: pick2.label, message, ok: false }, `pick:${value.action}(\u5931\u8D25)`);
         return { toast: { type: "error", content: message.slice(0, 80) } };
       }
     }
@@ -127977,30 +128019,14 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u6309\u94AE\uFF1A${value.dsh_panel} \u2192 ${JSON.stringify(action ?? null)}\uFF08${bot.id}\uFF09`);
       if (!action) return { toast: { type: "error", content: "\u8FD9\u4E2A\u6309\u94AE\u5DF2\u7ECF\u5931\u6548\u4E86\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
       if (action.panel) {
-        const ok = await repaintPanel(null, "button:panel");
-        if (!ok) {
-          return { toast: { type: "error", content: "\u63A7\u5236\u9762\u677F\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
-        }
-        return { toast: { type: "info", content: "\u5DF2\u56DE\u5230\u63A7\u5236\u9762\u677F" } };
+        repaintAfterResponse(null, "button:panel");
+        return { toast: { type: "info", content: "\u6B63\u5728\u8FD4\u56DE\u63A7\u5236\u9762\u677F\u2026" } };
       }
       if (action.menu) {
         const items = await menuItemsFor(commandContext);
         if (items.length > 0 && event.messageId) {
-          const viaToken = event.token ? await gateway.updateCard({ token: event.token, card: menuCard(items) }).then(() => true).catch((error) => {
-            logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u6E05\u5355\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
-            return false;
-          }) : false;
-          const patched = viaToken || await gateway.patchCard({
-            messageId: event.messageId,
-            card: menuCard(items)
-          }).then(() => true).catch((error) => {
-            logger.warn?.(`[dsh-chat-feishu] \u547D\u4EE4\u6E05\u5355\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
-            return false;
-          });
-          if (patched) {
-            logger.info?.(`[dsh-chat-feishu] \u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355\uFF08${bot.id} \u547D\u4EE4\u6570=${items.length}${viaToken ? "\uFF0Ctoken \u8DEF\u5F84" : "\uFF0Cpatch \u8DEF\u5F84"}\uFF09`);
-            return { toast: { type: "info", content: "\u5DF2\u5207\u5230\u547D\u4EE4\u6E05\u5355" } };
-          }
+          refreshCardAfterResponse({ card: menuCard(items), label: "\u547D\u4EE4\u6E05\u5355" });
+          return { toast: { type: "info", content: "\u6B63\u5728\u5207\u5230\u547D\u4EE4\u6E05\u5355\u2026" } };
         }
         value.dsh_menu = "/help";
         fromPanel = true;
@@ -128009,17 +128035,12 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
           try {
             const applied = await deps.panel.apply({ ...panelContext, field: "session", value: action.value });
             const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
-            const painted = await repaintPanel({ label: action.label, message, ok: true }, "button:new");
-            return {
-              toast: {
-                type: painted ? "success" : "warning",
-                content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}\uFF08\u5361\u7247\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\uFF09`
-              }
-            };
+            repaintAfterResponse({ label: action.label, message, ok: true }, "button:new");
+            return { toast: { type: "success", content: message.slice(0, 80) } };
           } catch (error) {
             noteCardError("\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08session=new\uFF09", error?.message ?? error);
             const message = error?.message ?? String(error);
-            await repaintPanel({ label: action.label, message, ok: false }, "button:new(\u5931\u8D25)");
+            repaintAfterResponse({ label: action.label, message, ok: false }, "button:new(\u5931\u8D25)");
             return { toast: { type: "error", content: message.slice(0, 80) } };
           }
         }
@@ -128035,28 +128056,21 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       if (!command?.handled) return { toast: { type: "error", content: "\u547D\u4EE4\u6CA1\u6709\u6267\u884C\u3002" } };
       if (fromPanel) {
         const reply = String(command.reply ?? "");
-        const painted = await repaintPanel({
+        repaintAfterResponse({
           label: value.dsh_menu,
           message: reply || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09",
           ok: !reply.startsWith("\u547D\u4EE4\u6267\u884C\u5931\u8D25")
         }, `command-from-panel:${value.dsh_menu}`);
-        if (painted) return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
+        return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
       }
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
       if (items.length > 0 && event.messageId) {
-        const card = menuCard(items, { command: value.dsh_menu, reply: command.reply ?? "" });
-        const viaToken = event.token ? await gateway.updateCard({ token: event.token, card }).then(() => true).catch((error) => {
-          logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
-          return false;
-        }) : false;
-        const patched = viaToken || await gateway.patchCard({
-          messageId: event.messageId,
-          card
-        }).then(() => true).catch((error) => {
-          logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u56DE\u6587\u5B57\uFF1A${error?.message ?? error}`);
-          return false;
+        refreshCardAfterResponse({
+          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? "" }),
+          label: `\u83DC\u5355\u5361\u7247 ${value.dsh_menu}`,
+          fallbackText: command.reply ?? ""
         });
-        if (patched) return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
+        return { toast: { type: "success", content: `\u5DF2\u6267\u884C ${value.dsh_menu}` } };
       }
       if (command.reply) {
         if (event.messageId) {
@@ -128102,7 +128116,8 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         logger.info?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u6CA1\u6709\u5339\u914D\u7684\u5F85\u5BA1\u6279\uFF08${bot.id} ${operatorId}\uFF09`);
         return { toast: { type: "info", content: "\u8FD9\u6B21\u6388\u6743\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
       }
-      await markAnswered(event, value.dsh, decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD");
+      const markTitle = decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD";
+      afterResponse(() => markAnswered(event, value.dsh, markTitle).catch((error) => noteCardError("\u5BA1\u6279\u5361\u7247\u6807\u8BB0\u5931\u8D25", error?.message ?? error)));
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
     const formValue = event?.action?.formValue ?? {};

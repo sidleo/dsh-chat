@@ -32,6 +32,15 @@ const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 
 /** 命令清单卡一行放几个按钮（超出的换到下一行，绝不截断命令）。 */
 const MENU_ROW_SIZE = 4;
 
+/**
+ * 交互回传的卡片重画要**等回调应答先发出去**，再动手（默认延迟）。
+ *
+ * 飞书客户端在回调应答落地时会把卡片还原成"用户点击前"的快照：先更新再应答 = 更新被还原，
+ * 真机表现就是"卡片闪一下又变回原样"，而日志里那次 update 明明是成功的。
+ * 延迟更新接口本来就是为"应答之后再更新"设计的（token 30 分钟内有效）。
+ */
+const RESPONSE_SETTLE_MS = 50;
+
 /** 卡片上的时间戳（本地 时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
 function panelClock() {
   const now = new Date();
@@ -1008,6 +1017,67 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
 
     /**
+     * 把一次卡片更新排到**回调应答之后**执行。
+     *
+     * 默认实现是"下一个宏任务 + 一点缓冲"：SDK 在 handler 的 promise 落地后才把应答发回飞书，
+     * 所以宏任务一定晚于应答的发送。测试可注入 `deps.scheduleAfterResponse` 收集这些任务，
+     * 从而显式断言"重画发生在应答之后"。
+     */
+    function afterResponse(task) {
+      if (typeof deps.scheduleAfterResponse === 'function') {
+        deps.scheduleAfterResponse(task);
+        return;
+      }
+      const timer = setTimeout(() => { void task(); }, RESPONSE_SETTLE_MS);
+      timer.unref?.();
+    }
+
+    /** 应答之后重画控制面板。失败照旧可见（日志 + `lastError`），只是不能进 toast 了。 */
+    function repaintAfterResponse(last, source) {
+      afterResponse(() => repaintPanel(last, source).then((ok) => {
+        if (!ok) noteCardError(`控制面板应答后重画失败（${source}）`, '未画出，见上面的 warn');
+      }).catch((error) => {
+        noteCardError(`控制面板应答后重画失败（${source}）`, error?.message ?? error);
+      }));
+    }
+
+    /**
+     * 应答之后就地更新当前卡片（按钮/命令清单这类"把这张卡换成另一张卡"的场景）。
+     *
+     * 优先用交互带来的延迟更新 token，没有或失败再退回 `message.patch`——patch 只在
+     * "应答已经落地"之后才有用，顺序反了会被客户端还原。
+     */
+    function refreshCardAfterResponse({ card, label, fallbackText = '' }) {
+      afterResponse(async () => {
+        /** 三条路都没成时退回"回一句话"，用户不会什么都收不到。 */
+        const fallback = async () => {
+          if (!fallbackText) return;
+          await gateway.replyText({ messageId: event.messageId, text: fallbackText }).catch(() => {});
+        };
+        if (typeof event.token === 'string' && event.token) {
+          try {
+            await gateway.updateCard({ token: event.token, card, openIds: [operatorId] });
+            logger.info?.(`[dsh-chat-feishu] ${label}已就地更新（token 路径）`);
+            return;
+          } catch (error) {
+            logger.warn?.(`[dsh-chat-feishu] ${label}延迟更新失败，改用 patch：${error?.message ?? error}`);
+          }
+        }
+        if (!event.messageId) {
+          await fallback();
+          return;
+        }
+        try {
+          await gateway.patchCard({ messageId: event.messageId, card });
+          logger.info?.(`[dsh-chat-feishu] ${label}已就地更新（patch 路径）`);
+        } catch (error) {
+          noteCardError(`${label}就地更新失败`, error?.message ?? error);
+          await fallback();
+        }
+      });
+    }
+
+    /**
      * 下拉（select_static）：`behaviors.callback` 直接回调，选中值在 `event.action.options`。
      *
      * 这是这次改造的核心：选完立即生效并把同一张卡片重画（成功 ✅、失败 ❌ 带原因），
@@ -1028,19 +1098,15 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
-        const painted = await repaintPanel({ label: pick.label, message, ok: true }, `pick:${value.action}`);
-        // 生效了但卡片没刷出去也要说：否则用户看到的是旧值与旧 ✓，只会反复点。
-        return {
-          toast: {
-            type: painted ? 'success' : 'warning',
-            content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}（卡片更新失败，请重发 /menu）`,
-          },
-        };
+        // 重画排在应答之后：先更新再应答会被客户端还原（"闪一下又变回去"）。
+        repaintAfterResponse({ label: pick.label, message, ok: true }, `pick:${value.action}`);
+        return { toast: { type: 'success', content: message.slice(0, 80) } };
       } catch (error) {
         // 失败必须可见：日志 + 卡片上的 ❌ 一行 + 错误 toast。
         noteCardError(`控制面板应用失败（${pick.field}=${pick.value}）`, error?.message ?? error);
         const message = error?.message ?? String(error);
-        await repaintPanel({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
+        // 这一步同样要排在应答之后，否则 ❌ 也会被还原。
+        repaintAfterResponse({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
         return { toast: { type: 'error', content: message.slice(0, 80) } };
       }
     }
@@ -1055,35 +1121,17 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       logger.info?.(`[dsh-chat-feishu] 控制面板按钮：${value.dsh_panel} → ${JSON.stringify(action ?? null)}（${bot.id}）`);
       if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
       if (action.panel) {
-        const ok = await repaintPanel(null, 'button:panel');
-        if (!ok) {
-          // 不能谎报成功：卡片没画出来就说清楚（日志里同时有 warn 现场）。
-          return { toast: { type: 'error', content: '控制面板更新失败，请重发 /menu。' } };
-        }
-        return { toast: { type: 'info', content: '已回到控制面板' } };
+        repaintAfterResponse(null, 'button:panel');
+        // 同上：不宣称"已回到"，等应答之后的这次重画落地（失败落 lastError）。
+        return { toast: { type: 'info', content: '正在返回控制面板…' } };
       }
       if (action.menu) {
         const items = await menuItemsFor(commandContext);
         if (items.length > 0 && event.messageId) {
-          // 同样是交互驱动的更新：优先延迟更新 token，退回 patchCard。
-          const viaToken = event.token
-            ? await gateway.updateCard({ token: event.token, card: menuCard(items) })
-              .then(() => true).catch((error) => {
-                logger.warn?.(`[dsh-chat-feishu] 命令清单延迟更新失败：${error?.message ?? error}`);
-                return false;
-              })
-            : false;
-          const patched = viaToken || await gateway.patchCard({
-            messageId: event.messageId, card: menuCard(items),
-          }).then(() => true).catch((error) => {
-            logger.warn?.(`[dsh-chat-feishu] 命令清单就地更新失败：${error?.message ?? error}`);
-            return false;
-          });
-          if (patched) {
-            logger.info?.(`[dsh-chat-feishu] 已切到命令清单（${bot.id} 命令数=${items.length}`
-              + `${viaToken ? '，token 路径' : '，patch 路径'}）`);
-            return { toast: { type: 'info', content: '已切到命令清单' } };
-          }
+          // 同样是交互驱动的更新：**排在应答之后**，否则一切换就被还原。
+          refreshCardAfterResponse({ card: menuCard(items), label: '命令清单' });
+          // 不写"已切到"：更新排在应答之后，此刻还没画上去（画失败会落 lastError）。
+          return { toast: { type: 'info', content: '正在切到命令清单…' } };
         }
         value.dsh_menu = '/help';
         fromPanel = true;
@@ -1093,17 +1141,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           try {
             const applied = await deps.panel.apply({ ...panelContext, field: 'session', value: action.value });
             const message = applied?.message ?? '已生效。';
-            const painted = await repaintPanel({ label: action.label, message, ok: true }, 'button:new');
-            return {
-              toast: {
-                type: painted ? 'success' : 'warning',
-                content: painted ? message.slice(0, 80) : `${message.slice(0, 60)}（卡片更新失败，请重发 /menu）`,
-              },
-            };
+            repaintAfterResponse({ label: action.label, message, ok: true }, 'button:new');
+            return { toast: { type: 'success', content: message.slice(0, 80) } };
           } catch (error) {
             noteCardError('控制面板应用失败（session=new）', error?.message ?? error);
             const message = error?.message ?? String(error);
-            await repaintPanel({ label: action.label, message, ok: false }, 'button:new(失败)');
+            repaintAfterResponse({ label: action.label, message, ok: false }, 'button:new(失败)');
             return { toast: { type: 'error', content: message.slice(0, 80) } };
           }
         }
@@ -1126,32 +1169,24 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
        */
       if (fromPanel) {
         const reply = String(command.reply ?? '');
-        const painted = await repaintPanel({
+        repaintAfterResponse({
           label: value.dsh_menu,
           message: reply || '（没有输出）',
           ok: !reply.startsWith('命令执行失败'),
         }, `command-from-panel:${value.dsh_menu}`);
-        if (painted) return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
+        return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
       }
       // 就地更新：把"点了哪个命令 + 输出"画回同一张卡片，按钮保持可用。
       // 取不到卡片 messageId 时退回原路（回文字），行为不变。
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
       if (items.length > 0 && event.messageId) {
-        const card = menuCard(items, { command: value.dsh_menu, reply: command.reply ?? '' });
-        // 点按钮是交互驱动：先走延迟更新 token（否则会被客户端还原），失败再 patch。
-        const viaToken = event.token
-          ? await gateway.updateCard({ token: event.token, card }).then(() => true).catch((error) => {
-            logger.warn?.(`[dsh-chat-feishu] 菜单卡片延迟更新失败：${error?.message ?? error}`);
-            return false;
-          })
-          : false;
-        const patched = viaToken || await gateway.patchCard({
-          messageId: event.messageId, card,
-        }).then(() => true).catch((error) => {
-          logger.warn?.(`[dsh-chat-feishu] 菜单卡片就地更新失败，回退为回文字：${error?.message ?? error}`);
-          return false;
+        // 点按钮是交互驱动：更新必须排在应答之后（否则"点了又变回去"）。
+        refreshCardAfterResponse({
+          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? '' }),
+          label: `菜单卡片 ${value.dsh_menu}`,
+          fallbackText: command.reply ?? '',
         });
-        if (patched) return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
+        return { toast: { type: 'success', content: `已执行 ${value.dsh_menu}` } };
       }
       if (command.reply) {
         if (event.messageId) {
@@ -1213,7 +1248,10 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         logger.info?.(`[dsh-chat-feishu] 卡片回调没有匹配的待审批（${bot.id} ${operatorId}）`);
         return { toast: { type: 'info', content: '这次授权已经处理过了。' } };
       }
-      await markAnswered(event, value.dsh, decision === 'allowed-once' ? '已允许' : '已拒绝');
+      // 同样排在应答之后：否则卡片上的"已允许"也会被还原成两个按钮。
+      const markTitle = decision === 'allowed-once' ? '已允许' : '已拒绝';
+      afterResponse(() => markAnswered(event, value.dsh, markTitle)
+        .catch((error) => noteCardError('审批卡片标记失败', error?.message ?? error)));
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 
