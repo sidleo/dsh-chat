@@ -127007,6 +127007,7 @@ function createTurnPresenter({
 
 // packages/dsh-chat-feishu/host/panel-card.mjs
 var MAX_OPTIONS = 30;
+var FOLLOW_DEFAULT = "__default__";
 var h = (value) => String(value ?? "");
 function mark(current, value, label) {
   return `${current === value ? "\u2713 " : ""}${label}`;
@@ -127082,10 +127083,10 @@ function panelCard(state, { last = null } = {}) {
       action: "reasoning_pick",
       placeholder: "\u9009\u62E9\u63A8\u7406\u7B49\u7EA7",
       items: [
-        { value: "", label: "\uFF08\u6A21\u578B\u9ED8\u8BA4\uFF09" },
+        { value: FOLLOW_DEFAULT, label: "\uFF08\u6A21\u578B\u9ED8\u8BA4\uFF09" },
         ...efforts.map((effort) => ({ value: effort.id, label: `${effort.id}${effort.label && effort.label !== effort.id ? ` \xB7 ${effort.label}` : ""}` }))
       ],
-      current: model.currentEffort ?? ""
+      current: model.currentEffort ?? FOLLOW_DEFAULT
     });
     if (effortPicker) elements.push(effortPicker);
   } else if (bound && current) {
@@ -127100,10 +127101,10 @@ function panelCard(state, { last = null } = {}) {
     action: "preset_pick",
     placeholder: "\u9009\u62E9 Agent \u9884\u8BBE",
     items: [
-      { value: "", label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
+      { value: FOLLOW_DEFAULT, label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
       ...(state?.preset?.options ?? []).map((item) => ({ value: item.id, label: item.id }))
     ],
-    current: state?.preset?.current ?? ""
+    current: state?.preset?.current ?? FOLLOW_DEFAULT
   });
   if (presetPicker) elements.push(presetPicker);
   const workspacePicker = dropdown({
@@ -127156,8 +127157,9 @@ function panelPick(action, options) {
   };
   const target = map[action];
   if (!target) return null;
-  const value = Array.isArray(options) ? options[0] ?? "" : "";
-  return { field: target.field, value: String(value), label: target.label };
+  const picked = Array.isArray(options) ? options[0] ?? "" : "";
+  const value = picked === FOLLOW_DEFAULT ? "" : String(picked);
+  return { field: target.field, value, label: target.label };
 }
 function panelButton(action) {
   const map = {

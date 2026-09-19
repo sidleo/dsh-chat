@@ -18,6 +18,14 @@
 /** 下拉最多列多少个选项（模型可能几十个，卡片放不下）。 */
 const MAX_OPTIONS = 30;
 
+/**
+ * "恢复默认"在下拉里的哨兵值。
+ *
+ * 不能用空串：飞书对 `value: ''` 的选项不可靠（dsh-im 用的是同样的哨兵做法）；
+ * 哨兵在 `panelPick` 里翻译回 `''`（= hub 侧"默认/清除"的语义）。
+ */
+const FOLLOW_DEFAULT = '__default__';
+
 const h = (value) => String(value ?? '');
 
 function mark(current, value, label) {
@@ -116,10 +124,10 @@ export function panelCard(state, { last = null } = {}) {
       action: 'reasoning_pick',
       placeholder: '选择推理等级',
       items: [
-        { value: '', label: '（模型默认）' },
+        { value: FOLLOW_DEFAULT, label: '（模型默认）' },
         ...efforts.map((effort) => ({ value: effort.id, label: `${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}` })),
       ],
-      current: model.currentEffort ?? '',
+      current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
     if (effortPicker) elements.push(effortPicker);
   } else if (bound && current) {
@@ -136,10 +144,10 @@ export function panelCard(state, { last = null } = {}) {
     action: 'preset_pick',
     placeholder: '选择 Agent 预设',
     items: [
-      { value: '', label: '跟随 Host 默认' },
+      { value: FOLLOW_DEFAULT, label: '跟随 Host 默认' },
       ...(state?.preset?.options ?? []).map((item) => ({ value: item.id, label: item.id })),
     ],
-    current: state?.preset?.current ?? '',
+    current: state?.preset?.current ?? FOLLOW_DEFAULT,
   });
   if (presetPicker) elements.push(presetPicker);
   const workspacePicker = dropdown({
@@ -207,8 +215,10 @@ export function panelPick(action, options) {
   };
   const target = map[action];
   if (!target) return null;
-  const value = Array.isArray(options) ? (options[0] ?? '') : '';
-  return { field: target.field, value: String(value), label: target.label };
+  const picked = Array.isArray(options) ? (options[0] ?? '') : '';
+  // 哨兵 → 空串：hub 侧的空值语义是"恢复默认/清除"。
+  const value = picked === FOLLOW_DEFAULT ? '' : String(picked);
+  return { field: target.field, value, label: target.label };
 }
 
 /** 面板按钮 → 动作：新会话 / 状态 / 命令清单 / 停止 / 回到面板。 */

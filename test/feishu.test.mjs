@@ -2210,6 +2210,10 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.equal(byName.workspace_pick.initial_index, 2);
   assert.ok(picks.every((el) => el.options.every((option) => option.selected === undefined)),
     'options 上不能有 selected（会 230099）');
+  // 选项值不能是空串（飞书对 value:'' 不可靠）："恢复默认"用哨兵，回调时再翻译回空串。
+  assert.ok(picks.every((el) => el.options.every((option) => option.value !== '')),
+    '下拉选项值不能为空串');
+  assert.equal(byName.reasoning_pick.options[0].value, '__default__');
   // 当前值要有 ✓ 标记，用户一眼看到现在是什么。
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
 });
@@ -2226,4 +2230,13 @@ test('控制面板卡：没有会话时不放下拉，直接说明要先建会�
   const names = card.body.elements.filter((el) => el.tag === 'select_static').map((el) => el.name);
   assert.ok(!names.includes('model_pick'), '没有会话时不给模型下拉（点了也改不了）');
   assert.match(JSON.stringify(card), /先在这里发一条消息/);
+});
+
+test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义在 hub 侧是空值）', async () => {
+  const { panelPick } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  assert.deepEqual(panelPick('reasoning_pick', ['__default__']), { field: 'reasoning', value: '', label: '设置推理等级' });
+  assert.deepEqual(panelPick('preset_pick', ['__default__']), { field: 'preset', value: '', label: '设置 Agent 预设' });
+  assert.deepEqual(panelPick('model_pick', ['deepseek/flash']), { field: 'model', value: 'deepseek/flash', label: '切换模型' });
+  assert.deepEqual(panelPick('workspace_pick', ['/ws/a']), { field: 'workspace', value: '/ws/a', label: '切换工作区' });
+  assert.equal(panelPick('other_pick', ['x']), null, '不是面板下拉就返回 null（别把别人的回调当自己的）');
 });
