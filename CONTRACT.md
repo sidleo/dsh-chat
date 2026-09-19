@@ -149,8 +149,8 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
   /**
    * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
-   * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,hostDefault,failures,
-   *                                        options,efforts,currentEffort,selectionFailed},
+   * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,botDefault,hostDefault,
+   *                                        failures,options,efforts,currentEffort,selectionFailed},
    *                                        preset{current,options,failed}, workspace{current,options} }
    *      `workspace.options` 是这台机器人各会话的工作区候选（含绝对路径）：**只给属主，
    *      且只在私聊**（`key` 不带 `group:` 前缀）；群聊卡片是一条群里所有人都能展开的消息，
@@ -158,9 +158,15 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      `model.failures` 是读不到模型的 provider 及原因，`model.selectionFailed` 表示当前会话的
    *      模型选择**读失败**（不是"没选过"），`preset.failed` 表示预设列表**读失败**（与"列表为空"
    *      是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设/跟随 Host 默认"。
+   *      `model.botDefault` 是**机器人默认模型** `{provider,model,reasoningEffort}`（可能为 null）：
+   *      未绑定时它就是"当前生效的模型"，由 `sessions.ensure()` 在新建会话后 `selectModel` 应用。
    * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session
-   *      `isOwner` 由渠道判定后传入：**preset / workspace 是机器人级设置，只限属主**
+   *      **model / reasoning 的落点看有没有会话**：有会话 → 会话级（`session/selectModel`，立即生效）；
+   *      没有会话 → **机器人默认模型**（只对新会话生效）。后者是机器人级设置，同样只限属主
+   *      （DSH 的 `session/create` 没有模型参数，`selectModel` 必须带 sessionId，所以未绑定时
+   *      只能先存成机器人默认，由建会话时应用）。
+   *      `isOwner` 由渠道判定后传入：**preset / workspace（以及未绑定时的 model / reasoning）只限属主**
    *      （非属主改会拿到 chat/owner-only；工作区候选来自这台机器人所有会话，不能给普通成员改）
    *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
    *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /

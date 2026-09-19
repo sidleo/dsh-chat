@@ -9,6 +9,8 @@
  */
 
 import * as accessPolicy from '../shared/access-policy.mjs';
+
+import { botModelForSelection, describeBotModel, normalizeBotModel } from './bot-model.mjs';
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 
 /** 命令名前缀。 */
@@ -213,6 +215,16 @@ async function readSelection(context, sessionId) {
   }
 }
 
+/**
+ * 机器人默认模型（没有会话时 `/model`、`/reasoning` 改的就是它）。
+ *
+ * DSH 的模型选择是会话级的（`session/create` 没有模型参数、`selectModel` 必须带 sessionId），
+ * 而未绑定的聊天还没有会话——于是把"先挑好模型"存成机器人级默认，由建会话时应用。
+ */
+function botModelOf(context) {
+  return normalizeBotModel(context.services.bots?.read?.(context.channelId, context.botId)?.model);
+}
+
 function findModel(rows, token) {
   const byIndex = indexOf(token);
   if (byIndex !== null) return rows[byIndex] ?? null;
@@ -410,7 +422,7 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
         `会话：${bound?.sessionId ?? '未绑定（发一条消息即可创建）'}`,
         `运行中：${running === null ? '未知' : running ? '是' : '否'}`,
         `工作区：${record.workspace ?? '未设置'}`,
-        `模型：${record.model ? `${record.model.providerId ?? record.model.provider}/${record.model.modelId ?? record.model.model}` : '跟随 Host 默认'}`,
+        `模型：${describeBotModel(record.model) ? `机器人默认 ${describeBotModel(record.model)}` : '未设机器人默认（跟随 Host 默认）'}`,
         `Agent Preset：${record.agentPreset ?? '跟随 Host 默认'}`,
       ].join('\n');
     },
@@ -540,21 +552,40 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
     usage: '/model [序号或 provider/模型id] [推理等级]',
     execute: async (context) => {
       const sessionId = await boundSession(context);
+      const botModel = botModelOf(context);
       if (context.args.length === 0) {
-        if (!sessionId) return '当前聊天还没有会话；先发一条消息，或用 /model 在已有会话里切换。';
+        if (!sessionId) {
+          return botModel
+            ? `还没有会话：机器人默认模型 ${describeBotModel(botModel)}（下一条消息新建的会话用它）。`
+              + '用 /model <序号或 provider/模型id> 就能现在就改。'
+            : '还没有会话，也还没设过机器人默认模型（当前跟随 Host 默认）。'
+              + '用 /model <序号或 provider/模型id> 设一个，下一条消息新建的会话就用它。';
+        }
         const { selection, failed } = await readSelection(context, sessionId);
         if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
         return selection
           ? `当前模型：${selection.provider}/${selection.model}${selection.reasoningEffort ? `（推理等级 ${selection.reasoningEffort}）` : ''}`
           : '当前会话没有显式选择模型（跟随 Host 默认）。';
       }
-      if (!sessionId) return '当前聊天还没有会话，无法切换模型；先发一条消息。';
       const { rows } = await modelCatalog(context);
       const target = findModel(rows, context.args[0]);
       if (!target) return `找不到模型 ${context.args[0]}；用 /models 查看可用列表。`;
       const effort = context.args[1];
       if (effort && !target.efforts.some((item) => item.id === effort)) {
         return `模型 ${target.provider}/${target.model} 不支持推理等级 ${effort}。`;
+      }
+      if (!sessionId) {
+        // 没有会话 → 写机器人默认模型（机器人级设置，与工作区/预设同一条口径：只限属主）。
+        if (context.isOwner !== true) {
+          return '还没有会话：这时改的是机器人默认模型（机器人级设置），只有属主能改。';
+        }
+        const next = botModelForSelection(botModel, {
+          provider: target.provider, model: target.model, reasoningEffort: effort || null,
+        });
+        await context.services.bots.write(context.channelId, context.botId, { model: next });
+        return `机器人默认模型已设为 ${target.provider}/${target.model}`
+          + `${next.reasoningEffort ? `（推理等级 ${next.reasoningEffort}）` : ''}`
+          + '（还没有会话：下一条消息新建的会话用它）。';
       }
       const selected = await context.services.sessions.invoke('session', 'selectModel', {
         request: {
@@ -597,14 +628,43 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
     usage: '/reasoning [序号或等级id|--default]',
     execute: async (context) => {
       const sessionId = await boundSession(context);
+      const botModel = botModelOf(context);
       if (context.args.length === 0) {
-        if (!sessionId) return '当前聊天还没有会话。';
+        if (!sessionId) {
+          return botModel
+            ? `还没有会话：机器人默认模型 ${describeBotModel(botModel)}（下一条消息新建的会话用它）。`
+            : '还没有会话，也还没设过机器人默认模型：先 /model 选一个模型。';
+        }
         const { selection, failed } = await readSelection(context, sessionId);
         if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
         if (!selection) return '当前会话没有显式选择模型。';
         return `当前模型 ${selection.provider}/${selection.model}，推理等级 ${selection.reasoningEffort ?? '（默认）'}。`;
       }
-      if (!sessionId) return '当前聊天还没有会话，无法切换推理等级；先发一条消息。';
+      if (!sessionId) {
+        // 没有会话 → 改机器人默认模型的推理等级。
+        if (context.isOwner !== true) {
+          return '还没有会话：这时改的是机器人默认模型（机器人级设置），只有属主能改。';
+        }
+        if (!botModel) return '还没有会话，也没设过机器人默认模型：先 /model 选一个模型。';
+        const { rows } = await modelCatalog(context);
+        const current = rows.find((row) => row.provider === botModel.provider && row.model === botModel.model);
+        if (!current) return `机器人默认模型 ${botModel.provider}/${botModel.model} 不在可用列表里。`;
+        const wanted = context.args[0] === '--default'
+          ? null
+          : (indexOf(context.args[0]) !== null
+            ? current.efforts[indexOf(context.args[0])]?.id
+            : context.args[0]);
+        if (wanted && !current.efforts.some((item) => item.id === wanted)) {
+          return `找不到推理等级 ${context.args[0]}；用 /reasonings 查看可用列表。`;
+        }
+        await context.services.bots.write(context.channelId, context.botId, {
+          model: { ...botModel, reasoningEffort: wanted ?? null },
+        });
+        return wanted
+          ? `机器人默认推理等级已设为 ${wanted}（还没有会话：下一条消息新建的会话用它）。`
+          : `机器人默认模型已恢复 ${current.provider}/${current.model} 的默认推理等级`
+            + `${current.defaultEffort ? `（${current.defaultEffort}）` : ''}（对新会话生效）。`;
+      }
       const { selection, failed } = await readSelection(context, sessionId);
       if (failed) return '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。';
       if (!selection) return '当前会话没有显式选择模型，无法单独设置推理等级。';

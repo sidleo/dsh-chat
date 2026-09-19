@@ -127057,13 +127057,15 @@ function panelCard(state, { last = null, at = null } = {}) {
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
+  const botDefault = model.botDefault ?? null;
   const hostDefault = model.hostDefault ?? null;
+  const effective = model.selectionFailed === true ? null : current ?? botDefault;
   elements.push({
     tag: "markdown",
     content: [
       `**\u5F53\u524D\u4F1A\u8BDD**\u3000${bound ? `\`${h(state.sessionId)}\`` : "\u672A\u7ED1\u5B9A\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u65B0\u5EFA\uFF09"}`,
       // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
-      `**\u6A21\u578B**\u3000${model.selectionFailed === true ? "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5" : current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+      `**\u6A21\u578B**\u3000${model.selectionFailed === true ? "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5" : current ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(current.reasoningEffort)}` : ""}` : botDefault ? `\u673A\u5668\u4EBA\u9ED8\u8BA4 ${h(botDefault.provider)}/${h(botDefault.model)}${botDefault.reasoningEffort ? ` \xB7 \u63A8\u7406 ${h(botDefault.reasoningEffort)}` : ""}\uFF08\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\uFF09` : hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${h(hostDefault.provider)}/${h(hostDefault.model)}\uFF09` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       `**Agent \u9884\u8BBE**\u3000${state?.preset?.current ? `\`${h(state.preset.current)}\`` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
       // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
       // 写成"用默认目录"会让用户以为发条消息就能建会话。
@@ -127071,21 +127073,19 @@ function panelCard(state, { last = null, at = null } = {}) {
     ].join("\n")
   });
   elements.push({ tag: "hr" });
-  elements.push({ tag: "markdown", content: "**\u6A21\u578B\u4E0E\u63A8\u7406**\uFF08\u7ACB\u5373\u751F\u6548\uFF0C\u53EA\u5F71\u54CD\u5F53\u524D\u4F1A\u8BDD\uFF09" });
+  elements.push({
+    tag: "markdown",
+    content: bound ? "**\u6A21\u578B\u4E0E\u63A8\u7406**\uFF08\u7ACB\u5373\u751F\u6548\uFF0C\u53EA\u5F71\u54CD\u5F53\u524D\u4F1A\u8BDD\uFF09" : "**\u6A21\u578B\u4E0E\u63A8\u7406**\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u6539\u7684\u662F**\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B**\uFF0C\u53EA\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\uFF0C\u4E14\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\uFF09"
+  });
   const modelPicker = dropdown({
     name: "model_pick",
     action: "model_pick",
-    placeholder: bound ? "\u9009\u62E9\u6A21\u578B" : "\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF09",
+    placeholder: "\u9009\u62E9\u6A21\u578B",
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
-    current: current ? `${current.provider}/${current.model}` : null
+    current: effective ? `${effective.provider}/${effective.model}` : null
   });
-  if (modelPicker.element && bound) {
+  if (modelPicker.element) {
     elements.push(modelPicker.element);
-  } else if (!bound) {
-    elements.push({
-      tag: "markdown",
-      content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A**\u53D1\u4E00\u6761\u6D88\u606F**\u5C31\u4F1A\u5EFA\u7ACB\u4F1A\u8BDD\uFF0C\u4E4B\u540E\u5C31\u80FD\u5728\u8FD9\u91CC\u9009\u6A21\u578B\u3002\uFF08\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\u53EA\u662F\u6E05\u6389\u5F53\u524D\u7ED1\u5B9A\uFF0C\u70B9\u5B8C\u4ECD\u8981\u53D1\u4E00\u6761\u6D88\u606F\u3002\uFF09"
-    });
   } else {
     const failures = Array.isArray(model.failures) ? model.failures : [];
     const catalogUnreadable = failures.length > 0 && failures.every((item) => !item.id);
@@ -127102,7 +127102,7 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
   }
   const efforts = model.efforts ?? [];
-  if (bound && current && efforts.length > 0) {
+  if (effective && efforts.length > 0) {
     const effortPicker = dropdown({
       name: "reasoning_pick",
       action: "reasoning_pick",
@@ -127114,20 +127114,24 @@ function panelCard(state, { last = null, at = null } = {}) {
       current: model.currentEffort ?? FOLLOW_DEFAULT
     });
     if (effortPicker.element) elements.push(effortPicker.element);
-  } else if (bound && current) {
+  } else if (effective) {
     const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
     const listed = (model.options ?? []).some(
-      (item) => item.provider === current.provider && item.model === current.model
+      (item) => item.provider === effective.provider && item.model === effective.model
     );
-    const providerFailed = catalogFailures.some((item) => item.id === current.provider);
+    const providerFailed = catalogFailures.some((item) => item.id === effective.provider);
     elements.push({
       tag: "markdown",
       content: providerFailed || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
     });
+  } else if (model.selectionFailed === true) {
+    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u63A8\u7406\u7B49\u7EA7\u3002" });
   } else if (bound) {
+    elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
+  } else {
     elements.push({
       tag: "markdown",
-      content: model.selectionFailed === true ? "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u63A8\u7406\u7B49\u7EA7\u3002" : "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002"
+      content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u4E5F\u8FD8\u6CA1\u8BBE\u8FC7\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF1A\u5148\u5728\u4E0A\u9762\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002"
     });
   }
   elements.push({ tag: "hr" });

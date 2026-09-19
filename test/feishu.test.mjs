@@ -2270,25 +2270,32 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
 });
 
-test('控制面板卡：没有会话时不放下拉，直接说明要先建会话', async () => {
+test('控制面板卡：没有会话也能选模型——改的是"机器人默认模型"，文案要写清生效范围', async () => {
   const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
   const card = panelCard({
     bound: false,
     sessionId: null,
     model: {
       current: null,
+      // 已经设过一个机器人默认模型：下拉与推理等级都按它来。
+      botDefault: { provider: 'deepseek', model: 'flash', reasoningEffort: 'low' },
       hostDefault: { provider: 'deepseek', model: 'flash' },
-      options: [{ value: 'deepseek/flash', model: 'flash' }],
-      efforts: [],
-      currentEffort: null,
+      options: [{
+        value: 'deepseek/flash', provider: 'deepseek', model: 'flash', efforts: [{ id: 'low' }, { id: 'high' }],
+      }],
+      efforts: [{ id: 'low', label: '低' }, { id: 'high', label: '高' }],
+      currentEffort: 'low',
     },
     preset: { current: null, options: [] },
     workspace: { current: null, options: [] },
   });
   const names = card.body.elements.filter((el) => el.tag === 'select_static').map((el) => el.name);
-  assert.ok(!names.includes('model_pick'), '没有会话时不给模型下拉（点了也改不了）');
-  assert.match(JSON.stringify(card), /发一条消息/, '要写明"发一条消息就会建立会话"');
-  assert.match(JSON.stringify(card), /只是清掉当前绑定/, '别把「新会话」说成能建会话');
+  assert.ok(names.includes('model_pick'), '没有会话也要能选模型（存成机器人默认模型）');
+  assert.ok(names.includes('reasoning_pick'), '机器人默认模型有推理等级时也要能调');
+  const body = JSON.stringify(card);
+  assert.match(body, /机器人默认/);
+  assert.match(body, /下一条消息新建的会话/, '要写明"对新会话生效"，别让用户以为马上生效');
+  assert.match(body, /只有属主能改/, '它是机器人级设置，文案要说明谁改得动');
 });
 
 test('控制面板：哨兵值回调时翻译回空串（"恢复默认"的语义在 hub 侧是空值）', async () => {

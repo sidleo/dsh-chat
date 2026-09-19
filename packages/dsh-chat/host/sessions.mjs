@@ -17,6 +17,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { normalizeBotModel } from './bot-model.mjs';
+
 const MAX_ASSISTANT_TEXT = 200_000;
 
 /**
@@ -313,6 +315,33 @@ export function createSessionBridge({
     }
   }
 
+  /**
+   * 把"机器人默认模型"应用到刚建好的会话。
+   *
+   * 面板与 `/model` 在没有会话时选的是**机器人默认模型**（DSH 的 `session/create` 没有模型参数，
+   * 只能在建好之后 `selectModel`）。失败不能让会话建不出来——记 warn 后退回 Host 默认，
+   * 用户下一条消息照样能跑（真正的现场在日志里）。
+   */
+  async function applyBotModel({ sessionId, botModel, signal, channelId, botId }) {
+    if (!botModel) return;
+    const label = `${botModel.provider}/${botModel.model}`
+      + `${botModel.reasoningEffort ? ` · 推理 ${botModel.reasoningEffort}` : ''}`;
+    try {
+      await invoke('session', 'selectModel', {
+        request: {
+          sessionId,
+          provider: botModel.provider,
+          model: botModel.model,
+          ...(botModel.reasoningEffort ? { reasoningEffort: botModel.reasoningEffort } : {}),
+        },
+      }, signal);
+      logger.info?.(`[dsh-chat] 新会话应用机器人默认模型：${label}（${channelId}/${botId}）`);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] 应用机器人默认模型失败（${label}，${channelId}/${botId}）：`
+        + `${error?.message ?? error}`);
+    }
+  }
+
   async function ensure({
     channelId, botId, key, workspacePath, signal, channelLabel = '', botLabel = '',
   }) {
@@ -354,6 +383,7 @@ export function createSessionBridge({
       throw error;
     }
     await store.bind(channelId, botId, key, { sessionId, workspacePath });
+    await applyBotModel({ sessionId, botModel: normalizeBotModel(record.model), signal, channelId, botId });
     return { sessionId, created: true };
   }
 

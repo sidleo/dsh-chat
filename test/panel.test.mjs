@@ -154,7 +154,7 @@ test('读面板：没有会话时不假装能改模型', async () => {
   assert.ok(state.model.options.length > 0, '模型列表本身照旧给出，便于先看再选');
 });
 
-test('应用：选模型 → session/selectModel；没会话 / 模型不存在都明确报错', async () => {
+test('应用：选模型 → session/selectModel；没会话时写"机器人默认模型"（只限属主）', async () => {
   const { panel, calls } = makePanel();
   const result = await panel.apply({
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
@@ -166,12 +166,30 @@ test('应用：选模型 → session/selectModel；没会话 / 模型不存在�
     sessionId: 'session-1', provider: 'deepseek', model: 'deepseek-v4.1-flash',
   });
 
+  /**
+   * 没有会话时不能改会话（DSH 的模型选择是会话级的），但也不该逼用户"先随便发一条消息"：
+   * 落点是**机器人默认模型**（只对新会话生效）。它是机器人级设置 → 只限属主。
+   */
   const noSession = makePanel({ bound: null });
   await assert.rejects(
     () => noSession.panel.apply({
       channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'model', value: 'deepseek/deepseek-v4.1-flash',
     }),
-    (error) => error.code === 'chat/no-session' && /还没有会话/.test(error.message),
+    (error) => error.code === 'chat/owner-only' && /机器人默认模型/.test(error.message),
+  );
+
+  const asOwner = await noSession.panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'model',
+    value: 'deepseek/deepseek-v4.1-flash', isOwner: true,
+  });
+  assert.match(asOwner.message, /机器人默认模型已设为 deepseek\/deepseek-v4.1-flash/);
+  assert.match(asOwner.message, /下一条消息新建的会话/);
+  assert.deepEqual(noSession.state.model, {
+    provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: null,
+  });
+  assert.equal(
+    noSession.calls.some((call) => call.method === 'selectModel'), false,
+    '没有会话就不该调 session/selectModel（它必须带 sessionId）',
   );
 
   await assert.rejects(
@@ -423,4 +441,68 @@ test('读面板：会话模型选择读成功时 selectionFailed 是 false（别
   const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
   assert.equal(view.model.selectionFailed, false);
   assert.equal(view.model.current?.model, 'deepseek-v4.1-flash');
+});
+
+test('未绑定时的推理等级改的是机器人默认模型，且只限属主', async () => {
+  const { panel, state, calls } = makePanel({ bound: null, record: {} });
+
+  // 还没有机器人默认模型：先选模型。
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'reasoning', value: 'high', isOwner: true,
+    }),
+    (error) => error.code === 'chat/no-model',
+  );
+
+  await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'model',
+    value: 'deepseek/deepseek-v4.1-flash', isOwner: true,
+  });
+  const set = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'reasoning', value: 'high', isOwner: true,
+  });
+  assert.match(set.message, /机器人默认推理等级已设为 high/);
+  assert.equal(state.model.reasoningEffort, 'high');
+
+  // 非属主改不动。
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'reasoning', value: 'low',
+    }),
+    (error) => error.code === 'chat/owner-only',
+  );
+
+  // 换模型时重置等级（等级是模型自己的能力，跨模型沿用会给出不支持的取值）。
+  await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'model',
+    value: 'anthropic/claude-x', isOwner: true,
+  });
+  assert.deepEqual(state.model, { provider: 'anthropic', model: 'claude-x', reasoningEffort: null });
+  assert.equal(calls.some((call) => call.method === 'selectModel'), false);
+});
+
+test('读面板：未绑定时给出机器人默认模型与它的推理等级选项', async () => {
+  const { panel } = makePanel({
+    bound: null,
+    record: { model: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' } },
+  });
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+
+  assert.equal(view.bound, false);
+  assert.deepEqual(view.model.botDefault, {
+    provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'low',
+  });
+  assert.deepEqual(view.model.efforts.map((item) => item.id), ['low', 'high'], '推理等级按机器人默认模型给');
+  assert.equal(view.model.currentEffort, 'low');
+});
+
+test('读面板：兼容旧 dsh-im 的 { providerId, modelId } 形状', async () => {
+  const { panel } = makePanel({
+    bound: null,
+    record: { model: { providerId: 'deepseek', modelId: 'deepseek-v4.1-flash' } },
+  });
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.deepEqual(view.model.botDefault, {
+    provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: null,
+  });
 });

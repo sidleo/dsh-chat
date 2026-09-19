@@ -17,6 +17,8 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 
+import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
+
 function panelError(code, message) {
   const error = new Error(message);
   error.code = code;
@@ -213,8 +215,15 @@ export function createPanelService({
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
-      const currentModel = selection
-        ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null
+      /** 机器人默认模型：没有会话时选模型就写它，下一条消息新建的会话应用（见 bot-model.mjs）。 */
+      const botDefault = normalizeBotModel(record.model);
+      /**
+       * 卡片该显示"当前用的是哪个模型"：有会话就看会话选择；没有会话就看机器人默认。
+       * **读会话失败时不能退回默认**——那会把"读不到"显示成一个具体的模型（谎报）。
+       */
+      const effective = selectionState.failed ? null : (selection ?? botDefault);
+      const effectiveModel = effective
+        ? options.find((item) => item.provider === effective.provider && item.model === effective.model) ?? null
         : null;
       return {
         sessionId,
@@ -223,13 +232,15 @@ export function createPanelService({
           current: selection,
           // `true` = 这次读**失败**了（不是"没选过"）：卡片必须如实说读不到。
           selectionFailed: selectionState.failed === true,
+          // 机器人默认模型（没有会话时选的那个）：卡片在未绑定时显示它并允许改。
+          botDefault,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
           failures: catalog.failures ?? [],
           options,
-          // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
-          efforts: currentModel?.efforts ?? [],
-          currentEffort: selection?.reasoningEffort ?? null,
+          // 推理等级取决于"当前生效的那个模型"：会话内的选择，或（没有会话时）机器人默认。
+          efforts: effectiveModel?.efforts ?? [],
+          currentEffort: effective?.reasoningEffort ?? null,
         },
         preset: {
           current: record.agentPreset ?? null,
@@ -268,11 +279,56 @@ export function createPanelService({
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
 
+      /**
+       * 模型与推理：有会话时改**会话**（立即生效）；没有会话时改**机器人默认模型**
+       * （只对下一条消息新建的会话生效）——DSH 不允许给"还不存在的会话"选模型
+       * （`session/create` 没有模型参数），所以未绑定时的落点就是机器人设置。
+       */
+      const botDefault = normalizeBotModel(record.model);
       if (field === 'model' || field === 'reasoning') {
         if (!sessionId) {
-          // 措辞要与实际行为一致：「新会话」只清绑定，会话要等第一条消息才建立。
-          throw panelError('chat/no-session',
-            '当前聊天还没有会话：先发一条消息建立会话，然后就能选（「新会话」只是清掉绑定）。');
+          // 未绑定 = 改机器人级设置：与预设/工作区同一条口径，只限属主。
+          if (isOwner !== true) {
+            throw panelError('chat/owner-only',
+              '还没有会话：这里改的是机器人默认模型（机器人级设置），只有属主能改。');
+          }
+          const { options } = await modelCatalog();
+          if (field === 'model') {
+            const target = options.find((item) => item.value === value);
+            if (!target) throw panelError('chat/unknown-model', `找不到模型 ${value}。`);
+            const next = botModelForSelection(botDefault, { provider: target.provider, model: target.model });
+            await settings.write(channelId, botId, { model: next });
+            return {
+              field,
+              value: target.value,
+              message: `机器人默认模型已设为 ${next.provider}/${next.model}`
+                + `${next.reasoningEffort ? ` · 推理 ${next.reasoningEffort}` : ''}`
+                + '（还没有会话：下一条消息新建的会话用它）。',
+            };
+          }
+          if (!botDefault) {
+            throw panelError('chat/no-model', '还没有选过模型：先选一个机器人默认模型，再改推理等级。');
+          }
+          const currentModel = options.find((item) => item.provider === botDefault.provider
+            && item.model === botDefault.model);
+          if (!currentModel) {
+            throw panelError('chat/unknown-model',
+              `机器人默认模型 ${botDefault.provider}/${botDefault.model} 不在可用列表里。`);
+          }
+          const wanted = String(value ?? '');
+          if (wanted !== '' && !currentModel.efforts.some((effort) => effort.id === wanted)) {
+            throw panelError('chat/unknown-effort',
+              `模型 ${currentModel.value} 不支持推理等级 ${wanted}。`);
+          }
+          const next = { ...botDefault, reasoningEffort: wanted || null };
+          await settings.write(channelId, botId, { model: next });
+          return {
+            field,
+            value: wanted,
+            message: wanted
+              ? `机器人默认推理等级已设为 ${wanted}（下一条消息新建的会话用它）。`
+              : '机器人默认推理等级已恢复模型默认（下一条消息新建的会话用它）。',
+          };
         }
         const { options } = await modelCatalog();
         if (field === 'model') {

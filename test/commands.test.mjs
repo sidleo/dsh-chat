@@ -671,3 +671,33 @@ test('读不到会话状态时说"读不到"，不能说成"你从没选过模�
   assert.doesNotMatch(session.reply, /找不到会话/);
   assert.equal(checkFailing.calls.bind.length, 0, '校验没过就不该绑定');
 });
+
+test('没有会话时 /model 与 /reasoning 改的是机器人默认模型（只限属主）', async () => {
+  const { services, calls } = createServices({ bound: false });
+  const registry = createRegistry(services);
+
+  // 还没设过：如实说明，并给出怎么设。
+  const before = await registry.handle(context('/model', { isOwner: true }));
+  assert.match(before.reply, /还没设过机器人默认模型/);
+
+  const model = await registry.handle(context('/model opencode-go/deepseek-v4.1-flash', { isOwner: true }));
+  assert.match(model.reply, /机器人默认模型已设为 opencode-go\/deepseek-v4.1-flash/);
+  assert.match(model.reply, /下一条消息新建的会话/);
+  assert.deepEqual(calls.writes.at(-1)?.patch, {
+    model: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: null },
+  });
+
+  const effort = await registry.handle(context('/reasoning high', { isOwner: true }));
+  assert.match(effort.reply, /机器人默认推理等级已设为 high/);
+  assert.deepEqual(calls.writes.at(-1)?.patch, {
+    model: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
+  });
+
+  // 机器人级设置：非属主改不动。
+  const denied = await registry.handle(context('/model opencode-go/glm-5.3-flash', { isOwner: false }));
+  assert.match(denied.reply, /只有属主能改/);
+
+  // /status 要如实写"机器人默认模型"。
+  const status = await registry.handle(context('/status', { isOwner: true }));
+  assert.match(status.reply, /机器人默认 opencode-go\/deepseek-v4.1-flash · 推理 high/);
+});

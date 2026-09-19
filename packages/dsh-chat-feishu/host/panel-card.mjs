@@ -99,7 +99,14 @@ export function panelCard(state, { last = null, at = null } = {}) {
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
+  /** 机器人默认模型：没有会话时"当前生效的模型"就是它（下一条消息新建的会话用它）。 */
+  const botDefault = model.botDefault ?? null;
   const hostDefault = model.hostDefault ?? null;
+  /**
+   * "当前生效的模型"：有会话看会话选择，没会话看机器人默认。
+   * **读会话失败时不能退回默认**——那会把"读不到"显示成一个具体的模型。
+   */
+  const effective = model.selectionFailed === true ? null : (current ?? botDefault);
 
   // ① 当前状态
   elements.push({
@@ -111,7 +118,11 @@ export function panelCard(state, { last = null, at = null } = {}) {
         ? '读不到当前会话的模型选择（Host 暂时不可用），稍后再试'
         : (current
           ? `${h(current.provider)}/${h(current.model)}${current.reasoningEffort ? ` · 推理 ${h(current.reasoningEffort)}` : ''}`
-          : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认'))}`,
+          : (botDefault
+            ? `机器人默认 ${h(botDefault.provider)}/${h(botDefault.model)}`
+              + `${botDefault.reasoningEffort ? ` · 推理 ${h(botDefault.reasoningEffort)}` : ''}`
+              + '（对下一条消息新建的会话生效）'
+            : (hostDefault ? `跟随 Host 默认（${h(hostDefault.provider)}/${h(hostDefault.model)}）` : '跟随 Host 默认')))}`,
       `**Agent 预设**　${state?.preset?.current ? `\`${h(state.preset.current)}\`` : '跟随 Host 默认'}`,
       // 没有"默认目录"：工作区为空时建会话直接失败（`chat/workspace-required`），
       // 写成"用默认目录"会让用户以为发条消息就能建会话。
@@ -120,24 +131,22 @@ export function panelCard(state, { last = null, at = null } = {}) {
   });
   elements.push({ tag: 'hr' });
 
-  // ② 模型 + 推理等级（会话级：立即生效）
-  elements.push({ tag: 'markdown', content: '**模型与推理**（立即生效，只影响当前会话）' });
+  // ② 模型 + 推理等级：有会话时改会话（立即生效）；没有会话时改**机器人默认模型**（对新会话生效）
+  elements.push({
+    tag: 'markdown',
+    content: bound
+      ? '**模型与推理**（立即生效，只影响当前会话）'
+      : '**模型与推理**（还没有会话：改的是**机器人默认模型**，只对下一条消息新建的会话生效，且只有属主能改）',
+  });
   const modelPicker = dropdown({
     name: 'model_pick',
     action: 'model_pick',
-    placeholder: bound ? '选择模型' : '先发一条消息（还没有会话）',
+    placeholder: '选择模型',
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
-    current: current ? `${current.provider}/${current.model}` : null,
+    current: effective ? `${effective.provider}/${effective.model}` : null,
   });
-  if (modelPicker.element && bound) {
+  if (modelPicker.element) {
     elements.push(modelPicker.element);
-  } else if (!bound) {
-    // 别写成"点新会话就能选模型"：「新会话」只清绑定，会话要等第一条消息才由 ensure() 建立。
-    elements.push({
-      tag: 'markdown',
-      content: '还没有会话：**发一条消息**就会建立会话，之后就能在这里选模型。'
-        + '（「🆕 新会话」只是清掉当前绑定，点完仍要发一条消息。）',
-    });
   } else {
     // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
     // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
@@ -168,7 +177,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
   }
 
   const efforts = model.efforts ?? [];
-  if (bound && current && efforts.length > 0) {
+  if (effective && efforts.length > 0) {
     const effortPicker = dropdown({
       name: 'reasoning_pick',
       action: 'reasoning_pick',
@@ -180,7 +189,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
       current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
     if (effortPicker.element) elements.push(effortPicker.element);
-  } else if (bound && current) {
+  } else if (effective) {
     /**
      * 空 `efforts` 有两种成因，措辞不能混：① 这个模型确实没有推理等级；
      * ② 读不到模型目录（或当前模型不在目录里）。说成①是与事实相反的断言——
@@ -188,23 +197,25 @@ export function panelCard(state, { last = null, at = null } = {}) {
      */
     const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
     const listed = (model.options ?? []).some(
-      (item) => item.provider === current.provider && item.model === current.model,
+      (item) => item.provider === effective.provider && item.model === effective.model,
     );
     // 只看**与当前模型相关**的失败：别的 provider 拉不到模型不代表这个模型列不出等级，
     // 拿它当理由就会把"这个模型确实没有推理等级"说成"读不到目录"（又是一句与事实相反的话）。
-    const providerFailed = catalogFailures.some((item) => item.id === current.provider);
+    const providerFailed = catalogFailures.some((item) => item.id === effective.provider);
     elements.push({
       tag: 'markdown',
       content: providerFailed || !listed
         ? '读不到模型目录，暂时列不出可选推理等级（可以手打 `/reasoning <等级>`）。'
         : '当前模型不支持调节推理等级。',
     });
+  } else if (model.selectionFailed === true) {
+    elements.push({ tag: 'markdown', content: '读不到当前会话的模型选择，暂时列不出推理等级。' });
   } else if (bound) {
+    elements.push({ tag: 'markdown', content: '先选一个模型，才能调推理等级。' });
+  } else {
     elements.push({
       tag: 'markdown',
-      content: model.selectionFailed === true
-        ? '读不到当前会话的模型选择，暂时列不出推理等级。'
-        : '先选一个模型，才能调推理等级。',
+      content: '还没有会话，也还没设过机器人默认模型：先在上面选一个模型，才能调推理等级。',
     });
   }
 

@@ -1088,6 +1088,34 @@ function createChannelRegistry({
   return { register, list, get, subscribe, handleRpc, disposeAll };
 }
 
+// packages/dsh-chat/host/bot-model.mjs
+function normalizeBotModel(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const pick = (...values) => {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return null;
+  };
+  const provider = pick(raw.provider, raw.providerId);
+  const model = pick(raw.model, raw.modelId);
+  if (!provider || !model) return null;
+  return { provider, model, reasoningEffort: pick(raw.reasoningEffort, raw.effort) };
+}
+function botModelForSelection(previous, { provider, model, reasoningEffort = null }) {
+  const same = previous?.provider === provider && previous?.model === model;
+  return {
+    provider,
+    model,
+    reasoningEffort: same ? previous?.reasoningEffort ?? null : reasoningEffort ?? null
+  };
+}
+function describeBotModel(value) {
+  const normalized = normalizeBotModel(value);
+  if (!normalized) return null;
+  return `${normalized.provider}/${normalized.model}${normalized.reasoningEffort ? ` \xB7 \u63A8\u7406 ${normalized.reasoningEffort}` : ""}`;
+}
+
 // packages/dsh-chat/host/commands.mjs
 var PREFIX = "/";
 var MAX_LINE = 120;
@@ -1227,6 +1255,9 @@ async function readSelection(context, sessionId) {
     context.log?.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u6A21\u578B\u9009\u62E9\u5931\u8D25\uFF08${sessionId}\uFF09\uFF1A${error?.message ?? error}`);
     return { selection: null, failed: true };
   }
+}
+function botModelOf(context) {
+  return normalizeBotModel(context.services.bots?.read?.(context.channelId, context.botId)?.model);
 }
 function findModel(rows, token) {
   const byIndex = indexOf(token);
@@ -1394,7 +1425,7 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
         `\u4F1A\u8BDD\uFF1A${bound?.sessionId ?? "\u672A\u7ED1\u5B9A\uFF08\u53D1\u4E00\u6761\u6D88\u606F\u5373\u53EF\u521B\u5EFA\uFF09"}`,
         `\u8FD0\u884C\u4E2D\uFF1A${running === null ? "\u672A\u77E5" : running ? "\u662F" : "\u5426"}`,
         `\u5DE5\u4F5C\u533A\uFF1A${record.workspace ?? "\u672A\u8BBE\u7F6E"}`,
-        `\u6A21\u578B\uFF1A${record.model ? `${record.model.providerId ?? record.model.provider}/${record.model.modelId ?? record.model.model}` : "\u8DDF\u968F Host \u9ED8\u8BA4"}`,
+        `\u6A21\u578B\uFF1A${describeBotModel(record.model) ? `\u673A\u5668\u4EBA\u9ED8\u8BA4 ${describeBotModel(record.model)}` : "\u672A\u8BBE\u673A\u5668\u4EBA\u9ED8\u8BA4\uFF08\u8DDF\u968F Host \u9ED8\u8BA4\uFF09"}`,
         `Agent Preset\uFF1A${record.agentPreset ?? "\u8DDF\u968F Host \u9ED8\u8BA4"}`
       ].join("\n");
     }
@@ -1520,19 +1551,33 @@ ${result.text}` : ""}`;
     usage: "/model [\u5E8F\u53F7\u6216 provider/\u6A21\u578Bid] [\u63A8\u7406\u7B49\u7EA7]",
     execute: async (context) => {
       const sessionId = await boundSession(context);
+      const botModel = botModelOf(context);
       if (context.args.length === 0) {
-        if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u7528 /model \u5728\u5DF2\u6709\u4F1A\u8BDD\u91CC\u5207\u6362\u3002";
+        if (!sessionId) {
+          return botModel ? `\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B ${describeBotModel(botModel)}\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002\u7528 /model <\u5E8F\u53F7\u6216 provider/\u6A21\u578Bid> \u5C31\u80FD\u73B0\u5728\u5C31\u6539\u3002` : "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u4E5F\u8FD8\u6CA1\u8BBE\u8FC7\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF08\u5F53\u524D\u8DDF\u968F Host \u9ED8\u8BA4\uFF09\u3002\u7528 /model <\u5E8F\u53F7\u6216 provider/\u6A21\u578Bid> \u8BBE\u4E00\u4E2A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u5C31\u7528\u5B83\u3002";
+        }
         const { selection, failed } = await readSelection(context, sessionId);
         if (failed) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
         return selection ? `\u5F53\u524D\u6A21\u578B\uFF1A${selection.provider}/${selection.model}${selection.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${selection.reasoningEffort}\uFF09` : ""}` : "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF08\u8DDF\u968F Host \u9ED8\u8BA4\uFF09\u3002";
       }
-      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u6A21\u578B\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
       const { rows } = await modelCatalog(context);
       const target = findModel(rows, context.args[0]);
       if (!target) return `\u627E\u4E0D\u5230\u6A21\u578B ${context.args[0]}\uFF1B\u7528 /models \u67E5\u770B\u53EF\u7528\u5217\u8868\u3002`;
       const effort = context.args[1];
       if (effort && !target.efforts.some((item) => item.id === effort)) {
         return `\u6A21\u578B ${target.provider}/${target.model} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7 ${effort}\u3002`;
+      }
+      if (!sessionId) {
+        if (context.isOwner !== true) {
+          return "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u8FD9\u65F6\u6539\u7684\u662F\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF08\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF09\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002";
+        }
+        const next = botModelForSelection(botModel, {
+          provider: target.provider,
+          model: target.model,
+          reasoningEffort: effort || null
+        });
+        await context.services.bots.write(context.channelId, context.botId, { model: next });
+        return `\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\u5DF2\u8BBE\u4E3A ${target.provider}/${target.model}${next.reasoningEffort ? `\uFF08\u63A8\u7406\u7B49\u7EA7 ${next.reasoningEffort}\uFF09` : ""}\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002`;
       }
       const selected = await context.services.sessions.invoke("session", "selectModel", {
         request: {
@@ -1572,14 +1617,33 @@ ${result.text}` : ""}`;
     usage: "/reasoning [\u5E8F\u53F7\u6216\u7B49\u7EA7id|--default]",
     execute: async (context) => {
       const sessionId = await boundSession(context);
+      const botModel = botModelOf(context);
       if (context.args.length === 0) {
-        if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u3002";
+        if (!sessionId) {
+          return botModel ? `\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B ${describeBotModel(botModel)}\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002` : "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u4E5F\u8FD8\u6CA1\u8BBE\u8FC7\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF1A\u5148 /model \u9009\u4E00\u4E2A\u6A21\u578B\u3002";
+        }
         const { selection: selection2, failed: failed2 } = await readSelection(context, sessionId);
         if (failed2) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
         if (!selection2) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\u3002";
         return `\u5F53\u524D\u6A21\u578B ${selection2.provider}/${selection2.model}\uFF0C\u63A8\u7406\u7B49\u7EA7 ${selection2.reasoningEffort ?? "\uFF08\u9ED8\u8BA4\uFF09"}\u3002`;
       }
-      if (!sessionId) return "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u65E0\u6CD5\u5207\u6362\u63A8\u7406\u7B49\u7EA7\uFF1B\u5148\u53D1\u4E00\u6761\u6D88\u606F\u3002";
+      if (!sessionId) {
+        if (context.isOwner !== true) {
+          return "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u8FD9\u65F6\u6539\u7684\u662F\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF08\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF09\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002";
+        }
+        if (!botModel) return "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF0C\u4E5F\u6CA1\u8BBE\u8FC7\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF1A\u5148 /model \u9009\u4E00\u4E2A\u6A21\u578B\u3002";
+        const { rows: rows2 } = await modelCatalog(context);
+        const current2 = rows2.find((row) => row.provider === botModel.provider && row.model === botModel.model);
+        if (!current2) return `\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B ${botModel.provider}/${botModel.model} \u4E0D\u5728\u53EF\u7528\u5217\u8868\u91CC\u3002`;
+        const wanted = context.args[0] === "--default" ? null : indexOf(context.args[0]) !== null ? current2.efforts[indexOf(context.args[0])]?.id : context.args[0];
+        if (wanted && !current2.efforts.some((item) => item.id === wanted)) {
+          return `\u627E\u4E0D\u5230\u63A8\u7406\u7B49\u7EA7 ${context.args[0]}\uFF1B\u7528 /reasonings \u67E5\u770B\u53EF\u7528\u5217\u8868\u3002`;
+        }
+        await context.services.bots.write(context.channelId, context.botId, {
+          model: { ...botModel, reasoningEffort: wanted ?? null }
+        });
+        return wanted ? `\u673A\u5668\u4EBA\u9ED8\u8BA4\u63A8\u7406\u7B49\u7EA7\u5DF2\u8BBE\u4E3A ${wanted}\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002` : `\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\u5DF2\u6062\u590D ${current2.provider}/${current2.model} \u7684\u9ED8\u8BA4\u63A8\u7406\u7B49\u7EA7${current2.defaultEffort ? `\uFF08${current2.defaultEffort}\uFF09` : ""}\uFF08\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF09\u3002`;
+      }
       const { selection, failed } = await readSelection(context, sessionId);
       if (failed) return "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002";
       if (!selection) return "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u663E\u5F0F\u9009\u62E9\u6A21\u578B\uFF0C\u65E0\u6CD5\u5355\u72EC\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7\u3002";
@@ -2233,7 +2297,9 @@ function createPanelService({
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
-      const currentModel = selection ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null : null;
+      const botDefault = normalizeBotModel(record.model);
+      const effective = selectionState.failed ? null : selection ?? botDefault;
+      const effectiveModel = effective ? options.find((item) => item.provider === effective.provider && item.model === effective.model) ?? null : null;
       return {
         sessionId,
         bound: typeof sessionId === "string" && sessionId.length > 0,
@@ -2241,13 +2307,15 @@ function createPanelService({
           current: selection,
           // `true` = 这次读**失败**了（不是"没选过"）：卡片必须如实说读不到。
           selectionFailed: selectionState.failed === true,
+          // 机器人默认模型（没有会话时选的那个）：卡片在未绑定时显示它并允许改。
+          botDefault,
           // Host 默认模型：卡片在"跟随 Host 默认"时把具体是哪个模型写出来，用户才知道会用什么。
           hostDefault: catalog.hostDefault,
           failures: catalog.failures ?? [],
           options,
-          // 推理等级取决于当前模型：没显式选模型时给不出可选项（卡片要如实说明）。
-          efforts: currentModel?.efforts ?? [],
-          currentEffort: selection?.reasoningEffort ?? null
+          // 推理等级取决于"当前生效的那个模型"：会话内的选择，或（没有会话时）机器人默认。
+          efforts: effectiveModel?.efforts ?? [],
+          currentEffort: effective?.reasoningEffort ?? null
         },
         preset: {
           current: record.agentPreset ?? null,
@@ -2282,12 +2350,51 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
+      const botDefault = normalizeBotModel(record.model);
       if (field === "model" || field === "reasoning") {
         if (!sessionId) {
-          throw panelError(
-            "chat/no-session",
-            "\u5F53\u524D\u804A\u5929\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u53D1\u4E00\u6761\u6D88\u606F\u5EFA\u7ACB\u4F1A\u8BDD\uFF0C\u7136\u540E\u5C31\u80FD\u9009\uFF08\u300C\u65B0\u4F1A\u8BDD\u300D\u53EA\u662F\u6E05\u6389\u7ED1\u5B9A\uFF09\u3002"
-          );
+          if (isOwner !== true) {
+            throw panelError(
+              "chat/owner-only",
+              "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u8FD9\u91CC\u6539\u7684\u662F\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF08\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF09\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002"
+            );
+          }
+          const { options: options2 } = await modelCatalog2();
+          if (field === "model") {
+            const target = options2.find((item) => item.value === value);
+            if (!target) throw panelError("chat/unknown-model", `\u627E\u4E0D\u5230\u6A21\u578B ${value}\u3002`);
+            const next2 = botModelForSelection(botDefault, { provider: target.provider, model: target.model });
+            await settings.write(channelId, botId, { model: next2 });
+            return {
+              field,
+              value: target.value,
+              message: `\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\u5DF2\u8BBE\u4E3A ${next2.provider}/${next2.model}${next2.reasoningEffort ? ` \xB7 \u63A8\u7406 ${next2.reasoningEffort}` : ""}\uFF08\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002`
+            };
+          }
+          if (!botDefault) {
+            throw panelError("chat/no-model", "\u8FD8\u6CA1\u6709\u9009\u8FC7\u6A21\u578B\uFF1A\u5148\u9009\u4E00\u4E2A\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF0C\u518D\u6539\u63A8\u7406\u7B49\u7EA7\u3002");
+          }
+          const currentModel2 = options2.find((item) => item.provider === botDefault.provider && item.model === botDefault.model);
+          if (!currentModel2) {
+            throw panelError(
+              "chat/unknown-model",
+              `\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B ${botDefault.provider}/${botDefault.model} \u4E0D\u5728\u53EF\u7528\u5217\u8868\u91CC\u3002`
+            );
+          }
+          const wanted2 = String(value ?? "");
+          if (wanted2 !== "" && !currentModel2.efforts.some((effort) => effort.id === wanted2)) {
+            throw panelError(
+              "chat/unknown-effort",
+              `\u6A21\u578B ${currentModel2.value} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7 ${wanted2}\u3002`
+            );
+          }
+          const next = { ...botDefault, reasoningEffort: wanted2 || null };
+          await settings.write(channelId, botId, { model: next });
+          return {
+            field,
+            value: wanted2,
+            message: wanted2 ? `\u673A\u5668\u4EBA\u9ED8\u8BA4\u63A8\u7406\u7B49\u7EA7\u5DF2\u8BBE\u4E3A ${wanted2}\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002` : "\u673A\u5668\u4EBA\u9ED8\u8BA4\u63A8\u7406\u7B49\u7EA7\u5DF2\u6062\u590D\u6A21\u578B\u9ED8\u8BA4\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u7528\u5B83\uFF09\u3002"
+          };
         }
         const { options } = await modelCatalog2();
         if (field === "model") {
@@ -2977,6 +3084,23 @@ function createSessionBridge({
       return invoke("session", "create", { request: { workspaceId } }, signal);
     }
   }
+  async function applyBotModel({ sessionId, botModel, signal, channelId, botId }) {
+    if (!botModel) return;
+    const label = `${botModel.provider}/${botModel.model}${botModel.reasoningEffort ? ` \xB7 \u63A8\u7406 ${botModel.reasoningEffort}` : ""}`;
+    try {
+      await invoke("session", "selectModel", {
+        request: {
+          sessionId,
+          provider: botModel.provider,
+          model: botModel.model,
+          ...botModel.reasoningEffort ? { reasoningEffort: botModel.reasoningEffort } : {}
+        }
+      }, signal);
+      logger.info?.(`[dsh-chat] \u65B0\u4F1A\u8BDD\u5E94\u7528\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\uFF1A${label}\uFF08${channelId}/${botId}\uFF09`);
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u5E94\u7528\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\u5931\u8D25\uFF08${label}\uFF0C${channelId}/${botId}\uFF09\uFF1A${error?.message ?? error}`);
+    }
+  }
   async function ensure({
     channelId,
     botId,
@@ -3018,6 +3142,7 @@ function createSessionBridge({
       throw error;
     }
     await store.bind(channelId, botId, key, { sessionId, workspacePath });
+    await applyBotModel({ sessionId, botModel: normalizeBotModel(record.model), signal, channelId, botId });
     return { sessionId, created: true };
   }
   async function prompt({ sessionId, content, mode = "queue", requestId = randomUUID(), signal }) {

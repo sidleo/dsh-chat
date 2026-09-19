@@ -29,6 +29,7 @@ function createFakeGateway({
   script = [], stuckReturn = false, stuckPrompt = false, failPrompt = false,
   pageRecords = [], frameDelayMs = 0, stuckStream = false, sessionTitles = {},
   commandResult = { commandId: 'cmd_1', result: { kind: 'success', text: 'Compaction finished.' } },
+  failSelectModel = null,
 } = {}) {
   const calls = [];
   const sessions = new Set();
@@ -75,6 +76,12 @@ function createFakeGateway({
         if (stuckPrompt) return new Promise(() => {});
         if (failPrompt) throw remoteError('session/not-found');
         return { accepted: true };
+      }
+      if (namespace === 'session' && method === 'selectModel') {
+        if (failSelectModel) throw failSelectModel;
+        const request = args?.request ?? {};
+        if (!sessions.has(request.sessionId)) throw remoteError('session/not-found');
+        return { selected: { provider: request.provider, model: request.model, reasoningEffort: request.reasoningEffort ?? null } };
       }
       if (namespace === 'session' && method === 'list') {
         return {
@@ -176,15 +183,17 @@ function withDeliverables(frames, files) {
 }
 
 async function makeBridge(options = {}) {
+  const { settings = null, ...gatewayOptions } = options;
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
   const store = createSessionStore({ dataDir, logger: silentLogger });
-  const gateway = createFakeGateway(options);
+  const gateway = createFakeGateway(gatewayOptions);
   const published = [];
   const bridge = createSessionBridge({
     ctx: { typertGateway: gateway },
     logger: silentLogger,
     store,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
+    ...(settings ? { settings } : {}),
   });
   return {
     bridge,
@@ -886,4 +895,52 @@ test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮
   await bridge.markSessionChannel?.('session-1', '飞书');
   assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
   await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+});
+
+test('新建会话后应用机器人默认模型（建会话不能带模型，只能建好再 selectModel）', async () => {
+  const app = await makeBridge({
+    script: [turnFrames()],
+    settings: {
+      read: () => ({
+        workspace: '/ws',
+        model: { provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' },
+      }),
+    },
+  });
+  try {
+    const { sessionId } = await app.bridge.ensure({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+    });
+    const select = app.gateway.calls.find((call) => call.method === 'selectModel');
+    assert.ok(select, '建完会话要立刻把机器人默认模型选上');
+    assert.deepEqual(select.args.request, {
+      sessionId, provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: 'high',
+    });
+
+    // 复用已有绑定时不重复应用（只对新会话生效）。
+    app.gateway.calls.length = 0;
+    await app.bridge.ensure({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+    assert.equal(app.gateway.calls.some((call) => call.method === 'selectModel'), false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('机器人默认模型应用失败不能让会话建不出来（记 warn，退回 Host 默认）', async () => {
+  const app = await makeBridge({
+    script: [turnFrames()],
+    failSelectModel: remoteError('gateway/method-unavailable'),
+    settings: {
+      read: () => ({ workspace: '/ws', model: { provider: 'ghost', model: 'gone' } }),
+    },
+  });
+  try {
+    const { sessionId } = await app.bridge.ensure({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+    });
+    assert.ok(sessionId, '模型选不上也要把会话建出来');
+    assert.equal(app.store.get('feishu', 'bot_1', 'p2p:ou_a').sessionId, sessionId);
+  } finally {
+    await app.cleanup();
+  }
 });
