@@ -38,6 +38,17 @@ const zh = {
   '去开通权限': '去开通权限',
   '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。': '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。',
   'Agent 预设': 'Agent 预设',
+  '模型': '模型',
+  '默认模型': '默认模型',
+  '推理等级': '推理等级',
+  '这个模型没有可选的推理等级。': '这个模型没有可选的推理等级。',
+  '先选一个模型。': '先选一个模型。',
+  '模型默认': '模型默认',
+  '部分 provider 读取失败：': '部分 provider 读取失败：',
+  '当前 Host 读不到模型目录。': '当前 Host 读不到模型目录。',
+  '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。':
+    '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。',
+
   '下拉里是这台机器人用过的目录。': '下拉里是这台机器人用过的目录。',
   '仅名单内可用': '仅名单内可用',
   '从会话里选一个人设为属主': '从会话里选一个人设为属主',
@@ -126,6 +137,17 @@ const en = {
   '属主名单是 *（这台机器人没有属主绕过）：能用它的人完全由下面的「访问策略」决定。':
     'The owner list is * (this bot has no owner bypass): who may use it is decided entirely by the access policy below.',
   'Agent 预设': 'Agent preset',
+  '模型': 'Model',
+  '默认模型': 'Default model',
+  '推理等级': 'Reasoning effort',
+  '这个模型没有可选的推理等级。': 'This model has no reasoning efforts to choose from.',
+  '先选一个模型。': 'Pick a model first.',
+  '模型默认': 'Model default',
+  '部分 provider 读取失败：': 'Some providers failed to load: ',
+  '当前 Host 读不到模型目录。': 'The model catalog is unavailable right now.',
+  '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。':
+    'Model used before a conversation exists; it applies to the session created by your next message. You can still change it per conversation from the panel.',
+
   '下拉里是这台机器人用过的目录。': 'The suggestions are directories this bot has used before.',
   '仅名单内可用': 'Allowlist only',
   '从会话里选一个人设为属主': 'Pick a person from a conversation to make them the owner',
@@ -224,7 +246,7 @@ const STEP_PUSH_OPTIONS = [
 export function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor,
-    DeliveryTargetsEditor, WorkspaceEditor, PresetEditor,
+    DeliveryTargetsEditor, WorkspaceEditor, PresetEditor, ModelEditor,
     AccessPolicyEditor, OwnerEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: bot.id,
@@ -260,6 +282,8 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
   const shared = {
     workspace: settings.record?.workspace ?? null,
     agentPreset: settings.record?.agentPreset ?? null,
+    // 机器人默认模型（还没有会话时用它）：与工作区/预设同一条口径，只对新建会话生效。
+    model: settings.record?.model ?? null,
     accessPolicy: settings.record?.accessPolicy ?? null,
   };
   const [busy, setBusy] = React.useState(false);
@@ -365,6 +389,15 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
     options: settings.options?.presets ?? [],
     translate: t,
     onSave: settings.saveAgentPreset,
+  }),
+
+  h(ModelEditor, {
+    value: shared.model ?? null,
+    options: settings.options?.models ?? [],
+    hostDefault: settings.options?.hostDefault ?? null,
+    failures: settings.options?.modelFailures ?? [],
+    translate: t,
+    onSave: settings.saveModel,
   }),
 
   h(OwnerEditor, {

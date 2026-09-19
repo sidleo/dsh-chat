@@ -2217,6 +2217,37 @@ function workspaceCandidates({ record, sessionStore, channelId, botId }) {
     ...boundPaths
   ])];
 }
+async function readModelCatalog(sessions, logger = console) {
+  const catalog = await sessions.invoke("session", "modelCatalog", {});
+  const options = [];
+  const failures = (catalog?.failures ?? []).map((item) => ({
+    id: item?.id ?? "",
+    name: item?.name ?? item?.id ?? "",
+    message: item?.message ?? ""
+  }));
+  for (const group of catalog?.groups ?? []) {
+    const provider = group.id ?? group.provider ?? group.providerId;
+    for (const model of group.models ?? []) {
+      const id = model.id ?? model.model;
+      if (!provider || !id) continue;
+      options.push({
+        value: `${provider}/${id}`,
+        provider,
+        model: id,
+        name: model.name ?? id,
+        providerName: group.name ?? group.providerName ?? provider,
+        efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
+          id: effort.id,
+          label: effort.name ?? effort.label ?? effort.id
+        })),
+        defaultEffort: model.reasoning?.defaultEffort ?? null
+      });
+    }
+  }
+  const rawDefault = catalog?.default;
+  const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
+  return { options, hostDefault, failures };
+}
 async function validateWorkspacePath(raw) {
   if (typeof raw !== "string" || !raw.trim()) {
     throw panelError("chat/workspace-invalid", "\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u3002");
@@ -2311,35 +2342,7 @@ function createPanelService({
     };
   }
   async function modelCatalog2() {
-    const catalog = await sessions.invoke("session", "modelCatalog", {});
-    const options = [];
-    const failures = (catalog?.failures ?? []).map((item) => ({
-      id: item?.id ?? "",
-      name: item?.name ?? item?.id ?? "",
-      message: item?.message ?? ""
-    }));
-    for (const group of catalog?.groups ?? []) {
-      const provider = group.id ?? group.provider ?? group.providerId;
-      for (const model of group.models ?? []) {
-        const id = model.id ?? model.model;
-        if (!provider || !id) continue;
-        options.push({
-          value: `${provider}/${id}`,
-          provider,
-          model: id,
-          name: model.name ?? id,
-          providerName: group.name ?? group.providerName ?? provider,
-          efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
-            id: effort.id,
-            label: effort.name ?? effort.label ?? effort.id
-          })),
-          defaultEffort: model.reasoning?.defaultEffort ?? null
-        });
-      }
-    }
-    const rawDefault = catalog?.default;
-    const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
-    return { options, hostDefault, failures };
+    return readModelCatalog(sessions, logger);
   }
   async function presetOptions() {
     if (typeof agentPresets?.remoteExportList !== "function") return { options: [], failed: false };
@@ -4209,13 +4212,29 @@ function apply(ctx, config = {}) {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6 Agent Preset \u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
       }
+      let models = [];
+      let hostDefault = null;
+      let modelFailures = [];
+      try {
+        const catalog = await readModelCatalog(sessions, logger);
+        models = catalog.options;
+        hostDefault = catalog.hostDefault;
+        modelFailures = catalog.failures;
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
+        modelFailures = [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }];
+      }
       return ok({
         workspacePaths,
         presets,
+        models,
+        hostDefault,
+        modelFailures,
         current: {
           workspace: record.workspace ?? null,
           agentPreset: record.agentPreset ?? null,
-          accessPolicy: record.accessPolicy ?? null
+          accessPolicy: record.accessPolicy ?? null,
+          model: normalizeBotModel(record.model)
         }
       });
     }
@@ -4264,6 +4283,40 @@ function apply(ctx, config = {}) {
       }
       const saved = await settings.write(payload.channelId, payload.botId, { agentPreset: target });
       return ok({ agentPreset: saved.agentPreset ?? null });
+    }
+    if (method === "bot.model.set") {
+      if (!validBotPayload(payload, { extra: ["model"] })) {
+        return fail("chat/bad-request", "bot.model.set \u9700\u8981 channelId\u3001botId \u4E0E model\u3002");
+      }
+      const raw = payload.model;
+      if (raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+        return fail("chat/bad-request", "model \u53EA\u80FD\u662F { provider, model, reasoningEffort? } \u6216 null\u3002");
+      }
+      const target = raw === null ? null : normalizeBotModel(raw);
+      if (raw !== null && !target) {
+        return fail("chat/bad-request", "model \u9700\u8981\u975E\u7A7A\u7684 provider \u4E0E model\u3002");
+      }
+      if (target) {
+        try {
+          const { options } = await readModelCatalog(sessions, logger);
+          if (options.length > 0) {
+            const found = options.find((item) => item.provider === target.provider && item.model === target.model);
+            if (!found) {
+              return fail("chat/unknown-model", `\u5F53\u524D Host \u6CA1\u6709\u8FD9\u4E2A\u6A21\u578B\uFF1A${target.provider}/${target.model}`);
+            }
+            if (target.reasoningEffort && !found.efforts.some((effort) => effort.id === target.reasoningEffort)) {
+              return fail(
+                "chat/unknown-effort",
+                `\u6A21\u578B ${found.value} \u4E0D\u652F\u6301\u63A8\u7406\u7B49\u7EA7 ${target.reasoningEffort}\u3002`
+              );
+            }
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u6821\u9A8C\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B\u65F6\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6309\u539F\u503C\u4FDD\u5B58\uFF1A${error?.message ?? error}`);
+        }
+      }
+      const saved = await settings.write(payload.channelId, payload.botId, { model: target });
+      return ok({ model: normalizeBotModel(saved.model) });
     }
     if (method === "bot.access-policy.set") {
       if (!validBotPayload(payload, { extra: ["policy"] })) {

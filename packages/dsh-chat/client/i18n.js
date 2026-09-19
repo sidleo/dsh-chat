@@ -8,6 +8,17 @@ export const LOCALE_NAMESPACE = 'dsh-chat';
 
 export const zh = {
   'Chat机器人': 'Chat机器人',
+  '模型': '模型',
+  '默认模型': '默认模型',
+  '推理等级': '推理等级',
+  '这个模型没有可选的推理等级。': '这个模型没有可选的推理等级。',
+  '先选一个模型。': '先选一个模型。',
+  '模型默认': '模型默认',
+  '部分 provider 读取失败：': '部分 provider 读取失败：',
+  '当前 Host 读不到模型目录。': '当前 Host 读不到模型目录。',
+  '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。':
+    '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。',
+
   'Chat机器人设置': 'Chat机器人设置',
   '渠道导航': '渠道导航',
   '未安装任何聊天软件插件': '未安装任何聊天软件插件',
@@ -153,6 +164,17 @@ export const zh = {
 
 export const en = {
   'Chat机器人': 'Chat bot',
+  '模型': 'Model',
+  '默认模型': 'Default model',
+  '推理等级': 'Reasoning effort',
+  '这个模型没有可选的推理等级。': 'This model has no reasoning efforts to choose from.',
+  '先选一个模型。': 'Pick a model first.',
+  '模型默认': 'Model default',
+  '部分 provider 读取失败：': 'Some providers failed to load: ',
+  '当前 Host 读不到模型目录。': 'The model catalog is unavailable right now.',
+  '还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。':
+    'Model used before a conversation exists; it applies to the session created by your next message. You can still change it per conversation from the panel.',
+
   'Chat机器人设置': 'Chat bot settings',
   '渠道导航': 'Channel navigation',
   '未安装任何聊天软件插件': 'No chat channel plugin installed',

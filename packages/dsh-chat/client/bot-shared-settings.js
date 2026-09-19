@@ -131,6 +131,94 @@ export function PresetEditor({ value, options = [], translate, onSave }) {
   failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
 }
 
+/**
+ * 机器人默认模型：**还没有会话时**（新聊天、或刚点过「新会话」）用哪个模型。
+ *
+ * 为什么要这一栏：模型选择在 DSH 里是**会话级**的（`session/selectModel` 必须带 sessionId），
+ * 没有会话时无处可写；只能存成机器人级默认、等建会话时应用（与工作区/预设同一条口径）。
+ * 两个下拉：模型 + 推理等级（等级依赖所选模型，所以跟着走）。
+ */
+export function ModelEditor({ value, options = [], hostDefault = null, failures = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const { busy, failed, run } = useSaver(onSave);
+
+  const current = value ?? null;
+  const selected = current
+    ? options.find((item) => item.provider === current.provider && item.model === current.model) ?? null
+    : null;
+  const effortOptions = selected?.efforts ?? [];
+  const hostText = hostDefault ? `${hostDefault.provider}/${hostDefault.model}` : null;
+
+  const save = (patch) => {
+    if (patch === null) {
+      void run(null);
+      return;
+    }
+    const provider = patch.provider ?? current?.provider ?? '';
+    const model = patch.model ?? current?.model ?? '';
+    const reasoningEffort = Object.hasOwn(patch, 'reasoningEffort')
+      ? patch.reasoningEffort
+      : (current?.reasoningEffort ?? null);
+    void run({ provider, model, reasoningEffort: reasoningEffort || null });
+  };
+
+  const modelSelect = h('div', { className: 'dchat-scopeRow' },
+    h('label', { className: 'dchat-scopeLabel' }, t('模型')),
+    h('select', {
+      className: 'dchat-select',
+      value: selected?.value ?? '',
+      disabled: busy,
+      'aria-label': t('默认模型'),
+      onChange: (event) => {
+        const next = options.find((item) => item.value === event.target.value);
+        if (!next) {
+          save(null);
+          return;
+        }
+        // 换模型时重置推理等级：等级是模型自己的能力，跨模型沿用会给出不支持的取值。
+        save({ provider: next.provider, model: next.model, reasoningEffort: null });
+      },
+    },
+    h('option', { value: '' }, hostText ? `${t('跟随 Host 默认')}（${hostText}）` : t('跟随 Host 默认')),
+    options.map((item) => h('option', { key: item.value, value: item.value },
+      `${item.value}${item.name && item.name !== item.model ? ` · ${item.name}` : ''}`))));
+
+  const effortSelect = h('div', { className: 'dchat-scopeRow' },
+    h('label', { className: 'dchat-scopeLabel' }, t('推理等级')),
+    effortOptions.length === 0
+      ? h('p', { className: 'dchat-cardDescription' },
+        current ? t('这个模型没有可选的推理等级。') : t('先选一个模型。'))
+      : h('select', {
+        className: 'dchat-select',
+        value: current?.reasoningEffort ?? '',
+        disabled: busy,
+        'aria-label': t('推理等级'),
+        onChange: (event) => {
+          save({ reasoningEffort: event.target.value || null });
+        },
+      },
+      h('option', { value: '' }, t('模型默认')),
+      effortOptions.map((effort) => h('option', { key: effort.id, value: effort.id },
+        `${effort.id}${effort.label && effort.label !== effort.id ? ` · ${effort.label}` : ''}`))));
+
+  const failureNote = failures.length > 0
+    ? h('p', { className: 'dchat-cardDescription' }, t('部分 provider 读取失败：')
+      + failures.map((item) => `${item.id || item.name}（${item.message}）`).join('；'))
+    : null;
+  const body = options.length === 0
+    ? h('p', { className: 'dchat-cardDescription' }, t('当前 Host 读不到模型目录。'))
+    : h('div', { className: 'dchat-scopeGrid' }, modelSelect, effortSelect);
+
+  return h(Card, {
+    title: t('默认模型'),
+    description: t('还没有会话时用哪个模型：选完对下一条消息新建的会话生效。会话内还能单独改（面板的模型下拉）。'),
+    actions: busy ? h('span', { className: 'dchat-status' }, t('保存中…')) : null,
+  },
+  failureNote,
+  body,
+  failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
+}
+
 /** 把策略归一化成编辑器用的草稿（缺字段按"保守方向"填充，与运行期一致）。 */
 function toDraft(value) {
   const base = value ?? defaultAccessPolicy();

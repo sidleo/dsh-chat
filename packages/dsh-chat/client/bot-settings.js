@@ -107,6 +107,10 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     (policy) => saveField('bot.access-policy.set', { policy }, 'accessPolicy'),
     [saveField],
   );
+  const saveModel = React.useCallback(
+    (model) => saveField('bot.model.set', { model }, 'model'),
+    [saveField],
+  );
 
   return {
     record: state.record,
@@ -119,6 +123,7 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     saveWorkspace,
     saveAgentPreset,
     saveAccessPolicy,
+    saveModel,
   };
 }
 

@@ -275,6 +275,10 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     (policy) => saveField("bot.access-policy.set", { policy }, "accessPolicy"),
     [saveField]
   );
+  const saveModel = React.useCallback(
+    (model) => saveField("bot.model.set", { model }, "model"),
+    [saveField]
+  );
   return {
     record: state.record,
     phase: state.phase,
@@ -285,7 +289,8 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     saveContextEnhancement,
     saveWorkspace,
     saveAgentPreset,
-    saveAccessPolicy
+    saveAccessPolicy,
+    saveModel
   };
 }
 function useConversations({ connection, channelId, botId, enabled = true }) {
@@ -527,6 +532,92 @@ function PresetEditor({ value, options = [], translate, onSave }) {
         )
       )
     ),
+    failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
+function ModelEditor({ value, options = [], hostDefault = null, failures = [], translate, onSave }) {
+  const t = translatorOf(translate);
+  const { busy, failed, run } = useSaver(onSave);
+  const current = value ?? null;
+  const selected = current ? options.find((item) => item.provider === current.provider && item.model === current.model) ?? null : null;
+  const effortOptions = selected?.efforts ?? [];
+  const hostText = hostDefault ? `${hostDefault.provider}/${hostDefault.model}` : null;
+  const save = (patch) => {
+    if (patch === null) {
+      void run(null);
+      return;
+    }
+    const provider = patch.provider ?? current?.provider ?? "";
+    const model = patch.model ?? current?.model ?? "";
+    const reasoningEffort = Object.hasOwn(patch, "reasoningEffort") ? patch.reasoningEffort : current?.reasoningEffort ?? null;
+    void run({ provider, model, reasoningEffort: reasoningEffort || null });
+  };
+  const modelSelect = h(
+    "div",
+    { className: "dchat-scopeRow" },
+    h("label", { className: "dchat-scopeLabel" }, t("\u6A21\u578B")),
+    h(
+      "select",
+      {
+        className: "dchat-select",
+        value: selected?.value ?? "",
+        disabled: busy,
+        "aria-label": t("\u9ED8\u8BA4\u6A21\u578B"),
+        onChange: (event) => {
+          const next = options.find((item) => item.value === event.target.value);
+          if (!next) {
+            save(null);
+            return;
+          }
+          save({ provider: next.provider, model: next.model, reasoningEffort: null });
+        }
+      },
+      h("option", { value: "" }, hostText ? `${t("\u8DDF\u968F Host \u9ED8\u8BA4")}\uFF08${hostText}\uFF09` : t("\u8DDF\u968F Host \u9ED8\u8BA4")),
+      options.map((item) => h(
+        "option",
+        { key: item.value, value: item.value },
+        `${item.value}${item.name && item.name !== item.model ? ` \xB7 ${item.name}` : ""}`
+      ))
+    )
+  );
+  const effortSelect = h(
+    "div",
+    { className: "dchat-scopeRow" },
+    h("label", { className: "dchat-scopeLabel" }, t("\u63A8\u7406\u7B49\u7EA7")),
+    effortOptions.length === 0 ? h(
+      "p",
+      { className: "dchat-cardDescription" },
+      current ? t("\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002") : t("\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002")
+    ) : h(
+      "select",
+      {
+        className: "dchat-select",
+        value: current?.reasoningEffort ?? "",
+        disabled: busy,
+        "aria-label": t("\u63A8\u7406\u7B49\u7EA7"),
+        onChange: (event) => {
+          save({ reasoningEffort: event.target.value || null });
+        }
+      },
+      h("option", { value: "" }, t("\u6A21\u578B\u9ED8\u8BA4")),
+      effortOptions.map((effort) => h(
+        "option",
+        { key: effort.id, value: effort.id },
+        `${effort.id}${effort.label && effort.label !== effort.id ? ` \xB7 ${effort.label}` : ""}`
+      ))
+    )
+  );
+  const failureNote = failures.length > 0 ? h("p", { className: "dchat-cardDescription" }, t("\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A") + failures.map((item) => `${item.id || item.name}\uFF08${item.message}\uFF09`).join("\uFF1B")) : null;
+  const body = options.length === 0 ? h("p", { className: "dchat-cardDescription" }, t("\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002")) : h("div", { className: "dchat-scopeGrid" }, modelSelect, effortSelect);
+  return h(
+    Card,
+    {
+      title: t("\u9ED8\u8BA4\u6A21\u578B"),
+      description: t("\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002"),
+      actions: busy ? h("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null
+    },
+    failureNote,
+    body,
     failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
   );
 }
@@ -2741,6 +2832,8 @@ function createChatUi({ ctx, translate } = {}) {
       WorkspaceEditor,
       /** 用哪套 Agent 预设（只对新建会话生效）。 */
       PresetEditor,
+      /** 机器人默认模型（还没有会话时用它，只对新建会话生效）。 */
+      ModelEditor,
       /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
       AccessPolicyEditor,
       /** 属主：绕过所有策略的人（改完渠道会重连一次）。 */
@@ -2774,6 +2867,15 @@ function createChatUi({ ctx, translate } = {}) {
 var LOCALE_NAMESPACE = "dsh-chat";
 var zh = {
   "Chat\u673A\u5668\u4EBA": "Chat\u673A\u5668\u4EBA",
+  "\u6A21\u578B": "\u6A21\u578B",
+  "\u9ED8\u8BA4\u6A21\u578B": "\u9ED8\u8BA4\u6A21\u578B",
+  "\u63A8\u7406\u7B49\u7EA7": "\u63A8\u7406\u7B49\u7EA7",
+  "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002": "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002",
+  "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002": "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002",
+  "\u6A21\u578B\u9ED8\u8BA4": "\u6A21\u578B\u9ED8\u8BA4",
+  "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A": "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002": "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002": "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002",
   "Chat\u673A\u5668\u4EBA\u8BBE\u7F6E": "Chat\u673A\u5668\u4EBA\u8BBE\u7F6E",
   "\u6E20\u9053\u5BFC\u822A": "\u6E20\u9053\u5BFC\u822A",
   "\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6": "\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6",
@@ -2913,6 +3015,15 @@ var zh = {
 };
 var en = {
   "Chat\u673A\u5668\u4EBA": "Chat bot",
+  "\u6A21\u578B": "Model",
+  "\u9ED8\u8BA4\u6A21\u578B": "Default model",
+  "\u63A8\u7406\u7B49\u7EA7": "Reasoning effort",
+  "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002": "This model has no reasoning efforts to choose from.",
+  "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002": "Pick a model first.",
+  "\u6A21\u578B\u9ED8\u8BA4": "Model default",
+  "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A": "Some providers failed to load: ",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002": "The model catalog is unavailable right now.",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002": "Model used before a conversation exists; it applies to the session created by your next message. You can still change it per conversation from the panel.",
   "Chat\u673A\u5668\u4EBA\u8BBE\u7F6E": "Chat bot settings",
   "\u6E20\u9053\u5BFC\u822A": "Channel navigation",
   "\u672A\u5B89\u88C5\u4EFB\u4F55\u804A\u5929\u8F6F\u4EF6\u63D2\u4EF6": "No chat channel plugin installed",

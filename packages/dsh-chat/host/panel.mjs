@@ -44,6 +44,53 @@ export function workspaceCandidates({ record, sessionStore, channelId, botId }) 
 }
 
 /**
+ * 读一次模型目录（`session/modelCatalog`）。
+ *
+ * 模块级实现：**面板与设置页的「默认模型」栏用同一份来源**（两处各写一遍必然漂移）。
+ *
+ * 真形状：`{ default, routableProviders, groups: [{ id, name, models: [{ id, name, reasoning }] }] }`
+ * ——provider 是 `group.id`（不是 `provider`/`providerId`）。
+ *
+ * @param sessions - 会话桥服务（要能 `invoke('session','modelCatalog')`）。
+ * @param logger - 读失败时记一条 warn（不静默）。
+ * @returns `{ options, hostDefault, failures }`。
+ */
+export async function readModelCatalog(sessions, logger = console) {
+  const catalog = await sessions.invoke('session', 'modelCatalog', {});
+  const options = [];
+  /**
+   * 目录里的失败清单（`session/modelCatalog` 会为每个拿不到模型的 provider 给一条
+   * `failures: [{ id, name, message }]`）。**必须带出去**：否则前端只能显示
+   * "当前 Host 没有可用模型"，用户和排查的人都不知道为什么（真机上就是这么卡住的）。
+   */
+  const failures = (catalog?.failures ?? []).map((item) => ({
+    id: item?.id ?? '', name: item?.name ?? item?.id ?? '', message: item?.message ?? '',
+  }));
+  for (const group of catalog?.groups ?? []) {
+    const provider = group.id ?? group.provider ?? group.providerId;
+    for (const model of group.models ?? []) {
+      const id = model.id ?? model.model;
+      if (!provider || !id) continue;
+      options.push({
+        value: `${provider}/${id}`,
+        provider,
+        model: id,
+        name: model.name ?? id,
+        providerName: group.name ?? group.providerName ?? provider,
+        efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
+          id: effort.id, label: effort.name ?? effort.label ?? effort.id,
+        })),
+        defaultEffort: model.reasoning?.defaultEffort ?? null,
+      });
+    }
+  }
+  // `default` 在 Host 没设默认时是 `{}`（schema 是 `{...currentSelection()}`）：补全成 null。
+  const rawDefault = catalog?.default;
+  const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
+  return { options, hostDefault, failures };
+}
+
+/**
  * 校验一个工作区路径：必须是已存在的目录，且存绝对路径。
  *
  * @param raw - 用户/卡片给的值。
@@ -186,7 +233,7 @@ export function createPanelService({
   }
 
   /**
-   * 模型目录。
+   * 模型目录（模块级实现，见文件底部 `readModelCatalog`）。
    *
    * 真形状（`session/modelCatalog` 的 schema）：`{ default, routableProviders, groups:
    * [{ id, name, models: [{ id, name, reasoning?: { efforts: [{ id, name }], defaultEffort } }] }] }`
@@ -194,38 +241,7 @@ export function createPanelService({
    * 真机上就是"当前 Host 没有可用模型"）。
    */
   async function modelCatalog() {
-    const catalog = await sessions.invoke('session', 'modelCatalog', {});
-    const options = [];
-    /**
-     * 目录里的失败清单（`session/modelCatalog` 会为每个拿不到模型的 provider 给一条
-     * `failures: [{ id, name, message }]`）。**必须带出去**：否则前端只能显示
-     * "当前 Host 没有可用模型"，用户和排查的人都不知道为什么（真机上就是这么卡住的）。
-     */
-    const failures = (catalog?.failures ?? []).map((item) => ({
-      id: item?.id ?? '', name: item?.name ?? item?.id ?? '', message: item?.message ?? '',
-    }));
-    for (const group of catalog?.groups ?? []) {
-      const provider = group.id ?? group.provider ?? group.providerId;
-      for (const model of group.models ?? []) {
-        const id = model.id ?? model.model;
-        if (!provider || !id) continue;
-        options.push({
-          value: `${provider}/${id}`,
-          provider,
-          model: id,
-          name: model.name ?? id,
-          providerName: group.name ?? group.providerName ?? provider,
-          efforts: (model.reasoning?.efforts ?? []).map((effort) => ({
-            id: effort.id, label: effort.name ?? effort.label ?? effort.id,
-          })),
-          defaultEffort: model.reasoning?.defaultEffort ?? null,
-        });
-      }
-    }
-    // `default` 在 Host 没设默认时是 `{}`（schema 是 `{...currentSelection()}`）：补全成 null。
-    const rawDefault = catalog?.default;
-    const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
-    return { options, hostDefault, failures };
+    return readModelCatalog(sessions, logger);
   }
 
   /**

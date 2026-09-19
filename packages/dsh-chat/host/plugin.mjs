@@ -24,7 +24,8 @@ import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
 import { createDeliveryService } from './delivery.mjs';
 import { channelLogPath, createLogFileSink, withFileSink } from './file-log.mjs';
 import { readLogTail } from './log-tail.mjs';
-import { createPanelService, workspaceCandidates } from './panel.mjs';
+import { normalizeBotModel } from './bot-model.mjs';
+import { createPanelService, readModelCatalog, workspaceCandidates } from './panel.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
@@ -344,13 +345,34 @@ export function apply(ctx, config = {}) {
           logger.warn?.(`[dsh-chat] 读取 Agent Preset 列表失败：${error?.message ?? error}`);
         }
       }
+      /**
+       * 模型目录：设置页的「默认模型」栏要用它渲染下拉。
+       * 与聊天里那块面板同一个来源（`readModelCatalog`），失败只记 warn —— 读不到时
+       * 那一栏退化成"读不到模型目录"，不阻塞设置页其它部分。
+       */
+      let models = [];
+      let hostDefault = null;
+      let modelFailures = [];
+      try {
+        const catalog = await readModelCatalog(sessions, logger);
+        models = catalog.options;
+        hostDefault = catalog.hostDefault;
+        modelFailures = catalog.failures;
+      } catch (error) {
+        logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
+        modelFailures = [{ id: '', name: '模型目录', message: String(error?.message ?? error) }];
+      }
       return ok({
         workspacePaths,
         presets,
+        models,
+        hostDefault,
+        modelFailures,
         current: {
           workspace: record.workspace ?? null,
           agentPreset: record.agentPreset ?? null,
           accessPolicy: record.accessPolicy ?? null,
+          model: normalizeBotModel(record.model),
         },
       });
     }
@@ -401,6 +423,44 @@ export function apply(ctx, config = {}) {
       }
       const saved = await settings.write(payload.channelId, payload.botId, { agentPreset: target });
       return ok({ agentPreset: saved.agentPreset ?? null });
+    }
+    if (method === 'bot.model.set') {
+      if (!validBotPayload(payload, { extra: ['model'] })) {
+        return fail('chat/bad-request', 'bot.model.set 需要 channelId、botId 与 model。');
+      }
+      const raw = payload.model;
+      if (raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return fail('chat/bad-request', 'model 只能是 { provider, model, reasoningEffort? } 或 null。');
+      }
+      const target = raw === null ? null : normalizeBotModel(raw);
+      if (raw !== null && !target) {
+        return fail('chat/bad-request', 'model 需要非空的 provider 与 model。');
+      }
+      if (target) {
+        /**
+         * 先跟当前 Host 的模型目录对账（与 Agent Preset 同一条口径）。
+         *
+         * 读不到目录时**放行**：这条路的入口是设置页的下拉，值本来就来自目录；
+         * 而"读不到"不该把用户已经选好的东西判成非法（聊天里那条路是另一套语义）。
+         */
+        try {
+          const { options } = await readModelCatalog(sessions, logger);
+          if (options.length > 0) {
+            const found = options.find((item) => item.provider === target.provider && item.model === target.model);
+            if (!found) {
+              return fail('chat/unknown-model', `当前 Host 没有这个模型：${target.provider}/${target.model}`);
+            }
+            if (target.reasoningEffort && !found.efforts.some((effort) => effort.id === target.reasoningEffort)) {
+              return fail('chat/unknown-effort',
+                `模型 ${found.value} 不支持推理等级 ${target.reasoningEffort}。`);
+            }
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] 校验机器人默认模型时读不到模型目录，按原值保存：${error?.message ?? error}`);
+        }
+      }
+      const saved = await settings.write(payload.channelId, payload.botId, { model: target });
+      return ok({ model: normalizeBotModel(saved.model) });
     }
     if (method === 'bot.access-policy.set') {
       if (!validBotPayload(payload, { extra: ['policy'] })) {

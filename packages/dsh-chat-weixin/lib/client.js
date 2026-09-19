@@ -65,6 +65,15 @@ var zh = {
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026",
   "Agent \u9884\u8BBE": "Agent \u9884\u8BBE",
+  "\u6A21\u578B": "\u6A21\u578B",
+  "\u9ED8\u8BA4\u6A21\u578B": "\u9ED8\u8BA4\u6A21\u578B",
+  "\u63A8\u7406\u7B49\u7EA7": "\u63A8\u7406\u7B49\u7EA7",
+  "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002": "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002",
+  "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002": "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002",
+  "\u6A21\u578B\u9ED8\u8BA4": "\u6A21\u578B\u9ED8\u8BA4",
+  "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A": "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002": "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002": "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002",
   "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002",
   "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "\u4EC5\u540D\u5355\u5185\u53EF\u7528",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B",
@@ -150,6 +159,15 @@ var en = {
   "\u6765\u6E90\u5B57\u6BB5\u53EA\u5728\u5F53\u524D\u6D88\u606F\u5DF2\u63D0\u4F9B\u65F6\u624D\u4F1A\u53D1\u9001\uFF0C\u4E0D\u4F1A\u989D\u5916\u67E5\u8BE2\u5E73\u53F0\u63A5\u53E3\u3002": "Source fields are sent only when the incoming message already carries them; no extra platform calls are made.",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026": "Pick a conversation\u2026",
   "Agent \u9884\u8BBE": "Agent preset",
+  "\u6A21\u578B": "Model",
+  "\u9ED8\u8BA4\u6A21\u578B": "Default model",
+  "\u63A8\u7406\u7B49\u7EA7": "Reasoning effort",
+  "\u8FD9\u4E2A\u6A21\u578B\u6CA1\u6709\u53EF\u9009\u7684\u63A8\u7406\u7B49\u7EA7\u3002": "This model has no reasoning efforts to choose from.",
+  "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\u3002": "Pick a model first.",
+  "\u6A21\u578B\u9ED8\u8BA4": "Model default",
+  "\u90E8\u5206 provider \u8BFB\u53D6\u5931\u8D25\uFF1A": "Some providers failed to load: ",
+  "\u5F53\u524D Host \u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\u3002": "The model catalog is unavailable right now.",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u65F6\u7528\u54EA\u4E2A\u6A21\u578B\uFF1A\u9009\u5B8C\u5BF9\u4E0B\u4E00\u6761\u6D88\u606F\u65B0\u5EFA\u7684\u4F1A\u8BDD\u751F\u6548\u3002\u4F1A\u8BDD\u5185\u8FD8\u80FD\u5355\u72EC\u6539\uFF08\u9762\u677F\u7684\u6A21\u578B\u4E0B\u62C9\uFF09\u3002": "Model used before a conversation exists; it applies to the session created by your next message. You can still change it per conversation from the panel.",
   "\u4E0B\u62C9\u91CC\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7528\u8FC7\u7684\u76EE\u5F55\u3002": "The suggestions are directories this bot has used before.",
   "\u4EC5\u540D\u5355\u5185\u53EF\u7528": "Allowlist only",
   "\u4ECE\u4F1A\u8BDD\u91CC\u9009\u4E00\u4E2A\u4EBA\u8BBE\u4E3A\u5C5E\u4E3B": "Pick a person from a conversation to make them the owner",
@@ -355,6 +373,7 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
     DeliveryTargetsEditor,
     WorkspaceEditor,
     PresetEditor,
+    ModelEditor,
     AccessPolicyEditor
   } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
@@ -377,6 +396,8 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const shared = {
     workspace: settings.record?.workspace ?? null,
     agentPreset: settings.record?.agentPreset ?? null,
+    // 机器人默认模型（还没有会话时用它）：与工作区/预设同一条口径，只对新建会话生效。
+    model: settings.record?.model ?? null,
     accessPolicy: settings.record?.accessPolicy ?? null
   };
   const [busy, setBusy] = React.useState(false);
@@ -469,6 +490,14 @@ function AccountCard({ account, chatUi, connection, translate, onChanged }) {
       options: settings.options?.presets ?? [],
       translate: t,
       onSave: settings.saveAgentPreset
+    }),
+    h(ModelEditor, {
+      value: shared.model ?? null,
+      options: settings.options?.models ?? [],
+      hostDefault: settings.options?.hostDefault ?? null,
+      failures: settings.options?.modelFailures ?? [],
+      translate: t,
+      onSave: settings.saveModel
     }),
     h(AccessPolicyEditor, {
       value: shared.accessPolicy,

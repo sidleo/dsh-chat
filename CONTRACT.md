@@ -332,9 +332,10 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 |---|---|---|
 | `channel.list` | `{}` | 契约版本 + hub 版本/包名 + 数据/日志目录 + 全部渠道状态与**渠道包版本**（设置页的「版本与更新」面板用它） |
 | `bot.settings.get` | `{ channelId, botId }` | 读每机器人共享设置 |
-| `bot.settings.options` | `{ channelId, botId }` | 设置页的下拉候选：该机器人用过的目录、Host 的 Agent Preset 列表、当前值 |
+| `bot.settings.options` | `{ channelId, botId }` | 设置页的下拉候选：该机器人用过的目录、Host 的 Agent Preset 列表、**模型目录（`models` + `hostDefault` + `modelFailures`）**、当前值 |
 | `bot.workspace.set` | `{ channelId, botId, workspace }` | 设工作区（校验存在且是目录，一律存绝对路径）；**只对新会话生效** |
 | `bot.agent-preset.set` | `{ channelId, botId, agentPreset }` | 设 Agent Preset（先与当前 Host 的列表对账）；**只对新会话生效** |
+| `bot.model.set` | `{ channelId, botId, model }` | 设**机器人默认模型** `{provider,model,reasoningEffort?}` 或 null；模型目录读得到时先对账（`chat/unknown-model` / `chat/unknown-effort`），**只对新会话生效**——无会话时聊天里改的也是它 |
 | `bot.access-policy.set` | `{ channelId, botId, policy }` | 设访问策略（与 host 拦消息同一份校验）；**立即生效** |
 | `bot.conversations` | `{ channelId, botId }` | 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |

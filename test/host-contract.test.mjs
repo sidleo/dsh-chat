@@ -907,3 +907,39 @@ test('bot.conversations：把该机器人聊过的会话（带名字）给选择
     await app.cleanup();
   }
 });
+
+test('bot.model.set：机器人默认模型（设置页那一栏）能存能清，不认识的值要报错', async () => {
+  const app = await bootstrap();
+  try {
+    // 先让模型目录可用（假渠道的 deployment 里已有一份 catalog 的话直接用；否则下面断言会走"读不到就放行"）。
+    const saved = await callRoute(app.routes, HUB_PATH, 'bot.model.set', {
+      channelId: 'fixture', botId: 'bot_1',
+      model: { provider: 'p', model: 'm', reasoningEffort: 'high' },
+    });
+    assert.equal(saved.result.ok, true, JSON.stringify(saved.result));
+    assert.deepEqual(saved.result.value.model, { provider: 'p', model: 'm', reasoningEffort: 'high' });
+
+    // 结构不合法的入参要挡住（provider/model 缺一不可）。
+    const bad = await callRoute(app.routes, HUB_PATH, 'bot.model.set', {
+      channelId: 'fixture', botId: 'bot_1', model: { provider: 'p' },
+    });
+    assert.equal(bad.result.ok, false);
+    assert.equal(bad.result.error.code, 'chat/bad-request');
+
+    const cleared = await callRoute(app.routes, HUB_PATH, 'bot.model.set', {
+      channelId: 'fixture', botId: 'bot_1', model: null,
+    });
+    assert.equal(cleared.result.ok, true);
+    assert.equal(cleared.result.value.model, null);
+
+    // 可选项端点要把模型目录与当前默认模型带给设置页。
+    const options = await callRoute(app.routes, HUB_PATH, 'bot.settings.options', {
+      channelId: 'fixture', botId: 'bot_1',
+    });
+    assert.equal(options.result.ok, true);
+    assert.ok(Array.isArray(options.result.value.models), '模型目录要带出去（设置页的下拉）');
+    assert.ok(Array.isArray(options.result.value.modelFailures));
+  } finally {
+    await app.cleanup();
+  }
+});

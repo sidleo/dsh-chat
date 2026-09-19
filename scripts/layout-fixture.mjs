@@ -18,7 +18,7 @@ import { createRoot } from 'react-dom/client';
 import { DeliveryTargetsEditor } from '../packages/dsh-chat/client/delivery-targets.js';
 import { DiagnosticsPanel } from '../packages/dsh-chat/client/diagnostics.js';
 import {
-  AccessPolicyEditor, OwnerEditor, PresetEditor, WorkspaceEditor,
+  AccessPolicyEditor, ModelEditor, OwnerEditor, PresetEditor, WorkspaceEditor,
 } from '../packages/dsh-chat/client/bot-shared-settings.js';
 import { ScopedModeEditor } from '../packages/dsh-chat/client/scoped-mode-editor.js';
 // 用真的 Panel / chatUi 工厂（不是手写复刻）：投递列表与整张渠道卡都靠它渲染外壳，
@@ -283,6 +283,18 @@ const FRAGMENTS = {
       onSave: async () => {},
     }),
     h(PresetEditor, { value: 'standard', options: [{ id: 'standard' }], translate: t, onSave: async () => {} }),
+    // 默认模型：两个下拉（模型 + 推理等级），窄栏下也要排得下（守门覆盖它）。
+    h(ModelEditor, {
+      value: { provider: 'yh', model: 'gpt-5.5-luna', reasoningEffort: 'high' },
+      options: [{
+        value: 'yh/gpt-5.5-luna', provider: 'yh', model: 'gpt-5.5-luna',
+        name: 'GPT-5.5 Luna', efforts: [{ id: 'high', label: '高' }],
+      }],
+      hostDefault: { provider: 'yh', model: 'gpt-5.5-luna' },
+      failures: [],
+      translate: t,
+      onSave: async () => {},
+    }),
     h(OwnerEditor, {
       owners: ['ou_9a1c3e5f7b2d4068a2c4e6f8b0d1a3c5'],
       wildcard: false,
