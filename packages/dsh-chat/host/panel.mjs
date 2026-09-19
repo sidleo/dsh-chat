@@ -187,7 +187,11 @@ export function createPanelService({
           return { options: [], hostDefault: null, failures: [{ id: '', name: '', message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
-        currentSelection(sessionId).catch(() => null),
+        currentSelection(sessionId).catch((error) => {
+          // 不能静默：读不到就退化成"跟随 Host 默认"，看起来像用户从没选过模型。
+          logger.warn?.(`[dsh-chat] 读取会话模型选择失败：${error?.message ?? error}`);
+          return null;
+        }),
       ]);
       const options = catalog.options;
       const currentModel = selection

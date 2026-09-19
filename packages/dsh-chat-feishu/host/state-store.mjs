@@ -12,6 +12,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 /** 去重集合上限（超出丢弃最旧的）。 */
+/** 卡片→会话映射最多留多少条（卡片消息是短命的，留最近的就够）。 */
+const MAX_CARDS = 200;
 const MAX_SEEN = 1_000;
 
 function isPlainObject(value) {
@@ -29,7 +31,20 @@ function normalizeDocument(value) {
   const seen = Array.isArray(source.seenMessageIds)
     ? source.seenMessageIds.filter((id) => typeof id === 'string' && id).slice(-MAX_SEEN)
     : [];
-  return { version: 1, sessions, seenMessageIds: seen };
+  /**
+   * 卡片消息 → 会话键（`p2p:…` / `group:…`）。
+   *
+   * 卡片回调里只有 chat_id，而群与私聊的 chat_id 长得一样；这个映射是判对会话的唯一可靠依据。
+   * **必须落盘**：进程重启（改 host 代码就要重启）后如果只剩绑定推断，群里点卡片会被判成私聊，
+   * 动作就落到操作者的私聊会话上了。
+   */
+  const cards = {};
+  if (isPlainObject(source.cardConversations)) {
+    for (const [messageId, key] of Object.entries(source.cardConversations)) {
+      if (typeof messageId === 'string' && messageId && typeof key === 'string' && key) cards[messageId] = key;
+    }
+  }
+  return { version: 1, sessions, seenMessageIds: seen, cardConversations: cards };
 }
 
 /**
@@ -40,7 +55,7 @@ function normalizeDocument(value) {
  */
 export function createFeishuStateStore({ path, logger = console } = {}) {
   if (typeof path !== 'string' || !path.trim()) throw new TypeError('state store 需要 path。');
-  let document = { version: 1, sessions: {}, seenMessageIds: [] };
+  let document = { version: 1, sessions: {}, seenMessageIds: [], cardConversations: {} };
   let loaded = false;
   let queue = Promise.resolve();
   const seen = new Set();
@@ -59,8 +74,30 @@ export function createFeishuStateStore({ path, logger = console } = {}) {
     return next;
   }
 
+  /** 记住"这张卡片属于哪个会话"（按插入顺序截断，避免无限增长）。 */
+  function rememberCard(messageId, key) {
+    if (typeof messageId !== 'string' || !messageId) return;
+    if (typeof key !== 'string' || !key) return;
+    const entries = Object.entries(document.cardConversations).filter(([id]) => id !== messageId);
+    entries.push([messageId, key]);
+    const kept = Object.fromEntries(entries.slice(-MAX_CARDS));
+    document = { version: 1, sessions: document.sessions, seenMessageIds: [...seenOrder], cardConversations: kept };
+    void enqueue(persist).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] 写入 ${path} 失败：${error?.message ?? error}`);
+    });
+  }
+
   return {
     path,
+
+    /** @returns 这张卡片属于哪个会话键；不认识（不是我们发的卡/太久远）时返回 null。 */
+    cardConversation(messageId) {
+      if (typeof messageId !== 'string' || !messageId) return null;
+      return document.cardConversations[messageId] ?? null;
+    },
+
+    /** 记住"这张卡片属于哪个会话"。 */
+    rememberCard,
 
     /**
      * 等待已排队的写盘落定（去重集合是异步落盘的，停机前要等它写完，
@@ -78,7 +115,7 @@ export function createFeishuStateStore({ path, logger = console } = {}) {
         if (error?.code !== 'ENOENT') {
           logger.warn?.(`[dsh-chat-feishu] 读取 ${path} 失败：${error?.message ?? error}`);
         }
-        document = { version: 1, sessions: {}, seenMessageIds: [] };
+        document = { version: 1, sessions: {}, seenMessageIds: [], cardConversations: {} };
       }
       for (const id of document.seenMessageIds) {
         if (seen.has(id)) continue;
@@ -112,6 +149,7 @@ export function createFeishuStateStore({ path, logger = console } = {}) {
         version: 1,
         sessions: document.sessions,
         seenMessageIds: [...seenOrder],
+        cardConversations: document.cardConversations,
       };
       void enqueue(persist).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] 写入 ${path} 失败：${error?.message ?? error}`);

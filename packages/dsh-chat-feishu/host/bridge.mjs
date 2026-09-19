@@ -832,41 +832,36 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
-   * 我们自己发出去的卡片 → 它属于哪个会话键（messageId → key）。
+   * 记住"这张卡片是我们发给哪个会话的"。
    *
    * 卡片回调里只有 chatId，而**群和私聊的 chat_id 长得一样**（都是 `oc_…`），
    * 光看绑定推断会判错：群里第一条交互（比如刚发的 /menu）还没有群绑定时，
    * 就会被当成私聊，于是"新会话"解掉的是操作者私聊的绑定、模型也改到私聊会话上。
-   * 所以"发卡时记住它是哪个会话的"是唯一可靠的判据。
+   * 所以"发卡时记住它是哪个会话的"是唯一可靠的判据——而且**必须落盘**
+   * （`state.json`），否则重启后又只能靠猜。
    */
-  const cardConversations = new Map(); // messageId → 会话键
-
   function rememberCardConversation(messageId, key) {
-    if (typeof messageId !== 'string' || !messageId || typeof key !== 'string' || !key) return;
-    cardConversations.set(messageId, key);
-    if (cardConversations.size > 200) {
-      cardConversations.delete(cardConversations.keys().next().value);
-    }
+    state?.rememberCard?.(messageId, key);
   }
 
   /**
    * 卡片动作属于哪个会话（群还是私聊）以及会话键。
    *
-   * 三级判据（从可靠到保守）：
-   * ① 这张卡是我们发的 → 用发卡时记下的会话键；
+   * 判据从可靠到保守：
+   * ① 这张卡是我们发的 → 用发卡时记下的会话键（落盘，重启后仍在）；
    * ② 该会话已有绑定 → 用绑定的那一侧；
-   * ③ 都没有 → **按群处理**（私聊卡片一定是先私聊过才存在的，那时早已有 p2p 绑定；
-   *    而群里第一条交互常常还没有群绑定）。判错方向的代价不对称：判成私聊会解错绑定、放宽门禁。
+   * ③ 都没有 → **按群处理**。判错方向的代价不对称：判成私聊会解错绑定、还会放宽命令门禁。
    */
   function conversationForCard(chatId, operatorId, messageId = null) {
     const groupKey = `group:${chatId}`;
     const p2pKey = `p2p:${operatorId}`;
-    const known = messageId ? cardConversations.get(messageId) : null;
+    const known = messageId ? state?.cardConversation?.(messageId) : null;
     if (known) {
       return { conversationType: known.startsWith('group:') ? 'group' : 'direct', key: known };
     }
     const groupBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
     const p2pBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, p2pKey);
+    // 保守方向：拿不准就当群。判成私聊会解错绑定、并让 direct 作用域的策略生效。
     const isGroup = groupBound ? true : !p2pBound;
     return { conversationType: isGroup ? 'group' : 'direct', key: isGroup ? groupKey : p2pKey };
   }

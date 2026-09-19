@@ -224,6 +224,7 @@ async function makeBridge({
   onAsk = () => {},
   commands = null,
   panel = null,
+  statePath = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -245,7 +246,9 @@ async function makeBridge({
       return interactions.claimed;
     },
   };
-  const state = createFeishuStateStore({ path: join(dataDir, 'state.json'), logger: silentLogger });
+  const state = createFeishuStateStore({
+    path: statePath ?? join(dataDir, 'state.json'), logger: silentLogger,
+  });
   await state.load();
   const published = [];
   /** 记录上传给会话的文件（入站文件链路用）；uploadFailure 可注入失败。 */
@@ -295,6 +298,7 @@ async function makeBridge({
     gateway,
     state,
     deps,
+    panel,
     published,
     interactions,
     attached,
@@ -2499,4 +2503,52 @@ test('控制面板卡：下拉超出上限时不静默丢——当前项一定�
   assert.equal(picker.options[picker.initial_index - 1].value, 'p/m35', 'initial_index 要指向当前项');
   assert.ok(picker.options.length > 30, '为了带上当前项可以略微超出上限');
   assert.match(JSON.stringify(card), /还有 9 个没列出/, '要写明还有多少没列出（不静默丢）');
+});
+
+test('卡片→会话映射落盘：重启后群里的卡片仍被判成群，不会落到操作者私聊', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-cardmap-'));
+  try {
+    const path = join(dataDir, 'state.json');
+    // 第一次运行：群里发 /menu 并把卡片映射写进 state.json。
+    const firstPanel = makePanelStub();
+    const commands = {
+      async handle() {
+        return { handled: true, reply: '可用命令', panel: await firstPanel.read(), menu: [] };
+      },
+    };
+    const first = await makeBridge({ panel: firstPanel, commands, statePath: path });
+    await first.bridge.accept(messageEvent({
+      messageId: 'om_g1',
+      chatType: 'group',
+      chatId: 'oc_group',
+      text: '@_user_1 /menu',
+      mentions: [{ key: '@_user_1', id: { open_id: BOT.botOpenId } }],
+    }));
+    await first.state.flush();
+    await first.cleanup();
+
+    const onDisk = JSON.parse(await readFile(path, 'utf8'));
+    assert.equal(
+      Object.values(onDisk.cardConversations ?? {}).includes('group:oc_group'), true,
+      '卡片→会话映射要落盘（重启后不再靠猜）',
+    );
+
+    // 重启（同一个 state.json，新的 bridge）：操作者自己有私聊绑定，但卡片是群里的。
+    const panel = makePanelStub();
+    const second = await makeBridge({ panel, statePath: path });
+    try {
+      await second.bridge.handleCardAction({
+        chatId: 'oc_group',
+        messageId: 'om_card',
+        token: 'tk_after_restart',
+        operator: { openId: 'ou_owner' },
+        action: { tag: 'select_static', name: 'model_pick', options: ['deepseek/flash'], value: { action: 'model_pick' } },
+      });
+      assert.equal(panel.applied.at(-1)?.key, 'group:oc_group', '重启后仍按群处理');
+    } finally {
+      await second.cleanup();
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
 });

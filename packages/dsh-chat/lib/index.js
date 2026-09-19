@@ -2204,7 +2204,10 @@ function createPanelService({
           return { options: [], hostDefault: null, failures: [{ id: "", name: "", message: String(error?.message ?? error) }] };
         }),
         presetOptions(),
-        currentSelection(sessionId).catch(() => null)
+        currentSelection(sessionId).catch((error) => {
+          logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u6A21\u578B\u9009\u62E9\u5931\u8D25\uFF1A${error?.message ?? error}`);
+          return null;
+        })
       ]);
       const options = catalog.options;
       const currentModel = selection ? options.find((item) => item.provider === selection.provider && item.model === selection.model) ?? null : null;

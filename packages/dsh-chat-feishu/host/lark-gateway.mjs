@@ -52,15 +52,22 @@ const FILE_TYPES = new Map(Object.entries({
  * 少认一种，用户点了下拉就"没反应"——而这类失败在真机上是静默的，所以这里全部认。
  *
  * @param value - 任意形态。
+ * @param options - { splitCommas }：多选的逗号串要拆；**单选（`action.option`）不能拆**
+ *   ——工作区路径里就可能有逗号，拆了会静默换成另一个目录。默认拆（多选语义）。
  * @returns 字符串数组（已去空、去重）。
  */
-export function normalizeOptionValues(value) {
+export function normalizeOptionValues(value, { splitCommas = true } = {}) {
   const flat = [];
   const push = (item) => {
     if (typeof item === 'string') {
       // 逗号串（Card 2.0 的多选就是这个形状）。
-      for (const part of item.split(',')) {
-        const text = part.trim();
+      if (splitCommas) {
+        for (const part of item.split(',')) {
+          const text = part.trim();
+          if (text) flat.push(text);
+        }
+      } else {
+        const text = item.trim();
         if (text) flat.push(text);
       }
       return;
@@ -123,11 +130,13 @@ export function normalizeCardAction(raw) {
        * 卡片上的下拉靠 `behaviors.callback` 直接回调，选中值就落在这两个字段里——
        * 漏了它们，用户点下拉就是"没反应"（而这在真机上是静默的）。
        */
-      options: Object.freeze(normalizeOptionValues([
-        action.option,
-        action.options,
-        (action.form_value ?? action.formValue ?? {})[action.name],
-      ].filter((item) => item !== undefined))),
+      options: Object.freeze([
+        // 单选是原子值（路径里可能有逗号）：不拆。
+        ...normalizeOptionValues(action.option, { splitCommas: false }),
+        // 多选与表单值按逗号串处理。
+        ...normalizeOptionValues(action.options),
+        ...normalizeOptionValues((action.form_value ?? action.formValue ?? {})[action.name]),
+      ].filter((item, index, list) => item !== '' && list.indexOf(item) === index)),
       ...(action.name === undefined ? {} : { name: action.name }),
     }),
     raw,

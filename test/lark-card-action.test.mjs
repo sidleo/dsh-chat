@@ -207,3 +207,19 @@ test('归一化：带出延迟更新 token（更新交互卡片的唯一凭证�
   });
   assert.equal(withoutToken.token, undefined);
 });
+
+test('归一化：单选值不按逗号拆（工作区路径里可能有逗号），多选才拆', () => {
+  const single = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'select_static', name: 'workspace_pick', option: '/Users/x/A, B/报表' },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(single.action.options, ['/Users/x/A, B/报表'], '单选的逗号是路径的一部分，不能拆');
+
+  const multi = normalizeCardAction({
+    operator: { open_id: 'ou_owner' },
+    action: { tag: 'multi_select_static', name: 'watch_add', options: 'a, b' },
+    context: { open_chat_id: 'oc_chat' },
+  });
+  assert.deepEqual(multi.action.options, ['a', 'b'], '多选是逗号串，要拆');
+});

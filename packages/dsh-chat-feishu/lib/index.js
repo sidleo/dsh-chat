@@ -127796,18 +127796,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       isOwner: isOwner(deps.accessPolicy, bot, senderId)
     });
   }
-  const cardConversations = /* @__PURE__ */ new Map();
   function rememberCardConversation(messageId, key) {
-    if (typeof messageId !== "string" || !messageId || typeof key !== "string" || !key) return;
-    cardConversations.set(messageId, key);
-    if (cardConversations.size > 200) {
-      cardConversations.delete(cardConversations.keys().next().value);
-    }
+    state?.rememberCard?.(messageId, key);
   }
   function conversationForCard(chatId, operatorId, messageId = null) {
     const groupKey = `group:${chatId}`;
     const p2pKey = `p2p:${operatorId}`;
-    const known = messageId ? cardConversations.get(messageId) : null;
+    const known = messageId ? state?.cardConversation?.(messageId) : null;
     if (known) {
       return { conversationType: known.startsWith("group:") ? "group" : "direct", key: known };
     }
@@ -128259,12 +128254,17 @@ var FILE_TYPES = new Map(Object.entries({
   ppt: "ppt",
   pptx: "ppt"
 }));
-function normalizeOptionValues(value) {
+function normalizeOptionValues(value, { splitCommas = true } = {}) {
   const flat = [];
   const push = (item) => {
     if (typeof item === "string") {
-      for (const part of item.split(",")) {
-        const text = part.trim();
+      if (splitCommas) {
+        for (const part of item.split(",")) {
+          const text = part.trim();
+          if (text) flat.push(text);
+        }
+      } else {
+        const text = item.trim();
         if (text) flat.push(text);
       }
       return;
@@ -128311,11 +128311,13 @@ function normalizeCardAction(raw) {
        * 卡片上的下拉靠 `behaviors.callback` 直接回调，选中值就落在这两个字段里——
        * 漏了它们，用户点下拉就是"没反应"（而这在真机上是静默的）。
        */
-      options: Object.freeze(normalizeOptionValues([
-        action.option,
-        action.options,
-        (action.form_value ?? action.formValue ?? {})[action.name]
-      ].filter((item) => item !== void 0))),
+      options: Object.freeze([
+        // 单选是原子值（路径里可能有逗号）：不拆。
+        ...normalizeOptionValues(action.option, { splitCommas: false }),
+        // 多选与表单值按逗号串处理。
+        ...normalizeOptionValues(action.options),
+        ...normalizeOptionValues((action.form_value ?? action.formValue ?? {})[action.name])
+      ].filter((item, index, list) => item !== "" && list.indexOf(item) === index)),
       ...action.name === void 0 ? {} : { name: action.name }
     }),
     raw
@@ -129225,6 +129227,7 @@ function createLarkGateway({
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { mkdir as mkdir2, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "node:fs/promises";
 import { dirname as dirname2 } from "node:path";
+var MAX_CARDS = 200;
 var MAX_SEEN = 1e3;
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -129238,11 +129241,17 @@ function normalizeDocument2(value) {
     }
   }
   const seen = Array.isArray(source.seenMessageIds) ? source.seenMessageIds.filter((id) => typeof id === "string" && id).slice(-MAX_SEEN) : [];
-  return { version: 1, sessions, seenMessageIds: seen };
+  const cards = {};
+  if (isPlainObject(source.cardConversations)) {
+    for (const [messageId, key] of Object.entries(source.cardConversations)) {
+      if (typeof messageId === "string" && messageId && typeof key === "string" && key) cards[messageId] = key;
+    }
+  }
+  return { version: 1, sessions, seenMessageIds: seen, cardConversations: cards };
 }
 function createFeishuStateStore({ path: path2, logger = console } = {}) {
   if (typeof path2 !== "string" || !path2.trim()) throw new TypeError("state store \u9700\u8981 path\u3002");
-  let document2 = { version: 1, sessions: {}, seenMessageIds: [] };
+  let document2 = { version: 1, sessions: {}, seenMessageIds: [], cardConversations: {} };
   let loaded = false;
   let queue = Promise.resolve();
   const seen = /* @__PURE__ */ new Set();
@@ -129259,8 +129268,26 @@ function createFeishuStateStore({ path: path2, logger = console } = {}) {
     queue = next.then(() => void 0, () => void 0);
     return next;
   }
+  function rememberCard(messageId, key) {
+    if (typeof messageId !== "string" || !messageId) return;
+    if (typeof key !== "string" || !key) return;
+    const entries = Object.entries(document2.cardConversations).filter(([id]) => id !== messageId);
+    entries.push([messageId, key]);
+    const kept = Object.fromEntries(entries.slice(-MAX_CARDS));
+    document2 = { version: 1, sessions: document2.sessions, seenMessageIds: [...seenOrder], cardConversations: kept };
+    void enqueue(persist).catch((error) => {
+      logger.warn?.(`[dsh-chat-feishu] \u5199\u5165 ${path2} \u5931\u8D25\uFF1A${error?.message ?? error}`);
+    });
+  }
   return {
     path: path2,
+    /** @returns 这张卡片属于哪个会话键；不认识（不是我们发的卡/太久远）时返回 null。 */
+    cardConversation(messageId) {
+      if (typeof messageId !== "string" || !messageId) return null;
+      return document2.cardConversations[messageId] ?? null;
+    },
+    /** 记住"这张卡片属于哪个会话"。 */
+    rememberCard,
     /**
      * 等待已排队的写盘落定（去重集合是异步落盘的，停机前要等它写完，
      * 否则重启后会重复处理刚收过的消息）。
@@ -129276,7 +129303,7 @@ function createFeishuStateStore({ path: path2, logger = console } = {}) {
         if (error?.code !== "ENOENT") {
           logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6 ${path2} \u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
-        document2 = { version: 1, sessions: {}, seenMessageIds: [] };
+        document2 = { version: 1, sessions: {}, seenMessageIds: [], cardConversations: {} };
       }
       for (const id of document2.seenMessageIds) {
         if (seen.has(id)) continue;
@@ -129307,7 +129334,8 @@ function createFeishuStateStore({ path: path2, logger = console } = {}) {
       document2 = {
         version: 1,
         sessions: document2.sessions,
-        seenMessageIds: [...seenOrder]
+        seenMessageIds: [...seenOrder],
+        cardConversations: document2.cardConversations
       };
       void enqueue(persist).catch((error) => {
         logger.warn?.(`[dsh-chat-feishu] \u5199\u5165 ${path2} \u5931\u8D25\uFF1A${error?.message ?? error}`);
