@@ -862,39 +862,40 @@ export function createLarkGateway({
       if (!receiveId) throw new TypeError('sendApprovalCard 需要 chatId 或 openId。');
       const lines = ['需要授权', '', `工具：${request?.toolName ?? '未知'}`];
       if (request?.reason) lines.push(`原因：${request.reason}`);
-      const response = await client.im.v1.message.create({
-        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
-        data: {
-          receive_id: receiveId,
-          msg_type: 'interactive',
-          content: JSON.stringify({
-            config: { wide_screen_mode: true, update_multi: true },
-            header: { template: 'orange', title: { tag: 'plain_text', content: '⚠️ 需要授权' } },
-            elements: [
-              { tag: 'div', text: { tag: 'lark_md', content: lines.join('\n') } },
+      // 审批卡是 Card 1.0（`elements` 顶格）：登记 schema，交互后回写才不会被
+      // "2.0/1.0 混用"拒掉，也才知道要不要带 open_ids。
+      const card = {
+        config: { wide_screen_mode: true, update_multi: true },
+        header: { template: 'orange', title: { tag: 'plain_text', content: '⚠️ 需要授权' } },
+        elements: [
+          { tag: 'div', text: { tag: 'lark_md', content: lines.join('\n') } },
+          {
+            tag: 'action',
+            actions: [
               {
-                tag: 'action',
-                actions: [
-                  {
-                    tag: 'button',
-                    type: 'primary',
-                    text: { tag: 'plain_text', content: '允许一次' },
-                    value: { dsh: 'approval', decision: 'allowed-once' },
-                  },
-                  {
-                    tag: 'button',
-                    type: 'danger',
-                    text: { tag: 'plain_text', content: '拒绝' },
-                    value: { dsh: 'approval', decision: 'rejected' },
-                  },
-                ],
+                tag: 'button',
+                type: 'primary',
+                text: { tag: 'plain_text', content: '允许一次' },
+                value: { dsh: 'approval', decision: 'allowed-once' },
+              },
+              {
+                tag: 'button',
+                type: 'danger',
+                text: { tag: 'plain_text', content: '拒绝' },
+                value: { dsh: 'approval', decision: 'rejected' },
               },
             ],
-          }),
-        },
+          },
+        ],
+      };
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? 'chat_id' : 'open_id' },
+        data: { receive_id: receiveId, msg_type: 'interactive', content: JSON.stringify(card) },
       });
       assertSuccess('飞书发送审批卡片', response);
-      return { messageId: response?.data?.message_id };
+      const messageId = response?.data?.message_id;
+      rememberCardSchema(messageId, card);
+      return { messageId };
     },
 
     /**
@@ -942,7 +943,7 @@ export function createLarkGateway({
      *
      * @param options - { messageId, token?, title, content }。
      */
-    async markCardAnswered({ messageId, token = null, title, content }) {
+    async markCardAnswered({ messageId, token = null, openIds = null, title, content }) {
       const schema = cardSchemas.get(messageId) ?? '1.0';
       const header = { template: 'green', title: { tag: 'plain_text', content: String(title).slice(0, 100) } };
       const text = String(content);
@@ -959,7 +960,7 @@ export function createLarkGateway({
           elements: [{ tag: 'div', text: { tag: 'lark_md', content: text } }],
         };
       if (token) {
-        const updated = await this.updateCard({ token, card }).then(() => true).catch((error) => {
+        const updated = await this.updateCard({ token, card, openIds }).then(() => true).catch((error) => {
           logger.warn?.(`[dsh-chat-feishu] 提问卡片延迟更新失败，退回 patch：${error?.message ?? error}`);
           return false;
         });
@@ -1026,21 +1027,30 @@ export function createLarkGateway({
      * 用 `message.patch` 改会被客户端还原（真机上反复出现"变了又变回去"）。
      *
      * 约束（飞书官方）：token 有效期 30 分钟、**最多用 2 次**；`card` 必须是**完整**卡片 JSON，
-     * 不支持增量更新。token 用完/过期会报错，调用方应退回 `patchCard` 或新发一张。
+     * 不支持增量更新；**Card 1.0 还必须在 card 里带 `open_ids`**（至少一个 open_id，
+     * 省略或传空会报 300090 "openid empty"）。
      *
-     * @param options - { token, card }。
+     * @param options - { token, card, openIds? }。`openIds` 仅 1.0 卡片需要。
      * @returns `{ updated: true }`。
      */
-    async updateCard({ token, card }) {
+    async updateCard({ token, card, openIds = null }) {
       if (typeof token !== 'string' || !token) {
         const error = new Error('交互卡片更新需要回调里的 token（延迟更新凭证）。');
         error.code = 'feishu/no-card-token';
         throw error;
       }
+      const payload = card?.schema === '2.0'
+        ? card
+        : { ...card, ...(Array.isArray(openIds) && openIds.length > 0 ? { open_ids: openIds } : {}) };
+      if (payload.schema !== '2.0' && !(Array.isArray(payload.open_ids) && payload.open_ids.length > 0)) {
+        const error = new Error('Card 1.0 的延迟更新必须在 card 里带 open_ids（否则飞书报 300090）。');
+        error.code = 'feishu/missing-open-ids';
+        throw error;
+      }
       const response = await client.request({
         method: 'POST',
         url: `${client.domain}/open-apis/interactive/v1/card/update`,
-        data: { token, card },
+        data: { token, card: payload },
       });
       assertSuccess('飞书更新交互卡片', response);
       return { updated: true };

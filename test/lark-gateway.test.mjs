@@ -231,3 +231,49 @@ test('交付物：一条消息，图片在上、文件在附件区，正文不�
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('延迟更新：Card 1.0 必须带 open_ids、2.0 不用；两者都打到 card/update', async () => {
+  const sdk = createFakeSdk();
+  const requests = [];
+  // 假 SDK 的 Client 实例挂 domain/request（真实 SDK 的 Client 就是这两个能力）。
+  const original = sdk.Client;
+  sdk.Client = function Client() {
+    const instance = original();
+    instance.domain = 'https://open.feishu.cn';
+    instance.request = async (payload) => {
+      requests.push(payload);
+      return { code: 0, msg: 'success', data: {} };
+    };
+    return instance;
+  };
+  const gateway = makeGateway(sdk);
+
+  // 2.0：不需要 open_ids。
+  await gateway.updateCard({
+    token: 'tk1',
+    card: { schema: '2.0', header: {}, body: { elements: [] } },
+  });
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /\/open-apis\/interactive\/v1\/card\/update$/);
+  assert.equal(requests[0].data.token, 'tk1');
+  assert.equal(requests[0].data.card.open_ids, undefined);
+
+  // 1.0：带 open_ids 才发得出去（飞书要求，否则 300090）。
+  await gateway.updateCard({
+    token: 'tk2',
+    card: { header: {}, elements: [] },
+    openIds: ['ou_operator'],
+  });
+  assert.deepEqual(requests[1].data.card.open_ids, ['ou_operator']);
+
+  // 1.0 忘了 open_ids：本地就拦住，并且给的是可读原因。
+  await assert.rejects(
+    () => gateway.updateCard({ token: 'tk3', card: { header: {}, elements: [] } }),
+    (error) => error.code === 'feishu/missing-open-ids',
+  );
+  // 没有 token 也不行（调用方应退回 patchCard 或新发一张）。
+  await assert.rejects(
+    () => gateway.updateCard({ token: '', card: { schema: '2.0' } }),
+    (error) => error.code === 'feishu/no-card-token',
+  );
+});

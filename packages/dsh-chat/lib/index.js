@@ -2098,7 +2098,11 @@ async function validateWorkspacePath(raw) {
   if (typeof raw !== "string" || !raw.trim()) {
     throw panelError("chat/workspace-invalid", "\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u3002");
   }
-  const target = isAbsolute2(raw.trim()) ? resolvePath(raw.trim()) : resolvePath(raw.trim());
+  const given = raw.trim();
+  if (!isAbsolute2(given)) {
+    throw panelError("chat/workspace-invalid", `\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF1A${given}`);
+  }
+  const target = resolvePath(given);
   let info;
   try {
     info = await stat4(target);

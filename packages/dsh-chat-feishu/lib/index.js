@@ -127075,7 +127075,12 @@ function panelCard(state, { last = null, at = null } = {}) {
   } else if (!bound) {
     elements.push({ tag: "markdown", content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u5148\u5728\u8FD9\u91CC\u53D1\u4E00\u6761\u6D88\u606F\uFF0C\u6216\u70B9\u4E0B\u9762\u7684\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF0C\u4E4B\u540E\u5C31\u80FD\u9009\u6A21\u578B\u3002" });
   } else {
-    elements.push({ tag: "markdown", content: "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002" });
+    const failures = Array.isArray(model.failures) ? model.failures : [];
+    elements.push({
+      tag: "markdown",
+      content: failures.length > 0 ? `\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\uFF0C\u4EE5\u4E0B provider \u8BFB\u53D6\u5931\u8D25\uFF1A${failures.map((item) => `
+\xB7 ${h(item.id || item.name)}\uFF1A${h(String(item.message).slice(0, 120))}`).join("")}` : "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002"
+    });
   }
   const efforts = model.efforts ?? [];
   if (bound && current && efforts.length > 0) {
@@ -127739,6 +127744,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       });
       if (updated) {
         if (key) panelCards.set(key, messageId);
+        if (key) rememberCardConversation(messageId, key);
         logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08token \u8DEF\u5F84 ${messageId}\uFF09`);
         return true;
       }
@@ -127750,6 +127756,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       });
       if (patched) {
         if (key) panelCards.set(key, target);
+        if (key) rememberCardConversation(target, key);
         logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u5C31\u5730\u66F4\u65B0\uFF08patch \u8DEF\u5F84 ${target}\uFF09`);
         return true;
       }
@@ -127760,6 +127767,9 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     });
     if (sent) {
       if (key && typeof sent.messageId === "string" && sent.messageId) panelCards.set(key, sent.messageId);
+      if (key && typeof sent.messageId === "string" && sent.messageId) {
+        rememberCardConversation(sent.messageId, key);
+      }
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u5DF2\u65B0\u53D1\u4E00\u5F20\uFF08${bot.id} ${sent.messageId ?? "\u672A\u77E5id"}\uFF09`);
     }
     return Boolean(sent);
@@ -127774,11 +127784,25 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       isOwner: isOwner(deps.accessPolicy, bot, senderId)
     });
   }
-  function conversationForCard(chatId, operatorId) {
+  const cardConversations = /* @__PURE__ */ new Map();
+  function rememberCardConversation(messageId, key) {
+    if (typeof messageId !== "string" || !messageId || typeof key !== "string" || !key) return;
+    cardConversations.set(messageId, key);
+    if (cardConversations.size > 200) {
+      cardConversations.delete(cardConversations.keys().next().value);
+    }
+  }
+  function conversationForCard(chatId, operatorId, messageId = null) {
     const groupKey = `group:${chatId}`;
-    const bound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
-    const conversationType = bound ? "group" : "direct";
-    return { conversationType, key: conversationType === "group" ? groupKey : `p2p:${operatorId}` };
+    const p2pKey = `p2p:${operatorId}`;
+    const known = messageId ? cardConversations.get(messageId) : null;
+    if (known) {
+      return { conversationType: known.startsWith("group:") ? "group" : "direct", key: known };
+    }
+    const groupBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
+    const p2pBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, p2pKey);
+    const isGroup = groupBound ? true : !p2pBound;
+    return { conversationType: isGroup ? "group" : "direct", key: isGroup ? groupKey : p2pKey };
   }
   async function handleCardAction(event) {
     const value = event?.action?.value ?? {};
@@ -127788,8 +127812,10 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       logger.warn?.(`[dsh-chat-feishu] \u5361\u7247\u56DE\u8C03\u7F3A\u5C11\u4F1A\u8BDD\u6216\u64CD\u4F5C\u8005\uFF0C\u65E0\u6CD5\u8BA4\u9886\uFF08chatId=${chatId ?? "\u65E0"} operator=${operatorId ?? "\u65E0"}\uFF09`);
       return void 0;
     }
-    const { conversationType, key } = conversationForCard(chatId, operatorId);
-    const isInteractionResponse = value.dsh === "answer" || value.dsh === "approval";
+    const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
+    const formFields = Object.keys(event?.action?.formValue ?? {});
+    const isFormSubmit = formFields.some((field) => /^(chk_|multi_|text_)/u.test(field));
+    const isInteractionResponse = value.dsh === "answer" || value.dsh === "approval" || isFormSubmit;
     if (!isInteractionResponse) {
       const commandAccess = commandAccessFor({ senderId: operatorId, conversationType });
       if (!commandAccess.allowed) {
@@ -127855,7 +127881,10 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u6309\u94AE\uFF1A${value.dsh_panel} \u2192 ${JSON.stringify(action ?? null)}\uFF08${bot.id}\uFF09`);
       if (!action) return { toast: { type: "error", content: "\u8FD9\u4E2A\u6309\u94AE\u5DF2\u7ECF\u5931\u6548\u4E86\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
       if (action.panel) {
-        await repaintPanel(null, "button:panel");
+        const ok = await repaintPanel(null, "button:panel");
+        if (!ok) {
+          return { toast: { type: "error", content: "\u63A7\u5236\u9762\u677F\u66F4\u65B0\u5931\u8D25\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
+        }
         return { toast: { type: "info", content: "\u5DF2\u56DE\u5230\u63A7\u5236\u9762\u677F" } };
       }
       if (action.menu) {
@@ -127914,9 +127943,14 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       }
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
       if (items.length > 0 && event.messageId) {
-        const patched = await gateway.patchCard({
+        const card = menuCard(items, { command: value.dsh_menu, reply: command.reply ?? "" });
+        const viaToken = event.token ? await gateway.updateCard({ token: event.token, card }).then(() => true).catch((error) => {
+          logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF1A${error?.message ?? error}`);
+          return false;
+        }) : false;
+        const patched = viaToken || await gateway.patchCard({
           messageId: event.messageId,
-          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? "" })
+          card
         }).then(() => true).catch((error) => {
           logger.warn?.(`[dsh-chat-feishu] \u83DC\u5355\u5361\u7247\u5C31\u5730\u66F4\u65B0\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u56DE\u6587\u5B57\uFF1A${error?.message ?? error}`);
           return false;
@@ -128887,39 +128921,38 @@ function createLarkGateway({
       if (!receiveId) throw new TypeError("sendApprovalCard \u9700\u8981 chatId \u6216 openId\u3002");
       const lines = ["\u9700\u8981\u6388\u6743", "", `\u5DE5\u5177\uFF1A${request?.toolName ?? "\u672A\u77E5"}`];
       if (request?.reason) lines.push(`\u539F\u56E0\uFF1A${request.reason}`);
-      const response = await client.im.v1.message.create({
-        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
-        data: {
-          receive_id: receiveId,
-          msg_type: "interactive",
-          content: JSON.stringify({
-            config: { wide_screen_mode: true, update_multi: true },
-            header: { template: "orange", title: { tag: "plain_text", content: "\u26A0\uFE0F \u9700\u8981\u6388\u6743" } },
-            elements: [
-              { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+      const card = {
+        config: { wide_screen_mode: true, update_multi: true },
+        header: { template: "orange", title: { tag: "plain_text", content: "\u26A0\uFE0F \u9700\u8981\u6388\u6743" } },
+        elements: [
+          { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+          {
+            tag: "action",
+            actions: [
               {
-                tag: "action",
-                actions: [
-                  {
-                    tag: "button",
-                    type: "primary",
-                    text: { tag: "plain_text", content: "\u5141\u8BB8\u4E00\u6B21" },
-                    value: { dsh: "approval", decision: "allowed-once" }
-                  },
-                  {
-                    tag: "button",
-                    type: "danger",
-                    text: { tag: "plain_text", content: "\u62D2\u7EDD" },
-                    value: { dsh: "approval", decision: "rejected" }
-                  }
-                ]
+                tag: "button",
+                type: "primary",
+                text: { tag: "plain_text", content: "\u5141\u8BB8\u4E00\u6B21" },
+                value: { dsh: "approval", decision: "allowed-once" }
+              },
+              {
+                tag: "button",
+                type: "danger",
+                text: { tag: "plain_text", content: "\u62D2\u7EDD" },
+                value: { dsh: "approval", decision: "rejected" }
               }
             ]
-          })
-        }
+          }
+        ]
+      };
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: chatId ? "chat_id" : "open_id" },
+        data: { receive_id: receiveId, msg_type: "interactive", content: JSON.stringify(card) }
       });
       assertSuccess("\u98DE\u4E66\u53D1\u9001\u5BA1\u6279\u5361\u7247", response);
-      return { messageId: response?.data?.message_id };
+      const messageId = response?.data?.message_id;
+      rememberCardSchema(messageId, card);
+      return { messageId };
     },
     /**
      * 给一条消息加表情回复（默认「在做了」），返回可撤销的 reaction_id。
@@ -128964,7 +128997,7 @@ function createLarkGateway({
      *
      * @param options - { messageId, token?, title, content }。
      */
-    async markCardAnswered({ messageId, token = null, title, content }) {
+    async markCardAnswered({ messageId, token = null, openIds = null, title, content }) {
       const schema = cardSchemas.get(messageId) ?? "1.0";
       const header = { template: "green", title: { tag: "plain_text", content: String(title).slice(0, 100) } };
       const text = String(content);
@@ -128979,7 +129012,7 @@ function createLarkGateway({
         elements: [{ tag: "div", text: { tag: "lark_md", content: text } }]
       };
       if (token) {
-        const updated = await this.updateCard({ token, card }).then(() => true).catch((error) => {
+        const updated = await this.updateCard({ token, card, openIds }).then(() => true).catch((error) => {
           logger.warn?.(`[dsh-chat-feishu] \u63D0\u95EE\u5361\u7247\u5EF6\u8FDF\u66F4\u65B0\u5931\u8D25\uFF0C\u9000\u56DE patch\uFF1A${error?.message ?? error}`);
           return false;
         });
@@ -129042,21 +129075,28 @@ function createLarkGateway({
      * 用 `message.patch` 改会被客户端还原（真机上反复出现"变了又变回去"）。
      *
      * 约束（飞书官方）：token 有效期 30 分钟、**最多用 2 次**；`card` 必须是**完整**卡片 JSON，
-     * 不支持增量更新。token 用完/过期会报错，调用方应退回 `patchCard` 或新发一张。
+     * 不支持增量更新；**Card 1.0 还必须在 card 里带 `open_ids`**（至少一个 open_id，
+     * 省略或传空会报 300090 "openid empty"）。
      *
-     * @param options - { token, card }。
+     * @param options - { token, card, openIds? }。`openIds` 仅 1.0 卡片需要。
      * @returns `{ updated: true }`。
      */
-    async updateCard({ token, card }) {
+    async updateCard({ token, card, openIds = null }) {
       if (typeof token !== "string" || !token) {
         const error = new Error("\u4EA4\u4E92\u5361\u7247\u66F4\u65B0\u9700\u8981\u56DE\u8C03\u91CC\u7684 token\uFF08\u5EF6\u8FDF\u66F4\u65B0\u51ED\u8BC1\uFF09\u3002");
         error.code = "feishu/no-card-token";
         throw error;
       }
+      const payload = card?.schema === "2.0" ? card : { ...card, ...Array.isArray(openIds) && openIds.length > 0 ? { open_ids: openIds } : {} };
+      if (payload.schema !== "2.0" && !(Array.isArray(payload.open_ids) && payload.open_ids.length > 0)) {
+        const error = new Error("Card 1.0 \u7684\u5EF6\u8FDF\u66F4\u65B0\u5FC5\u987B\u5728 card \u91CC\u5E26 open_ids\uFF08\u5426\u5219\u98DE\u4E66\u62A5 300090\uFF09\u3002");
+        error.code = "feishu/missing-open-ids";
+        throw error;
+      }
       const response = await client.request({
         method: "POST",
         url: `${client.domain}/open-apis/interactive/v1/card/update`,
-        data: { token, card }
+        data: { token, card: payload }
       });
       assertSuccess("\u98DE\u4E66\u66F4\u65B0\u4EA4\u4E92\u5361\u7247", response);
       return { updated: true };

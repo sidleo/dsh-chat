@@ -779,6 +779,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       });
       if (updated) {
         if (key) panelCards.set(key, messageId);
+        if (key) rememberCardConversation(messageId, key);
         logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（token 路径 ${messageId}）`);
         return true;
       }
@@ -790,6 +791,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       });
       if (patched) {
         if (key) panelCards.set(key, target);
+        if (key) rememberCardConversation(target, key);
         logger.info?.(`[dsh-chat-feishu] 控制面板已就地更新（patch 路径 ${target}）`);
         return true;
       }
@@ -800,6 +802,9 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     });
     if (sent) {
       if (key && typeof sent.messageId === 'string' && sent.messageId) panelCards.set(key, sent.messageId);
+      if (key && typeof sent.messageId === 'string' && sent.messageId) {
+        rememberCardConversation(sent.messageId, key);
+      }
       logger.info?.(`[dsh-chat-feishu] 控制面板已新发一张（${bot.id} ${sent.messageId ?? '未知id'}）`);
     }
     return Boolean(sent);
@@ -827,15 +832,43 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   }
 
   /**
+   * 我们自己发出去的卡片 → 它属于哪个会话键（messageId → key）。
+   *
+   * 卡片回调里只有 chatId，而**群和私聊的 chat_id 长得一样**（都是 `oc_…`），
+   * 光看绑定推断会判错：群里第一条交互（比如刚发的 /menu）还没有群绑定时，
+   * 就会被当成私聊，于是"新会话"解掉的是操作者私聊的绑定、模型也改到私聊会话上。
+   * 所以"发卡时记住它是哪个会话的"是唯一可靠的判据。
+   */
+  const cardConversations = new Map(); // messageId → 会话键
+
+  function rememberCardConversation(messageId, key) {
+    if (typeof messageId !== 'string' || !messageId || typeof key !== 'string' || !key) return;
+    cardConversations.set(messageId, key);
+    if (cardConversations.size > 200) {
+      cardConversations.delete(cardConversations.keys().next().value);
+    }
+  }
+
+  /**
    * 卡片动作属于哪个会话（群还是私聊）以及会话键。
    *
-   * 与手打消息同一套判定：以已有的会话绑定为准（群里没有绑定时按群处理——卡片本来就在群里）。
+   * 三级判据（从可靠到保守）：
+   * ① 这张卡是我们发的 → 用发卡时记下的会话键；
+   * ② 该会话已有绑定 → 用绑定的那一侧；
+   * ③ 都没有 → **按群处理**（私聊卡片一定是先私聊过才存在的，那时早已有 p2p 绑定；
+   *    而群里第一条交互常常还没有群绑定）。判错方向的代价不对称：判成私聊会解错绑定、放宽门禁。
    */
-  function conversationForCard(chatId, operatorId) {
+  function conversationForCard(chatId, operatorId, messageId = null) {
     const groupKey = `group:${chatId}`;
-    const bound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
-    const conversationType = bound ? 'group' : 'direct';
-    return { conversationType, key: conversationType === 'group' ? groupKey : `p2p:${operatorId}` };
+    const p2pKey = `p2p:${operatorId}`;
+    const known = messageId ? cardConversations.get(messageId) : null;
+    if (known) {
+      return { conversationType: known.startsWith('group:') ? 'group' : 'direct', key: known };
+    }
+    const groupBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, groupKey);
+    const p2pBound = deps.sessions?.bindings?.get?.(deps.channelId, bot.id, p2pKey);
+    const isGroup = groupBound ? true : !p2pBound;
+    return { conversationType: isGroup ? 'group' : 'direct', key: isGroup ? groupKey : p2pKey };
   }
 
   /**
@@ -858,7 +891,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       return undefined;
     }
 
-    const { conversationType, key } = conversationForCard(chatId, operatorId);
+    const { conversationType, key } = conversationForCard(chatId, operatorId, event.messageId ?? null);
 
     /**
      * 门禁：卡片动作等同于命令，先判权限再动手。
@@ -866,7 +899,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
      * 提问/审批按钮是"人在环回传"，不是命令（dsh-im 同样把它们排除在外）——
      * 它们本来只对已经进得来的消息负责，加命令门禁反而会让提问卡点不动。
      */
-    const isInteractionResponse = value.dsh === 'answer' || value.dsh === 'approval';
+    /**
+     * 交互回传的三种形态：
+     * - 单选按钮 / 审批按钮：`value.dsh = 'answer' | 'approval'`；
+     * - **表单提交（多选勾选器、自由文本框）：飞书没有 form_submit 事件**，它是
+     *   `action.tag='button'` + `action.form_value` 有值、`action.value` 为空。
+     *   漏掉这一种，默认策略下"能对话、不能执行命令"的人就永远提交不了回答（功能性回归）。
+     */
+    const formFields = Object.keys(event?.action?.formValue ?? {});
+    const isFormSubmit = formFields.some((field) => /^(chk_|multi_|text_)/u.test(field));
+    const isInteractionResponse = value.dsh === 'answer' || value.dsh === 'approval' || isFormSubmit;
     if (!isInteractionResponse) {
       const commandAccess = commandAccessFor({ senderId: operatorId, conversationType });
       if (!commandAccess.allowed) {
@@ -943,7 +985,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       logger.info?.(`[dsh-chat-feishu] 控制面板按钮：${value.dsh_panel} → ${JSON.stringify(action ?? null)}（${bot.id}）`);
       if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
       if (action.panel) {
-        await repaintPanel(null, 'button:panel');
+        const ok = await repaintPanel(null, 'button:panel');
+        if (!ok) {
+          // 不能谎报成功：卡片没画出来就说清楚（日志里同时有 warn 现场）。
+          return { toast: { type: 'error', content: '控制面板更新失败，请重发 /menu。' } };
+        }
         return { toast: { type: 'info', content: '已回到控制面板' } };
       }
       if (action.menu) {
@@ -1016,9 +1062,16 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       // 取不到卡片 messageId 时退回原路（回文字），行为不变。
       const items = command.menu?.length ? command.menu : await menuItemsFor(commandContext);
       if (items.length > 0 && event.messageId) {
-        const patched = await gateway.patchCard({
-          messageId: event.messageId,
-          card: menuCard(items, { command: value.dsh_menu, reply: command.reply ?? '' }),
+        const card = menuCard(items, { command: value.dsh_menu, reply: command.reply ?? '' });
+        // 点按钮是交互驱动：先走延迟更新 token（否则会被客户端还原），失败再 patch。
+        const viaToken = event.token
+          ? await gateway.updateCard({ token: event.token, card }).then(() => true).catch((error) => {
+            logger.warn?.(`[dsh-chat-feishu] 菜单卡片延迟更新失败：${error?.message ?? error}`);
+            return false;
+          })
+          : false;
+        const patched = viaToken || await gateway.patchCard({
+          messageId: event.messageId, card,
         }).then(() => true).catch((error) => {
           logger.warn?.(`[dsh-chat-feishu] 菜单卡片就地更新失败，回退为回文字：${error?.message ?? error}`);
           return false;

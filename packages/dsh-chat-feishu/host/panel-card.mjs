@@ -119,7 +119,17 @@ export function panelCard(state, { last = null, at = null } = {}) {
   } else if (!bound) {
     elements.push({ tag: 'markdown', content: '还没有会话：先在这里发一条消息，或点下面的「🆕 新会话」，之后就能选模型。' });
   } else {
-    elements.push({ tag: 'markdown', content: '当前 Host 没有可用模型。' });
+    // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
+    // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
+    const failures = Array.isArray(model.failures) ? model.failures : [];
+    elements.push({
+      tag: 'markdown',
+      content: failures.length > 0
+        ? `当前没有可用模型，以下 provider 读取失败：${failures
+          .map((item) => `\n· ${h(item.id || item.name)}：${h(String(item.message).slice(0, 120))}`)
+          .join('')}`
+        : '当前 Host 没有可用模型。',
+    });
   }
 
   const efforts = model.efforts ?? [];

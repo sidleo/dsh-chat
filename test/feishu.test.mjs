@@ -2054,8 +2054,8 @@ function makePanelStub({ fail = null } = {}) {
     async read() {
       return state;
     },
-    async apply({ field, value }) {
-      applied.push({ field, value });
+    async apply({ field, value, key }) {
+      applied.push({ field, value, key });
       if (fail && fail.field === field) throw Object.assign(new Error(fail.message), { code: fail.code });
       return { field, value, message: `已应用 ${field}=${value}` };
     },
@@ -2088,7 +2088,10 @@ test('控制面板：/menu 发可交互卡（下拉直接选，选完立即生�
       operator: { openId: 'ou_owner' },
       action: { tag: 'select_static', name: 'model_pick', options: ['anthropic/claude-x'], value: { action: 'model_pick' } },
     });
-    assert.deepEqual(panel.applied, [{ field: 'model', value: 'anthropic/claude-x' }]);
+    assert.deepEqual(
+      panel.applied.map((item) => ({ field: item.field, value: item.value })),
+      [{ field: 'model', value: 'anthropic/claude-x' }],
+    );
     assert.equal(answer.toast.type, 'success');
     assert.match(answer.toast.content, /claude-x/);
 
@@ -2158,7 +2161,10 @@ test('控制面板：按钮 —— 新会话走面板、命令清单切卡、状
       chatId: 'oc_chat', messageId: 'om_panel', operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { dsh_panel: 'new' } },
     });
-    assert.deepEqual(panel.applied, [{ field: 'session', value: 'new' }]);
+    assert.deepEqual(
+      panel.applied.map((item) => ({ field: item.field, value: item.value })),
+      [{ field: 'session', value: 'new' }],
+    );
     assert.equal(fresh.toast.type, 'success');
     assert.match(JSON.stringify(app.gateway.calls.patches.at(-1)?.card), /机器人控制面板/);
 
@@ -2373,6 +2379,103 @@ test('审批按钮把回调 token 交给渠道（标记已处理的更新同样�
     // 回答按钮不替换卡片（由 hub 带"已回答"状态重渲染整张卡），所以这里验审批那条路。
     assert.equal(app.gateway.calls.markedCards.at(-1)?.token, 'tk_approval');
     assert.equal(app.gateway.calls.markedCards.at(-1)?.messageId, 'om_approval');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('表单提交（多选/自由文本）是交互回传，不受命令门禁影响（否则这些人再也答不了题）', async () => {
+  const app = await makeBridge({ policy: restrictCommands });
+  try {
+    app.interactions.claimed = true;
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_form',
+      token: 'tk_form',
+      operator: { openId: 'ou_other' },
+      // 飞书没有 form_submit 事件：表单提交就是 button + form_value（value 为空）。
+      action: { tag: 'button', value: {}, formValue: { text_q1: '我的答案' }, name: 'submit' },
+    });
+    assert.ok(answer, '应被认领为回答');
+    assert.equal(answer.toast.type, 'success');
+    assert.equal(app.gateway.calls.replies.length, 0, '不该出现"没有权限"的回复');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('群里的卡片即使还没有群绑定，也按群处理（别把动作落到操作者的私聊上）', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    // 群里发 /menu：这一步会记住"这张卡属于 group:<chatId>"。
+    await app.bridge.accept(messageEvent({ messageId: 'om_g1', chatType: 'group', chatId: 'oc_group', text: '/menu' }));
+    // 模拟"操作者在群里，但群里还没有会话绑定"。
+    await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_card',
+      token: 'tk_g',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'model_pick', options: ['deepseek/flash'], value: { action: 'model_pick' } },
+    });
+    // 面板卡是 sendCard 发的（假 gateway 固定回 om_card），registry 里记的就是它。
+    assert.equal(panel.applied.at(-1)?.key, 'group:oc_group', '动作必须落在群会话键上');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('命令清单卡上点命令也走延迟更新 token（否则输出会被客户端还原）', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/menu') {
+        return { handled: true, reply: '可用命令', panel: await panel.read(), menu: [{ label: '/help', command: '/help' }] };
+      }
+      return { handled: true, reply: `输出：${request.text}` };
+    },
+  };
+  const app = await makeBridge({ commands, panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_menu',
+      token: 'tk_cmd',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_menu: '/status' } },
+    });
+    assert.equal(answer.toast.type, 'success');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1, '要走 token 路径');
+    assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /\/status/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('返回控制面板失败时不谎报成功', async () => {
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel });
+  try {
+    app.gateway.setFailure('updateCard', new Error('token expired'));
+    app.gateway.setFailure('patchCard', new Error('卡片被删了'));
+    app.gateway.setFailure('sendCard', new Error('发不出去'));
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_panel',
+      token: 'tk_bad',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'panel' } },
+    });
+    assert.equal(answer.toast.type, 'error');
+    assert.match(answer.toast.content, /失败/);
   } finally {
     await app.cleanup();
   }

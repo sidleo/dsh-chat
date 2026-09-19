@@ -51,7 +51,12 @@ export async function validateWorkspacePath(raw) {
   if (typeof raw !== 'string' || !raw.trim()) {
     throw panelError('chat/workspace-invalid', '工作区需要是一个绝对路径。');
   }
-  const target = isAbsolute(raw.trim()) ? resolvePath(raw.trim()) : resolvePath(raw.trim());
+  const given = raw.trim();
+  // 必须绝对路径：相对路径会跟着 dsh 的启动目录变，排查时最难查（设置页那条路也是这个口径）。
+  if (!isAbsolute(given)) {
+    throw panelError('chat/workspace-invalid', `工作区需要是绝对路径：${given}`);
+  }
+  const target = resolvePath(given);
   let info;
   try {
     info = await stat(target);
