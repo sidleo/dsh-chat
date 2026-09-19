@@ -127064,6 +127064,11 @@ function field(label, element) {
 function grid(cells) {
   return { tag: "column_set", flex_mode: "stretch", columns: cells };
 }
+function shortLabel(text, max) {
+  const value = String(text ?? "");
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(1, max - 12))}\u2026${value.slice(-10)}`;
+}
 function button(label, action, type = "default") {
   return {
     tag: "button",
@@ -127160,6 +127165,18 @@ function panelCard(state, { last = null, at = null } = {}) {
       });
     }
   }
+  const sessionPicker = dropdown({
+    name: "session_pick",
+    action: "session_pick",
+    placeholder: "\u9009\u62E9\u8981\u7ED1\u5B9A\u7684\u4F1A\u8BDD",
+    // 会话标题来自 Host，可能很长：截到 34 个字符（全宽行比半栏宽，够用）。
+    items: (state?.session?.options ?? []).map((item) => ({ value: item.id, label: shortLabel(item.label, 34) })),
+    current: state?.session?.current ?? null
+  });
+  if (sessionPicker.element) elements.push(grid([field("\u4F1A\u8BDD", sessionPicker.element)]));
+  if (state?.session?.failed === true) {
+    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u4F1A\u8BDD\u5217\u8868\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF08\u5F53\u524D\u7ED1\u5B9A\u7684\u4F1A\u8BDD\u4ECD\u663E\u793A\u5728\u4E0A\u9762\uFF09\u3002" });
+  }
   if (modelCells.length > 0) elements.push(grid(modelCells));
   elements.push({ tag: "hr" });
   elements.push({
@@ -127232,7 +127249,11 @@ ${h(last.message)}`
   elements.push(row([
     button("\u{1F195} \u65B0\u4F1A\u8BDD", "new"),
     button("\u{1F4CA} \u72B6\u6001", "status"),
-    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands"),
+    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands")
+  ]));
+  elements.push(row([
+    button("\u{1F4DC} \u5386\u53F2", "history"),
+    button("\u{1F5DC} \u538B\u7F29", "compact"),
     button("\u23F9 \u505C\u6B62", "stop", "danger")
   ]));
   return {
@@ -127247,6 +127268,7 @@ ${h(last.message)}`
 }
 function panelPick(action, options) {
   const map = {
+    session_pick: { field: "session", label: "\u5207\u6362\u4F1A\u8BDD" },
     model_pick: { field: "model", label: "\u5207\u6362\u6A21\u578B" },
     reasoning_pick: { field: "reasoning", label: "\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7" },
     preset_pick: { field: "preset", label: "\u8BBE\u7F6E Agent \u9884\u8BBE" },
@@ -127267,6 +127289,10 @@ function panelButton(action) {
     // 命令清单是另一张卡（命令按钮），卡上有「⬅ 返回控制面板」。
     commands: { menu: true, label: "\u547D\u4EE4\u6E05\u5355" },
     stop: { command: "/stop", label: "\u505C\u6B62" },
+    // 历史/压缩：输出是文本、压缩还可能跑很久（超过回调应答的 3 秒）——
+    // 排在应答之后执行，结果用一条文字消息回，不往面板卡上写（历史可能几十行）。
+    history: { command: "/history", label: "\u5386\u53F2", asText: true },
+    compact: { command: "/compact", label: "\u538B\u7F29", asText: true },
     // 命令清单卡上的返回按钮。
     panel: { panel: true, label: "\u63A7\u5236\u9762\u677F" }
   };
@@ -128054,6 +128080,20 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       const action = panelButton(value.dsh_panel);
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u6309\u94AE\uFF1A${value.dsh_panel} \u2192 ${JSON.stringify(action ?? null)}\uFF08${bot.id}\uFF09`);
       if (!action) return { toast: { type: "error", content: "\u8FD9\u4E2A\u6309\u94AE\u5DF2\u7ECF\u5931\u6548\u4E86\uFF0C\u8BF7\u91CD\u53D1 /menu\u3002" } };
+      if (action.asText) {
+        const text = action.command;
+        afterResponse(async () => {
+          const result = await deps.commands?.handle?.({ ...commandContext, text }).catch((error) => {
+            noteCardError(`\u9762\u677F\u547D\u4EE4\u5931\u8D25\uFF08${text}\uFF09`, error?.message ?? error);
+            return null;
+          });
+          const reply = result?.reply ?? "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09";
+          await gateway.replyText({ messageId: event.messageId, text: reply }).catch((error) => {
+            noteCardError(`\u9762\u677F\u547D\u4EE4\u56DE\u6587\u5B57\u5931\u8D25\uFF08${text}\uFF09`, error?.message ?? error);
+          });
+        });
+        return { toast: { type: "info", content: `\u6B63\u5728\u6267\u884C ${text}\u2026` } };
+      }
       if (action.panel) {
         repaintAfterResponse(null, "button:panel");
         return { toast: { type: "info", content: "\u6B63\u5728\u8FD4\u56DE\u63A7\u5236\u9762\u677F\u2026" } };

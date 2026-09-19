@@ -45,6 +45,8 @@ function makePanel({
   /** true：`session/list` 直接抛错（DSH 侧不可用）——读失败不能说成"从没选过模型"。 */
   listFailing = false,
   sessionCheckFailing = false,
+  /** 覆盖 `session/list` 的返回（会话下拉用）。 */
+  sessionItems = null,
   entries = { 'p2p:ou_a': { sessionId: 'session-1', workspacePath: '/ws/from-binding' } },
 } = {}) {
   const state = { ...record };
@@ -64,6 +66,7 @@ function makePanel({
       if (method === 'modelCatalog') return CATALOG;
       if (method === 'list') {
         if (listFailing) throw new Error('session service down');
+        if (sessionItems) return { items: sessionItems };
         /**
          * 真形状：`modelSelection = { lastUsed, next }`，`next = pending ?? lastUsed`。
          * 桩里刻意让两者不同：`next` 是"刚选的"，`lastUsed` 是"上一轮真正跑过的" ——
@@ -505,4 +508,45 @@ test('读面板：兼容旧 dsh-im 的 { providerId, modelId } 形状', async ()
   assert.deepEqual(view.model.botDefault, {
     provider: 'deepseek', model: 'deepseek-v4.1-flash', reasoningEffort: null,
   });
+});
+
+test('读面板：会话下拉只列同工作区 + 本机器人其它聊天的会话，排除空会话与子代理', async () => {
+  const now = Date.now();
+  const { panel } = makePanel({
+    record: { workspace: '/ws/current' },
+    entries: { 'p2p:ou_a': { sessionId: 'session-1' }, 'group:oc_g': { sessionId: 'session-9' } },
+    sessionItems: [
+      { sessionId: 'session-1', updatedAt: now - 60_000, cwd: '/ws/current', projections: { asOfSeq: 1, values: { title: '当前聊天' } } },
+      { sessionId: 'session-9', updatedAt: now - 3_600_000, cwd: '/ws/other', projections: { asOfSeq: 1, values: { title: '别的聊天' } } },
+      { sessionId: 'session-8', updatedAt: now - 10_000, cwd: '/ws/current', projections: { asOfSeq: 1, values: {} } },
+      { sessionId: 'session-7', updatedAt: now, cwd: '/ws/current', blank: true },
+      { sessionId: 'session-6', updatedAt: now, cwd: '/ws/current', origin: 'subagent' },
+      { sessionId: 'session-5', updatedAt: now, cwd: '/ws/elsewhere', projections: { asOfSeq: 1, values: { title: '无关项目' } } },
+    ],
+  });
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+
+  assert.equal(view.session.current, 'session-1');
+  assert.deepEqual(view.session.options.map((item) => item.id), ['session-8', 'session-1', 'session-9'],
+    '同工作区 + 本机器人其它聊天绑定过的会话，按最近更新排序；空会话/子代理/无关项目排除');
+  assert.equal(view.session.options[1].label, '当前聊天 · 1 分钟前');
+  assert.match(view.session.options[0].label, /^session-8 · /, '没有标题时用会话 id 短写');
+});
+
+test('读面板：会话列表读不到时也要带出当前绑定，并标 failed', async () => {
+  const { panel } = makePanel({ listFailing: true });
+  const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(view.session.failed, true);
+  assert.deepEqual(view.session.options, [{ id: 'session-1', label: 'session-1' }],
+    '读失败不能显示成"没绑定会话"');
+});
+
+test('应用：会话下拉的空值（哨兵翻译回来）等于"新会话"，不是"找不到会话"', async () => {
+  const { panel, calls } = makePanel();
+  const result = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: '',
+  });
+  assert.match(result.message, /新会话/);
+  assert.equal(calls.some((call) => call.method === 'sessionExists'), false, '空值不该去校验会话存在');
+  assert.ok(calls.some((call) => call.kind === 'reset'));
 });

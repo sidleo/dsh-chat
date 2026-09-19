@@ -3037,6 +3037,7 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
     },
     preset: { current: 'yh-olap', options: [{ id: 'yh-olap', label: 'yh-olap · 有货率', isDefault: true }] },
     workspace: { current: '/Users/zhang3/yh_zhang3/张三bot', options: ['/Users/zhang3/yh_zhang3/张三bot'] },
+    session: { current: 'session-880fd592-b257', options: [{ id: 'session-880fd592-b257', label: '上次那个会话 · 3 分钟前' }] },
   });
   const body = JSON.stringify(card);
 
@@ -3044,11 +3045,18 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
   assert.doesNotMatch(body, /\*\*当前会话\*\*/);
   assert.doesNotMatch(body, /不便点下拉时/, '页脚那行手打提示是废话，已删');
 
-  // 顶层只剩：栅格、hr、生效范围说明、栅格、hr、按钮。
+  // 顶层只剩：会话行、模型/推理行、hr、生效范围说明、预设/工作区行、hr、两行按钮。
   assert.deepEqual(
     card.body.elements.map((el) => el.tag),
-    ['column_set', 'hr', 'markdown', 'column_set', 'hr', 'column_set'],
+    ['column_set', 'column_set', 'hr', 'markdown', 'column_set', 'hr', 'column_set', 'column_set'],
   );
+  const buttonLabels = card.body.elements
+    .filter((el) => el.tag === 'column_set' && el.columns[0].elements[0].tag === 'button')
+    .map((el) => el.columns.map((column) => column.elements[0].text.content));
+  assert.deepEqual(buttonLabels, [
+    ['🆕 新会话', '📊 状态', '📖 命令清单'],
+    ['📜 历史', '🗜 压缩', '⏹ 停止'],
+  ], '6 个按钮分两行，一行 3 个');
 
   // 每个下拉都有自己的名称：名称是同一列里的 markdown，控件在下（select_static 没有 label 字段）。
   const labelled = (name) => {
@@ -3061,6 +3069,7 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
     }
     return null;
   };
+  assert.equal(labelled('session_pick').label, '**会话**');
   assert.equal(labelled('model_pick').label, '**模型**');
   assert.equal(labelled('reasoning_pick').label, '**推理等级**');
   assert.equal(labelled('preset_pick').label, '**Agent 预设**');
@@ -3069,7 +3078,7 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
 
   // 并排两格 + 窄屏自动堆叠（`stretch`）：手机上半栏会压扁模型 id / 路径。
   const grids = card.body.elements.filter((el) => el.tag === 'column_set' && el.columns.length === 2);
-  assert.equal(grids.length, 2, '两组设置各一行两格');
+  assert.equal(grids.length, 2, '两组设置各一行两格（会话那一行是全宽单格）');
   assert.ok(grids.every((el) => el.flex_mode === 'stretch'));
 
   // 长路径自己截断（飞书会从尾巴截，正好截掉目录名），取值仍是完整路径。
@@ -3077,4 +3086,68 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
   assert.match(workspace.options[0].text.content, /\/…\/yh_zhang3\/张三bot/);
   assert.equal(workspace.options[0].value, '/Users/zhang3/yh_zhang3/张三bot');
   assert.ok(workspace.options[0].text.content.length <= 24, '要短到飞书不再二次截断（含 ✓ 前缀）');
+});
+
+test('会话下拉：映射到 field=session，空值 = 新会话；历史/压缩按钮走文字回', async () => {
+  const { panelPick, panelButton } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+
+  assert.deepEqual(panelPick('session_pick', ['session-9']), {
+    field: 'session', value: 'session-9', label: '切换会话',
+  });
+  // 哨兵（下拉里的"新会话"）翻译回空串，hub 侧空值 = 新会话（不是"找不到会话"）。
+  assert.deepEqual(panelPick('session_pick', ['__default__']), {
+    field: 'session', value: '', label: '切换会话',
+  });
+
+  // 历史/压缩：输出是文本、压缩还可能超过回调应答的 3 秒 → 排在应答之后，用文字消息回。
+  assert.deepEqual(panelButton('history'), { command: '/history', label: '历史', asText: true });
+  assert.deepEqual(panelButton('compact'), { command: '/compact', label: '压缩', asText: true });
+});
+
+test('面板上的「历史/压缩」：排在应答之后执行，结果用文字回（不往卡片上写）', async () => {
+  const panel = makePanelStub();
+  const commands = {
+    async handle(request) {
+      if (request.text === '/history') return { handled: true, reply: '最近 2 轮：\n1. 你：你好\n   bot：你好' };
+      if (request.text === '/compact') return { handled: true, reply: '压缩完成。' };
+      return { handled: true, reply: 'x' };
+    },
+  };
+  const app = await makeBridge({ panel, commands });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', token: 'tk_hist',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_panel: 'history' } },
+    });
+    // 不能在应答前跑（压缩可能几十秒，回调只有 3 秒）。
+    assert.equal(answer.toast.type, 'info');
+    assert.match(answer.toast.content, /正在执行 \/history/);
+    assert.equal(app.gateway.calls.replies.length, 0, '结果要等应答之后再回');
+
+    await app.flushPaints();
+    assert.match(app.gateway.calls.replies.at(-1)?.text ?? '', /最近 2 轮/, '历史走文字消息');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 0, '不往卡片上写');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('会话下拉：选一个会话就绑定到当前聊天（走 hub 的 field=session）', async () => {
+  const panel = makePanelStub();
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat', messageId: 'om_panel', token: 'tk_session',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'session_pick', options: ['session-9'], value: { action: 'session_pick' } },
+    });
+    assert.equal(answer.toast.type, 'success');
+    assert.deepEqual(
+      panel.applied.map((item) => ({ field: item.field, value: item.value })),
+      [{ field: 'session', value: 'session-9' }],
+    );
+  } finally {
+    await app.cleanup();
+  }
 });

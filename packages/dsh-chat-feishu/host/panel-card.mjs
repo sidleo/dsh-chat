@@ -120,6 +120,13 @@ function grid(cells) {
   return { tag: 'column_set', flex_mode: 'stretch', columns: cells };
 }
 
+/** 下拉项太长时截断（保留头尾信息：标题在头、时间在尾）。 */
+function shortLabel(text, max) {
+  const value = String(text ?? '');
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(1, max - 12))}…${value.slice(-10)}`;
+}
+
 function button(label, action, type = 'default') {
   return {
     tag: 'button',
@@ -277,6 +284,20 @@ export function panelCard(state, { last = null, at = null } = {}) {
     }
   }
 
+  // 「会话」单独一行全宽：标题 + 相对时间比较长，塞进半栏会被截。
+  const sessionPicker = dropdown({
+    name: 'session_pick',
+    action: 'session_pick',
+    placeholder: '选择要绑定的会话',
+    // 会话标题来自 Host，可能很长：截到 34 个字符（全宽行比半栏宽，够用）。
+    items: (state?.session?.options ?? []).map((item) => ({ value: item.id, label: shortLabel(item.label, 34) })),
+    current: state?.session?.current ?? null,
+  });
+  if (sessionPicker.element) elements.push(grid([field('会话', sessionPicker.element)]));
+  if (state?.session?.failed === true) {
+    elements.push({ tag: 'markdown', content: '读不到会话列表，稍后再试（当前绑定的会话仍显示在上面）。' });
+  }
+
   // 模型与推理并排（放在各自的说明行之前：说明行是全宽的，不该夹在两格中间）。
   if (modelCells.length > 0) elements.push(grid(modelCells));
 
@@ -360,12 +381,16 @@ export function panelCard(state, { last = null, at = null } = {}) {
     });
   }
 
-  // ④ 操作按钮（放在最后，手指不用往上找）
+  // ④ 操作按钮（放在最后，手指不用往上找；6 个分两行，一行 4 个会挤）
   elements.push({ tag: 'hr' });
   elements.push(row([
     button('🆕 新会话', 'new'),
     button('📊 状态', 'status'),
     button('📖 命令清单', 'commands'),
+  ]));
+  elements.push(row([
+    button('📜 历史', 'history'),
+    button('🗜 压缩', 'compact'),
     button('⏹ 停止', 'stop', 'danger'),
   ]));
 
@@ -394,6 +419,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
  */
 export function panelPick(action, options) {
   const map = {
+    session_pick: { field: 'session', label: '切换会话' },
     model_pick: { field: 'model', label: '切换模型' },
     reasoning_pick: { field: 'reasoning', label: '设置推理等级' },
     preset_pick: { field: 'preset', label: '设置 Agent 预设' },
@@ -420,6 +446,10 @@ export function panelButton(action) {
     // 命令清单是另一张卡（命令按钮），卡上有「⬅ 返回控制面板」。
     commands: { menu: true, label: '命令清单' },
     stop: { command: '/stop', label: '停止' },
+    // 历史/压缩：输出是文本、压缩还可能跑很久（超过回调应答的 3 秒）——
+    // 排在应答之后执行，结果用一条文字消息回，不往面板卡上写（历史可能几十行）。
+    history: { command: '/history', label: '历史', asText: true },
+    compact: { command: '/compact', label: '压缩', asText: true },
     // 命令清单卡上的返回按钮。
     panel: { panel: true, label: '控制面板' },
   };

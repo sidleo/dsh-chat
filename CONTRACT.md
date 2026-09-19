@@ -151,7 +151,8 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
    * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,botDefault,hostDefault,
    *                                        failures,options,efforts,currentEffort,selectionFailed},
-   *                                        preset{current,options,failed}, workspace{current,options} }
+   *                                        session{current,options,failed}, preset{current,options,failed},
+   *                                        workspace{current,options} }
    *      `workspace.options` 是这台机器人各会话的工作区候选（含绝对路径）：**只给属主，
    *      且只在私聊**（`key` 不带 `group:` 前缀）；群聊卡片是一条群里所有人都能展开的消息，
    *      属主也要在私聊或设置页改工作区。
@@ -160,8 +161,13 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设/跟随 Host 默认"。
    *      `model.botDefault` 是**机器人默认模型** `{provider,model,reasoningEffort}`（可能为 null）：
    *      未绑定时它就是"当前生效的模型"，由 `sessions.ensure()` 在新建会话后 `selectModel` 应用。
+   *      `session.options` 是**可以切过去的会话**（`[{id,label}]`，label 含标题与相对时间）：
+   *      同一工作目录的会话 ∪ 这台机器人其它聊天绑定过的会话，排除空会话与子代理会话；
+   *      `session.failed` 表示会话列表**读失败**（此时 options 只含当前绑定，不能显示成"没绑定"）。
    * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session
+   *      `field: 'session'` 的值：会话 id = 切换绑定；**`''` / `'new'` / null = 解除绑定**
+   *      （下一条消息开新会话）——渠道下拉的哨兵值翻译回来就是空串。
    *      **model / reasoning 的落点看有没有会话**：有会话 → 会话级（`session/selectModel`，立即生效）；
    *      没有会话 → **机器人默认模型**（只对新会话生效）。后者是机器人级设置，同样只限属主
    *      （DSH 的 `session/create` 没有模型参数，`selectModel` 必须带 sessionId，所以未绑定时

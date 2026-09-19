@@ -117,6 +117,74 @@ export function createPanelService({
     };
   }
 
+  /** 相对时间：会话列表里"多久没动过"比绝对时间戳更好用。 */
+  function sinceLabel(updatedAt) {
+    if (!Number.isFinite(updatedAt)) return null;
+    const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60_000));
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes} 分钟前`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours} 小时前`;
+    return `${Math.round(hours / 24)} 天前`;
+  }
+
+  /**
+   * 这个聊天可以切过去的会话（面板上的「会话」下拉）。
+   *
+   * 两类候选取并集：
+   * ① **同一个工作目录**的会话（跨项目的会话切过来上下文对不上）；
+   * ② 这台机器人**其它聊天**绑定过的会话（用户就是想把这个聊天接回上次那个会话）。
+   * 排除子代理会话与从没用过的空会话。当前会话一定在列表里——否则下拉会显示成"没选"。
+   */
+  async function sessionOptions({ channelId, botId, key, currentSessionId, workspace, limit = 25 }) {
+    let items = [];
+    try {
+      const listed = await sessions.invoke('session', 'list', { _request: {} });
+      items = Array.isArray(listed?.items) ? listed.items : [];
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] 读取会话列表失败：${error?.message ?? error}`);
+      // 读失败也要把"当前绑的是哪个会话"带出去：否则下拉看起来像"没绑定"，又是一句谎报。
+      return {
+        options: currentSessionId
+          ? [{ id: currentSessionId, label: String(currentSessionId).slice(0, 12) }]
+          : [],
+        failed: true,
+      };
+    }
+    /** 这台机器人**其它聊天**绑定过的会话（entries 是"会话键 → 绑定"的对象）。 */
+    const bound = new Set();
+    for (const [boundKey, entry] of Object.entries(sessionStore?.entries?.(channelId, botId) ?? {})) {
+      if (entry?.sessionId && boundKey !== key) bound.add(entry.sessionId);
+    }
+    const wanted = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : null;
+    const usable = items.filter((item) => item?.sessionId
+      && item.origin !== 'subagent'
+      && item.blank !== true
+      && (item.sessionId === currentSessionId
+        || bound.has(item.sessionId)
+        || (wanted && item.cwd === wanted)));
+    const ordered = usable.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    const picked = ordered.slice(0, Math.max(1, limit));
+    // 当前会话必须带上（它可能排在很后面，甚至是上面那些条件之外的会话）。
+    if (currentSessionId && !picked.some((item) => item.sessionId === currentSessionId)) {
+      const current = items.find((item) => item.sessionId === currentSessionId);
+      picked.unshift(current ?? { sessionId: currentSessionId });
+    }
+    return {
+      options: picked.map((item) => {
+        const title = typeof item.projections?.values?.title === 'string' && item.projections.values.title.trim()
+          ? item.projections.values.title.trim()
+          : null;
+        const since = sinceLabel(item.updatedAt);
+        return {
+          id: item.sessionId,
+          label: [title ?? item.sessionId.slice(0, 12), since].filter(Boolean).join(' · '),
+        };
+      }),
+      failed: false,
+    };
+  }
+
   /**
    * 模型目录。
    *
@@ -199,7 +267,7 @@ export function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState] = await Promise.all([
+      const [catalog, presetState, selectionState, sessionState] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
           // 整目录读失败：给这条失败一个显示名，卡片上才不会印出「· ：<原因>」这种无名行。
@@ -211,6 +279,9 @@ export function createPanelService({
           // `selectionFailed` —— 卡片据此如实说"读不到"，而不是断言一个与事实相反的状态。
           logger.warn?.(`[dsh-chat] 读取会话模型选择失败：${error?.message ?? error}`);
           return { selection: null, failed: true };
+        }),
+        sessionOptions({
+          channelId, botId, key, currentSessionId: sessionId, workspace: record.workspace,
         }),
       ]);
       const options = catalog.options;
@@ -244,6 +315,12 @@ export function createPanelService({
           // 推理等级取决于"当前生效的那个模型"：会话内的选择，或（没有会话时）机器人默认。
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null,
+        },
+        // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
+        session: {
+          current: sessionId,
+          options: sessionState.options,
+          failed: sessionState.failed === true,
         },
         preset: {
           current: record.agentPreset ?? null,
@@ -424,7 +501,8 @@ export function createPanelService({
       }
 
       if (field === 'session') {
-        if (value === 'new' || value === null || value === undefined) {
+        // 空串也当"新会话"：下拉里的哨兵值翻译回来就是空串（面板的语义是"清掉绑定"）。
+        if (value === 'new' || value === '' || value === null || value === undefined) {
           await sessions.reset({ channelId, botId, key });
           return { field, value: 'new', message: '已解除当前会话绑定，下一条消息将开启新会话。' };
         }

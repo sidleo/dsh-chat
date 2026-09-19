@@ -1120,6 +1120,27 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       const action = panelButton(value.dsh_panel);
       logger.info?.(`[dsh-chat-feishu] 控制面板按钮：${value.dsh_panel} → ${JSON.stringify(action ?? null)}（${bot.id}）`);
       if (!action) return { toast: { type: 'error', content: '这个按钮已经失效了，请重发 /menu。' } };
+      /**
+       * 输出是**文本**、执行还可能很慢的命令（历史/压缩）：应答之后再跑，结果用一条文字消息回。
+       *
+       * 两个原因：① 飞书要求回调在 3 秒内应答，压缩动辄更久；② 历史可能几十行，
+       * 写进面板卡会把设置区整个埋掉（卡片也有大小上限）。
+       */
+      if (action.asText) {
+        const text = action.command;
+        afterResponse(async () => {
+          const result = await deps.commands?.handle?.({ ...commandContext, text })
+            .catch((error) => {
+              noteCardError(`面板命令失败（${text}）`, error?.message ?? error);
+              return null;
+            });
+          const reply = result?.reply ?? '（没有输出）';
+          await gateway.replyText({ messageId: event.messageId, text: reply }).catch((error) => {
+            noteCardError(`面板命令回文字失败（${text}）`, error?.message ?? error);
+          });
+        });
+        return { toast: { type: 'info', content: `正在执行 ${text}…` } };
+      }
       if (action.panel) {
         repaintAfterResponse(null, 'button:panel');
         // 同上：不宣称"已回到"，等应答之后的这次重画落地（失败落 lastError）。

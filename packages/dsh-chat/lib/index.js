@@ -2221,6 +2221,51 @@ function createPanelService({
       reasoningEffort: selection.reasoningEffort ?? null
     };
   }
+  function sinceLabel(updatedAt) {
+    if (!Number.isFinite(updatedAt)) return null;
+    const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 6e4));
+    if (minutes < 1) return "\u521A\u521A";
+    if (minutes < 60) return `${minutes} \u5206\u949F\u524D`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours} \u5C0F\u65F6\u524D`;
+    return `${Math.round(hours / 24)} \u5929\u524D`;
+  }
+  async function sessionOptions({ channelId, botId, key, currentSessionId, workspace, limit = 25 }) {
+    let items = [];
+    try {
+      const listed = await sessions.invoke("session", "list", { _request: {} });
+      items = Array.isArray(listed?.items) ? listed.items : [];
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return {
+        options: currentSessionId ? [{ id: currentSessionId, label: String(currentSessionId).slice(0, 12) }] : [],
+        failed: true
+      };
+    }
+    const bound = /* @__PURE__ */ new Set();
+    for (const [boundKey, entry] of Object.entries(sessionStore?.entries?.(channelId, botId) ?? {})) {
+      if (entry?.sessionId && boundKey !== key) bound.add(entry.sessionId);
+    }
+    const wanted = typeof workspace === "string" && workspace.trim() ? workspace.trim() : null;
+    const usable = items.filter((item) => item?.sessionId && item.origin !== "subagent" && item.blank !== true && (item.sessionId === currentSessionId || bound.has(item.sessionId) || wanted && item.cwd === wanted));
+    const ordered = usable.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    const picked = ordered.slice(0, Math.max(1, limit));
+    if (currentSessionId && !picked.some((item) => item.sessionId === currentSessionId)) {
+      const current = items.find((item) => item.sessionId === currentSessionId);
+      picked.unshift(current ?? { sessionId: currentSessionId });
+    }
+    return {
+      options: picked.map((item) => {
+        const title = typeof item.projections?.values?.title === "string" && item.projections.values.title.trim() ? item.projections.values.title.trim() : null;
+        const since = sinceLabel(item.updatedAt);
+        return {
+          id: item.sessionId,
+          label: [title ?? item.sessionId.slice(0, 12), since].filter(Boolean).join(" \xB7 ")
+        };
+      }),
+      failed: false
+    };
+  }
   async function modelCatalog2() {
     const catalog = await sessions.invoke("session", "modelCatalog", {});
     const options = [];
@@ -2284,7 +2329,7 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState] = await Promise.all([
+      const [catalog, presetState, selectionState, sessionState] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }] };
@@ -2293,6 +2338,13 @@ function createPanelService({
         currentSelection(sessionId).then((selection2) => ({ selection: selection2, failed: false })).catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u4F1A\u8BDD\u6A21\u578B\u9009\u62E9\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { selection: null, failed: true };
+        }),
+        sessionOptions({
+          channelId,
+          botId,
+          key,
+          currentSessionId: sessionId,
+          workspace: record.workspace
         })
       ]);
       const options = catalog.options;
@@ -2316,6 +2368,12 @@ function createPanelService({
           // 推理等级取决于"当前生效的那个模型"：会话内的选择，或（没有会话时）机器人默认。
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null
+        },
+        // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
+        session: {
+          current: sessionId,
+          options: sessionState.options,
+          failed: sessionState.failed === true
         },
         preset: {
           current: record.agentPreset ?? null,
@@ -2472,7 +2530,7 @@ function createPanelService({
         };
       }
       if (field === "session") {
-        if (value === "new" || value === null || value === void 0) {
+        if (value === "new" || value === "" || value === null || value === void 0) {
           await sessions.reset({ channelId, botId, key });
           return { field, value: "new", message: "\u5DF2\u89E3\u9664\u5F53\u524D\u4F1A\u8BDD\u7ED1\u5B9A\uFF0C\u4E0B\u4E00\u6761\u6D88\u606F\u5C06\u5F00\u542F\u65B0\u4F1A\u8BDD\u3002" };
         }
