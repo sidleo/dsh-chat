@@ -13,6 +13,7 @@ import test from 'node:test';
 
 import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh-chat/shared/context-enhancement.mjs';
+import { enhanceReplyReference } from '../packages/dsh-chat/shared/reply-reference.mjs';
 import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
 import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feishu/host/config-store.mjs';
 import { createFeishuController } from '../packages/dsh-chat-feishu/host/controller.mjs';
@@ -107,6 +108,20 @@ function createFakeGateway() {
       if (gatewayState.failures.updateCard) throw gatewayState.failures.updateCard;
       return { updated: true };
     },
+    /** 假"读被引用的消息"：默认读得到，可由用例替换成失败。 */
+    async getMessageText({ messageId }) {
+      calls.quoted = calls.quoted ?? [];
+      calls.quoted.push({ messageId });
+      if (gatewayState.quotedError) throw gatewayState.quotedError;
+      return {
+        messageId,
+        senderId: 'ou_owner',
+        kind: gatewayState.quotedKind ?? 'text',
+        text: gatewayState.quotedText ?? '昨天销售额多少？',
+        fileName: gatewayState.quotedFileName ?? null,
+      };
+    },
+
     /** 假资源下载：默认给一张 1x1 PNG，可由用例替换成失败/超限。 */
     async downloadResource({ messageId, fileKey, type }) {
       calls.resources.push({ messageId, fileKey, type });
@@ -198,6 +213,7 @@ function messageEvent({
   imageKey = 'img_v2_test',
   fileKey = 'file_v3_test',
   fileName = '报表.xlsx',
+  parentId = null,
 } = {}) {
   const content = messageType === 'text'
     ? JSON.stringify({ text })
@@ -208,6 +224,7 @@ function messageEvent({
     message: {
       message_id: messageId,
       chat_id: chatId,
+      ...(parentId ? { parent_id: parentId } : {}),
       chat_type: chatType,
       message_type: messageType,
       content,
@@ -281,6 +298,7 @@ async function makeBridge({
       },
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
     interactions,
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
@@ -443,6 +461,7 @@ test('设属主：落盘 + 立刻生效（重连），非法 id 与 `['*']` 的�
         logger: silentLogger,
         credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
         accessPolicy,
         sessions: {
           ask: async () => ({ text: '', reason: { kind: 'completed' } }),
@@ -803,6 +822,7 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
         logger: silentLogger,
         credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
         accessPolicy,
         sessions: {
           ask: async () => ({ text: '', reason: { kind: 'completed' } }),
@@ -907,6 +927,7 @@ test('控制器：凭据缺失时该机器人标记失败，但不影响其他�
           resolve: async (ref) => (ref === 'REF_OK' ? { value: 'ok' } : { configured: false }),
         },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
         accessPolicy,
         sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },
       },
@@ -1235,6 +1256,7 @@ test('控制器投递：文件走 file 消息、图片走 image 消息，机器�
         logger: silentLogger,
         credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
         accessPolicy,
         sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },
       },
@@ -1863,6 +1885,7 @@ test('名字解析：并发查询合并成一次、缺权限长退避、「重�
         logger: silentLogger,
         credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
         contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
         accessPolicy,
         sessions: {
           ask: async () => ({ text: '', reason: { kind: 'completed' } }),
@@ -3179,6 +3202,30 @@ test('会话下拉：选一个会话就绑定到当前聊天（走 hub 的 field
       panel.applied.map((item) => ({ field: item.field, value: item.value })),
       [{ field: 'session', value: 'session-9' }],
     );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('引用回复：用户引用一条消息后提问，被引用正文要一起进提示词（读不到也不能丢当前问题）', async () => {
+  const asked = [];
+  const app = await makeBridge({ onAsk: (options) => asked.push(options) });
+  try {
+    await app.bridge.accept(messageEvent({ text: '这条你怎么看', parentId: 'om_parent' }));
+    assert.deepEqual(app.gateway.calls.quoted, [{ messageId: 'om_parent' }], '要按 parent_id 查一次');
+    const prompt = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
+    assert.match(prompt, /<dsh_im_reply>/, '要有引用块');
+    assert.match(prompt, /昨天销售额多少？/, '被引用的正文要在');
+    assert.match(prompt, /这条你怎么看/, '当前提问也要在（不能被引用顶掉）');
+    assert.equal((prompt.match(/<dsh_im_reply>/g) ?? []).length, 1, '只出现一次');
+
+    // 读不到（删除/无权限）：给结构化标记，当前问题照常进模型。
+    asked.length = 0;
+    app.gateway.setDownload({ quotedError: Object.assign(new Error('message not found'), { code: 230002 }) });
+    await app.bridge.accept(messageEvent({ messageId: 'om_2', text: '那这个呢', parentId: 'om_gone' }));
+    const prompt2 = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
+    assert.match(prompt2, /引用内容不可用/, '读不到要有结构化标记');
+    assert.match(prompt2, /那这个呢/, '当前问题照样进模型');
   } finally {
     await app.cleanup();
   }

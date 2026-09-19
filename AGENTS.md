@@ -66,9 +66,18 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   先看会话日志里那个 turn 的 `turn/start` 与 `turn/end` 的 `time`（毫秒）：相差很小且 reason=interrupted
   = 被我们中断；再数一下这轮的事件密度与最长工具耗时——**帧一直在来就不该判超时**，
   所以出现 timeout 只可能是"流真的不再产出"，那要往 DSH/长连接/单个工具挂死方向查。
+- **引用回复**（用户引用一条消息再提问）：飞书事件里只有 `parent_id`，正文要再查一次
+  （`gateway.getMessageText`，3 秒超时）；渠道只把平台字段映射成 `reply`，
+  拼装（标签 `<dsh_im_reply>`、限长、转义、读不到时的标记）在 hub 的 `shared/reply-reference.mjs`。
+  读不到被引用消息**不能丢当前问题**——只加一句"引用内容不可用"。
 - **"回合跑完但用户没收到"怎么查**：在日志里对齐四行——hub 的 `发送提示词` → hub 的 `回合结束` → 渠道的 `回合结束，准备回复` → 渠道的 `最终答案投递方式`。
   第 2 行有、第 3 行没有 = 结果没交回渠道（`ask()` 的返回路径被卡住：关流或提示词收据永不落地，二者都必须有界，见 `sessions.mjs`）；
   第 3 行有、第 4 行是 `failed` = 呈现层发不出去（会同时写进 `connection.status.lastError`）。
+- **一轮回答"只剩最后一段"**：一轮里每个 step 各有一条定稿 `assistant/message`（工具调用前后各一段是常态）。
+  最终答案必须是**该轮所有段拼接**（空行分隔、相邻重复去重）——只取最后一段就会丢正文（上游 Issue #112 同一根因）。
+- **模型被删了机器人就哑了**：模型是会话级设置，那个模型一旦不可用，这个会话每次都失败。
+  `ask()` 会识别 `session/model-unavailable`（提示词收据抛的、或事件流 error 收尾的两种形态），
+  切回一个当前可用的模型（优先 Host 默认）**重试一次**，并在答案前加一行说明（失败必须可见）。
 - **模型/推理相关都对不上时先查这两个字段名**（照着 `session/modelCatalog` 的 schema 读）：
   ① provider 在 **`groups[].id`**（不是 `provider`/`providerId`）——读错会一个选项都拼不出来，
   真机表现是控制面板写「当前 Host 没有可用模型」、`/models` 印 `undefined/xxx`；

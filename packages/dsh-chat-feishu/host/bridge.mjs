@@ -41,6 +41,12 @@ const MENU_ROW_SIZE = 4;
  */
 const RESPONSE_SETTLE_MS = 50;
 
+/**
+ * 读"被引用的消息"的时限：它是为了让提示词更完整，**不能拖住用户的提问**。
+ * 超时就当"引用内容不可用"，当前消息照常进模型。
+ */
+const REPLY_REFERENCE_TIMEOUT_MS = 3000;
+
 /** 卡片上的时间戳（本地 时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
 function panelClock() {
   const now = new Date();
@@ -267,6 +273,43 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   });
 
   /**
+   * 用户**引用/回复**了一条消息：把被引用的内容取回来交给 hub 拼提示词。
+   *
+   * 飞书的事件里只有 `parent_id`（正文要再查一次），所以这一步是"一次有界的延迟查询"：
+   * - 超时（3 秒）、读不到（删除/无权限）、不是引用 → 都只影响引用块，**当前的提问照常进模型**；
+   * - 读不到时给 hub 一个 `reason`，由它放一句"引用内容不可用"的结构化标记（不丢当前问题，也不假装没引用）。
+   */
+  async function resolveReplyReference(message) {
+    const parentId = message?.parent_id ?? message?.parentId ?? null;
+    if (typeof parentId !== 'string' || !parentId) return null;
+    const timeout = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ timedOut: true }), REPLY_REFERENCE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    try {
+      const fetched = await Promise.race([
+        gateway.getMessageText({ messageId: parentId }),
+        timeout,
+      ]);
+      if (fetched?.timedOut) {
+        logger.warn?.(`[dsh-chat-feishu] 读被引用的消息超时：${parentId}`);
+        return { messageId: parentId, reason: '读取超时' };
+      }
+      return {
+        messageId: fetched.messageId ?? parentId,
+        senderId: fetched.senderId ?? null,
+        kind: fetched.kind ?? 'text',
+        text: fetched.text ?? '',
+        fileName: fetched.fileName ?? null,
+      };
+    } catch (error) {
+      // 不静默：引用读不到要留痕，同时让模型知道"引用内容不可用"。
+      logger.warn?.(`[dsh-chat-feishu] 读被引用的消息失败（${parentId}）：${error?.message ?? error}`);
+      return { messageId: parentId, reason: error?.message ?? String(error) };
+    }
+  }
+
+  /**
    * 处理一条入站事件。
    *
    * @param event - `im.message.receive_v1` 的事件体。
@@ -484,6 +527,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     try {
       await deps.ready?.();
       const record = deps.storage.read(bot.id);
+      // 引用回复：用户引用了某条消息（飞书只给 parent_id，正文要再查一次）。
+      const replyTo = await resolveReplyReference(message);
       const identity = {
         senderId,
         chatId: message.chat_id,
@@ -498,6 +543,13 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       );
       // 文本保持"前缀拼进同一个文本块"的老形态；图片走内容数组，enhanceContent 会在
       // 前面插一个上下文文本块，于是图片也带上来源信息。
+      /**
+       * 引用块在**来源块之后、正文之前**：先"这条消息从哪来"，再"用户在回复哪条"，最后才是问题本身。
+       * 拼装本身在 hub（`enhanceReplyReference`），渠道只负责把平台字段映射成 `reply`。
+       */
+      const withReply = (content) => (typeof deps.replyReference?.enhanceReplyReference === 'function'
+        ? deps.replyReference.enhanceReplyReference(content, replyTo)
+        : content);
       let finalParts;
       let enhanced;
       if (attachmentParts) {
@@ -517,6 +569,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         finalParts = [{ type: 'text', text: enhancedText }];
         enhanced = enhancedText !== text;
       }
+      if (replyTo) finalParts = withReply(finalParts);
 
       const mode = conversationType === 'direct' ? bot.stepPushDirect : bot.stepPushGroup;
       const presenter = createTurnPresenter({

@@ -127330,6 +127330,7 @@ function messageText(message) {
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var MENU_ROW_SIZE = 4;
 var RESPONSE_SETTLE_MS = 50;
+var REPLY_REFERENCE_TIMEOUT_MS = 3e3;
 function panelClock() {
   const now = /* @__PURE__ */ new Date();
   const pad = (value) => String(value).padStart(2, "0");
@@ -127472,6 +127473,34 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
       }
     }
   });
+  async function resolveReplyReference(message) {
+    const parentId = message?.parent_id ?? message?.parentId ?? null;
+    if (typeof parentId !== "string" || !parentId) return null;
+    const timeout = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ timedOut: true }), REPLY_REFERENCE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    try {
+      const fetched = await Promise.race([
+        gateway.getMessageText({ messageId: parentId }),
+        timeout
+      ]);
+      if (fetched?.timedOut) {
+        logger.warn?.(`[dsh-chat-feishu] \u8BFB\u88AB\u5F15\u7528\u7684\u6D88\u606F\u8D85\u65F6\uFF1A${parentId}`);
+        return { messageId: parentId, reason: "\u8BFB\u53D6\u8D85\u65F6" };
+      }
+      return {
+        messageId: fetched.messageId ?? parentId,
+        senderId: fetched.senderId ?? null,
+        kind: fetched.kind ?? "text",
+        text: fetched.text ?? "",
+        fileName: fetched.fileName ?? null
+      };
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u88AB\u5F15\u7528\u7684\u6D88\u606F\u5931\u8D25\uFF08${parentId}\uFF09\uFF1A${error?.message ?? error}`);
+      return { messageId: parentId, reason: error?.message ?? String(error) };
+    }
+  }
   async function accept(event) {
     const message = event?.message;
     if (!message?.message_id) return;
@@ -127661,6 +127690,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     try {
       await deps.ready?.();
       const record = deps.storage.read(bot.id);
+      const replyTo = await resolveReplyReference(message);
       const identity2 = {
         senderId,
         chatId: message.chat_id,
@@ -127672,6 +127702,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         identity2,
         () => ({ channel: "feishu", ...identity2 })
       );
+      const withReply = (content) => typeof deps.replyReference?.enhanceReplyReference === "function" ? deps.replyReference.enhanceReplyReference(content, replyTo) : content;
       let finalParts;
       let enhanced;
       if (attachmentParts) {
@@ -127691,6 +127722,7 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
         finalParts = [{ type: "text", text: enhancedText }];
         enhanced = enhancedText !== text;
       }
+      if (replyTo) finalParts = withReply(finalParts);
       const mode = conversationType === "direct" ? bot.stepPushDirect : bot.stepPushGroup;
       const presenter = createTurnPresenter({
         mode,
@@ -129344,6 +129376,56 @@ function createLarkGateway({
       });
       assertSuccess("\u98DE\u4E66\u66F4\u65B0\u4EA4\u4E92\u5361\u7247", response);
       return { updated: true };
+    },
+    /**
+     * 读一条消息的**可读内容**（引用回复要用：飞书的事件里只有 `parent_id`，正文得再查一次）。
+     *
+     * 只做"映射成 reply 快照"这一件事，拼提示词是 hub 的活（`enhanceReplyReference`）：
+     * - 文字：`body.content` 是 JSON，`text` 字段；
+     * - 富文本（post）：把 `content` 里各段的 text 拼起来；
+     * - 其它类型（图片/文件/语音/视频…）：给类型与文件名，**不下载**被引用的历史媒体；
+     * - 读不到（已删除/无权限/超时）抛错，由调用方转成"引用内容不可用"的标记。
+     *
+     * @param options - { messageId }。
+     * @returns `{ messageId, senderId, kind, text, fileName }`。
+     */
+    async getMessageText({ messageId }) {
+      if (typeof messageId !== "string" || !messageId) {
+        throw new TypeError("getMessageText \u9700\u8981 messageId\u3002");
+      }
+      const response = await client.im.v1.message.get({ path: { message_id: messageId } });
+      assertSuccess("\u98DE\u4E66\u8BFB\u53D6\u88AB\u5F15\u7528\u7684\u6D88\u606F", response);
+      const item = (response?.data?.items ?? [])[0];
+      if (!item) {
+        const error = new Error(`\u98DE\u4E66\u6CA1\u6709\u8FD4\u56DE\u6D88\u606F ${messageId} \u7684\u5185\u5BB9\u3002`);
+        error.code = "feishu/message-not-found";
+        throw error;
+      }
+      let body = {};
+      try {
+        body = JSON.parse(item.body?.content ?? "{}");
+      } catch {
+        body = {};
+      }
+      const msgType = typeof item.msg_type === "string" ? item.msg_type : "unknown";
+      const plain = (value) => typeof value === "string" ? value.trim() : "";
+      let text = "";
+      if (msgType === "text") {
+        text = plain(body.text);
+      } else if (msgType === "post") {
+        const rows = Array.isArray(body.content) ? body.content : [];
+        text = rows.flat().map((node) => plain(node?.text ?? node?.href)).filter(Boolean).join(" ");
+      } else if (msgType === "audio") {
+        text = plain(body.text);
+      }
+      const fileName = plain(body.file_name) || plain(body.fileName) || null;
+      return {
+        messageId: item.message_id ?? messageId,
+        senderId: item.sender?.id ?? item.sender?.sender_id?.open_id ?? null,
+        kind: msgType,
+        text,
+        fileName
+      };
     },
     /**
      * 下载消息里的资源（图片/文件）。

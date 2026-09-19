@@ -543,6 +543,75 @@ function contextStatusLabel(config) {
   return active === 0 ? scopeText : `${scopeText} \xB7 ${active} \u9879\u6307\u5B9A`;
 }
 
+// packages/dsh-chat/shared/reply-reference.mjs
+var REPLY_TAG_OPEN = "<dsh_im_reply>";
+var REPLY_TAG_CLOSE = "</dsh_im_reply>";
+var MAX_QUOTE_TEXT = 1e3;
+var KIND_LABELS = Object.freeze({
+  image: "\u56FE\u7247",
+  file: "\u6587\u4EF6",
+  audio: "\u8BED\u97F3",
+  media: "\u89C6\u9891",
+  sticker: "\u8868\u60C5",
+  post: "\u5BCC\u6587\u672C",
+  interactive: "\u5361\u7247",
+  system: "\u7CFB\u7EDF\u6D88\u606F",
+  share_chat: "\u7FA4\u540D\u7247",
+  share_user: "\u4E2A\u4EBA\u540D\u7247",
+  location: "\u4F4D\u7F6E",
+  todo: "\u4EFB\u52A1",
+  calendar: "\u65E5\u7A0B"
+});
+function safeText(value) {
+  return String(value ?? "").split(REPLY_TAG_OPEN).join("\uFF1Cdsh_im_reply\uFF1E").split(REPLY_TAG_CLOSE).join("\uFF1C/dsh_im_reply\uFF1E").trim();
+}
+function clip(value, max = MAX_QUOTE_TEXT) {
+  const text = safeText(value);
+  return text.length > max ? `${text.slice(0, max)}\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : text;
+}
+function replyReferenceBlock(reply) {
+  if (!reply || typeof reply !== "object") return null;
+  const lines = [];
+  const id = typeof reply.messageId === "string" && reply.messageId ? reply.messageId : null;
+  const sender = typeof reply.senderId === "string" && reply.senderId ? reply.senderId : null;
+  const from = [id, sender].filter(Boolean).join("\uFF0C\u6765\u81EA ");
+  const head = from ? `\u7528\u6237\u5F15\u7528\u4E86\u4E00\u6761\u6D88\u606F\uFF08${from}\uFF09\uFF1A` : "\u7528\u6237\u5F15\u7528\u4E86\u4E00\u6761\u6D88\u606F\uFF1A";
+  if (reply.reason) {
+    lines.push(head);
+    lines.push(`\uFF08\u5F15\u7528\u5185\u5BB9\u4E0D\u53EF\u7528\uFF1A${clip(reply.reason, 200)}\uFF09`);
+  } else {
+    const kind = typeof reply.kind === "string" && reply.kind ? reply.kind : "text";
+    const label = KIND_LABELS[kind] ?? null;
+    lines.push(head);
+    const body = [];
+    if (typeof reply.text === "string" && reply.text.trim()) body.push(clip(reply.text));
+    if (label || reply.fileName) {
+      const name2 = reply.fileName ? `\uFF1A${clip(reply.fileName, 200)}` : "";
+      body.push(label ? `\uFF08\u88AB\u5F15\u7528\u7684\u662F${label}${name2}\uFF09` : `\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip(kind, 40)}${name2}\uFF09`);
+    } else if (kind !== "text") {
+      body.push(`\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip(kind, 40)}\uFF09`);
+    }
+    if (body.length === 0) body.push("\uFF08\u8FD9\u6761\u6D88\u606F\u6CA1\u6709\u53EF\u8BFB\u7684\u6B63\u6587\uFF09");
+    lines.push(...body);
+  }
+  return `${REPLY_TAG_OPEN}
+${lines.join("\n")}
+${REPLY_TAG_CLOSE}`;
+}
+function enhanceReplyReference(content, reply) {
+  const block = replyReferenceBlock(reply);
+  if (!block) return content;
+  try {
+    if (typeof content === "string") return content ? `${block}
+
+${content}` : block;
+    if (Array.isArray(content)) return [{ type: "text", text: block }, ...content];
+    return content;
+  } catch {
+    return content;
+  }
+}
+
 // packages/dsh-chat/host/bot-settings.mjs
 import { readFile as readFile2 } from "node:fs/promises";
 import { join } from "node:path";
@@ -1125,7 +1194,7 @@ function line(text) {
 }
 var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny", "diag", "retitle"]);
 var MAX_HISTORY_CHARS = 160;
-function clip(text) {
+function clip2(text) {
   const value = String(text ?? "").replace(/\s+/gu, " ").trim();
   return value.length > MAX_HISTORY_CHARS ? `${value.slice(0, MAX_HISTORY_CHARS)}\u2026` : value;
 }
@@ -1542,9 +1611,9 @@ ${result.text}` : ""}`;
       for (const message of messages) {
         if (message.role === "user") {
           index += 1;
-          lines.push(`${index}. \u4F60\uFF1A${line(clip(message.text))}`);
+          lines.push(`${index}. \u4F60\uFF1A${line(clip2(message.text))}`);
         } else {
-          lines.push(`   bot\uFF1A${line(clip(message.text))}`);
+          lines.push(`   bot\uFF1A${line(clip2(message.text))}`);
         }
       }
       return [`\u6700\u8FD1 ${index} \u8F6E\uFF08\u6700\u591A\u56DE\u770B 20 \u8F6E\uFF09\uFF1A`, ...lines].join("\n");
@@ -2083,7 +2152,7 @@ function stamp() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
 var MAX_FIELD_CHARS = 2e3;
-function clip2(text) {
+function clip3(text) {
   return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}\u2026` : text;
 }
 function httpErrorSummary(value) {
@@ -2105,9 +2174,9 @@ function oneLine(value) {
     return `${value.name}: ${value.message}${value.code ? `\uFF08code ${value.code}\uFF09` : ""}`;
   }
   if (typeof value !== "object") return String(value);
-  if (Array.isArray(value)) return clip2(value.map(oneLine).filter((part) => part !== "").join(" "));
+  if (Array.isArray(value)) return clip3(value.map(oneLine).filter((part) => part !== "").join(" "));
   const http = httpErrorSummary(value);
-  if (http) return clip2(http);
+  if (http) return clip3(http);
   try {
     const seen = /* @__PURE__ */ new WeakSet();
     const text = JSON.stringify(value, (key, item) => {
@@ -2118,7 +2187,7 @@ function oneLine(value) {
       return item;
     });
     if (typeof text !== "string") return String(value);
-    return clip2(text);
+    return clip3(text);
   } catch {
     return String(value);
   }
@@ -4274,6 +4343,11 @@ function apply(ctx, config = {}) {
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
       contextEnhancement: context_enhancement_exports,
+      /**
+       * 引用回复：渠道只把平台字段映射成 `reply`（正文/类型/文件名/发送者/消息 id），
+       * 拼装（标签、限长、安全转义、读不到时的标记）由 hub 实现一次、所有渠道复用。
+       */
+      replyReference: Object.freeze({ enhanceReplyReference }),
       /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
       accessPolicy: Object.freeze({ ...access_policy_exports }),
       /** 机器人命令：渠道把入站文本交进来即可，命令实现只在 hub 一份。 */
@@ -4674,6 +4748,8 @@ function apply(ctx, config = {}) {
       supportsFile: (channelId) => delivery.supportsFile(channelId)
     }),
     contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
+    /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
+    replyReference: Object.freeze({ enhanceReplyReference }),
     guidance: Object.freeze({
       publish: (sessionId, text) => guidance.publish(sessionId, text),
       forget: (sessionId) => guidance.forget(sessionId)

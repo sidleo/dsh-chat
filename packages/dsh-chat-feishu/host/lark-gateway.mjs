@@ -1077,6 +1077,58 @@ export function createLarkGateway({
     },
 
     /**
+     * 读一条消息的**可读内容**（引用回复要用：飞书的事件里只有 `parent_id`，正文得再查一次）。
+     *
+     * 只做"映射成 reply 快照"这一件事，拼提示词是 hub 的活（`enhanceReplyReference`）：
+     * - 文字：`body.content` 是 JSON，`text` 字段；
+     * - 富文本（post）：把 `content` 里各段的 text 拼起来；
+     * - 其它类型（图片/文件/语音/视频…）：给类型与文件名，**不下载**被引用的历史媒体；
+     * - 读不到（已删除/无权限/超时）抛错，由调用方转成"引用内容不可用"的标记。
+     *
+     * @param options - { messageId }。
+     * @returns `{ messageId, senderId, kind, text, fileName }`。
+     */
+    async getMessageText({ messageId }) {
+      if (typeof messageId !== 'string' || !messageId) {
+        throw new TypeError('getMessageText 需要 messageId。');
+      }
+      const response = await client.im.v1.message.get({ path: { message_id: messageId } });
+      assertSuccess('飞书读取被引用的消息', response);
+      const item = (response?.data?.items ?? [])[0];
+      if (!item) {
+        const error = new Error(`飞书没有返回消息 ${messageId} 的内容。`);
+        error.code = 'feishu/message-not-found';
+        throw error;
+      }
+      let body = {};
+      try {
+        body = JSON.parse(item.body?.content ?? '{}');
+      } catch {
+        body = {};
+      }
+      const msgType = typeof item.msg_type === 'string' ? item.msg_type : 'unknown';
+      const plain = (value) => (typeof value === 'string' ? value.trim() : '');
+      let text = '';
+      if (msgType === 'text') {
+        text = plain(body.text);
+      } else if (msgType === 'post') {
+        // 富文本：`content` 是 [[{tag,text|href|...}]]，只取文字部分。
+        const rows = Array.isArray(body.content) ? body.content : [];
+        text = rows.flat().map((node) => plain(node?.text ?? node?.href)).filter(Boolean).join(' ');
+      } else if (msgType === 'audio') {
+        text = plain(body.text); // 飞书的语音消息可能带 ASR 文本。
+      }
+      const fileName = plain(body.file_name) || plain(body.fileName) || null;
+      return {
+        messageId: item.message_id ?? messageId,
+        senderId: item.sender?.id ?? item.sender?.sender_id?.open_id ?? null,
+        kind: msgType,
+        text,
+        fileName,
+      };
+    },
+
+    /**
      * 下载消息里的资源（图片/文件）。
      *
      * 飞书这个接口用**二进制流**返回成功结果，业务失败则回一段 JSON；因此这里

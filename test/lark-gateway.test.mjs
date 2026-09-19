@@ -43,6 +43,23 @@ function createFakeSdk({ upload = 'data', createReturns = {} } = {}) {
             calls.created.push(payload);
             return { code: 0, msg: 'success', data: { message_id: 'om_1' } };
           },
+          get: async (payload) => {
+            calls.messageGets = calls.messageGets ?? [];
+            calls.messageGets.push(payload);
+            if ('messageGet' in createReturns) return createReturns.messageGet;
+            return {
+              code: 0,
+              msg: 'success',
+              data: {
+                items: [{
+                  message_id: 'om_parent',
+                  msg_type: 'text',
+                  sender: { id: 'ou_sender' },
+                  body: { content: JSON.stringify({ text: '昨天销售额多少？' }) },
+                }],
+              },
+            };
+          },
         },
       },
     },
@@ -275,5 +292,71 @@ test('延迟更新：Card 1.0 必须带 open_ids、2.0 不用；两者都打到 
   await assert.rejects(
     () => gateway.updateCard({ token: '', card: { schema: '2.0' } }),
     (error) => error.code === 'feishu/no-card-token',
+  );
+});
+
+test('网关：读被引用消息的正文（文字 / 富文本 / 媒体只给类型与文件名）', async () => {
+  const sdk = createFakeSdk();
+  const gateway = makeGateway(sdk);
+
+  const text = await gateway.getMessageText({ messageId: 'om_parent' });
+  assert.deepEqual(text, {
+    messageId: 'om_parent',
+    senderId: 'ou_sender',
+    kind: 'text',
+    text: '昨天销售额多少？',
+    fileName: null,
+  });
+
+  // 富文本：只取文字部分，链接取 href。
+  sdk.__calls.messageGets = [];
+  const sdkPost = createFakeSdk({
+    createReturns: {
+      messageGet: {
+        code: 0,
+        msg: 'success',
+        data: {
+          items: [{
+            message_id: 'om_post',
+            msg_type: 'post',
+            sender: { id: 'ou_a' },
+            body: { content: JSON.stringify({ content: [[{ tag: 'text', text: '看这个' }, { tag: 'a', href: 'https://x' }]] }) },
+          }],
+        },
+      },
+    },
+  });
+  const post = await makeGateway(sdkPost).getMessageText({ messageId: 'om_post' });
+  assert.equal(post.text, '看这个 https://x');
+
+  // 媒体：不下载历史附件，只给类型与文件名。
+  const sdkImage = createFakeSdk({
+    createReturns: {
+      messageGet: {
+        code: 0,
+        msg: 'success',
+        data: {
+          items: [{
+            message_id: 'om_img',
+            msg_type: 'image',
+            sender: { id: 'ou_b' },
+            body: { content: JSON.stringify({ image_key: 'img_x' }) },
+          }],
+        },
+      },
+    },
+  });
+  const image = await makeGateway(sdkImage).getMessageText({ messageId: 'om_img' });
+  assert.equal(image.kind, 'image');
+  assert.equal(image.text, '');
+  assert.equal(image.fileName, null);
+
+  // 读不到（被删除/无权限）：抛错，由调用方转成"引用内容不可用"。
+  const sdkGone = createFakeSdk({
+    createReturns: { messageGet: { code: 230002, msg: 'message not found' } },
+  });
+  await assert.rejects(
+    () => makeGateway(sdkGone).getMessageText({ messageId: 'om_gone' }),
+    (error) => /读取被引用的消息|message not found/.test(error.message),
   );
 });

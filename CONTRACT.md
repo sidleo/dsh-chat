@@ -145,6 +145,13 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
   },
 
   contextEnhancement: { /* §4 全部导出，见 CONTRACT 附录 A */ },
+  /**
+   * 引用回复：渠道只把平台字段映射成 `reply`，拼装由 hub 做一次（所有渠道复用）。
+   * enhanceReplyReference(content, reply) -> 拼好引用块的内容（`reply` 为 null 时原样返回）。
+   *   reply = { messageId?, senderId?, kind?, text?, fileName?, reason? }
+   *   `reason` 有值表示**读不到**被引用消息（删除/无权限/超时）：只出"引用内容不可用"的标记，
+   *   当前消息照常进模型。渠道自己的超时要有界（飞书是 3 秒），引用读不到不能拖住提问。
+   */
   guidance: { publish(sessionId, text), forget(sessionId) },
   sessions: { invoke, ask, stop, steer, isRunning, reset },   // §5
   /**

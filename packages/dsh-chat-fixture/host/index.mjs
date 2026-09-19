@@ -54,6 +54,7 @@ export function apply(ctx) {
                 ready: typeof deps.ready === 'function',
                 storage: typeof deps.storage?.read === 'function',
                 contextEnhancement: typeof deps.contextEnhancement?.enhanceContent === 'function',
+                replyReference: typeof deps.replyReference?.enhanceReplyReference === 'function',
                 accessPolicy: typeof deps.accessPolicy?.evaluateAccess === 'function',
                 commands: typeof deps.commands?.handle === 'function',
                 createJsonStore: typeof deps.createJsonStore === 'function',
