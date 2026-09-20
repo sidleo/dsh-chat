@@ -8,7 +8,8 @@
     "build": "node scripts/build-all.mjs",
     "test": "node --test test/*.test.mjs",
     "check": "npm run build && npm test && node scripts/verify-package.mjs && npm run check:layout",
-    "check:layout": "node scripts/check-layout.mjs"
+    "check:layout": "node scripts/check-layout.mjs",
+    "rehearsal": "npm run build && node scripts/rehearsal.mjs"
   },
   "devDependencies": {
     "esbuild": "0.25.9",

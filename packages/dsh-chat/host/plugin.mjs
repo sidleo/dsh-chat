@@ -112,7 +112,9 @@ function validBotPayload(payload, options = {}) {
  * Cordis host 插件入口。
  *
  * @param ctx - host 上下文。
- * @param config - 插件配置：{ dataDir, integrationRoot }。
+ * @param config - 插件配置：{ dataDir, integrationRoot, deferred? }。
+ *   `deferred` 可选地覆盖延迟交付的三个时间窗（`firstCheckMs / intervalMs / maxAgeMs`）——
+ *   默认 1 分钟 / 30 秒 / 30 分钟；编排演练或排查时可以用小值把整条链路跑完。
  */
 export function apply(ctx, config = {}) {
   const baseLogger = resolveLogger(ctx, 'dsh-chat');
@@ -137,6 +139,8 @@ export function apply(ctx, config = {}) {
   const deferred = createDeferredDelivery({
     dataDir: hubDataDir(config.dataDir),
     logger,
+    // 时间窗可按部署调整（默认 1 分钟 / 30 秒 / 30 分钟）：演练脚本用小值把补发链路跑完。
+    ...(config.deferred && typeof config.deferred === 'object' ? config.deferred : {}),
     probe: async ({ record }) => sessions.probeTurn({
       channelId: record.channelId,
       botId: record.botId,

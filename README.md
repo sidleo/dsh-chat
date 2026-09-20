@@ -25,7 +25,13 @@ packages/dsh-chat-fixture    契约验证用假渠道（不发布）
 npm run build     # 构建全部包的 host + client 两半
 npm test          # 契约与引擎单元测试
 npm run check     # build + test + 打包自检（含"渠道包不得 import hub"检查）
+npm run rehearsal # 离线端到端演练：真实 hub + 真实飞书卡片 + 脚本化假 DSH（不联网、不用凭据）
 ```
+
+改了 host/卡片逻辑、准备重启 DSH 之前，先跑一次 `npm run rehearsal`：它把主要用户路径
+（渠道依赖自检 → 一问一答 → 命令 → 控制面板与卡片 → 访问策略确认 → 上下文增强 →
+图片回退 → 延迟交付 → 诊断）在几秒内走一遍，并逐条打印 ✅/❌。
+**它不替代真机**——Lark 长连接、真实平台回调只能真机验。
 
 构建产物 `lib/index.js`（host，ESM）与 `lib/client.js`（client，DSH 模块加载器包装）随包提交，
 因此安装方不需要构建。
