@@ -13,6 +13,7 @@
 7. **容错归一化按保守方向补齐**，不要判成"谁都进不来"/"谁都放行"。残缺的历史配置不能让机器人锁死或裸奔。
 8. **互斥**：`@xmanrui/dsh-im` 与本插件不能同时启用（同一批凭据会双连，表现为双份回复或消息随机分流）。
 9. **平台 id 是应用维度的**：同一个用户在不同飞书应用里 `open_id` 不同，属主/白名单必须按"该应用的 id"存。
+10. **调 `lark-cli` 只能走唯一入口**（`packages/dsh-chat-feishu/host/lark-cli.mjs`）：lark-cli 里可以同时登录**多个应用**，还有一个**全局可变的"生效 profile"**——不显式指定 profile 就是在用来路不明的授权，可能以**另一个机器人**甚至**另一个人的用户身份**说话。所以：只有那个模块会拉起 lark-cli（守门检查"没有别的包文件引入 `node:child_process`"），它每次调用必然带 `--profile <本机器人 appId 对应的 profile>` + 显式 `--as`，并在调用前核对 `appId`（用户身份还要核对钉住的 `openId`）——对不上就失败，**绝不回退**到当前生效 profile。要不要允许用户身份是**每机器人**的设置，默认 `bot-only`。
 
 ## 目录结构
 
@@ -26,6 +27,7 @@ packages/dsh-chat/             Hub：设置页入口 + 渠道注册表 + 共享�
                                  delivery-targets.js = 主动投递，context-enhancement.js = 上下文增强，
                                  list-order.js = 左栏渠道 / 机器人列表的拖动排序，存浏览器 localStorage）
 packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
+                               （host/lark-cli.mjs = 调 lark-cli 的唯一入口：强制绑定自身 appId 与身份）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
 scripts/check-layout.mjs       布局守门：真实组件在 549/360/320px 下渲染并断言不溢出、不逐字竖排
@@ -46,7 +48,7 @@ UPSTREAM.md                    与上游 dsh-im 的对照关系、移植范围�
 ```bash
 npm run build   # esbuild 打 host（ESM）+ client（DSH 模块加载器包装），产物在各自 lib/
 npm test        # node --test，覆盖契约/引擎/渠道/命令/策略
-npm run check        # build + test + 打包自检（含"渠道不得 import hub"与互斥检查）+ 布局守门
+npm run check        # build + test + 打包自检（含"渠道不得 import hub"、lark-cli 唯一入口、互斥检查）+ 布局守门
 npm run check:layout # 只跑布局守门：真实组件在 549/360/320px 下渲染，断言不溢出、不逐字竖排
 npm run rehearsal    # 离线端到端演练：真实 hub + 真实飞书卡片 + 脚本化假 DSH（不联网、不用凭据）；
                      # 逐条打印 ✅/❌，失败退出码 1；改完 host/卡片先跑它，再重启 DSH 做真机验证
@@ -208,6 +210,18 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **"回合跑完但用户没收到"怎么查**：在日志里对齐四行——hub 的 `发送提示词` → hub 的 `回合结束` → 渠道的 `回合结束，准备回复` → 渠道的 `最终答案投递方式`。
   第 2 行有、第 3 行没有 = 结果没交回渠道（`ask()` 的返回路径被卡住：关流或提示词收据永不落地，二者都必须有界，见 `sessions.mjs`）；
   第 3 行有、第 4 行是 `failed` = 呈现层发不出去（会同时写进 `connection.status.lastError`）。
+- **调 lark-cli 用的是谁的授权 / 机器人能不能用用户身份**：lark-cli 支持一台机器登录多个应用，
+  还有"当前生效 profile"这种**全局状态**（`lark-cli profile use` 会改它）——所以"忘了带 profile"
+  就是"用别人的授权说话"。规矩是**结构**而不是纪律：只有 `packages/dsh-chat-feishu/host/lark-cli.mjs`
+  会拉起 lark-cli（`npm run check` 会红：别的包文件不许引入 `node:child_process`；那个入口必须注入
+  `--profile` 与 `--as`，且不许出现 `--use` / `--global` / `shell: true`），它每次都带
+  `--profile dsh-chat-<appId>`（按 **appId** 找 profile，认 appId 不认名字），调用前用
+  `lark-cli whoami` 核对 `appId`——对不上就**拒绝执行**，绝不回退到当前生效的那份。
+  身份开关在设置页「lark-cli 身份」：默认 **只用应用身份**；要允许用户身份得**二次确认**，并且
+  由 lark-cli 自己回答"登录的是谁"、把它钉住（`larkUserOpenId`）——登录的人换了就拒绝，绝不偷偷换人。
+  自查：`lark-cli profile list`（看每个 profile 的 appId 与登录人）、
+  `lark-cli whoami --profile <name> --as user`（看实际身份与 `onBehalfOf`）。
+  真机现象对照：只用应用身份时消息以**应用名义**发出；用了用户身份才是"以某个人名义"。
 - **用户发了图片，机器人说"不支持图片"**：DSH 的 `session/prompt` 会拿**会话当前模型**的模态
   直接拒掉图片内容块（`session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES`）。
   `sessions.ask()` 认这个拒绝后会把图片**换成同一会话的文件**再试一次（`imagesAsFiles`：
@@ -326,6 +340,7 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 会话渠道标识 ✅（host 侧：工作区命名「渠道 · 机器人」+ 会话标题加「渠道 · 」前缀，均幂等；**历史会话用 `/retitle`（别名 `/fixtitles`，仅属主）一次性回填**——前缀只在"下一次发消息"时自动补，长期不说话的旧会话要手动补一次；client 侧：侧边栏会话行把前缀换渠道徽标——会话列表没有插槽，做的是纯装饰、可还原、**认结构不认类名**的 DOM 增强，见 `client/session-badges.js`）；版本与更新 ✅（Chat机器人 页右上角入口展开：内核/契约/各渠道包版本与状态、数据与日志目录、更新方式，`check` 会与 package.json 对账）；i18n 完整化 ✅（共享组件与上下文增强表单全部走 `t()`，渠道字典同步补齐）；⚠️ 会话标题前缀自 P6-① 起一直是坏的（`session/list` 漏 `_request`），已修，重启后每个会话在**下一次消息**结束时补上 |
 | P7 | 机器人自助接入与可用性 | ✅ 飞书「新建机器人接入」**两条路**（照 dsh-im 对齐）：**扫码新建**（`registerApp` 一次性授权链接 → 自动创建应用，**扫码的人就是属主**）与**手动接入已有机器人**（填 App ID + App Secret，属主可留空）——手动那条**先验凭据再写任何东西**（探针换 `tenant_access_token`），`botId`/`secretRef` 由 `sha256(appId)` 推导（重复接入直接拒绝），落盘失败回滚刚写的凭据；属主留空时客户端紧接着调 hub 的 `bot.access-policy.open-scope` 把私聊放宽到「任何人可用」（新机器人没有属主候选，默认策略谁都进不来），那一步失败只告警、绝不静默。另有：访问策略白名单显示「名字 + id」（飞书 `names.resolve`，人名走**通讯录 → 共同群成员**两条路，查不到只显示 id + 能行动的说明）|
 | P8 | 提示词与多会话的正确性 | ✅ 增强提示词改走**会话级系统提示词段**（`ctx.systemPrompt.section`，全局注册按 agent 求值；没有该服务的部署自动退回消息前缀并告警一次；`config.guidanceTarget` 可强制 `prefix`）；**会话不允许被两个聊天共用**（下拉扣下 + apply 拒绝 + 卡片明示，因为提示词一个会话只有一个槽位）；**会话标题带"哪个群/哪个人"**（渠道给 `chatLabel`，前缀可升级不叠加，`/retitle` 按绑定键兜底） |
+| P9 | lark-cli 身份红线 | ✅ **调 lark-cli 只能走唯一入口**（`host/lark-cli.mjs`）：每次调用注入 `--profile <本机器人 appId 对应 profile>` + 显式 `--as`，调用前用 `whoami` 核对 `appId`（用户身份再核对钉住的 `openId`），对不上就拒绝、**绝不回退**；profile 按 **appId** 匹配（认 appId 不认名字），没有就懒建自己的 `dsh-chat-<appId>`（secret 只走 stdin、绝不带 `--use`、绝不 `--global`），拿不到 secret / 名字被别的应用占用就 fail-closed。**要不要允许用户身份是每机器人的设置**（默认 `bot-only`），设置页「lark-cli 身份」可改，**开启必须二次确认**（不带 `confirm:true` 一个字节都不写），开启时由 lark-cli 回答"登录的是谁"并钉住。守门：`scripts/verify-package.mjs` 禁止别的包文件引入 `node:child_process`、并要求该入口注入 pin（`test/lark-cli.test.mjs` 18 条 + 飞书端点 7 条钉住 argv/env/confirm 与"拒绝时不执行目标命令"） |
 
 ## 工作方式
 

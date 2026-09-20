@@ -4534,3 +4534,241 @@ test('过程卡不再显示「已注入会话上下文」那行（真机反馈�
   // 第一个元素就是面板，不再插一行说明占空间。
   assert.equal(card.body.elements[0].tag, 'collapsible_panel');
 });
+
+test('配置：lark-cli 身份策略默认 bot-only，写坏的值也回落 bot-only', () => {
+  const base = { id: 'b1', appId: 'cli_abc_12345', secretRef: 'REF', ownerOpenIds: ['ou_owner'] };
+  assert.equal(normalizeBot(base).larkUserIdentity, 'bot-only', '缺字段 = 只用应用身份');
+  assert.equal(normalizeBot(base).larkUserOpenId, null);
+  assert.equal(normalizeBot({ ...base, larkUserIdentity: 'user' }).larkUserIdentity, 'bot-only');
+  assert.equal(normalizeBot({ ...base, larkUserIdentity: true }).larkUserIdentity, 'bot-only');
+  // 允许了但没钉住用户：值是允许的（设置页要如实显示"需要重新开启"），但 openId 为空。
+  const openNoUser = normalizeBot({ ...base, larkUserIdentity: 'user-allowed', larkUserOpenId: '' });
+  assert.equal(openNoUser.larkUserIdentity, 'user-allowed');
+  assert.equal(openNoUser.larkUserOpenId, null);
+  const pinned = normalizeBot({
+    ...base, larkUserIdentity: 'user-allowed', larkUserOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5',
+  });
+  assert.equal(pinned.larkUserOpenId, 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5');
+  // 关掉时必须把钉住的人一起清掉（留着只会让下次误用时更迷惑）。
+  const off = normalizeBot({
+    ...base, larkUserIdentity: 'bot-only', larkUserOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5',
+  });
+  assert.equal(off.larkUserOpenId, null);
+});
+
+test('配置：setLarkIdentity 落盘并清空/拒绝可疑的 openId', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkid-'));
+  try {
+    const store = createFeishuConfigStore({ path: join(dataDir, 'config.json'), logger: silentLogger });
+    await store.load();
+    await store.saveBot({ id: 'b1', appId: 'cli_abc_12345', secretRef: 'REF', ownerOpenIds: ['ou_owner'] });
+
+    const on = await store.setLarkIdentity('b1', { value: 'user-allowed', userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' });
+    assert.equal(on.larkUserIdentity, 'user-allowed');
+    assert.equal(on.larkUserOpenId, 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5');
+
+    const off = await store.setLarkIdentity('b1', { value: 'bot-only' });
+    assert.equal(off.larkUserIdentity, 'bot-only');
+    assert.equal(off.larkUserOpenId, null, '关掉时要把钉住的用户清掉');
+
+    await assert.rejects(
+      store.setLarkIdentity('b1', { value: 'user-allowed', userOpenId: 'not-an-open-id' }),
+      /open_id/,
+    );
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+/** 控制器测试用的假 lark-cli：只实现设置页/端点会碰的那几个方法。 */
+function createFakeLarkCli(options = {}) {
+  const calls = { inspect: 0, whoami: [] };
+  return {
+    calls,
+    cli: {
+      appId: options.appId ?? 'cli_lark_identity_1',
+      profileName: options.profileName ?? 'dsh-chat-cli_lark_identity_1',
+      async inspect() {
+        calls.inspect += 1;
+        if (options.inspectError) throw options.inspectError;
+        return options.inspect ?? {
+          policy: { mode: 'bot-only', userOpenId: null },
+          profile: { found: true, name: 'dsh-chat-cli_lark_identity_1', appId: 'cli_lark_identity_1', brand: 'feishu' },
+          identity: {
+            bot: { appId: 'cli_lark_identity_1', identity: 'bot', available: true },
+            user: { onBehalfOf: { userName: '张三', openId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' } },
+          },
+          checkedAt: '2026-09-20T10:00:00.000Z',
+        };
+      },
+      async whoami({ as }) {
+        calls.whoami.push(as);
+        if (options.whoamiError) throw options.whoamiError;
+        return options.whoami ?? {
+          appId: 'cli_lark_identity_1',
+          identity: as,
+          available: true,
+          onBehalfOf: { userName: '张三', openId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
+        };
+      },
+    },
+  };
+}
+
+async function createIdentityController(dataDir, options = {}) {
+  const bot = {
+    id: 'bot_lark',
+    appId: 'cli_lark_identity_1',
+    secretRef: 'DSH_FEISHU_APP_SECRET',
+    ownerOpenIds: ['ou_owner'],
+    stepPushDirect: 'off',
+    stepPushGroup: 'off',
+    ...(options.bot ?? {}),
+  };
+  await mkdir(join(dataDir, 'bots'), { recursive: true });
+  await writeFile(join(dataDir, 'config.json'), JSON.stringify({ version: 2, bots: [bot] }), 'utf8');
+  const fake = createFakeLarkCli(options.larkCli);
+  const controller = createFeishuController({
+    deps: {
+      channelId: 'feishu',
+      dataDir,
+      logger: silentLogger,
+      credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+      contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+      replyReference: { enhanceReplyReference },
+      accessPolicy,
+      sessions: {
+        ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+        bindings: { adopt: async () => 0 },
+      },
+    },
+    logger: silentLogger,
+    internals: {
+      sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+      createGateway: () => createFakeGateway(),
+      createLarkCli: () => fake.cli,
+    },
+  });
+  return { controller, fake };
+}
+
+test('lark-cli 身份：只读体检把 profile 与两个身份都报出来（不写盘）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkget-'));
+  try {
+    const { controller, fake } = await createIdentityController(dataDir);
+    const before = await readFile(join(dataDir, 'config.json'), 'utf8');
+    const result = await controller.endpoints['bot.lark-identity.get']({ botId: 'bot_lark' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.value.policy.mode, 'bot-only');
+    assert.equal(result.value.profile.appId, 'cli_lark_identity_1');
+    assert.equal(result.value.identity.user.onBehalfOf.userName, '张三');
+    assert.equal(fake.calls.inspect, 1);
+    assert.deepEqual(fake.calls.whoami, [], '只读体检走 inspect，不额外问 whoami');
+    assert.equal(await readFile(join(dataDir, 'config.json'), 'utf8'), before, '读接口不该写盘');
+
+    assert.equal((await controller.endpoints['bot.lark-identity.get']({})).error.code, 'chat/bad-request');
+    assert.equal((await controller.endpoints['bot.lark-identity.get']({ botId: 'ghost' })).error.code, 'feishu/unknown-bot');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('lark-cli 身份：开启用户身份必须先确认，确认前一个字节都不写', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkconfirm-'));
+  try {
+    const { controller } = await createIdentityController(dataDir);
+    const before = await readFile(join(dataDir, 'config.json'), 'utf8');
+
+    const asked = await controller.endpoints['bot.lark-identity.set']({ botId: 'bot_lark', value: 'user-allowed' });
+    assert.equal(asked.ok, true, JSON.stringify(asked));
+    assert.equal(asked.value.requiresConfirm, true, '放权必须先确认');
+    assert.match(asked.value.confirmPrompt, /张三/, '确认文案要说清"以谁的名义"');
+    assert.equal(asked.value.candidate.openId, 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5');
+    assert.equal(await readFile(join(dataDir, 'config.json'), 'utf8'), before, '确认前不许落盘');
+
+    const done = await controller.endpoints['bot.lark-identity.set']({
+      botId: 'bot_lark', value: 'user-allowed', confirm: true,
+    });
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.equal(done.value.mode, 'user-allowed');
+    assert.equal(done.value.userOpenId, 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5', '要钉住 lark-cli 报回来的那个人');
+    const saved = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    assert.equal(saved.bots[0].larkUserIdentity, 'user-allowed');
+    assert.equal(saved.bots[0].larkUserOpenId, 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5');
+
+    // 运行期那份 bot 对象必须就地改（桥上拿的就是它；换引用 = 改了不生效）。
+    const status = await controller.endpoints['connection.status']({});
+    assert.equal(status.value.bots[0].larkIdentity.mode, 'user-allowed');
+
+    // 关回 bot-only：收窄不用确认，立刻落盘并清掉钉住的用户。
+    const narrowed = await controller.endpoints['bot.lark-identity.set']({ botId: 'bot_lark', value: 'bot-only' });
+    assert.equal(narrowed.value.requiresConfirm, undefined);
+    assert.equal(narrowed.value.mode, 'bot-only');
+    assert.equal(narrowed.value.userOpenId, null);
+    const back = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    assert.equal(back.bots[0].larkUserOpenId, null);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('lark-cli 身份：lark-cli 里没有用户登录时拒绝开启，并给出能照做的命令', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larknouser-'));
+  try {
+    const { controller } = await createIdentityController(dataDir, {
+      larkCli: { whoami: { appId: 'cli_lark_identity_1', identity: 'user', available: false } },
+    });
+    const result = await controller.endpoints['bot.lark-identity.set']({
+      botId: 'bot_lark', value: 'user-allowed', confirm: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'feishu/lark-cli-user-unavailable');
+    assert.match(result.error.details.hint, /auth login/, '要说清怎么把用户登录补上');
+    const saved = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    assert.equal(saved.bots[0].larkUserIdentity ?? 'bot-only', 'bot-only', '失败不能留下"已开启"');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('lark-cli 身份：生效的应用不是这台机器人时拒绝开启', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkmismatch-'));
+  try {
+    const { controller } = await createIdentityController(dataDir, {
+      larkCli: { whoami: { appId: 'cli_another_app', identity: 'user', available: true, onBehalfOf: { openId: 'ou_x' } } },
+    });
+    const result = await controller.endpoints['bot.lark-identity.set']({
+      botId: 'bot_lark', value: 'user-allowed', confirm: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'feishu/lark-cli-app-mismatch');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('lark-cli 身份：读不到 lark-cli 时如实报错，且取值必须合法', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkbad-'));
+  try {
+    const probeError = new Error('没找到 lark-cli');
+    probeError.code = 'feishu/lark-cli-missing';
+    const { controller } = await createIdentityController(dataDir, { larkCli: { whoamiError: probeError } });
+    const failed = await controller.endpoints['bot.lark-identity.set']({
+      botId: 'bot_lark', value: 'user-allowed', confirm: true,
+    });
+    assert.equal(failed.error.code, 'feishu/lark-cli-missing', '保留底层错误码，便于排查');
+
+    for (const payload of [
+      { botId: 'bot_lark' },
+      { botId: 'bot_lark', value: 'user' },
+      { botId: 'bot_lark', value: true },
+      { value: 'bot-only' },
+    ]) {
+      assert.equal((await controller.endpoints['bot.lark-identity.set'](payload)).error.code, 'chat/bad-request');
+    }
+    assert.equal((await controller.endpoints['bot.lark-identity.set']({ botId: 'ghost', value: 'bot-only' })).error.code,
+      'feishu/unknown-bot');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});

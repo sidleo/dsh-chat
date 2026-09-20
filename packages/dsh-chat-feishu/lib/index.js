@@ -128622,14 +128622,423 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-var LEGACY_SECRET_REF = "DSH_FEISHU_APP_SECRET";
-var STEP_PUSH_MODES = Object.freeze(["off", "post", "streaming_card"]);
-var DEFAULT_STEP_PUSH = "off";
+
+// packages/dsh-chat-feishu/host/lark-cli.mjs
+import { spawn } from "node:child_process";
+var LARK_IDENTITY_MODES = Object.freeze(["bot-only", "user-allowed"]);
+var PROFILE_PREFIX = "dsh-chat-";
+var APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
+var WORKSPACE_ENV_KEYS = Object.freeze(["LARK_CHANNEL", "OPENCLAW_HOME", "HERMES_HOME"]);
 function cleanString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
+function normalizeLarkUserIdentity(value) {
+  return value === "user-allowed" ? "user-allowed" : "bot-only";
+}
+function profileNameFor(appId) {
+  return `${PROFILE_PREFIX}${cleanString(appId) ?? "unknown"}`;
+}
+function larkError(code, message, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, details);
+  return error;
+}
+function parseJson(text) {
+  const raw = typeof text === "string" ? text.trim() : "";
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function defaultRunner({ bin, args, env, cwd, input }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { env, cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding?.("utf8");
+    child.stderr?.setEncoding?.("utf8");
+    child.stdout?.on?.("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on?.("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    if (input === void 0 || input === null) child.stdin?.end?.();
+    else child.stdin?.end?.(input);
+  });
+}
+function createLarkCli({
+  appId,
+  brand = "feishu",
+  secretRef = null,
+  resolveSecret: resolveSecret2 = null,
+  identityPolicy = () => ({ mode: "bot-only", userOpenId: null }),
+  runner = defaultRunner,
+  spawnStream = spawn,
+  logger = console,
+  env = process.env,
+  cwd = void 0,
+  bin = "lark-cli"
+} = {}) {
+  const ownAppId = cleanString(appId);
+  if (!ownAppId || !APP_ID_PATTERN.test(ownAppId)) {
+    throw larkError(
+      "feishu/lark-cli-appid-required",
+      `lark-cli \u8C03\u7528\u5668\u9700\u8981\u4E00\u4E2A\u5408\u6CD5\u7684 App ID\uFF08\u6536\u5230 ${JSON.stringify(appId ?? null)}\uFF09\u3002`
+    );
+  }
+  const managedName = profileNameFor(ownAppId);
+  let resolved = null;
+  let resolving = null;
+  let appliedStrictMode = null;
+  function policy() {
+    let value;
+    try {
+      value = typeof identityPolicy === "function" ? identityPolicy() : identityPolicy;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6 lark-cli \u8EAB\u4EFD\u7B56\u7565\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      value = null;
+    }
+    return {
+      mode: normalizeLarkUserIdentity(value?.mode),
+      userOpenId: cleanString(value?.userOpenId)
+    };
+  }
+  function childEnv() {
+    const next = { ...env };
+    for (const key of WORKSPACE_ENV_KEYS) delete next[key];
+    next.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1";
+    next.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1";
+    return next;
+  }
+  async function exec(args, { input = null, allowPlainText = false, pin = true } = {}) {
+    const argv = pin ? ["--profile", resolved?.name ?? managedName, ...args] : [...args];
+    let result;
+    try {
+      result = await runner({ bin, args: argv, env: childEnv(), cwd, input });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw larkError("feishu/lark-cli-missing", `\u6CA1\u627E\u5230 lark-cli\uFF08${bin}\uFF09\uFF0C\u65E0\u6CD5\u5B8C\u6210\u8FD9\u6B21\u8C03\u7528\u3002`, { cause: error });
+      }
+      throw larkError("feishu/lark-cli-failed", `\u8C03 lark-cli \u5931\u8D25\uFF1A${error?.message ?? error}`, { cause: error });
+    }
+    const payload = parseJson(result?.stdout);
+    if (allowPlainText && payload === null && result?.code === 0) {
+      return { plain: String(result?.stdout ?? "").trim(), stderr: String(result?.stderr ?? "") };
+    }
+    if (payload?.ok === false) throw describeFailure(payload.error, result, argv);
+    if (result?.code !== 0) {
+      const fromStderr = parseJson(result?.stderr);
+      throw describeFailure(fromStderr?.error, result, argv);
+    }
+    if (payload === null) {
+      throw larkError("feishu/lark-cli-failed", `lark-cli \u6CA1\u6709\u8FD4\u56DE\u53EF\u89E3\u6790\u7684 JSON\uFF08${argv.join(" ")}\uFF09\u3002`, {
+        stderr: String(result?.stderr ?? "").slice(0, 400)
+      });
+    }
+    return payload;
+  }
+  function describeFailure(error, result, argv) {
+    const type = cleanString(error?.type);
+    const subtype = cleanString(error?.subtype);
+    const hint = cleanString(error?.hint);
+    const field2 = cleanString(error?.field);
+    const code = cleanString(error?.message) ?? "lark-cli \u8C03\u7528\u5931\u8D25";
+    if (field2 === "--profile" || subtype === "not_configured") {
+      return larkError(
+        "feishu/lark-cli-profile-unavailable",
+        `lark-cli \u91CC\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\uFF08${ownAppId}\uFF09\u5BF9\u5E94\u7684 profile\uFF1A${code}`,
+        {
+          hint: hint ?? `\u8BF7\u5148\u6267\u884C lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin`,
+          appId: ownAppId
+        }
+      );
+    }
+    if (result?.code === 10 || error?.risk === "high-risk-write") {
+      return larkError("feishu/lark-cli-needs-confirmation", `\u8FD9\u6761 lark-cli \u547D\u4EE4\u9700\u8981\u7528\u6237\u663E\u5F0F\u786E\u8BA4\uFF1A${code}`, {
+        hint: hint ?? null,
+        action: error?.action ?? null
+      });
+    }
+    return larkError("feishu/lark-cli-failed", `\u8C03 lark-cli \u5931\u8D25\uFF08${type ?? "unknown"}${subtype ? `/${subtype}` : ""}\uFF09\uFF1A${code}`, {
+      hint: hint ?? null,
+      argv: argv.join(" "),
+      exitCode: result?.code ?? null
+    });
+  }
+  async function listProfiles() {
+    const payload = await exec(["profile", "list"], { pin: false });
+    const list = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
+    return list.map((item) => ({
+      name: cleanString(item?.name),
+      appId: cleanString(item?.appId),
+      brand: cleanString(item?.brand),
+      user: cleanString(item?.user),
+      tokenStatus: cleanString(item?.tokenStatus),
+      active: item?.active === true,
+      effective: item?.effective === true
+    }));
+  }
+  async function findProfile() {
+    const list = await listProfiles();
+    return list.find((item) => item.appId === ownAppId) ?? null;
+  }
+  async function readStrictMode() {
+    const result = await exec(["config", "strict-mode"], { allowPlainText: true });
+    const text = typeof result?.plain === "string" ? result.plain : "";
+    const found = /strict-mode:\s*(bot|user|off)/.exec(text);
+    return found ? found[1] : null;
+  }
+  async function syncStrictMode(profile, mode) {
+    if (profile?.name !== managedName) return;
+    const desired = mode === "user-allowed" ? "off" : "bot";
+    if (appliedStrictMode === desired) return;
+    const current = await readStrictMode();
+    if (current !== desired) {
+      await exec(["config", "strict-mode", desired], { allowPlainText: true });
+      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684 strict-mode \u5DF2\u8BBE\u4E3A ${desired}`);
+    }
+    appliedStrictMode = desired;
+  }
+  async function ensureProfile() {
+    if (resolved) {
+      await syncStrictMode(resolved, policy().mode);
+      return resolved;
+    }
+    if (resolving) return resolving;
+    resolving = (async () => {
+      const found = await findProfile();
+      if (found) {
+        resolved = found;
+        return resolved;
+      }
+      const list = await listProfiles();
+      const clash = list.find((item) => item.name === managedName && item.appId !== ownAppId);
+      if (clash) {
+        throw larkError(
+          "feishu/lark-cli-profile-unavailable",
+          `profile \u540D ${managedName} \u5DF2\u88AB\u53E6\u4E00\u4E2A\u5E94\u7528\uFF08${clash.appId}\uFF09\u5360\u7528\uFF0C\u4E0D\u80FD\u62FF\u5B83\u7ED9 ${ownAppId} \u7528\u3002`,
+          { hint: "\u628A\u90A3\u4E2A profile \u6539\u540D\u6216\u5220\u6389\u540E\u91CD\u8BD5\uFF1B\u672C\u63D2\u4EF6\u4E0D\u4F1A\u8986\u76D6\u522B\u4EBA\u7684 profile\u3002" }
+        );
+      }
+      if (typeof resolveSecret2 !== "function" || !cleanString(secretRef)) {
+        throw larkError(
+          "feishu/lark-cli-profile-unavailable",
+          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14\u5F53\u524D\u62FF\u4E0D\u5230 App Secret\uFF0C\u65E0\u6CD5\u4E3A\u5B83\u65B0\u5EFA\u3002`,
+          { hint: `\u8BF7\u6267\u884C lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin` }
+        );
+      }
+      const secret = await resolveSecret2(secretRef);
+      if (!cleanString(secret)) {
+        throw larkError(
+          "feishu/lark-cli-profile-unavailable",
+          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14 DSH \u91CC\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 App Secret \u8BFB\u4E0D\u5230\u3002`,
+          { hint: "\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u63A5\u5165\u8FD9\u53F0\u673A\u5668\u4EBA\uFF08\u586B App ID + App Secret\uFF09\uFF0C\u6216\u624B\u5DE5 lark-cli profile add\u3002" }
+        );
+      }
+      try {
+        await exec(
+          ["profile", "add", "--name", managedName, "--app-id", ownAppId, "--brand", brand, "--app-secret-stdin"],
+          { input: secret, pin: false }
+        );
+      } catch (error) {
+        const again = await findProfile().catch(() => null);
+        if (!again) throw error;
+        resolved = again;
+        return resolved;
+      }
+      const created = await findProfile();
+      if (!created) {
+        throw larkError(
+          "feishu/lark-cli-profile-unavailable",
+          `lark-cli \u8BF4 profile \u5EFA\u597D\u4E86\uFF0C\u4F46\u5217\u8868\u91CC\u8BFB\u4E0D\u5230 ${ownAppId}\u3002`,
+          { hint: "\u67E5\u770B lark-cli profile list\uFF1B\u82E5\u786E\u5B9E\u662F\u6743\u9650/\u94A5\u5319\u4E32\u95EE\u9898\uFF0C\u8BF7\u624B\u5DE5\u6267\u884C profile add\u3002" }
+        );
+      }
+      resolved = created;
+      logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u4E3A ${ownAppId} \u65B0\u5EFA\u4E86 profile ${created.name}`);
+      await syncStrictMode(created, policy().mode);
+      return resolved;
+    })();
+    try {
+      return await resolving;
+    } finally {
+      resolving = null;
+    }
+  }
+  async function whoami({ as = "bot" } = {}) {
+    await ensureProfile();
+    return exec(["whoami", "--json", "--as", as]);
+  }
+  async function assertIdentity({ as = "bot" } = {}) {
+    if (as !== "bot" && as !== "user") {
+      throw larkError("feishu/lark-cli-bad-identity", `\u8EAB\u4EFD\u53EA\u80FD\u662F bot \u6216 user\uFF08\u6536\u5230 ${JSON.stringify(as)}\uFF09\u3002`);
+    }
+    if (as === "user") {
+      const current = policy();
+      if (current.mode !== "user-allowed") {
+        throw larkError(
+          "feishu/lark-cli-user-not-allowed",
+          "\u8FD9\u53F0\u673A\u5668\u4EBA\u6CA1\u6709\u5F00\u542F\u300C\u5141\u8BB8\u4EE5\u7528\u6237\u8EAB\u4EFD\u8C03\u7528 lark-cli\u300D\uFF0C\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u8C03\u7528\u3002",
+          { hint: "\u5230\u8BBE\u7F6E\u9875 \u2192 \u8FD9\u53F0\u673A\u5668\u4EBA \u2192 \u300Clark-cli \u8EAB\u4EFD\u300D\u91CC\u5F00\u542F\uFF08\u9700\u8981\u4E8C\u6B21\u786E\u8BA4\uFF09\u3002" }
+        );
+      }
+      if (!current.userOpenId) {
+        throw larkError(
+          "feishu/lark-cli-user-not-allowed",
+          "\u8FD9\u53F0\u673A\u5668\u4EBA\u867D\u7136\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF0C\u4F46\u6CA1\u6709\u9489\u4F4F\u5177\u4F53\u7528\u6237\uFF0C\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u8C03\u7528\u3002",
+          { hint: "\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u5F00\u542F\u4E00\u6B21\u300C\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D\uFF0C\u8BA9\u63D2\u4EF6\u8BB0\u5F55\u4E0B\u5F53\u524D\u767B\u5F55\u7684\u7528\u6237\u3002" }
+        );
+      }
+      const profile = await ensureProfile();
+      await syncStrictMode(profile, "user-allowed");
+    }
+    const info = await whoami({ as });
+    if (cleanString(info?.appId) !== ownAppId) {
+      throw larkError(
+        "feishu/lark-cli-app-mismatch",
+        `lark-cli \u5B9E\u9645\u751F\u6548\u7684\u5E94\u7528\u662F ${info?.appId ?? "<\u672A\u77E5>"}\uFF0C\u4E0D\u662F\u672C\u673A\u5668\u4EBA\u7684 ${ownAppId}\uFF1B\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u8C03\u7528\u3002`,
+        { hint: "\u68C0\u67E5 lark-cli profile list\uFF1B\u672C\u63D2\u4EF6\u53EA\u4F1A\u7528 appId \u4E0E\u81EA\u8EAB\u4E00\u81F4\u7684\u90A3\u4E2A profile\u3002" }
+      );
+    }
+    if (as === "bot" && cleanString(info?.identity) !== "bot") {
+      throw larkError(
+        "feishu/lark-cli-identity-mismatch",
+        `lark-cli \u5B9E\u9645\u8EAB\u4EFD\u662F ${info?.identity ?? "<\u672A\u77E5>"}\uFF0C\u4E0D\u662F bot\uFF1B\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u8C03\u7528\u3002`
+      );
+    }
+    if (as === "user") {
+      const actual = cleanString(info?.onBehalfOf?.openId);
+      const expected = policy().userOpenId;
+      if (cleanString(info?.identity) !== "user" || actual !== expected) {
+        throw larkError(
+          "feishu/lark-cli-user-mismatch",
+          `lark-cli \u91CC\u7684\u7528\u6237\u8EAB\u4EFD\u662F ${actual ?? "<\u672A\u77E5>"}\uFF0C\u4E0D\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u9489\u4F4F\u7684 ${expected}\uFF1B\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u8C03\u7528\u3002`,
+          { hint: "\u5728 lark-cli \u91CC\u91CD\u65B0\u767B\u5F55\u6B63\u786E\u7684\u4EBA\uFF0C\u6216\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u5F00\u542F\u4E00\u6B21\u300C\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D\u3002" }
+        );
+      }
+    }
+    if (info?.available === false) {
+      throw larkError(
+        "feishu/lark-cli-identity-unavailable",
+        `lark-cli \u7684 ${as} \u8EAB\u4EFD\u5F53\u524D\u4E0D\u53EF\u7528\uFF08${cleanString(info?.tokenStatus) ?? "\u672A\u77E5\u72B6\u6001"}\uFF09\u3002`
+      );
+    }
+    return info;
+  }
+  async function inspect() {
+    const current = policy();
+    const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+    let profile = null;
+    try {
+      const found = await findProfile();
+      if (found) {
+        resolved = resolved ?? found;
+        profile = found;
+      }
+    } catch (error) {
+      return Object.freeze({
+        policy: current,
+        profile: null,
+        identity: null,
+        checkedAt,
+        error: { code: error?.code ?? "feishu/lark-cli-failed", message: error?.message ?? String(error) }
+      });
+    }
+    if (!profile) return Object.freeze({ policy: current, profile: { found: false, name: managedName }, identity: null, checkedAt });
+    const identity2 = { bot: null, user: null };
+    for (const as of ["bot", "user"]) {
+      try {
+        identity2[as] = await whoami({ as });
+      } catch (error) {
+        identity2[as] = { error: { code: error?.code ?? "feishu/lark-cli-failed", message: error?.message ?? String(error) } };
+      }
+    }
+    return Object.freeze({
+      policy: current,
+      profile: Object.freeze({ found: true, ...profile }),
+      identity: Object.freeze(identity2),
+      checkedAt
+    });
+  }
+  async function guard(as) {
+    return assertIdentity({ as });
+  }
+  async function sendMessage(params = {}) {
+    const chatId = cleanString(params.chatId);
+    if (!chatId) throw larkError("feishu/lark-cli-bad-request", "sendMessage \u9700\u8981 chatId\u3002");
+    const body = contentArgs(params);
+    await guard(params.as ?? "bot");
+    const args = ["im", "+messages-send", "--chat-id", chatId, ...body];
+    if (cleanString(params.msgType)) args.push("--msg-type", params.msgType);
+    if (cleanString(params.idempotencyKey)) args.push("--idempotency-key", params.idempotencyKey);
+    if (params.dryRun === true) args.push("--dry-run");
+    return exec(withAs(args, params.as ?? "bot"));
+  }
+  async function replyMessage(params = {}) {
+    const messageId = cleanString(params.messageId);
+    if (!messageId) throw larkError("feishu/lark-cli-bad-request", "replyMessage \u9700\u8981 messageId\u3002");
+    const body = contentArgs(params);
+    await guard(params.as ?? "bot");
+    const args = ["im", "+messages-reply", "--message-id", messageId, ...body];
+    if (params.replyInThread === true) args.push("--reply-in-thread");
+    if (params.dryRun === true) args.push("--dry-run");
+    return exec(withAs(args, params.as ?? "bot"));
+  }
+  async function consumeEvents(params = {}) {
+    const key = cleanString(params.key);
+    if (!key || !/^[A-Za-z0-9._]+$/.test(key)) {
+      throw larkError("feishu/lark-cli-bad-request", `consumeEvents \u7684\u4E8B\u4EF6\u540D\u4E0D\u5408\u6CD5\uFF1A${JSON.stringify(params.key ?? null)}\u3002`);
+    }
+    const as = params.as ?? "bot";
+    await guard(as);
+    const args = ["event", "consume", key, "--as", as];
+    if (Number.isInteger(params.maxEvents) && params.maxEvents > 0) args.push("--max-events", String(params.maxEvents));
+    if (Number.isInteger(params.timeoutSeconds) && params.timeoutSeconds > 0) {
+      args.push("--timeout", `${params.timeoutSeconds}s`);
+    }
+    const argv = ["--profile", (resolved ?? { name: managedName }).name, ...args];
+    return spawnStream(bin, argv, { env: childEnv(), cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+  }
+  function withAs(args, as) {
+    return [...args, "--as", as];
+  }
+  function contentArgs(params) {
+    const given = ["text", "markdown", "content"].filter((field3) => cleanString(params[field3]));
+    if (given.length !== 1) {
+      throw larkError("feishu/lark-cli-bad-request", "text / markdown / content \u5FC5\u987B\u4E14\u53EA\u80FD\u7ED9\u4E00\u4E2A\u3002");
+    }
+    const field2 = given[0];
+    return [`--${field2}`, params[field2]];
+  }
+  return Object.freeze({
+    appId: ownAppId,
+    profileName: managedName,
+    inspect,
+    listProfiles,
+    ensureProfile,
+    whoami,
+    assertIdentity,
+    sendMessage,
+    replyMessage,
+    consumeEvents
+  });
+}
+
+// packages/dsh-chat-feishu/host/config-store.mjs
+var LEGACY_SECRET_REF = "DSH_FEISHU_APP_SECRET";
+var STEP_PUSH_MODES = Object.freeze(["off", "post", "streaming_card"]);
+var DEFAULT_STEP_PUSH = "off";
+function cleanString2(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 function safeId(value) {
-  const id = cleanString(value);
+  const id = cleanString2(value);
   return id && /^[A-Za-z0-9_-]{1,128}$/.test(id) ? id : null;
 }
 function normalizeStepPushMode(value) {
@@ -128637,34 +129046,38 @@ function normalizeStepPushMode(value) {
 }
 function normalizeOwners(value) {
   const candidates = Array.isArray(value?.ownerOpenIds) ? value.ownerOpenIds : [value?.ownerOpenId];
-  return [...new Set(candidates.map(cleanString).filter(Boolean))];
+  return [...new Set(candidates.map(cleanString2).filter(Boolean))];
 }
 function normalizeBot(value, { legacy = false } = {}) {
   if (!value || typeof value !== "object") return null;
-  const appId = cleanString(value.appId);
+  const appId = cleanString2(value.appId);
   const ownerOpenIds = normalizeOwners(value);
   const id = safeId(value.id) ?? (legacy && appId ? `legacy_${appId.replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}` : null);
-  const secretRef = cleanString(value.secretRef) ?? (legacy ? LEGACY_SECRET_REF : null);
+  const secretRef = cleanString2(value.secretRef) ?? (legacy ? LEGACY_SECRET_REF : null);
   if (!appId || ownerOpenIds.length === 0 || !id || !secretRef) return null;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(secretRef)) return null;
   const hasNewFields = value.stepPushDirect !== void 0 || value.stepPushGroup !== void 0;
   const migrated = normalizeStepPushMode(value.stepPushMode);
   const legacyMode = value.stepPush === true ? migrated : DEFAULT_STEP_PUSH;
+  const larkUserIdentity = normalizeLarkUserIdentity(value.larkUserIdentity);
+  const larkUserOpenId = larkUserIdentity === "user-allowed" ? cleanString2(value.larkUserOpenId) : null;
   return Object.freeze({
     id,
     appId,
     secretRef,
     ownerOpenIds: Object.freeze(ownerOpenIds),
     domain: value.domain === "lark" ? "lark" : "feishu",
-    botName: cleanString(value.botName),
-    botOpenId: cleanString(value.botOpenId),
+    botName: cleanString2(value.botName),
+    botOpenId: cleanString2(value.botOpenId),
     groupResponseMode: value.groupResponseMode === "all" ? "all" : "mention",
     groupTopicReply: value.groupTopicReply === true,
     groupMessagePermissionGranted: value.groupMessagePermissionGranted === true,
     stepPushDirect: hasNewFields ? normalizeStepPushMode(value.stepPushDirect) : legacyMode,
     stepPushGroup: hasNewFields ? normalizeStepPushMode(value.stepPushGroup) : legacyMode,
-    connectedAt: cleanString(value.connectedAt),
-    createdAt: cleanString(value.createdAt) ?? cleanString(value.connectedAt)
+    larkUserIdentity,
+    larkUserOpenId,
+    connectedAt: cleanString2(value.connectedAt),
+    createdAt: cleanString2(value.createdAt) ?? cleanString2(value.connectedAt)
   });
 }
 function normalizeDocument(value) {
@@ -128749,6 +129162,23 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
       const direct = normalizeStepPushMode(modes?.direct);
       const group = normalizeStepPushMode(modes?.group);
       return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    },
+    /**
+     * 设置"这台机器人调 lark-cli 时允不允许用用户身份"，以及钉住哪个用户。
+     *
+     * 关回 `bot-only` 时把钉住的用户一起清掉（留着只会在下次误用时更迷惑）。
+     *
+     * @param botId - 机器人 id。
+     * @param options - { value, userOpenId }。
+     * @returns 写入后的机器人配置。
+     */
+    async setLarkIdentity(botId, { value, userOpenId } = {}) {
+      const mode = normalizeLarkUserIdentity(value);
+      const pinned = mode === "user-allowed" ? cleanString2(userOpenId) : null;
+      if (mode === "user-allowed" && pinned && !/^ou_[A-Za-z0-9_-]{4,64}$/.test(pinned)) {
+        throw new TypeError(`\u9489\u4F4F\u7684\u7528\u6237 open_id \u5F62\u72B6\u4E0D\u5BF9\uFF1A${pinned}`);
+      }
+      return this.saveBot({ id: botId, larkUserIdentity: mode, larkUserOpenId: pinned });
     },
     /** 删除一个机器人。 */
     async removeBot(botId) {
@@ -130235,7 +130665,7 @@ function deriveFeishuIdentity(appId) {
   const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
   return { botId: `fs_${digest}`, secretRef: `DSH_FEISHU_APP_SECRET_${digest.toUpperCase()}` };
 }
-var APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
+var APP_ID_PATTERN2 = /^cli_[A-Za-z0-9_-]{4,64}$/;
 var APP_DOMAINS = Object.freeze(["feishu", "lark"]);
 async function resolveSecret(credentials, ref) {
   if (typeof credentials?.resolve !== "function") {
@@ -130272,6 +130702,27 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const sdkLoader = internals.sdk ?? (() => Promise.resolve().then(() => (init_es(), es_exports)));
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
   const probeFactory = internals.createProbe ?? createLarkProbe;
+  const larkCliFactory = internals.createLarkCli ?? createLarkCli;
+  const larkCliInstances = /* @__PURE__ */ new Map();
+  function larkCliFor(botId) {
+    const existing = larkCliInstances.get(botId);
+    if (existing) return existing;
+    const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
+    if (!bot) return null;
+    const instance = larkCliFactory({
+      appId: bot.appId,
+      brand: bot.domain === "lark" ? "lark" : "feishu",
+      secretRef: bot.secretRef,
+      resolveSecret: (ref) => resolveSecret(deps.credentials, ref),
+      identityPolicy: () => {
+        const live = runtimes.get(botId)?.bot ?? configStore.get(botId) ?? bot;
+        return { mode: live.larkUserIdentity, userOpenId: live.larkUserOpenId };
+      },
+      logger
+    });
+    larkCliInstances.set(botId, instance);
+    return instance;
+  }
   const registerApp2 = internals.registerApp ?? (async (options) => {
     const sdk = await sdkLoader();
     if (typeof sdk?.registerApp !== "function") {
@@ -130398,6 +130849,8 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // lark-cli 的身份策略（默认 bot-only）；细节（profile / whoami）走 bot.lark-identity.get。
+      larkIdentity: Object.freeze({ mode: bot.larkUserIdentity, userOpenId: bot.larkUserOpenId }),
       handled: bridgeStatus.handled,
       lastHandledAt: bridgeStatus.lastHandledAt ?? null,
       // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
@@ -130903,13 +131356,13 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         const domain = APP_DOMAINS.includes(payload?.domain) ? payload.domain : "feishu";
         const rawOwners = payload?.ownerOpenIds === void 0 ? ["*"] : payload.ownerOpenIds;
         const ownersValid = Array.isArray(rawOwners) && rawOwners.length > 0 && rawOwners.length <= MAX_OWNERS && rawOwners.every((id) => typeof id === "string" && OWNER_ID_PATTERN.test(id.trim()));
-        if (!APP_ID_PATTERN.test(appId) || appSecret.length < 8 || appSecret.length > 256 || !ownersValid) {
+        if (!APP_ID_PATTERN2.test(appId) || appSecret.length < 8 || appSecret.length > 256 || !ownersValid) {
           return {
             ok: false,
             error: {
               code: "chat/bad-request",
               message: `bot.add \u9700\u8981 { appId: "cli_\u2026", appSecret, domain?, ownerOpenIds? }\uFF1BappSecret \u662F 8\u2013256 \u4E2A\u5B57\u7B26\uFF0CownerOpenIds \u53EF\u7701\u7565\uFF08\u7701\u7565\u5373"\u6CA1\u6709\u5C5E\u4E3B"\uFF0C1\u2013${MAX_OWNERS} \u4E2A ou_\u2026\uFF09\u3002`,
-              details: { appIdOk: APP_ID_PATTERN.test(appId), ownersValid }
+              details: { appIdOk: APP_ID_PATTERN2.test(appId), ownersValid }
             }
           };
         }
@@ -131202,6 +131655,139 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         return {
           ok: true,
           value: { stepPush: { direct: saved.stepPushDirect, group: saved.stepPushGroup } }
+        };
+      },
+      /**
+       * lark-cli 身份策略的**只读**体检：给设置页看"现在到底会是谁"。
+       *
+       * 只读：不建 profile、不写任何东西（profile 要等真正调用时才懒建）。
+       */
+      "bot.lark-identity.get": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId) {
+          return { ok: false, error: { code: "chat/bad-request", message: "bot.lark-identity.get \u9700\u8981 botId\u3002", details: {} } };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        }
+        const cli = larkCliFor(payload.botId);
+        const info = await cli.inspect();
+        return {
+          ok: true,
+          value: {
+            policy: { mode: bot.larkUserIdentity, userOpenId: bot.larkUserOpenId },
+            profile: info.profile,
+            identity: info.identity,
+            checkedAt: info.checkedAt,
+            error: info.error ?? null
+          }
+        };
+      },
+      /**
+       * 设置"这台机器人能不能用 lark-cli 的用户身份"，并钉住具体的人。
+       *
+       * **开启必须先确认**（照访问策略放宽那条口径）：不带 `confirm: true` 就只回
+       * `requiresConfirm` + 说明，**一个字节都不写**。关回 `bot-only` 是收窄，立即生效、不用确认。
+       *
+       * 钉住的用户由 lark-cli 自己回答（`whoami --as user`）——**不由我们猜**；
+       * 探不到用户就如实拒绝开启：开了也是个用不了的开关。
+       */
+      "bot.lark-identity.set": async (payload) => {
+        const value = payload?.value;
+        if (typeof payload?.botId !== "string" || !payload.botId || value !== "bot-only" && value !== "user-allowed") {
+          return {
+            ok: false,
+            error: {
+              code: "chat/bad-request",
+              message: "bot.lark-identity.set \u9700\u8981 { botId, value: bot-only | user-allowed }\u3002",
+              details: {}
+            }
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        }
+        if (value === "bot-only") {
+          const saved2 = await configStore.setLarkIdentity(payload.botId, { value: "bot-only" });
+          patchRuntime(payload.botId, {
+            larkUserIdentity: saved2.larkUserIdentity,
+            larkUserOpenId: saved2.larkUserOpenId
+          });
+          return {
+            ok: true,
+            value: {
+              mode: saved2.larkUserIdentity,
+              userOpenId: null,
+              message: "\u5DF2\u6539\u56DE\u300C\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\u300D\u2014\u2014lark-cli \u7684\u7528\u6237\u6388\u6743\u4E0D\u518D\u88AB\u8FD9\u53F0\u673A\u5668\u4EBA\u4F7F\u7528\u3002"
+            }
+          };
+        }
+        let identity2;
+        try {
+          identity2 = await larkCliFor(payload.botId).whoami({ as: "user" });
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof error?.code === "string" ? error.code : "feishu/lark-cli-failed",
+              message: `\u8BFB\u4E0D\u5230 lark-cli \u91CC\u7684\u7528\u6237\u8EAB\u4EFD\uFF1A${error?.message ?? error}`,
+              details: { hint: error?.hint ?? null }
+            }
+          };
+        }
+        if (typeof identity2?.appId === "string" && identity2.appId !== bot.appId) {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/lark-cli-app-mismatch",
+              message: `lark-cli \u751F\u6548\u7684\u5E94\u7528\u662F ${identity2.appId}\uFF0C\u4E0D\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 ${bot.appId}\uFF1B\u5DF2\u62D2\u7EDD\u3002`,
+              details: {}
+            }
+          };
+        }
+        const openId = typeof identity2?.onBehalfOf?.openId === "string" ? identity2.onBehalfOf.openId : "";
+        const userName2 = typeof identity2?.onBehalfOf?.userName === "string" ? identity2.onBehalfOf.userName : null;
+        if (!openId) {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/lark-cli-user-unavailable",
+              message: "lark-cli \u91CC\u8FD9\u53F0\u5E94\u7528\u6CA1\u6709\u53EF\u7528\u7684\u7528\u6237\u767B\u5F55\uFF0C\u65E0\u6CD5\u5F00\u542F\uFF08\u5F00\u4E86\u4E5F\u7528\u4E0D\u4E86\uFF09\u3002",
+              details: {
+                hint: "\u5148\u5728\u547D\u4EE4\u884C\u5B8C\u6210\u8FD9\u53F0\u5E94\u7528\u7684\u7528\u6237\u6388\u6743\uFF1Alark-cli auth login --profile " + larkCliFor(payload.botId).profileName + "\uFF0C\u518D\u56DE\u6765\u5F00\u542F\u3002"
+              }
+            }
+          };
+        }
+        if (payload.confirm !== true) {
+          return {
+            ok: true,
+            value: {
+              mode: bot.larkUserIdentity,
+              userOpenId: bot.larkUserOpenId,
+              requiresConfirm: true,
+              candidate: { openId, userName: userName2 },
+              confirmPrompt: `\u5F00\u542F\u540E\uFF0C\u8FD9\u53F0\u673A\u5668\u4EBA\u53EF\u4EE5\u4EE5\u300C${userName2 ?? openId}\u300D\u7684\u8EAB\u4EFD\u8C03\u7528 lark-cli\uFF08\u80FD\u8BFB\u5199\u8FD9\u4E2A\u4EBA\u81EA\u5DF1\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\u3002\u786E\u5B9A\u8981\u5F00\u5417\uFF1F`,
+              message: `\u9700\u8981\u786E\u8BA4\uFF1A\u5C06\u5141\u8BB8\u4EE5 ${userName2 ?? openId} \u7684\u7528\u6237\u8EAB\u4EFD\u8C03\u7528 lark-cli\u3002`
+            }
+          };
+        }
+        const saved = await configStore.setLarkIdentity(payload.botId, { value: "user-allowed", userOpenId: openId });
+        patchRuntime(payload.botId, {
+          larkUserIdentity: saved.larkUserIdentity,
+          larkUserOpenId: saved.larkUserOpenId
+        });
+        return {
+          ok: true,
+          value: {
+            mode: saved.larkUserIdentity,
+            userOpenId: saved.larkUserOpenId,
+            userName: userName2,
+            message: `\u5DF2\u5141\u8BB8\u4EE5\u300C${userName2 ?? openId}\u300D\u7684\u7528\u6237\u8EAB\u4EFD\u8C03\u7528 lark-cli\uFF1B\u8C03\u7528\u65F6\u4F1A\u6838\u5BF9 appId \u4E0E\u8FD9\u4E2A\u4EBA\uFF0C\u5BF9\u4E0D\u4E0A\u5C31\u62D2\u7EDD\u3002`
+          }
         };
       }
     })

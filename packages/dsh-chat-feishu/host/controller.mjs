@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
+import { createLarkCli } from './lark-cli.mjs';
 import { createLarkGateway, createLarkProbe } from './lark-gateway.mjs';
 import { createProvisionManager } from './provision.mjs';
 import { createFeishuStateStore } from './state-store.mjs';
@@ -87,6 +88,39 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
   /** 凭据探针：测试注入替身，避免真去打飞书接口。 */
   const probeFactory = internals.createProbe ?? createLarkProbe;
+  /** lark-cli 调用器工厂：测试注入替身（**测试绝不真跑 lark-cli**）。 */
+  const larkCliFactory = internals.createLarkCli ?? createLarkCli;
+  /** @type {Map<string, object>} botId → lark-cli 调用器（懒建，一个进程一份） */
+  const larkCliInstances = new Map();
+
+  /**
+   * 取某台机器人的 lark-cli 调用器。
+   *
+   * 身份策略是**函数**：每次调用现读运行期那份 bot 对象——设置页改完立刻生效，
+   * 不用重启、不用重连（与过程展示那条同一个道理，见 `patchRuntime`）。
+   *
+   * @param botId - 机器人 id。
+   * @returns 调用器，或 null（机器人不存在）。
+   */
+  function larkCliFor(botId) {
+    const existing = larkCliInstances.get(botId);
+    if (existing) return existing;
+    const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
+    if (!bot) return null;
+    const instance = larkCliFactory({
+      appId: bot.appId,
+      brand: bot.domain === 'lark' ? 'lark' : 'feishu',
+      secretRef: bot.secretRef,
+      resolveSecret: (ref) => resolveSecret(deps.credentials, ref),
+      identityPolicy: () => {
+        const live = runtimes.get(botId)?.bot ?? configStore.get(botId) ?? bot;
+        return { mode: live.larkUserIdentity, userOpenId: live.larkUserOpenId };
+      },
+      logger,
+    });
+    larkCliInstances.set(botId, instance);
+    return instance;
+  }
   /**
    * 扫码接入用的 SDK 入口（`registerApp`）。
    *
@@ -235,6 +269,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // lark-cli 的身份策略（默认 bot-only）；细节（profile / whoami）走 bot.lark-identity.get。
+      larkIdentity: Object.freeze({ mode: bot.larkUserIdentity, userOpenId: bot.larkUserOpenId }),
       handled: bridgeStatus.handled,
       lastHandledAt: bridgeStatus.lastHandledAt ?? null,
       // 处理消息的失败必须能被设置页看到：终端日志之外，这是唯一的现场。
@@ -1229,6 +1265,144 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         return {
           ok: true,
           value: { stepPush: { direct: saved.stepPushDirect, group: saved.stepPushGroup } },
+        };
+      },
+
+      /**
+       * lark-cli 身份策略的**只读**体检：给设置页看"现在到底会是谁"。
+       *
+       * 只读：不建 profile、不写任何东西（profile 要等真正调用时才懒建）。
+       */
+      'bot.lark-identity.get': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId) {
+          return { ok: false, error: { code: 'chat/bad-request', message: 'bot.lark-identity.get 需要 botId。', details: {} } };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        }
+        const cli = larkCliFor(payload.botId);
+        const info = await cli.inspect();
+        return {
+          ok: true,
+          value: {
+            policy: { mode: bot.larkUserIdentity, userOpenId: bot.larkUserOpenId },
+            profile: info.profile,
+            identity: info.identity,
+            checkedAt: info.checkedAt,
+            error: info.error ?? null,
+          },
+        };
+      },
+
+      /**
+       * 设置"这台机器人能不能用 lark-cli 的用户身份"，并钉住具体的人。
+       *
+       * **开启必须先确认**（照访问策略放宽那条口径）：不带 `confirm: true` 就只回
+       * `requiresConfirm` + 说明，**一个字节都不写**。关回 `bot-only` 是收窄，立即生效、不用确认。
+       *
+       * 钉住的用户由 lark-cli 自己回答（`whoami --as user`）——**不由我们猜**；
+       * 探不到用户就如实拒绝开启：开了也是个用不了的开关。
+       */
+      'bot.lark-identity.set': async (payload) => {
+        const value = payload?.value;
+        if (typeof payload?.botId !== 'string' || !payload.botId
+          || (value !== 'bot-only' && value !== 'user-allowed')) {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: 'bot.lark-identity.set 需要 { botId, value: bot-only | user-allowed }。',
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) {
+          return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        }
+        if (value === 'bot-only') {
+          const saved = await configStore.setLarkIdentity(payload.botId, { value: 'bot-only' });
+          patchRuntime(payload.botId, {
+            larkUserIdentity: saved.larkUserIdentity,
+            larkUserOpenId: saved.larkUserOpenId,
+          });
+          return {
+            ok: true,
+            value: {
+              mode: saved.larkUserIdentity,
+              userOpenId: null,
+              message: '已改回「只用应用身份」——lark-cli 的用户授权不再被这台机器人使用。',
+            },
+          };
+        }
+        let identity;
+        try {
+          identity = await larkCliFor(payload.botId).whoami({ as: 'user' });
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof error?.code === 'string' ? error.code : 'feishu/lark-cli-failed',
+              message: `读不到 lark-cli 里的用户身份：${error?.message ?? error}`,
+              details: { hint: error?.hint ?? null },
+            },
+          };
+        }
+        if (typeof identity?.appId === 'string' && identity.appId !== bot.appId) {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/lark-cli-app-mismatch',
+              message: `lark-cli 生效的应用是 ${identity.appId}，不是这台机器人的 ${bot.appId}；已拒绝。`,
+              details: {},
+            },
+          };
+        }
+        const openId = typeof identity?.onBehalfOf?.openId === 'string' ? identity.onBehalfOf.openId : '';
+        const userName = typeof identity?.onBehalfOf?.userName === 'string' ? identity.onBehalfOf.userName : null;
+        if (!openId) {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/lark-cli-user-unavailable',
+              message: 'lark-cli 里这台应用没有可用的用户登录，无法开启（开了也用不了）。',
+              details: {
+                hint: '先在命令行完成这台应用的用户授权：lark-cli auth login --profile '
+                  + larkCliFor(payload.botId).profileName + '，再回来开启。',
+              },
+            },
+          };
+        }
+        if (payload.confirm !== true) {
+          return {
+            ok: true,
+            value: {
+              mode: bot.larkUserIdentity,
+              userOpenId: bot.larkUserOpenId,
+              requiresConfirm: true,
+              candidate: { openId, userName },
+              confirmPrompt: `开启后，这台机器人可以以「${userName ?? openId}」的身份调用 lark-cli`
+                + '（能读写这个人自己的云文档、日历等个人资源）。确定要开吗？',
+              message: `需要确认：将允许以 ${userName ?? openId} 的用户身份调用 lark-cli。`,
+            },
+          };
+        }
+        const saved = await configStore.setLarkIdentity(payload.botId, { value: 'user-allowed', userOpenId: openId });
+        patchRuntime(payload.botId, {
+          larkUserIdentity: saved.larkUserIdentity,
+          larkUserOpenId: saved.larkUserOpenId,
+        });
+        return {
+          ok: true,
+          value: {
+            mode: saved.larkUserIdentity,
+            userOpenId: saved.larkUserOpenId,
+            userName,
+            message: `已允许以「${userName ?? openId}」的用户身份调用 lark-cli；调用时会核对 appId 与这个人，对不上就拒绝。`,
+          },
         };
       },
     }),

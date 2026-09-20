@@ -1,0 +1,567 @@
+/**
+ * lark-cli 的**唯一调用入口**：把"只能用自己的授权"变成结构，而不是纪律。
+ *
+ * 背景：lark-cli 允许在同一台机器上登录**多个应用**（`~/.lark-cli/config.json` 的 `apps[]`），
+ * 并且有一个**全局可变的"生效 profile"**（`profile use` 会改它）。谁不显式指定 profile，
+ * 谁就是在用来路不明的那一份授权——对机器人来说这是致命的：它可能以**另一个机器人**、
+ * 甚至**另一个人的用户身份**说话。
+ *
+ * 所以这里定死四条：
+ * ① **只有本模块可以拉起 `lark-cli`**（`scripts/verify-package.mjs` 的守门会强制）；
+ * ② 每次调用都必然带 `--profile <本机器人 appId 对应的 profile>`——profile 找不到就失败，
+ *    **绝不回退**到当前生效 profile（lark-cli 自己也会以退出码 3 + `error.field === '--profile'` 拒绝）；
+ * ③ 身份（`--as`）由 intent 显式声明，**绝不省略**（省略时 lark-cli 会自己"看着办"，不可控）；
+ * ④ 用 `--as user` 需要该机器人在设置页显式开启，且**钉住用户**：`whoami` 报回来的
+ *    `appId` / `onBehalfOf.openId` 与预期不符就失败，**目标命令一次都不执行**。
+ *
+ * 另外：子进程环境里会剔除 `LARK_CHANNEL` / `OPENCLAW_HOME` / `HERMES_HOME`——它们会让
+ * lark-cli 把配置切到别的"workspace"（实测 `OPENCLAW_HOME=/tmp/x lark-cli config show`
+ * 直接报 `openclaw context detected but lark-cli is not bound to it`），与这里的 pin 互相打架。
+ *
+ * @module dsh-chat-feishu/lark-cli
+ */
+
+import { spawn } from 'node:child_process';
+
+/** 身份策略取值：只用应用身份，或允许该应用在 lark-cli 里登录的那个用户。 */
+export const LARK_IDENTITY_MODES = Object.freeze(['bot-only', 'user-allowed']);
+
+/** 插件自建 profile 的名字前缀（`dsh-chat-<appId>`）。 */
+export const PROFILE_PREFIX = 'dsh-chat-';
+
+/** App ID 的合法形状（与控制器同一份判据）。 */
+const APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
+
+/**
+ * 会改写 lark-cli "workspace" 的环境变量：决不让它们影响我们的子进程。
+ * 只在这一个子进程里剔除，不碰宿主环境。
+ */
+const WORKSPACE_ENV_KEYS = Object.freeze(['LARK_CHANNEL', 'OPENCLAW_HOME', 'HERMES_HOME']);
+
+function cleanString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * 归一化身份策略：**保守方向**——认不出来一律 `bot-only`。
+ *
+ * @param value - 任意历史值。
+ * @returns 'bot-only' | 'user-allowed'。
+ */
+export function normalizeLarkUserIdentity(value) {
+  return value === 'user-allowed' ? 'user-allowed' : 'bot-only';
+}
+
+/**
+ * 本机器人在 lark-cli 里的专用 profile 名。
+ *
+ * @param appId - 飞书 App ID。
+ * @returns profile 名（`dsh-chat-<appId>`）。
+ */
+export function profileNameFor(appId) {
+  return `${PROFILE_PREFIX}${cleanString(appId) ?? 'unknown'}`;
+}
+
+function larkError(code, message, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, details);
+  return error;
+}
+
+/** 解析 stdout 里的 JSON；不是 JSON 就返回 null（lark-cli 出错时也可能给纯文本）。 */
+function parseJson(text) {
+  const raw = typeof text === 'string' ? text.trim() : '';
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 默认执行器：数组形式参数 + 关闭 shell（**没有 shell 注入面**）。
+ *
+ * @param options - { bin, args, env, cwd, input }。
+ * @returns { code, stdout, stderr }。
+ */
+function defaultRunner({ bin, args, env, cwd, input }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { env, cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.setEncoding?.('utf8');
+    child.stderr?.setEncoding?.('utf8');
+    child.stdout?.on?.('data', (chunk) => { stdout += chunk; });
+    child.stderr?.on?.('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    if (input === undefined || input === null) child.stdin?.end?.();
+    else child.stdin?.end?.(input);
+  });
+}
+
+/**
+ * 创建某台机器人的 lark-cli 调用器。
+ *
+ * @param options - 配置：
+ *   - `appId`：本机器人的 App ID（必填，形状不对直接拒绝）；
+ *   - `brand`：`feishu` | `lark`（自建 profile 时用）；
+ *   - `secretRef` / `resolveSecret`：自建 profile 时取 App Secret（只经 stdin 传给 lark-cli）；
+ *   - `identityPolicy`：**函数**，每次调用时现读（设置页改完立刻生效，不必重连）；
+ *   - `runner`：执行器（测试注入假替身，**测试绝不真跑 lark-cli**）；
+ *   - `env` / `cwd` / `bin` / `logger`。
+ * @returns 调用器：`inspect` / `listProfiles` / `ensureProfile` / `whoami` / `assertIdentity` /
+ *   `sendMessage` / `replyMessage` / `consumeEvents` / `profileName`。
+ */
+export function createLarkCli({
+  appId,
+  brand = 'feishu',
+  secretRef = null,
+  resolveSecret = null,
+  identityPolicy = () => ({ mode: 'bot-only', userOpenId: null }),
+  runner = defaultRunner,
+  spawnStream = spawn,
+  logger = console,
+  env = process.env,
+  cwd = undefined,
+  bin = 'lark-cli',
+} = {}) {
+  const ownAppId = cleanString(appId);
+  if (!ownAppId || !APP_ID_PATTERN.test(ownAppId)) {
+    throw larkError(
+      'feishu/lark-cli-appid-required',
+      `lark-cli 调用器需要一个合法的 App ID（收到 ${JSON.stringify(appId ?? null)}）。`,
+    );
+  }
+  const managedName = profileNameFor(ownAppId);
+  /** 进程内缓存：解析出的 profile（一个进程只解析一次）。 */
+  let resolved = null;
+  let resolving = null;
+  /** 本进程给"我们自己的" profile 设过的 strict-mode（避免每次调用都写一遍）。 */
+  let appliedStrictMode = null;
+
+  /** 现读身份策略：设置页改完这一条立刻生效。 */
+  function policy() {
+    let value;
+    try {
+      value = typeof identityPolicy === 'function' ? identityPolicy() : identityPolicy;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] 读取 lark-cli 身份策略失败：${error?.message ?? error}`);
+      value = null;
+    }
+    return {
+      mode: normalizeLarkUserIdentity(value?.mode),
+      userOpenId: cleanString(value?.userOpenId),
+    };
+  }
+
+  /** 子进程环境：剔除会切 workspace 的变量，并关掉两类提示（免得 JSON 里混 `_notice`）。 */
+  function childEnv() {
+    const next = { ...env };
+    for (const key of WORKSPACE_ENV_KEYS) delete next[key];
+    next.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = '1';
+    next.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = '1';
+    return next;
+  }
+
+  /**
+   * 跑一条命令（**参数由本模块拼**，调用方没有"传任意 argv"的入口）。
+   *
+   * @param args - 已经拼好的参数（不含 `--profile`，它由这里统一注入）。
+   * @param options - { input, allowPlainText, pin }。`pin: false` **只给发现/创建 profile 用**：
+   *   那两条命令必须在"还不知道该用哪个 profile"时跑（`profile list` 是全局列表，
+   *   `profile add` 是新建），给它们带上一个尚不存在的 profile 名只会被 lark-cli 拒掉。
+   * @returns lark-cli 的 JSON 结果。
+   */
+  async function exec(args, { input = null, allowPlainText = false, pin = true } = {}) {
+    // `--profile` 是 lark-cli 的**根持久 flag**：写在子命令前，任何子命令都吃它。
+    const argv = pin ? ['--profile', resolved?.name ?? managedName, ...args] : [...args];
+    let result;
+    try {
+      result = await runner({ bin, args: argv, env: childEnv(), cwd, input });
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        throw larkError('feishu/lark-cli-missing', `没找到 lark-cli（${bin}），无法完成这次调用。`, { cause: error });
+      }
+      throw larkError('feishu/lark-cli-failed', `调 lark-cli 失败：${error?.message ?? error}`, { cause: error });
+    }
+    const payload = parseJson(result?.stdout);
+    if (allowPlainText && payload === null && result?.code === 0) {
+      return { plain: String(result?.stdout ?? '').trim(), stderr: String(result?.stderr ?? '') };
+    }
+    if (payload?.ok === false) throw describeFailure(payload.error, result, argv);
+    if (result?.code !== 0) {
+      const fromStderr = parseJson(result?.stderr);
+      throw describeFailure(fromStderr?.error, result, argv);
+    }
+    if (payload === null) {
+      throw larkError('feishu/lark-cli-failed', `lark-cli 没有返回可解析的 JSON（${argv.join(' ')}）。`, {
+        stderr: String(result?.stderr ?? '').slice(0, 400),
+      });
+    }
+    return payload;
+  }
+
+  /**
+   * 把 lark-cli 的错误信封翻译成可读的手册错误。
+   *
+   * 两条硬规矩：**`--profile` 相关的失败一律不许重试/去掉 flag 再试**；
+   * **退出码 10（高风险确认门禁）绝不自动补 `--yes`**——那是用户的决定。
+   */
+  function describeFailure(error, result, argv) {
+    const type = cleanString(error?.type);
+    const subtype = cleanString(error?.subtype);
+    const hint = cleanString(error?.hint);
+    const field = cleanString(error?.field);
+    const code = cleanString(error?.message) ?? 'lark-cli 调用失败';
+    if (field === '--profile' || subtype === 'not_configured') {
+      return larkError(
+        'feishu/lark-cli-profile-unavailable',
+        `lark-cli 里没有这台机器人（${ownAppId}）对应的 profile：${code}`,
+        {
+          hint: hint ?? `请先执行 lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin`,
+          appId: ownAppId,
+        },
+      );
+    }
+    if (result?.code === 10 || error?.risk === 'high-risk-write') {
+      return larkError('feishu/lark-cli-needs-confirmation', `这条 lark-cli 命令需要用户显式确认：${code}`, {
+        hint: hint ?? null,
+        action: error?.action ?? null,
+      });
+    }
+    return larkError('feishu/lark-cli-failed', `调 lark-cli 失败（${type ?? 'unknown'}${subtype ? `/${subtype}` : ''}）：${code}`, {
+      hint: hint ?? null,
+      argv: argv.join(' '),
+      exitCode: result?.code ?? null,
+    });
+  }
+
+  /** 列出本机 lark-cli 的全部 profile（只读）。 */
+  async function listProfiles() {
+    // 注意：`profile list` **没有** `--json`（这版是默认 JSON 输出，加 flag 会报 unknown flag）。
+    const payload = await exec(['profile', 'list'], { pin: false });
+    const list = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
+    return list.map((item) => ({
+      name: cleanString(item?.name),
+      appId: cleanString(item?.appId),
+      brand: cleanString(item?.brand),
+      user: cleanString(item?.user),
+      tokenStatus: cleanString(item?.tokenStatus),
+      active: item?.active === true,
+      effective: item?.effective === true,
+    }));
+  }
+
+  /** 按 **appId**（不是名字）找到本机器人的 profile；找不到返回 null。 */
+  async function findProfile() {
+    const list = await listProfiles();
+    return list.find((item) => item.appId === ownAppId) ?? null;
+  }
+
+  /** 读该 profile 当前的 strict-mode（文本输出，例如 `strict-mode: off (source: global (default))`）。 */
+  async function readStrictMode() {
+    const result = await exec(['config', 'strict-mode'], { allowPlainText: true });
+    const text = typeof result?.plain === 'string' ? result.plain : '';
+    const found = /strict-mode:\s*(bot|user|off)/.exec(text);
+    return found ? found[1] : null;
+  }
+
+  /** 只给"我们自己建的" profile 同步 strict-mode（用户自己的 profile 一个字节都不碰）。 */
+  async function syncStrictMode(profile, mode) {
+    if (profile?.name !== managedName) return;
+    const desired = mode === 'user-allowed' ? 'off' : 'bot';
+    if (appliedStrictMode === desired) return;
+    const current = await readStrictMode();
+    if (current !== desired) {
+      // **绝不 `--global`**：只改这一个 profile，别的应用/别的 profile 不受影响。
+      // 读是纯文本；写这版也只回一行文本——两种形态都吃下（allowPlainText）。
+      await exec(['config', 'strict-mode', desired], { allowPlainText: true });
+      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} 的 strict-mode 已设为 ${desired}`);
+    }
+    appliedStrictMode = desired;
+  }
+
+  /**
+   * 解析（必要时创建）本机器人专用的 profile。
+   *
+   * 创建只在**真的要调用**时发生（懒），且：**不带 `--use`**、不碰任何已存在的 profile。
+   *
+   * @returns 解析出的 profile 记录。
+   */
+  async function ensureProfile() {
+    if (resolved) {
+      // 策略可能刚被改过（设置页切换）：我们**自己建的** profile 要跟着走。
+      // 不是我们建的 profile 在 syncStrictMode 里直接返回，一个字节都不碰。
+      await syncStrictMode(resolved, policy().mode);
+      return resolved;
+    }
+    if (resolving) return resolving;
+    resolving = (async () => {
+      const found = await findProfile();
+      if (found) {
+        resolved = found;
+        return resolved;
+      }
+      const list = await listProfiles();
+      const clash = list.find((item) => item.name === managedName && item.appId !== ownAppId);
+      if (clash) {
+        throw larkError(
+          'feishu/lark-cli-profile-unavailable',
+          `profile 名 ${managedName} 已被另一个应用（${clash.appId}）占用，不能拿它给 ${ownAppId} 用。`,
+          { hint: '把那个 profile 改名或删掉后重试；本插件不会覆盖别人的 profile。' },
+        );
+      }
+      if (typeof resolveSecret !== 'function' || !cleanString(secretRef)) {
+        throw larkError(
+          'feishu/lark-cli-profile-unavailable',
+          `lark-cli 里没有 ${ownAppId} 的 profile，且当前拿不到 App Secret，无法为它新建。`,
+          { hint: `请执行 lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin` },
+        );
+      }
+      const secret = await resolveSecret(secretRef);
+      if (!cleanString(secret)) {
+        throw larkError(
+          'feishu/lark-cli-profile-unavailable',
+          `lark-cli 里没有 ${ownAppId} 的 profile，且 DSH 里这台机器人的 App Secret 读不到。`,
+          { hint: '到设置页重新接入这台机器人（填 App ID + App Secret），或手工 lark-cli profile add。' },
+        );
+      }
+      try {
+        // App Secret 只走 stdin；**绝不 `--use`**（那会改全局生效 profile，影响用户别的用法）。
+        await exec(
+          ['profile', 'add', '--name', managedName, '--app-id', ownAppId, '--brand', brand, '--app-secret-stdin'],
+          { input: secret, pin: false },
+        );
+      } catch (error) {
+        // 并发建同名 profile 是可能的：再查一次，查到了就当成功（幂等）。
+        const again = await findProfile().catch(() => null);
+        if (!again) throw error;
+        resolved = again;
+        return resolved;
+      }
+      const created = await findProfile();
+      if (!created) {
+        throw larkError(
+          'feishu/lark-cli-profile-unavailable',
+          `lark-cli 说 profile 建好了，但列表里读不到 ${ownAppId}。`,
+          { hint: '查看 lark-cli profile list；若确实是权限/钥匙串问题，请手工执行 profile add。' },
+        );
+      }
+      resolved = created;
+      logger.info?.(`[dsh-chat-feishu] lark-cli 里为 ${ownAppId} 新建了 profile ${created.name}`);
+      await syncStrictMode(created, policy().mode);
+      return resolved;
+    })();
+    try {
+      return await resolving;
+    } finally {
+      resolving = null;
+    }
+  }
+
+  /**
+   * `whoami`：问 lark-cli"你现在到底是谁"。
+   *
+   * **故意不走身份策略**：设置页要能先探到"当前登录的是谁"，才能把它钉下来；
+   * 而且它只读身份信息，不碰任何用户资源（真正代表用户操作的是 intent，那里才判策略）。
+   */
+  async function whoami({ as = 'bot' } = {}) {
+    await ensureProfile();
+    return exec(['whoami', '--json', '--as', as]);
+  }
+
+  /**
+   * 断言"这次调用真的是以本机器人的身份"。
+   *
+   * 不满足就抛错，**并且绝不继续执行目标命令**——这是"绝对禁止用别的机器人授权"的落点。
+   *
+   * @param options - { as }。
+   * @returns whoami 的结果。
+   */
+  async function assertIdentity({ as = 'bot' } = {}) {
+    if (as !== 'bot' && as !== 'user') {
+      throw larkError('feishu/lark-cli-bad-identity', `身份只能是 bot 或 user（收到 ${JSON.stringify(as)}）。`);
+    }
+    if (as === 'user') {
+      const current = policy();
+      if (current.mode !== 'user-allowed') {
+        throw larkError(
+          'feishu/lark-cli-user-not-allowed',
+          '这台机器人没有开启「允许以用户身份调用 lark-cli」，已拒绝这次调用。',
+          { hint: '到设置页 → 这台机器人 → 「lark-cli 身份」里开启（需要二次确认）。' },
+        );
+      }
+      if (!current.userOpenId) {
+        throw larkError(
+          'feishu/lark-cli-user-not-allowed',
+          '这台机器人虽然允许用户身份，但没有钉住具体用户，已拒绝这次调用。',
+          { hint: '到设置页重新开启一次「允许用户身份」，让插件记录下当前登录的用户。' },
+        );
+      }
+      const profile = await ensureProfile();
+      // 允许用户身份时，我们自己的 profile 不能停在 strict-mode=bot（那会把 --as user 挡住）。
+      await syncStrictMode(profile, 'user-allowed');
+    }
+    const info = await whoami({ as });
+    if (cleanString(info?.appId) !== ownAppId) {
+      throw larkError(
+        'feishu/lark-cli-app-mismatch',
+        `lark-cli 实际生效的应用是 ${info?.appId ?? '<未知>'}，不是本机器人的 ${ownAppId}；已拒绝这次调用。`,
+        { hint: '检查 lark-cli profile list；本插件只会用 appId 与自身一致的那个 profile。' },
+      );
+    }
+    if (as === 'bot' && cleanString(info?.identity) !== 'bot') {
+      throw larkError(
+        'feishu/lark-cli-identity-mismatch',
+        `lark-cli 实际身份是 ${info?.identity ?? '<未知>'}，不是 bot；已拒绝这次调用。`,
+      );
+    }
+    if (as === 'user') {
+      const actual = cleanString(info?.onBehalfOf?.openId);
+      const expected = policy().userOpenId;
+      if (cleanString(info?.identity) !== 'user' || actual !== expected) {
+        throw larkError(
+          'feishu/lark-cli-user-mismatch',
+          `lark-cli 里的用户身份是 ${actual ?? '<未知>'}，不是这台机器人钉住的 ${expected}；已拒绝这次调用。`,
+          { hint: '在 lark-cli 里重新登录正确的人，或到设置页重新开启一次「允许用户身份」。' },
+        );
+      }
+    }
+    if (info?.available === false) {
+      throw larkError(
+        'feishu/lark-cli-identity-unavailable',
+        `lark-cli 的 ${as} 身份当前不可用（${cleanString(info?.tokenStatus) ?? '未知状态'}）。`,
+      );
+    }
+    return info;
+  }
+
+  /** 只读体检：给设置页看"现在到底会是谁"。**不建 profile、不写任何东西**。 */
+  async function inspect() {
+    const current = policy();
+    const checkedAt = new Date().toISOString();
+    let profile = null;
+    try {
+      const found = await findProfile();
+      if (found) {
+        // 只读路径也走同一份解析结果，避免设置页看到的状态与真实调用不一致。
+        resolved = resolved ?? found;
+        profile = found;
+      }
+    } catch (error) {
+      return Object.freeze({
+        policy: current,
+        profile: null,
+        identity: null,
+        checkedAt,
+        error: { code: error?.code ?? 'feishu/lark-cli-failed', message: error?.message ?? String(error) },
+      });
+    }
+    if (!profile) return Object.freeze({ policy: current, profile: { found: false, name: managedName }, identity: null, checkedAt });
+    const identity = { bot: null, user: null };
+    for (const as of ['bot', 'user']) {
+      try {
+        identity[as] = await whoami({ as });
+      } catch (error) {
+        identity[as] = { error: { code: error?.code ?? 'feishu/lark-cli-failed', message: error?.message ?? String(error) } };
+      }
+    }
+    return Object.freeze({
+      policy: current,
+      profile: Object.freeze({ found: true, ...profile }),
+      identity: Object.freeze(identity),
+      checkedAt,
+    });
+  }
+
+  /** 只允许 bot/user 两种身份，且 intent 必须显式给。 */
+  async function guard(as) {
+    return assertIdentity({ as });
+  }
+
+  /**
+   * 发消息（`im +messages-send`）。
+   *
+   * @param params - { chatId, text | markdown | content, msgType, idempotencyKey, dryRun, as }。
+   */
+  async function sendMessage(params = {}) {
+    const chatId = cleanString(params.chatId);
+    if (!chatId) throw larkError('feishu/lark-cli-bad-request', 'sendMessage 需要 chatId。');
+    const body = contentArgs(params);
+    await guard(params.as ?? 'bot');
+    const args = ['im', '+messages-send', '--chat-id', chatId, ...body];
+    if (cleanString(params.msgType)) args.push('--msg-type', params.msgType);
+    if (cleanString(params.idempotencyKey)) args.push('--idempotency-key', params.idempotencyKey);
+    if (params.dryRun === true) args.push('--dry-run');
+    return exec(withAs(args, params.as ?? 'bot'));
+  }
+
+  /**
+   * 回复消息（`im +messages-reply`）。
+   *
+   * @param params - { messageId, text | markdown | content, replyInThread, dryRun, as }。
+   */
+  async function replyMessage(params = {}) {
+    const messageId = cleanString(params.messageId);
+    if (!messageId) throw larkError('feishu/lark-cli-bad-request', 'replyMessage 需要 messageId。');
+    const body = contentArgs(params);
+    await guard(params.as ?? 'bot');
+    const args = ['im', '+messages-reply', '--message-id', messageId, ...body];
+    if (params.replyInThread === true) args.push('--reply-in-thread');
+    if (params.dryRun === true) args.push('--dry-run');
+    return exec(withAs(args, params.as ?? 'bot'));
+  }
+
+  /**
+   * 消费事件（`event consume <key>`）：**返回子进程句柄**，流式读由调用方负责。
+   *
+   * 这里仍然把 `--profile` / `--as` 钉死——入站事件也必须来自**本机器人**那条长连接。
+   *
+   * @param params - { key, maxEvents, timeoutSeconds, as }。
+   * @returns 子进程句柄（已带 pin 好的参数与环境）。
+   */
+  async function consumeEvents(params = {}) {
+    const key = cleanString(params.key);
+    if (!key || !/^[A-Za-z0-9._]+$/.test(key)) {
+      throw larkError('feishu/lark-cli-bad-request', `consumeEvents 的事件名不合法：${JSON.stringify(params.key ?? null)}。`);
+    }
+    const as = params.as ?? 'bot';
+    await guard(as);
+    const args = ['event', 'consume', key, '--as', as];
+    if (Number.isInteger(params.maxEvents) && params.maxEvents > 0) args.push('--max-events', String(params.maxEvents));
+    if (Number.isInteger(params.timeoutSeconds) && params.timeoutSeconds > 0) {
+      args.push('--timeout', `${params.timeoutSeconds}s`);
+    }
+    const argv = ['--profile', (resolved ?? { name: managedName }).name, ...args];
+    return spawnStream(bin, argv, { env: childEnv(), cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+  }
+
+  function withAs(args, as) {
+    return [...args, '--as', as];
+  }
+
+  function contentArgs(params) {
+    const given = ['text', 'markdown', 'content'].filter((field) => cleanString(params[field]));
+    if (given.length !== 1) {
+      throw larkError('feishu/lark-cli-bad-request', 'text / markdown / content 必须且只能给一个。');
+    }
+    const field = given[0];
+    return [`--${field}`, params[field]];
+  }
+
+  return Object.freeze({
+    appId: ownAppId,
+    profileName: managedName,
+    inspect,
+    listProfiles,
+    ensureProfile,
+    whoami,
+    assertIdentity,
+    sendMessage,
+    replyMessage,
+    consumeEvents,
+  });
+}

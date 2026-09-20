@@ -117,6 +117,26 @@ const zh = {
   '逐步直播（每一步单独发一条消息）': '逐步直播（每一步单独发一条消息）',
   '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息':
     '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息',
+  'lark-cli 身份': 'lark-cli 身份',
+  '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK',
+  '调用身份': '调用身份',
+  '只用应用身份（bot）': '只用应用身份（bot）',
+  '允许用户身份（--as user）': '允许用户身份（--as user）',
+  '以应用自己的身份调 lark-cli，只能访问这台机器人自己的资源': '以应用自己的身份调 lark-cli，只能访问这台机器人自己的资源',
+  '以某个人的名义调 lark-cli（能读写他的云文档、日历等个人资源）；开启前需要确认，并会钉住当前登录的人': '以某个人的名义调 lark-cli（能读写他的云文档、日历等个人资源）；开启前需要确认，并会钉住当前登录的人',
+  'lark-cli 里的 profile': 'lark-cli 里的 profile',
+  'lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）': 'lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）',
+  '读取 lark-cli 状态失败：': '读取 lark-cli 状态失败：',
+  '应用身份：': '应用身份：',
+  '用户身份：': '用户身份：',
+  '可用': '可用',
+  '不可用': '不可用',
+  '登录人：': '登录人：',
+  '没有用户登录': '没有用户登录',
+  '确认开启': '确认开启',
+  '已取消，未做任何改动。': '已取消，未做任何改动。',
+  '已保存。': '已保存。',
+  '重读 lark-cli 状态': '重读 lark-cli 状态',
   '已处理消息': '已处理消息',
   '没有已接入的飞书机器人': '没有已接入的飞书机器人',
   '本机还没有飞书机器人配置。': '本机还没有飞书机器人配置。',
@@ -259,6 +279,26 @@ const en = {
   '逐步直播（每一步单独发一条消息）': 'Step-by-step feed (one message per step)',
   '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息':
     'Every step is its own message; long tasks send many messages',
+  'lark-cli 身份': 'lark-cli identity',
+  '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': 'Which identity this bot uses when calling lark-cli; message send/receive still goes through the official SDK',
+  '调用身份': 'Identity',
+  '只用应用身份（bot）': 'Application identity only (bot)',
+  '允许用户身份（--as user）': 'Allow user identity (--as user)',
+  '以应用自己的身份调 lark-cli，只能访问这台机器人自己的资源': 'Calls lark-cli as the app itself; only this bot own resources are reachable',
+  '以某个人的名义调 lark-cli（能读写他的云文档、日历等个人资源）；开启前需要确认，并会钉住当前登录的人': 'Calls lark-cli on behalf of a person (their docs, calendar and other personal resources); enabling needs confirmation and pins the currently signed-in user',
+  'lark-cli 里的 profile': 'Profile in lark-cli',
+  'lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）': 'lark-cli has no profile for this bot yet (created automatically on first real call)',
+  '读取 lark-cli 状态失败：': 'Failed to read lark-cli status: ',
+  '应用身份：': 'App identity: ',
+  '用户身份：': 'User identity: ',
+  '可用': 'available',
+  '不可用': 'not available',
+  '登录人：': 'Signed-in user: ',
+  '没有用户登录': 'no user signed in',
+  '确认开启': 'Confirm',
+  '已取消，未做任何改动。': 'Cancelled; nothing changed.',
+  '已保存。': 'Saved.',
+  '重读 lark-cli 状态': 'Re-read lark-cli status',
   '已处理消息': 'Messages handled',
   '没有已接入的飞书机器人': 'No Feishu bot connected',
   '本机还没有飞书机器人配置。': 'This Host has no Feishu bot configured yet.',
@@ -328,6 +368,167 @@ const STEP_PUSH_OPTIONS = [
     help: '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息',
   },
 ];
+
+/**
+ * lark-cli 身份：这台机器人调 lark-cli 时用哪个身份。
+ *
+ * 为什么要有这个开关：lark-cli 里可以同时登录**多个应用**，谁不显式指定 profile、
+ * 谁省略 `--as`，谁就可能在用别人的授权。策略（能不能用用户身份）由这里设置；
+ * **真正调用时的绑定与断言**在 host 的 `lark-cli.mjs`（唯一入口）里做——
+ * 它每次都会核对自己是不是那台应用、以及用户是不是这里钉住的那个人。
+ */
+const LARK_IDENTITY_OPTIONS = [
+  {
+    value: 'bot-only',
+    label: '只用应用身份（bot）',
+    help: '以应用自己的身份调 lark-cli，只能访问这台机器人自己的资源',
+  },
+  {
+    value: 'user-allowed',
+    label: '允许用户身份（--as user）',
+    help: '以某个人的名义调 lark-cli（能读写他的云文档、日历等个人资源）；开启前需要确认，并会钉住当前登录的人',
+  },
+];
+
+/**
+ * 「lark-cli 身份」设置块。
+ *
+ * 开启用户身份是**放权**（能以某个人的名义读写他的个人资源），所以照访问策略那条口径：
+ * 服务端不带 `confirm: true` 就只回 `requiresConfirm`、**一个字节都不写**，确认画在同一张卡上。
+ *
+ * @param props - { botId, value, chatUi, connection, translate, onChanged }。
+ * @returns React 元素。
+ */
+function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onChanged }) {
+  const t = typeof translate === 'function' ? translate : (key) => key;
+  const { Panel } = chatUi.components;
+  const [probe, setProbe] = React.useState({ phase: 'loading', value: null, error: null });
+  const [pending, setPending] = React.useState(null);
+  const [notice, setNotice] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+
+  /** 只读体检：lark-cli 里到底有没有这台机器人的 profile、现在会以谁的身份说话。 */
+  const load = React.useCallback(async () => {
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.lark-identity.get', { botId });
+      setProbe({ phase: 'ready', value: chatUi.unwrapRpc(result), error: null });
+    } catch (cause) {
+      // 读失败与"没开启/没登录"是两回事：读失败必须如实说，不能显示成默认值。
+      setProbe({ phase: 'failed', value: null, error: cause?.message ?? String(cause) });
+    }
+  }, [botId, chatUi, connection]);
+
+  React.useEffect(() => { void load(); }, [load]);
+
+  const submit = async (next, { confirm = false } = {}) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.lark-identity.set', {
+        botId, value: next, confirm,
+      });
+      const applied = chatUi.unwrapRpc(result);
+      if (applied?.requiresConfirm === true) {
+        setPending({ value: next, prompt: applied.confirmPrompt ?? applied.message ?? '' });
+        setNotice(null);
+        return;
+      }
+      setPending(null);
+      setNotice(applied?.message ?? t('已保存。'));
+      await load();
+      await onChanged?.();
+    } catch (cause) {
+      setError(cause?.message ?? String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const mode = value?.mode === 'user-allowed' ? 'user-allowed' : 'bot-only';
+  const selected = LARK_IDENTITY_OPTIONS.find((item) => item.value === mode) ?? LARK_IDENTITY_OPTIONS[0];
+  const info = probe.value;
+  const line = (label, text) => h('div', { className: 'dchat-scopeRow' },
+    h('span', { className: 'dchat-scopeLabel' }, label),
+    h('span', { className: 'dchat-cardDescription' }, text));
+  const identityText = (entry, empty) => {
+    if (!entry) return empty;
+    if (entry.error) return `${t('不可用')}（${entry.error.code}）`;
+    if (entry.available === false) return t('不可用');
+    return t('可用');
+  };
+
+  return h(Panel, {
+    title: t('lark-cli 身份'),
+    description: t('这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK'),
+    actions: h('button', {
+      type: 'button',
+      className: 'dchat-button',
+      disabled: busy,
+      onClick: () => { void load(); },
+    }, t('重读 lark-cli 状态')),
+  },
+    h('div', { className: 'dchat-scopeGrid' },
+      h('div', { className: 'dchat-scopeRow' },
+        h('label', {
+          className: 'dchat-scopeLabel',
+          htmlFor: `lark-identity-${botId}`,
+        }, t('调用身份')),
+        h('select', {
+          id: `lark-identity-${botId}`,
+          className: 'dchat-select',
+          // 布局守门按这个属性核对"控件状态确实来自假数据"。
+          'data-lark-identity': mode,
+          value: mode,
+          disabled: busy,
+          onChange: (event) => {
+            setPending(null);
+            void submit(event.target.value);
+          },
+        }, LARK_IDENTITY_OPTIONS.map((option) => h('option', {
+          key: option.value,
+          value: option.value,
+        }, t(option.label)))))),
+    h('p', { className: 'dchat-cardDescription' }, t(selected.help)),
+    pending ? h('div', { className: 'dchat-warning', role: 'alert' },
+      h('p', null, pending.prompt),
+      h('div', { className: 'dchat-actions' },
+        h('button', {
+          type: 'button',
+          className: 'dchat-button dchat-buttonPrimary',
+          disabled: busy,
+          onClick: () => { void submit(pending.value, { confirm: true }); },
+        }, t('确认开启')),
+        h('button', {
+          type: 'button',
+          className: 'dchat-button',
+          disabled: busy,
+          onClick: () => {
+            setPending(null);
+            setNotice(t('已取消，未做任何改动。'));
+          },
+        }, t('取消')))) : null,
+    notice ? h('p', { className: 'dchat-cardDescription', role: 'status' }, notice) : null,
+    error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
+    probe.phase === 'failed'
+      ? h('p', { className: 'dchat-error', role: 'alert' }, `${t('读取 lark-cli 状态失败：')}${probe.error}`)
+      : null,
+    probe.phase === 'ready' && info
+      ? line(t('lark-cli 里的 profile'), info.profile?.found
+        ? `${info.profile.name ?? '?'}（${info.profile.appId ?? '?'}）`
+        : t('lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）'))
+      : null,
+    probe.phase === 'ready' && info?.identity
+      ? line(t('应用身份：'), identityText(info.identity.bot, t('不可用')))
+      : null,
+    probe.phase === 'ready' && info?.identity
+      ? line(t('用户身份：'), info.identity.user?.onBehalfOf?.openId
+        ? `${t('登录人：')}${info.identity.user.onBehalfOf.userName ?? ''}`
+          + ` (${info.identity.user.onBehalfOf.openId})`
+        : (identityText(info.identity.user, t('没有用户登录'))))
+      : null,
+  );
+}
 
 // 导出给布局守门用：整张渠道卡在窄栏下的真实渲染（真机炸过「卡片头逐字竖排」）。
 export function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
@@ -574,6 +775,15 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
       chatUi.unwrapRpc(result);
       await onChanged?.();
     },
+  }),
+
+  h(LarkIdentityEditor, {
+    botId: bot.id,
+    value: status.larkIdentity ?? { mode: 'bot-only', userOpenId: null },
+    chatUi,
+    connection,
+    translate: t,
+    onChanged,
   }),
 
   h(ContextEnhancementEditor, {

@@ -143,6 +143,17 @@ try {
     else if (policyDirect.checked !== false) failures.push('配了关闭的「访问策略（本会话） · 私聊」渲染成了勾上');
   }
 
+  // lark-cli 身份：下拉的当前值必须反映假数据（假数据是"允许用户身份"这个非默认值）。
+  // 漏传字段的后果与「控制面板显示项」那次一样：界面上永远显示默认值，用户以为设置没生效。
+  const larkFrames = results.filter((frame) => frame.larkIdentity != null);
+  if (larkFrames.length === 0) failures.push('没测到「lark-cli 身份」下拉（守门本身失效了）');
+  for (const frame of larkFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    if (frame.larkIdentity !== 'user-allowed') {
+      failures.push(`${where}: 「lark-cli 身份」下拉显示的是 ${frame.larkIdentity}，与假数据（user-allowed）不符`);
+    }
+  }
+
   // 上下文增强弹窗的两个页签：每个弹窗只允许可见一个，且必须是选中的那个
   // （hidden 属性被作者样式 display:flex 盖掉过，真机上两个页签内容一模一样）。
   const dialogs = results.find((frame) => (frame.dialogs ?? []).length > 0)?.dialogs ?? [];

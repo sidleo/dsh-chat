@@ -138,6 +138,26 @@ var zh = {
   "\u63A8\u8350\u957F\u4EFB\u52A1\u4F7F\u7528\uFF1A\u8FC7\u7A0B\u4E0E\u6700\u7EC8\u7B54\u6848\u90FD\u5728\u540C\u4E00\u5F20\u5361\u7247\u91CC\u5B9E\u65F6\u66F4\u65B0\uFF0C\u4E0D\u5237\u5C4F": "\u63A8\u8350\u957F\u4EFB\u52A1\u4F7F\u7528\uFF1A\u8FC7\u7A0B\u4E0E\u6700\u7EC8\u7B54\u6848\u90FD\u5728\u540C\u4E00\u5F20\u5361\u7247\u91CC\u5B9E\u65F6\u66F4\u65B0\uFF0C\u4E0D\u5237\u5C4F",
   "\u9010\u6B65\u76F4\u64AD\uFF08\u6BCF\u4E00\u6B65\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF09": "\u9010\u6B65\u76F4\u64AD\uFF08\u6BCF\u4E00\u6B65\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF09",
   "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F": "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F",
+  "lark-cli \u8EAB\u4EFD": "lark-cli \u8EAB\u4EFD",
+  "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK",
+  "\u8C03\u7528\u8EAB\u4EFD": "\u8C03\u7528\u8EAB\u4EFD",
+  "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09": "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09",
+  "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09": "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09",
+  "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90": "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90",
+  "\u4EE5\u67D0\u4E2A\u4EBA\u7684\u540D\u4E49\u8C03 lark-cli\uFF08\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\uFF1B\u5F00\u542F\u524D\u9700\u8981\u786E\u8BA4\uFF0C\u5E76\u4F1A\u9489\u4F4F\u5F53\u524D\u767B\u5F55\u7684\u4EBA": "\u4EE5\u67D0\u4E2A\u4EBA\u7684\u540D\u4E49\u8C03 lark-cli\uFF08\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\uFF1B\u5F00\u542F\u524D\u9700\u8981\u786E\u8BA4\uFF0C\u5E76\u4F1A\u9489\u4F4F\u5F53\u524D\u767B\u5F55\u7684\u4EBA",
+  "lark-cli \u91CC\u7684 profile": "lark-cli \u91CC\u7684 profile",
+  "lark-cli \u91CC\u8FD8\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 profile\uFF08\u771F\u6B63\u8C03\u7528\u65F6\u4F1A\u81EA\u52A8\u521B\u5EFA\uFF09": "lark-cli \u91CC\u8FD8\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 profile\uFF08\u771F\u6B63\u8C03\u7528\u65F6\u4F1A\u81EA\u52A8\u521B\u5EFA\uFF09",
+  "\u8BFB\u53D6 lark-cli \u72B6\u6001\u5931\u8D25\uFF1A": "\u8BFB\u53D6 lark-cli \u72B6\u6001\u5931\u8D25\uFF1A",
+  "\u5E94\u7528\u8EAB\u4EFD\uFF1A": "\u5E94\u7528\u8EAB\u4EFD\uFF1A",
+  "\u7528\u6237\u8EAB\u4EFD\uFF1A": "\u7528\u6237\u8EAB\u4EFD\uFF1A",
+  "\u53EF\u7528": "\u53EF\u7528",
+  "\u4E0D\u53EF\u7528": "\u4E0D\u53EF\u7528",
+  "\u767B\u5F55\u4EBA\uFF1A": "\u767B\u5F55\u4EBA\uFF1A",
+  "\u6CA1\u6709\u7528\u6237\u767B\u5F55": "\u6CA1\u6709\u7528\u6237\u767B\u5F55",
+  "\u786E\u8BA4\u5F00\u542F": "\u786E\u8BA4\u5F00\u542F",
+  "\u5DF2\u53D6\u6D88\uFF0C\u672A\u505A\u4EFB\u4F55\u6539\u52A8\u3002": "\u5DF2\u53D6\u6D88\uFF0C\u672A\u505A\u4EFB\u4F55\u6539\u52A8\u3002",
+  "\u5DF2\u4FDD\u5B58\u3002": "\u5DF2\u4FDD\u5B58\u3002",
+  "\u91CD\u8BFB lark-cli \u72B6\u6001": "\u91CD\u8BFB lark-cli \u72B6\u6001",
   "\u5DF2\u5904\u7406\u6D88\u606F": "\u5DF2\u5904\u7406\u6D88\u606F",
   "\u6CA1\u6709\u5DF2\u63A5\u5165\u7684\u98DE\u4E66\u673A\u5668\u4EBA": "\u6CA1\u6709\u5DF2\u63A5\u5165\u7684\u98DE\u4E66\u673A\u5668\u4EBA",
   "\u672C\u673A\u8FD8\u6CA1\u6709\u98DE\u4E66\u673A\u5668\u4EBA\u914D\u7F6E\u3002": "\u672C\u673A\u8FD8\u6CA1\u6709\u98DE\u4E66\u673A\u5668\u4EBA\u914D\u7F6E\u3002",
@@ -270,6 +290,26 @@ var en = {
   "\u63A8\u8350\u957F\u4EFB\u52A1\u4F7F\u7528\uFF1A\u8FC7\u7A0B\u4E0E\u6700\u7EC8\u7B54\u6848\u90FD\u5728\u540C\u4E00\u5F20\u5361\u7247\u91CC\u5B9E\u65F6\u66F4\u65B0\uFF0C\u4E0D\u5237\u5C4F": "Recommended for long tasks: process and answer update in one card without flooding the chat",
   "\u9010\u6B65\u76F4\u64AD\uFF08\u6BCF\u4E00\u6B65\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF09": "Step-by-step feed (one message per step)",
   "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F": "Every step is its own message; long tasks send many messages",
+  "lark-cli \u8EAB\u4EFD": "lark-cli identity",
+  "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "Which identity this bot uses when calling lark-cli; message send/receive still goes through the official SDK",
+  "\u8C03\u7528\u8EAB\u4EFD": "Identity",
+  "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09": "Application identity only (bot)",
+  "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09": "Allow user identity (--as user)",
+  "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90": "Calls lark-cli as the app itself; only this bot own resources are reachable",
+  "\u4EE5\u67D0\u4E2A\u4EBA\u7684\u540D\u4E49\u8C03 lark-cli\uFF08\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\uFF1B\u5F00\u542F\u524D\u9700\u8981\u786E\u8BA4\uFF0C\u5E76\u4F1A\u9489\u4F4F\u5F53\u524D\u767B\u5F55\u7684\u4EBA": "Calls lark-cli on behalf of a person (their docs, calendar and other personal resources); enabling needs confirmation and pins the currently signed-in user",
+  "lark-cli \u91CC\u7684 profile": "Profile in lark-cli",
+  "lark-cli \u91CC\u8FD8\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 profile\uFF08\u771F\u6B63\u8C03\u7528\u65F6\u4F1A\u81EA\u52A8\u521B\u5EFA\uFF09": "lark-cli has no profile for this bot yet (created automatically on first real call)",
+  "\u8BFB\u53D6 lark-cli \u72B6\u6001\u5931\u8D25\uFF1A": "Failed to read lark-cli status: ",
+  "\u5E94\u7528\u8EAB\u4EFD\uFF1A": "App identity: ",
+  "\u7528\u6237\u8EAB\u4EFD\uFF1A": "User identity: ",
+  "\u53EF\u7528": "available",
+  "\u4E0D\u53EF\u7528": "not available",
+  "\u767B\u5F55\u4EBA\uFF1A": "Signed-in user: ",
+  "\u6CA1\u6709\u7528\u6237\u767B\u5F55": "no user signed in",
+  "\u786E\u8BA4\u5F00\u542F": "Confirm",
+  "\u5DF2\u53D6\u6D88\uFF0C\u672A\u505A\u4EFB\u4F55\u6539\u52A8\u3002": "Cancelled; nothing changed.",
+  "\u5DF2\u4FDD\u5B58\u3002": "Saved.",
+  "\u91CD\u8BFB lark-cli \u72B6\u6001": "Re-read lark-cli status",
   "\u5DF2\u5904\u7406\u6D88\u606F": "Messages handled",
   "\u6CA1\u6709\u5DF2\u63A5\u5165\u7684\u98DE\u4E66\u673A\u5668\u4EBA": "No Feishu bot connected",
   "\u672C\u673A\u8FD8\u6CA1\u6709\u98DE\u4E66\u673A\u5668\u4EBA\u914D\u7F6E\u3002": "This Host has no Feishu bot configured yet.",
@@ -336,6 +376,153 @@ var STEP_PUSH_OPTIONS = [
     help: "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F"
   }
 ];
+var LARK_IDENTITY_OPTIONS = [
+  {
+    value: "bot-only",
+    label: "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09",
+    help: "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90"
+  },
+  {
+    value: "user-allowed",
+    label: "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09",
+    help: "\u4EE5\u67D0\u4E2A\u4EBA\u7684\u540D\u4E49\u8C03 lark-cli\uFF08\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\uFF1B\u5F00\u542F\u524D\u9700\u8981\u786E\u8BA4\uFF0C\u5E76\u4F1A\u9489\u4F4F\u5F53\u524D\u767B\u5F55\u7684\u4EBA"
+  }
+];
+function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onChanged }) {
+  const t = typeof translate === "function" ? translate : (key) => key;
+  const { Panel } = chatUi.components;
+  const [probe, setProbe] = React.useState({ phase: "loading", value: null, error: null });
+  const [pending, setPending] = React.useState(null);
+  const [notice, setNotice] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const load = React.useCallback(async () => {
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.lark-identity.get", { botId });
+      setProbe({ phase: "ready", value: chatUi.unwrapRpc(result), error: null });
+    } catch (cause) {
+      setProbe({ phase: "failed", value: null, error: cause?.message ?? String(cause) });
+    }
+  }, [botId, chatUi, connection]);
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+  const submit = async (next, { confirm = false } = {}) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.lark-identity.set", {
+        botId,
+        value: next,
+        confirm
+      });
+      const applied = chatUi.unwrapRpc(result);
+      if (applied?.requiresConfirm === true) {
+        setPending({ value: next, prompt: applied.confirmPrompt ?? applied.message ?? "" });
+        setNotice(null);
+        return;
+      }
+      setPending(null);
+      setNotice(applied?.message ?? t("\u5DF2\u4FDD\u5B58\u3002"));
+      await load();
+      await onChanged?.();
+    } catch (cause) {
+      setError(cause?.message ?? String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const mode = value?.mode === "user-allowed" ? "user-allowed" : "bot-only";
+  const selected = LARK_IDENTITY_OPTIONS.find((item) => item.value === mode) ?? LARK_IDENTITY_OPTIONS[0];
+  const info = probe.value;
+  const line = (label, text) => h(
+    "div",
+    { className: "dchat-scopeRow" },
+    h("span", { className: "dchat-scopeLabel" }, label),
+    h("span", { className: "dchat-cardDescription" }, text)
+  );
+  const identityText = (entry, empty) => {
+    if (!entry) return empty;
+    if (entry.error) return `${t("\u4E0D\u53EF\u7528")}\uFF08${entry.error.code}\uFF09`;
+    if (entry.available === false) return t("\u4E0D\u53EF\u7528");
+    return t("\u53EF\u7528");
+  };
+  return h(
+    Panel,
+    {
+      title: t("lark-cli \u8EAB\u4EFD"),
+      description: t("\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK"),
+      actions: h("button", {
+        type: "button",
+        className: "dchat-button",
+        disabled: busy,
+        onClick: () => {
+          void load();
+        }
+      }, t("\u91CD\u8BFB lark-cli \u72B6\u6001"))
+    },
+    h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      h(
+        "div",
+        { className: "dchat-scopeRow" },
+        h("label", {
+          className: "dchat-scopeLabel",
+          htmlFor: `lark-identity-${botId}`
+        }, t("\u8C03\u7528\u8EAB\u4EFD")),
+        h("select", {
+          id: `lark-identity-${botId}`,
+          className: "dchat-select",
+          // 布局守门按这个属性核对"控件状态确实来自假数据"。
+          "data-lark-identity": mode,
+          value: mode,
+          disabled: busy,
+          onChange: (event) => {
+            setPending(null);
+            void submit(event.target.value);
+          }
+        }, LARK_IDENTITY_OPTIONS.map((option) => h("option", {
+          key: option.value,
+          value: option.value
+        }, t(option.label))))
+      )
+    ),
+    h("p", { className: "dchat-cardDescription" }, t(selected.help)),
+    pending ? h(
+      "div",
+      { className: "dchat-warning", role: "alert" },
+      h("p", null, pending.prompt),
+      h(
+        "div",
+        { className: "dchat-actions" },
+        h("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonPrimary",
+          disabled: busy,
+          onClick: () => {
+            void submit(pending.value, { confirm: true });
+          }
+        }, t("\u786E\u8BA4\u5F00\u542F")),
+        h("button", {
+          type: "button",
+          className: "dchat-button",
+          disabled: busy,
+          onClick: () => {
+            setPending(null);
+            setNotice(t("\u5DF2\u53D6\u6D88\uFF0C\u672A\u505A\u4EFB\u4F55\u6539\u52A8\u3002"));
+          }
+        }, t("\u53D6\u6D88"))
+      )
+    ) : null,
+    notice ? h("p", { className: "dchat-cardDescription", role: "status" }, notice) : null,
+    error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
+    probe.phase === "failed" ? h("p", { className: "dchat-error", role: "alert" }, `${t("\u8BFB\u53D6 lark-cli \u72B6\u6001\u5931\u8D25\uFF1A")}${probe.error}`) : null,
+    probe.phase === "ready" && info ? line(t("lark-cli \u91CC\u7684 profile"), info.profile?.found ? `${info.profile.name ?? "?"}\uFF08${info.profile.appId ?? "?"}\uFF09` : t("lark-cli \u91CC\u8FD8\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 profile\uFF08\u771F\u6B63\u8C03\u7528\u65F6\u4F1A\u81EA\u52A8\u521B\u5EFA\uFF09")) : null,
+    probe.phase === "ready" && info?.identity ? line(t("\u5E94\u7528\u8EAB\u4EFD\uFF1A"), identityText(info.identity.bot, t("\u4E0D\u53EF\u7528"))) : null,
+    probe.phase === "ready" && info?.identity ? line(t("\u7528\u6237\u8EAB\u4EFD\uFF1A"), info.identity.user?.onBehalfOf?.openId ? `${t("\u767B\u5F55\u4EBA\uFF1A")}${info.identity.user.onBehalfOf.userName ?? ""} (${info.identity.user.onBehalfOf.openId})` : identityText(info.identity.user, t("\u6CA1\u6709\u7528\u6237\u767B\u5F55"))) : null
+  );
+}
 function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === "function" ? translate : (key) => key;
   const {
@@ -573,6 +760,14 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
         chatUi.unwrapRpc(result);
         await onChanged?.();
       }
+    }),
+    h(LarkIdentityEditor, {
+      botId: bot.id,
+      value: status.larkIdentity ?? { mode: "bot-only", userOpenId: null },
+      chatUi,
+      connection,
+      translate: t,
+      onChanged
     }),
     h(ContextEnhancementEditor, {
       config: settings.record?.contextEnhancement ?? null,

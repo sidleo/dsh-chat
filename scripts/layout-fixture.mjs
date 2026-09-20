@@ -65,6 +65,8 @@ const FEISHU_STATUS = {
   groupResponseMode: 'mention',
   groupTopicReply: false,
   stepPush: { direct: 'card', group: 'card' },
+  // 非默认值：默认是 bot-only，这里放"允许用户身份"，守门才能发现"控件没反映假数据"。
+  larkIdentity: { mode: 'user-allowed', userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
   handled: 128,
   lastHandledAt: '2026-09-19T02:21:57.000Z',
   lastError: null,
@@ -134,6 +136,32 @@ const RPC_FIXTURES = {
     remainingSeconds: null,
     error: { code: 'abort', message: '已取消。' },
     bot: null,
+  }),
+  // lark-cli 身份体检（只读）：给一个"profile 在、user 已登录"的真实形态。
+  'bot.lark-identity.get': () => ({
+    policy: { mode: 'user-allowed', userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
+    profile: {
+      found: true,
+      name: 'dsh-chat-cli_7b9d1a2c4e6f8035',
+      appId: 'cli_7b9d1a2c4e6f8035',
+      brand: 'feishu',
+      user: '李四',
+      tokenStatus: 'valid',
+      active: false,
+      effective: false,
+    },
+    identity: {
+      bot: { appId: 'cli_7b9d1a2c4e6f8035', identity: 'bot', available: true, tokenStatus: 'ready' },
+      user: {
+        appId: 'cli_7b9d1a2c4e6f8035',
+        identity: 'user',
+        available: true,
+        tokenStatus: 'ready',
+        onBehalfOf: { userName: '李四', openId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
+      },
+    },
+    checkedAt: '2026-09-20T10:00:00.000Z',
+    error: null,
   }),
   'bot.settings.get': () => ({
     settings: {
@@ -500,6 +528,8 @@ function measure() {
         .map((el) => el.dataset.scope),
       total: dialog.querySelectorAll('.dchat-tabPanel').length,
     }));
+    // lark-cli 身份下拉的当前值：必须反映假数据（漏传字段会永远显示默认值）。
+    const larkIdentity = frame.querySelector('[data-lark-identity]')?.getAttribute('data-lark-identity') ?? null;
     const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
       .filter((el) => el.getAttribute('aria-label').includes(' · '))
       .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
@@ -526,6 +556,7 @@ function measure() {
       tall,
       widest,
       sectionChecks,
+      larkIdentity,
       dialogs,
       dragResult,
       railOrder,

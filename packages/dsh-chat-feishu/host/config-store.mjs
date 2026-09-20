@@ -4,7 +4,11 @@
  * 沿用 dsh-im 的 `~/.dsh/integrations/dsh-feishu/config.json`（version 2）
  * 与凭据引用，因此用户现有机器人零重绑即可继续使用。
  *
- * 本插件在机器人上新增两个字段，取代原来的"全局一份"过程展示：
+ * 本插件在机器人上新增的字段：
+ * - `larkUserIdentity` / `larkUserOpenId`：这台机器人调 lark-cli 时**能不能用用户身份**、
+ *   以及钉住的是哪个用户（默认 `bot-only`；见 `host/lark-cli.mjs` 的"绝不用别人的授权"）。
+ *
+ * 取代原来的"全局一份"过程展示：
  * - `stepPushDirect`：私聊过程展示
  * - `stepPushGroup`：群聊过程展示
  * 取值 `off | post | streaming_card`；旧字段 `stepPush` + `stepPushMode`
@@ -16,6 +20,8 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+
+import { normalizeLarkUserIdentity } from './lark-cli.mjs';
 
 /** 旧实现里默认 Secret 引用名（手工配置的机器人沿用）。 */
 export const LEGACY_SECRET_REF = 'DSH_FEISHU_APP_SECRET';
@@ -72,6 +78,10 @@ export function normalizeBot(value, { legacy = false } = {}) {
   const migrated = normalizeStepPushMode(value.stepPushMode);
   const legacyMode = value.stepPush === true ? migrated : DEFAULT_STEP_PUSH;
 
+  // 身份策略：保守方向——缺省/写坏一律 `bot-only`；只有显式允许时才记住钉住的用户。
+  const larkUserIdentity = normalizeLarkUserIdentity(value.larkUserIdentity);
+  const larkUserOpenId = larkUserIdentity === 'user-allowed' ? cleanString(value.larkUserOpenId) : null;
+
   return Object.freeze({
     id,
     appId,
@@ -89,6 +99,8 @@ export function normalizeBot(value, { legacy = false } = {}) {
     stepPushGroup: hasNewFields
       ? normalizeStepPushMode(value.stepPushGroup)
       : legacyMode,
+    larkUserIdentity,
+    larkUserOpenId,
     connectedAt: cleanString(value.connectedAt),
     createdAt: cleanString(value.createdAt) ?? cleanString(value.connectedAt),
   });
@@ -191,6 +203,24 @@ export function createFeishuConfigStore({ path, logger = console } = {}) {
       const direct = normalizeStepPushMode(modes?.direct);
       const group = normalizeStepPushMode(modes?.group);
       return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    },
+
+    /**
+     * 设置"这台机器人调 lark-cli 时允不允许用用户身份"，以及钉住哪个用户。
+     *
+     * 关回 `bot-only` 时把钉住的用户一起清掉（留着只会在下次误用时更迷惑）。
+     *
+     * @param botId - 机器人 id。
+     * @param options - { value, userOpenId }。
+     * @returns 写入后的机器人配置。
+     */
+    async setLarkIdentity(botId, { value, userOpenId } = {}) {
+      const mode = normalizeLarkUserIdentity(value);
+      const pinned = mode === 'user-allowed' ? cleanString(userOpenId) : null;
+      if (mode === 'user-allowed' && pinned && !/^ou_[A-Za-z0-9_-]{4,64}$/.test(pinned)) {
+        throw new TypeError(`钉住的用户 open_id 形状不对：${pinned}`);
+      }
+      return this.saveBot({ id: botId, larkUserIdentity: mode, larkUserOpenId: pinned });
     },
 
     /** 删除一个机器人。 */
