@@ -470,7 +470,13 @@ export function createPanelService({
     }
   }
 
-  /** 渠道动作的形状归一化：认不出来就丢掉（宁可不画，也不画一个点了没反应的按钮）。 */
+  /**
+   * 渠道动作的形状归一化：认不出来就丢掉（宁可不画，也不画一个点了没反应的按钮）。
+   *
+   * `deferred` 是渠道对**卡片交互**的声明："这个动作慢，或会断开当前这条长连接"——
+   * 渠道要**先把回调应答发出去、再执行**，否则飞书会判定"目标回调服务超时未响应"
+   * （真机上点「重连」就是这样：动作本身掐掉了正在送回执的那条长连接）。
+   */
   function normalizeAction(input) {
     const action = typeof input?.action === 'string' ? input.action.trim() : '';
     const label = typeof input?.label === 'string' ? input.label.trim() : '';
@@ -484,6 +490,7 @@ export function createPanelService({
       type,
       // `confirm` 有值 = 点之前先让用户确认一次（危险/影响连接的动作）。
       confirm: title && text ? { title: title.slice(0, 40), text: text.slice(0, 200) } : null,
+      deferred: input.deferred === true,
     };
   }
 

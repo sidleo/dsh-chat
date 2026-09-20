@@ -42,6 +42,14 @@ const MENU_ROW_SIZE = 4;
 const RESPONSE_SETTLE_MS = 50;
 
 /**
+ * 「会断长连接」的动作排在应答之后多久执行。
+ *
+ * 1 秒是给回执帧留的余量：SDK 在 handler 的 promise 落地后才把应答写回长连接，
+ * 而这类动作（重连）接下来就会把那条连接关掉——抢在它前面执行就等于没有回执。
+ */
+const SLOW_ACTION_SETTLE_MS = 1_000;
+
+/**
  * 读"被引用的消息"的时限：它是为了让提示词更完整，**不能拖住用户的提问**。
  * 超时就当"引用内容不可用"，当前消息照常进模型。
  */
@@ -1117,12 +1125,12 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
      * 所以宏任务一定晚于应答的发送。测试可注入 `deps.scheduleAfterResponse` 收集这些任务，
      * 从而显式断言"重画发生在应答之后"。
      */
-    function afterResponse(task) {
+    function afterResponse(task, delayMs = RESPONSE_SETTLE_MS) {
       if (typeof deps.scheduleAfterResponse === 'function') {
         deps.scheduleAfterResponse(task);
         return;
       }
-      const timer = setTimeout(() => { void task(); }, RESPONSE_SETTLE_MS);
+      const timer = setTimeout(() => { void task(); }, delayMs);
       timer.unref?.();
     }
 
@@ -1265,6 +1273,30 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     const channelAction = panelAction(value);
     if (channelAction) {
       logger.info?.(`[dsh-chat-feishu] 控制面板动作：${channelAction.action}（${bot.id}）`);
+      /**
+       * 会断开长连接（或本来就很慢）的动作：**先把应答发出去，再执行**。
+       *
+       * 真机教训：点「🔌 重连」→ 卡片显示了"已重连"，飞书却弹「目标回调服务器超时未响应」
+       * ——因为重连恰好在回调链路上：它关掉的就是正在送回执的那条长连接。
+       * 与 /history、/compact 同一条规矩：排到应答之后，靠延迟更新接口（HTTP）画结果。
+       */
+      if (value.dsh_action_deferred === true) {
+        const label = channelAction.label;
+        afterResponse(async () => {
+          try {
+            const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
+            const message = done?.message ?? '已执行。';
+            await repaintPanel({ at: panelClock(), label, message, ok: true }, `act:${channelAction.action}`);
+          } catch (error) {
+            noteCardError(`控制面板动作失败（${channelAction.action}）`, error?.message ?? error);
+            await repaintPanel({
+              at: panelClock(), label, message: error?.message ?? String(error), ok: false,
+            }, `act:${channelAction.action}(失败)`);
+          }
+        }, SLOW_ACTION_SETTLE_MS);
+        // 不写"已重连"：真正做完了才画到卡上（失败会落 lastError）。
+        return { toast: { type: 'info', content: `正在执行「${label}」…` } };
+      }
       try {
         const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
         const message = done?.message ?? '已执行。';

@@ -127085,7 +127085,15 @@ function channelActionButton(item) {
     type: item.type ?? "default",
     width: "fill",
     text: { tag: "plain_text", content: String(item.label ?? "").slice(0, 40) },
-    behaviors: [{ type: "callback", value: { dsh_action: item.action, dsh_action_label: item.label } }],
+    behaviors: [{
+      type: "callback",
+      value: {
+        dsh_action: item.action,
+        dsh_action_label: item.label,
+        // 动作慢/会断长连接：桥要先把应答发出去再执行（见 bridge 的 afterResponse）。
+        ...item.deferred === true ? { dsh_action_deferred: true } : {}
+      }
+    }],
     ...item.confirm ? {
       confirm: {
         title: { tag: "plain_text", content: item.confirm.title },
@@ -127426,6 +127434,7 @@ function messageText(message) {
 var SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var MENU_ROW_SIZE = 4;
 var RESPONSE_SETTLE_MS = 50;
+var SLOW_ACTION_SETTLE_MS = 1e3;
 var REPLY_REFERENCE_TIMEOUT_MS = 3e3;
 function panelClock() {
   const now = /* @__PURE__ */ new Date();
@@ -128177,14 +128186,14 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         pending
       });
     }
-    function afterResponse(task) {
+    function afterResponse(task, delayMs = RESPONSE_SETTLE_MS) {
       if (typeof deps.scheduleAfterResponse === "function") {
         deps.scheduleAfterResponse(task);
         return;
       }
       const timer = setTimeout(() => {
         void task();
-      }, RESPONSE_SETTLE_MS);
+      }, delayMs);
       timer.unref?.();
     }
     function repaintAfterResponse(last, source, pending = null) {
@@ -128290,6 +128299,25 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     const channelAction = panelAction(value);
     if (channelAction) {
       logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u52A8\u4F5C\uFF1A${channelAction.action}\uFF08${bot.id}\uFF09`);
+      if (value.dsh_action_deferred === true) {
+        const label2 = channelAction.label;
+        afterResponse(async () => {
+          try {
+            const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
+            const message = done?.message ?? "\u5DF2\u6267\u884C\u3002";
+            await repaintPanel({ at: panelClock(), label: label2, message, ok: true }, `act:${channelAction.action}`);
+          } catch (error) {
+            noteCardError(`\u63A7\u5236\u9762\u677F\u52A8\u4F5C\u5931\u8D25\uFF08${channelAction.action}\uFF09`, error?.message ?? error);
+            await repaintPanel({
+              at: panelClock(),
+              label: label2,
+              message: error?.message ?? String(error),
+              ok: false
+            }, `act:${channelAction.action}(\u5931\u8D25)`);
+          }
+        }, SLOW_ACTION_SETTLE_MS);
+        return { toast: { type: "info", content: `\u6B63\u5728\u6267\u884C\u300C${label2}\u300D\u2026` } };
+      }
       try {
         const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
         const message = done?.message ?? "\u5DF2\u6267\u884C\u3002";
@@ -130349,6 +130377,12 @@ function createFeishuController({ deps, logger = console, config = {}, internals
               action: "reconnect",
               label: "\u{1F50C} \u91CD\u8FDE",
               type: "default",
+              /**
+               * 重连会**亲手掐掉正在送回执的那条长连接**：真机上点完卡片显示"已重连"，
+               * 飞书却弹一句「目标回调服务超时未响应」——回执没能送出去。
+               * 声明成 deferred：桥先应答，再执行（与 /history、/compact 同一条规矩）。
+               */
+              deferred: true,
               // 原生二次确认：重连会短暂断开长连接，别让误触把机器人踢下线。
               confirm: {
                 title: "\u91CD\u8FDE\u8FD9\u53F0\u673A\u5668\u4EBA\uFF1F",

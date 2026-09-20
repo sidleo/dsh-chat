@@ -157,7 +157,15 @@ function channelActionButton(item) {
     type: item.type ?? 'default',
     width: 'fill',
     text: { tag: 'plain_text', content: String(item.label ?? '').slice(0, 40) },
-    behaviors: [{ type: 'callback', value: { dsh_action: item.action, dsh_action_label: item.label } }],
+    behaviors: [{
+      type: 'callback',
+      value: {
+        dsh_action: item.action,
+        dsh_action_label: item.label,
+        // 动作慢/会断长连接：桥要先把应答发出去再执行（见 bridge 的 afterResponse）。
+        ...(item.deferred === true ? { dsh_action_deferred: true } : {}),
+      },
+    }],
     ...(item.confirm
       ? {
         confirm: {

@@ -652,6 +652,12 @@ export function createFeishuController({ deps, logger = console, config = {}, in
               action: 'reconnect',
               label: '🔌 重连',
               type: 'default',
+              /**
+               * 重连会**亲手掐掉正在送回执的那条长连接**：真机上点完卡片显示"已重连"，
+               * 飞书却弹一句「目标回调服务超时未响应」——回执没能送出去。
+               * 声明成 deferred：桥先应答，再执行（与 /history、/compact 同一条规矩）。
+               */
+              deferred: true,
               // 原生二次确认：重连会短暂断开长连接，别让误触把机器人踢下线。
               confirm: {
                 title: '重连这台机器人？',

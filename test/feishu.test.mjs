@@ -975,6 +975,8 @@ test('控制器：渠道动作按钮只给属主；点重连会真的重建长�
     assert.deepEqual(listed.value.actions.map((item) => item.action), ['reconnect']);
     assert.equal(listed.value.actions[0].label, '🔌 重连');
     assert.ok(listed.value.actions[0].confirm?.title, '重连要带原生二次确认（误触就是掉线）');
+    assert.equal(listed.value.actions[0].deferred, true,
+      '重连会掐掉送回执的长连接：必须声明 deferred，让桥先应答再执行');
     assert.equal((await controller.endpoints['panel.actions']({ botId: 'bot_none', isOwner: true })).ok, false);
 
     // 非属主 / 未知动作都被挡下；属主点了才真的重连（断开再连上）。
@@ -2443,6 +2445,57 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
 });
 
+test('渠道动作：会断长连接的动作用「先应答、再执行」，不让飞书等到超时', async () => {
+  const panel = makePanelStub();
+  panel.read = async () => ({
+    bound: true, sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] }, workspace: { current: null, options: [] },
+    actions: [{ action: 'reconnect', label: '🔌 重连', type: 'default', deferred: true }],
+  });
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_card',
+      token: 'tk_reconnect',
+      operator: { openId: 'ou_owner' },
+      action: {
+        tag: 'button',
+        value: { dsh_action: 'reconnect', dsh_action_label: '🔌 重连', dsh_action_deferred: true },
+      },
+    });
+    // 关键：应答这一刻**还没执行**——重连会掐掉正在送回执的那条长连接（真机上就是"回调超时"）。
+    assert.deepEqual(panel.acted, [], '应答之前一次都不该执行动作');
+    assert.match(answer.toast.content, /正在执行/);
+    assert.equal(app.gateway.calls.tokenUpdates.length, 0, '应答之前也不该更新卡片');
+
+    await app.flushPaints();
+    assert.deepEqual(panel.acted.map((item) => item.action), ['reconnect']);
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1, '执行完画回卡片（延迟更新接口是 HTTP，不受断连影响）');
+    assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /已执行 reconnect/);
+  } finally {
+    await app.cleanup();
+  }
+
+  // 不带的（快动作）：照旧同步执行，应答里就带上结果。
+  const fast = makePanelStub();
+  const quick = await makeBridge({ panel: fast });
+  try {
+    const answer = await quick.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_card',
+      token: 'tk_fast',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_action: 'ping', dsh_action_label: 'Ping' } },
+    });
+    assert.deepEqual(fast.acted.map((item) => item.action), ['ping'], '没声明 deferred 的照旧同步执行');
+    assert.match(answer.toast.content, /已执行 ping/);
+  } finally {
+    await quick.cleanup();
+  }
+});
+
 test('访问策略：下拉放宽要二次确认，确认/取消都在同一张卡上，确认之前绝不落盘', async () => {
   const panel = makePanelStub();
   panel.read = async () => ({
@@ -2551,7 +2604,7 @@ test('控制面板卡：渠道动作按钮带原生二次确认；点击走 pane
     preset: { current: null, options: [] },
     workspace: { current: null, options: [] },
     actions: [{
-      action: 'reconnect', label: '🔌 重连', type: 'default',
+      action: 'reconnect', label: '🔌 重连', type: 'default', deferred: true,
       confirm: { title: '重连这台机器人？', text: '会断开并重建长连接。' },
     }],
   });
@@ -2562,6 +2615,8 @@ test('控制面板卡：渠道动作按钮带原生二次确认；点击走 pane
     title: { tag: 'plain_text', content: '重连这台机器人？' },
     text: { tag: 'plain_text', content: '会断开并重建长连接。' },
   }, 'confirm 用卡片原生的二次确认弹窗');
+  assert.equal(buttons[0].behaviors[0].value.dsh_action_deferred, true,
+    'deferred 要带进按钮值：桥据此"先应答再执行"');
   assert.deepEqual(panelAction(buttons[0].behaviors[0].value), { action: 'reconnect', label: '🔌 重连' });
   assert.equal(panelAction({ dsh_panel: 'status' }), null, '面板按钮不是渠道动作');
   assert.match(JSON.stringify(panelCard({

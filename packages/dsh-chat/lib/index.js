@@ -2842,7 +2842,8 @@ function createPanelService({
       label: label.slice(0, 40),
       type,
       // `confirm` 有值 = 点之前先让用户确认一次（危险/影响连接的动作）。
-      confirm: title && text ? { title: title.slice(0, 40), text: text.slice(0, 200) } : null
+      confirm: title && text ? { title: title.slice(0, 40), text: text.slice(0, 200) } : null,
+      deferred: input.deferred === true
     };
   }
   async function applyChannelField({ channelId, botId, key, conversationType, field, value }) {

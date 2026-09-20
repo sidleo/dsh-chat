@@ -762,6 +762,7 @@ test('渠道动作按钮：读出来透传，点击走 panel.act，失败原样�
             {
               action: 'reconnect', label: '🔌 重连', type: 'default',
               confirm: { title: '重连？', text: '会断开几秒' },
+              deferred: true,
             },
             // 形状不对的（没有 label / 动作名非法）要丢掉：不能画出一个点了没反应的按钮。
             { action: 'ghost' },
@@ -786,6 +787,8 @@ test('渠道动作按钮：读出来透传，点击走 panel.act，失败原样�
     '只丢掉认不出形状的（没有 label / 没有动作名），type 不认识回落 default');
   assert.deepEqual(state.actions[0].confirm, { title: '重连？', text: '会断开几秒' });
   assert.equal(state.actions[1].type, 'default');
+  assert.equal(state.actions[0].deferred, true, 'deferred 要透传给卡片（决定"先应答再执行"）');
+  assert.equal(state.actions[1].deferred, false, '没声明就是同步执行');
   assert.equal(state.actionsFailed, false);
   const listed = seen.find((call) => call.method === 'panel.actions');
   assert.equal(listed.payload.isOwner, true, '属主要透传给渠道（渠道据此决定给不给按钮）');
