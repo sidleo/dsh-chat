@@ -3417,6 +3417,31 @@ function fileUploadFailure(error) {
   wrapped.code = typeof error?.code === "string" ? error.code : "chat/upload-failed";
   return wrapped;
 }
+var MODEL_IMAGE_REJECTION = "MODEL_DOES_NOT_SUPPORT_IMAGES";
+var IMAGE_FILE_EXTENSION_FALLBACK = ".img";
+var IMAGE_FILE_EXTENSIONS = /* @__PURE__ */ new Map([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"]
+]);
+function hasImageParts(content) {
+  return Array.isArray(content) && content.some((part) => part?.type === "image");
+}
+function imageRejectionOf(error) {
+  if (error?.details?.reason === MODEL_IMAGE_REJECTION) return { reason: MODEL_IMAGE_REJECTION };
+  if (error?.code === "session/attachment-invalid" && /does not support image input/i.test(String(error?.message ?? ""))) {
+    return { reason: MODEL_IMAGE_REJECTION };
+  }
+  return null;
+}
+function imageFileName(name2, mediaType, index) {
+  const extension = IMAGE_FILE_EXTENSIONS.get(
+    typeof mediaType === "string" ? mediaType.trim().toLowerCase() : ""
+  ) ?? IMAGE_FILE_EXTENSION_FALLBACK;
+  const base = typeof name2 === "string" && name2.trim() ? name2.trim() : `image-${index + 1}`;
+  return /\.[A-Za-z0-9]{2,5}$/.test(base) ? base : `${base}${extension}`;
+}
 function textOfAssistantMessage(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return "";
@@ -3743,31 +3768,55 @@ function createSessionBridge({
     }
     const startedAt = Date.now();
     let recovered = null;
+    let imageFallback = null;
     try {
       const runOnce = async () => {
         try {
           return await runTurn();
         } catch (error) {
+          const sessionId = store?.get?.(channelId, botId, key)?.sessionId ?? null;
           const failed2 = modelUnavailableOf(error);
-          if (!failed2) throw error;
-          return {
-            sessionId: store?.get?.(channelId, botId, key)?.sessionId ?? null,
-            text: "",
-            reason: { kind: "error", error: sessionError(error) },
-            tools: [],
-            files: [],
-            aborted: false,
-            failed: failed2
-          };
+          if (failed2) {
+            return {
+              sessionId,
+              text: "",
+              reason: { kind: "error", error: sessionError(error) },
+              tools: [],
+              files: [],
+              aborted: false,
+              failed: failed2
+            };
+          }
+          throw error;
         }
       };
-      let result = await runOnce();
+      const runWithImageFallback = async () => {
+        try {
+          return await runOnce();
+        } catch (error) {
+          const rejected = imageRejectionOf(error);
+          const sessionId = store?.get?.(channelId, botId, key)?.sessionId ?? null;
+          if (!rejected || !hasImageParts(content) || typeof sessionId !== "string" || !sessionId) {
+            throw error;
+          }
+          const fallback = await imagesAsFiles({ sessionId, content, signal }).catch((failure) => {
+            logger.warn?.(`[dsh-chat] \u628A\u56FE\u7247\u8F6C\u6210\u4F1A\u8BDD\u6587\u4EF6\u5931\u8D25\uFF1A${failure?.message ?? failure}`);
+            return null;
+          });
+          if (!fallback) throw error;
+          imageFallback = fallback;
+          content = fallback.content;
+          logger.info?.(`[dsh-chat] \u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u5DF2\u6539\u4E3A\u4F5C\u4E3A\u6587\u4EF6\u4EA4\u7ED9\u4F1A\u8BDD\uFF1A${queueKey} \u4F1A\u8BDD=${sessionId} \u56FE\u7247=${fallback.saved}${fallback.failed.length > 0 ? ` \u5931\u8D25=${fallback.failed.length}` : ""}`);
+          return await runOnce();
+        }
+      };
+      let result = await runWithImageFallback();
       const failed = result?.failed ?? modelUnavailableOf(result?.reason?.error);
       if (failed && typeof result?.sessionId === "string" && result.sessionId) {
         const target = await recoverUnavailableModel({ sessionId: result.sessionId, failed, signal });
         if (target) {
           recovered = { failed, target };
-          result = await runOnce();
+          result = await runWithImageFallback();
         }
       }
       if (deferred && result?.reason?.kind === "timeout" && typeof result.sessionId === "string") {
@@ -3785,14 +3834,21 @@ function createSessionBridge({
           logger.warn?.(`[dsh-chat] \u767B\u8BB0\u5EF6\u8FDF\u4EA4\u4ED8\u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
       }
-      if (!recovered) return result;
-      const notice = `\u26A0\uFE0F \u4F1A\u8BDD\u539F\u6765\u9009\u7684\u6A21\u578B ${recovered.failed.provider ?? "?"}/${recovered.failed.model ?? "?"} \u5DF2\u4E0D\u53EF\u7528\uFF0C\u5DF2\u81EA\u52A8\u5207\u5230 ${recovered.target.provider}/${recovered.target.model} \u5E76\u91CD\u8BD5\u4E86\u8FD9\u4E00\u8F6E\u3002`;
+      const notices = [];
+      if (recovered) {
+        notices.push(`\u26A0\uFE0F \u4F1A\u8BDD\u539F\u6765\u9009\u7684\u6A21\u578B ${recovered.failed.provider ?? "?"}/${recovered.failed.model ?? "?"} \u5DF2\u4E0D\u53EF\u7528\uFF0C\u5DF2\u81EA\u52A8\u5207\u5230 ${recovered.target.provider}/${recovered.target.model} \u5E76\u91CD\u8BD5\u4E86\u8FD9\u4E00\u8F6E\u3002`);
+      }
+      if (imageFallback) {
+        notices.push(`\u26A0\uFE0F \u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\uFF0C\u5DF2\u628A ${imageFallback.saved} \u5F20\u56FE\u7247\u4F5C\u4E3A\u6587\u4EF6\u4EA4\u7ED9\u4F1A\u8BDD\uFF08\u7528\u5DE5\u5177\u5206\u6790\u540E\u56DE\u7B54\uFF09${imageFallback.failed.length > 0 ? `\uFF1B\u53E6\u6709 ${imageFallback.failed.length} \u5F20\u6CA1\u80FD\u4EA4\u7ED9\u4F1A\u8BDD` : ""}\u3002\u60F3\u76F4\u63A5\u770B\u56FE\uFF0C\u7528 /model \u6362\u4E00\u4E2A\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u518D\u53D1\u4E00\u6B21\u3002`);
+      }
+      if (notices.length === 0) return result;
       return {
         ...result,
-        text: `${notice}
+        text: `${notices.join("\n\n")}
 
 ${result.text ?? ""}`.trim(),
-        recovered
+        ...recovered ? { recovered } : {},
+        ...imageFallback ? { imageFallback: { saved: imageFallback.saved, failed: imageFallback.failed } } : {}
       };
     } finally {
       const left = (queueDepth.get(queueKey) ?? 1) - 1;
@@ -4142,6 +4198,40 @@ ${result.text ?? ""}`.trim(),
     } catch (error) {
       throw fileUploadFailure(error);
     }
+  }
+  async function imagesAsFiles({ sessionId, content: parts, signal }) {
+    const images = parts.filter((part) => part?.type === "image");
+    if (images.length === 0) return null;
+    const files = [];
+    const failed = [];
+    for (const [index, part] of images.entries()) {
+      const name2 = imageFileName(part.name, part.mediaType, index);
+      try {
+        const uploaded = await uploadFile({
+          sessionId,
+          name: name2,
+          bytes: Buffer.from(typeof part.data === "string" ? part.data : "", "base64"),
+          signal
+        });
+        if (!uploaded?.receiptId) throw new Error("\u4E0A\u4F20\u540E\u6CA1\u6709\u62FF\u5230 receiptId");
+        files.push({ type: "file", receiptId: uploaded.receiptId });
+      } catch (error) {
+        failed.push({ name: name2, reason: error?.message ?? String(error) });
+      }
+    }
+    if (files.length === 0) return null;
+    const lines = [
+      `\u5F53\u524D\u4F1A\u8BDD\u6A21\u578B\u4E0D\u652F\u6301\u76F4\u63A5\u63A5\u6536\u56FE\u7247\u8F93\u5165\u3002\u7528\u6237\u53D1\u7684 ${files.length} \u5F20\u56FE\u7247\u5DF2\u4F5C\u4E3A\u53EA\u8BFB\u6587\u4EF6\u4FDD\u5B58\u5230\u4F1A\u8BDD\uFF08\u89C1\u4E0B\u9762\u7684\u6587\u4EF6\u8BF4\u660E\uFF09\u3002\u8BF7\u7528\u53EF\u7528\u5DE5\u5177\u8BFB\u53D6\u8FD9\u4E9B\u56FE\u7247\u6587\u4EF6\u540E\u56DE\u7B54\uFF08\u4F8B\u5982\u7528\u4EE3\u7801\u8BFB\u53D6\u5B57\u8282\u3001\u89E3\u6790\u5143\u6570\u636E\u3001\u8C03\u7528\u56FE\u50CF\u5904\u7406\u6216 OCR \u5E93\uFF09\uFF0C**\u4E0D\u8981\u5047\u8BBE\u81EA\u5DF1\u80FD\u76F4\u63A5\u770B\u5230\u56FE\u7247\u5185\u5BB9**\u3002`
+    ];
+    if (failed.length > 0) {
+      lines.push(`\u53E6\u6709 ${failed.length} \u5F20\u56FE\u7247\u6CA1\u80FD\u4FDD\u5B58\uFF1A` + failed.map((row) => `${row.name}\uFF08${row.reason}\uFF09`).join("\u3001") + "\u3002");
+    }
+    return {
+      // 原始的文本/上下文块保持在原位，图片位置换成文件，最后补一段"该怎么用它们"。
+      content: [...parts.filter((part) => part?.type !== "image"), ...files, { type: "text", text: lines.join("") }],
+      saved: files.length,
+      failed
+    };
   }
   async function history({ channelId, botId, key, maxMessages = 12, signal } = {}) {
     const bound = store?.get?.(channelId, botId, key);

@@ -559,6 +559,7 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `stream(namespace, method, args, signal)` | 流式调用；`session/follow`、`session/control`、`workspace/follow` **必须**用它 |
 | `ensure({ channelId, botId, key, workspacePath, signal })` | 找到或创建该会话键对应的 DSH 会话（`{ sessionId, created }`）；绑定的会话被删会自动重建 |
 | `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools, files }`（`files` = 本轮 `present` 的交付文件，渠道要当附件发出去） |
+| `imagesAsFiles`（内部） | 图片回退：会话当前模型不收图片时，`ask` 会把图片块换成 `{ type:'file', receiptId }`（同一个会话上传）并**重试一次**，答案前加一句说明；一张都没存下就原样抛错。渠道不用管，`ask` 的结果里会带 `imageFallback: { saved, failed }` |
 | `uploadFile({ sessionId, name, bytes })` | 把一段字节入库成**该会话可引用**的文件，返回 `{ receiptId, file }`（入站文件必须走它） |
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
 | `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |
@@ -587,6 +588,13 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 ```
 
 处理器抛错即由 hub 交还 `next()`，浏览器 UI 仍能接管；不属于本插件的会话从不拦截。
+
+**图片与"非视觉模型"**：`session/prompt` 会拿**会话当前模型**的模态直接拒掉图片内容块
+（`session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES`）。`ask()` 认这个拒绝，
+把图片块换成"本会话的文件"（同一个会话上传得到的 `receiptId`）再试一次——纯文本模型拿到的是
+"只读副本已保存在 <path>"，可以用工具读字节/图像处理/OCR 去分析；同时补一段模型侧说明
+（"不要假设自己能直接看到图片内容"）与一句用户可见的说明（含"想直接看图用 /model 换模型"）。
+**一张都没存下就原样抛错**（不静默丢图片），部分失败会在说明里写清几张没交出去。
 
 **延迟交付（超时≠结束）**：`ask()` 的兜底按**静默时长**判超时，判超时只说明"流不再产出"，
 **不代表那一轮没跑完**。所以超时时 hub 只做两件事：回一句"回合未正常结束"+ 登记一条待交付记录

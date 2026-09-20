@@ -53,6 +53,7 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 |---|---|---|
 | Issue #112「多 step 回答只剩最后一段」 | `sessions.mjs` 的 `turn/end` | 一轮里每个 step 各有一条定稿 `assistant/message`，最终答案改为**全部拼接**（空行分隔、相邻重复去重） |
 | Issue #192「模型失效自救」 | `sessions.mjs` 的 `recoverUnavailableModel` | 识别 `session/model-unavailable`，切回可用模型（优先 Host 默认）并重试一次，答案前加一行说明 |
+| 「入站图片在非视觉模型下回退为文件」 | `sessions.ask()` 的图片回退（`imagesAsFiles`） | 拒绝信号与文案沿用上游（`MODEL_DOES_NOT_SUPPORT_IMAGES`），但降级目标改为"本会话的文件"而不是自写工作区文件——复用已验证的 `uploadFile` 通道；转换失败**原样抛**，不静默丢图片 |
 | Issue #106「引用/回复消息」 | `shared/reply-reference.mjs` + 飞书 `getMessageText` | 用户引用一条消息再提问时，被引用正文一起进提示词；读不到只加"引用内容不可用"标记，不丢当前问题 |
 | Issue #188「机器人别名」 | 已有等价物 | 飞书自身的机器人名 + 我们设置页的机器人卡片，不再单做一层别名 |
 | `stepPush` 过程展示 | 设置页已有，这一轮又搬进**聊天面板** | 走新加的「渠道自带面板字段」契约（`panel.fields` / `panel.apply`），hub 不认渠道语义 |
@@ -64,7 +65,7 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 
 | 上游 | 为什么先不做 |
 |---|---|
-| 「入站图片在非视觉模型下回退为文件」 | 需要先拿到"当前模型是否支持视觉"的能力声明，再把图片降级成文件/描述；改动面涉及模型目录与入站链路，值得单独一轮 |
+| ~~「入站图片在非视觉模型下回退为文件」~~ | **已对齐**（P5⁺⁺）：不查模型目录，改用 Host 自己的拒绝信号——`session/prompt` 抛 `session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES` 时，`sessions.ask()` 把图片块上传成同一会话的文件（`{type:'file',receiptId}`）重试一次，并补一段模型侧说明（"不要假设自己能直接看到图片内容"）。上游是自己写工作区文件，我们复用已有的 `uploadFile` 通道 |
 | `session-reply-recovery`（流中断后从历史补回答案） | 我们的失败路径已经有界（`stream-ended` 会如实返回空并留日志），要从历史补回就必须可靠区分"这一轮"与"上一轮"，判错会把上一轮答案当成本轮结果——风险大于收益 |
 
 ## 行为比对流程

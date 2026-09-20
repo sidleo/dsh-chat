@@ -198,13 +198,16 @@ function withDeliverables(frames, files) {
 }
 
 async function makeBridge(options = {}) {
-  const { settings = null, deferred = null, ...gatewayOptions } = options;
+  const { settings = null, deferred = null, fileUploads = null, ...gatewayOptions } = options;
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
   const store = createSessionStore({ dataDir, logger: silentLogger });
   const gateway = createFakeGateway(gatewayOptions);
   const published = [];
   const bridge = createSessionBridge({
-    ctx: { typertGateway: gateway },
+    ctx: {
+      typertGateway: gateway,
+      ...(fileUploads ? { get: (name) => (name === 'fileUploads' ? fileUploads : undefined) } : {}),
+    },
     logger: silentLogger,
     store,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
@@ -1196,6 +1199,177 @@ test('probeTurn：还在跑 / 已换绑 / 空闲且有正文（延迟交付的�
       channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', sessionId: 'session-1',
     });
     assert.deepEqual(gone, { exists: false, running: false, text: '' });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+/** 一个记录上传的假 fileUploads；`failIndexes` 里的第几张图会上传失败。 */
+function recordingFileUploads({ failIndexes = [] } = {}) {
+  const uploaded = [];
+  return {
+    uploaded,
+    async uploadStream(request) {
+      const chunks = [];
+      for await (const chunk of request.data) chunks.push(chunk);
+      const bytes = Buffer.concat(chunks);
+      if (failIndexes.includes(uploaded.length)) {
+        uploaded.push({ sessionId: request.sessionId, name: request.name, bytes: bytes.length, failed: true });
+        throw new Error('磁盘满了');
+      }
+      uploaded.push({ sessionId: request.sessionId, name: request.name, bytes: bytes.length });
+      return {
+        receiptId: `receipt-${uploaded.length}`,
+        file: { attachmentId: 'sha256:x', name: request.name, bytes: bytes.length },
+      };
+    },
+  };
+}
+
+const IMAGE_REJECTION = () => Object.assign(new Error('Model "ghost" does not support image input.'), {
+  code: 'session/attachment-invalid',
+  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+});
+
+const TINY_PNG_BASE64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+
+test('图片回退：当前模型不收图片就换成会话文件重试一次，答案前说明怎么处理的', async () => {
+  const fileUploads = recordingFileUploads();
+  const calls = [];
+  const app = await makeBridge({
+    script: [turnFrames({ text: '图片里是昨天的销售表。' })],
+    repeatScript: true,
+    failPromptOnce: IMAGE_REJECTION(),
+    onInvoke: (call) => calls.push(call),
+    fileUploads,
+  });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [
+        { type: 'text', text: '看看这张图' },
+        { type: 'image', mediaType: 'image/png', data: TINY_PNG_BASE64, name: 'feishu-image' },
+      ],
+      sourceGuidance: '',
+    });
+
+    // 同名图片要补上扩展名：模型才知道这是个图片文件。
+    assert.deepEqual(fileUploads.uploaded, [
+      { sessionId: 'session-1', name: 'feishu-image.png', bytes: 4 },
+    ]);
+
+    const prompts = calls.filter((call) => call.namespace === 'session' && call.method === 'prompt');
+    assert.equal(prompts.length, 2, '被拒之后要重试一次');
+    assert.deepEqual(prompts[0].args.request.content.map((part) => part.type), ['text', 'image']);
+    assert.deepEqual(prompts[1].args.request.content.map((part) => part.type), ['text', 'file', 'text'],
+      '重试时图片换成文件，并补一段"该怎么用这些文件"');
+    assert.equal(prompts[1].args.request.content[1].receiptId, 'receipt-1');
+    assert.match(prompts[1].args.request.content[2].text, /不支持直接接收图片输入/);
+    assert.match(prompts[1].args.request.content[2].text, /不要假设自己能直接看到图片内容/);
+
+    assert.match(result.text, /^⚠️ 当前模型不支持图片输入，已把 1 张图片作为文件交给会话/);
+    assert.match(result.text, /用 \/model 换一个支持图片的模型/);
+    assert.match(result.text, /图片里是昨天的销售表/, '重试那一轮的答案要在');
+    assert.deepEqual(result.imageFallback, { saved: 1, failed: [] });
+    assert.equal(result.reason.kind, 'completed');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片回退：一张都没存下就原样抛错（不静默把图片丢掉）', async () => {
+  const fileUploads = recordingFileUploads({ failIndexes: [0] });
+  const app = await makeBridge({
+    script: [turnFrames()],
+    repeatScript: true,
+    failPromptOnce: IMAGE_REJECTION(),
+    fileUploads,
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.ask({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+        content: [{ type: 'image', mediaType: 'image/png', data: TINY_PNG_BASE64, name: 'x' }],
+        sourceGuidance: '',
+      }),
+      (error) => error.code === 'session/attachment-invalid',
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('图片回退：部分图片存不下时照常重试，但在说明里写清有几张没交出去', async () => {
+  const fileUploads = recordingFileUploads({ failIndexes: [1] });
+  const app = await makeBridge({
+    script: [turnFrames({ text: '看完了。' })],
+    repeatScript: true,
+    failPromptOnce: IMAGE_REJECTION(),
+    fileUploads,
+  });
+  try {
+    const result = await app.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [
+        { type: 'image', mediaType: 'image/png', data: TINY_PNG_BASE64, name: 'one' },
+        { type: 'image', mediaType: 'image/jpeg', data: TINY_PNG_BASE64, name: 'two' },
+      ],
+      sourceGuidance: '',
+    });
+    assert.equal(result.imageFallback.saved, 1);
+    assert.equal(result.imageFallback.failed.length, 1);
+    assert.match(result.text, /已把 1 张图片作为文件交给会话/);
+    assert.match(result.text, /另有 1 张没能交给会话/);
+    assert.equal(fileUploads.uploaded[1].name, 'two.jpg', 'jpeg 用 .jpg');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('别的附件错误不触发图片回退：原样抛出（只有"模型不收图片"才换路）', async () => {
+  const fileUploads = recordingFileUploads();
+  const app = await makeBridge({
+    script: [turnFrames()],
+    repeatScript: true,
+    failPromptOnce: Object.assign(new Error('attachment rejected'), {
+      code: 'session/attachment-invalid',
+      details: { reason: 'IMAGE_TOO_MANY_PIXELS' },
+    }),
+    fileUploads,
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.ask({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+        content: [{ type: 'image', mediaType: 'image/png', data: TINY_PNG_BASE64, name: 'x' }],
+        sourceGuidance: '',
+      }),
+      (error) => error.details?.reason === 'IMAGE_TOO_MANY_PIXELS',
+    );
+    assert.deepEqual(fileUploads.uploaded, [], '不该白白上传');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('没有图片的普通回合遇到附件错误也不会去上传文件', async () => {
+  const fileUploads = recordingFileUploads();
+  const app = await makeBridge({
+    script: [turnFrames()],
+    repeatScript: true,
+    failPromptOnce: IMAGE_REJECTION(),
+    fileUploads,
+  });
+  try {
+    await assert.rejects(
+      () => app.bridge.ask({
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+        content: [{ type: 'text', text: '在吗' }],
+        sourceGuidance: '',
+      }),
+      (error) => error.code === 'session/attachment-invalid',
+    );
+    assert.deepEqual(fileUploads.uploaded, []);
   } finally {
     await app.cleanup();
   }

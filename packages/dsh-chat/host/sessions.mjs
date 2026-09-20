@@ -67,6 +67,56 @@ function fileUploadFailure(error) {
   return wrapped;
 }
 
+/**
+ * 图片回退：当前会话模型不收图片时，把**同样的字节**上传成本会话的文件再试一次。
+ *
+ * 为什么需要：`session/prompt` 会拿**会话当前模型**的模态直接拒掉图片内容块
+ * （`session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES`），
+ * 而文件内容块对纯文本模型是可用的——DSH 会把它变成"只读副本已保存在 <path>"的文本，
+ * 模型可以用工具（读字节、图像处理、OCR）去分析。丢了图片等于问题没送出去。
+ */
+const MODEL_IMAGE_REJECTION = 'MODEL_DOES_NOT_SUPPORT_IMAGES';
+
+/** 认不出的媒体类型：仍然给它一个后缀，至少模型知道这是个文件。 */
+const IMAGE_FILE_EXTENSION_FALLBACK = '.img';
+
+/** 媒体类型 → 文件扩展名：没有扩展名的名字模型不知道该按图片读。 */
+const IMAGE_FILE_EXTENSIONS = new Map([
+  ['image/png', '.png'],
+  ['image/jpeg', '.jpg'],
+  ['image/gif', '.gif'],
+  ['image/webp', '.webp'],
+]);
+
+/** 图片内容块统一用 base64 传字节，所以这类问题不该因为编码差异漏判。 */
+function hasImageParts(content) {
+  return Array.isArray(content) && content.some((part) => part?.type === 'image');
+}
+
+/**
+ * 这一轮是不是被"当前模型不支持图片"拒了？
+ *
+ * 主判据是 DSH 给的 `details.reason`（与官方 UI 的判据一致）；再留一条按 code+文案的兜底，
+ * 防止某个版本只带文案不带 reason——误判的代价只是"多存一份文件、多一句说明"，不会丢消息。
+ */
+function imageRejectionOf(error) {
+  if (error?.details?.reason === MODEL_IMAGE_REJECTION) return { reason: MODEL_IMAGE_REJECTION };
+  if (error?.code === 'session/attachment-invalid'
+    && /does not support image input/i.test(String(error?.message ?? ''))) {
+    return { reason: MODEL_IMAGE_REJECTION };
+  }
+  return null;
+}
+
+/** 给图片起个带扩展名的文件名（渠道给的名字常常是 `feishu-image` 这种没有后缀的）。 */
+function imageFileName(name, mediaType, index) {
+  const extension = IMAGE_FILE_EXTENSIONS.get(
+    typeof mediaType === 'string' ? mediaType.trim().toLowerCase() : '',
+  ) ?? IMAGE_FILE_EXTENSION_FALLBACK;
+  const base = typeof name === 'string' && name.trim() ? name.trim() : `image-${index + 1}`;
+  return /\.[A-Za-z0-9]{2,5}$/.test(base) ? base : `${base}${extension}`;
+}
+
 function textOfAssistantMessage(message) {
   const content = message?.content;
   if (!Array.isArray(content)) return '';
@@ -571,33 +621,67 @@ export function createSessionBridge({
      */
     const startedAt = Date.now();
     let recovered = null;
+    let imageFallback = null;
     try {
       const runOnce = async () => {
         try {
           return await runTurn();
         } catch (error) {
+          // ensure() 已经绑定过会话，所以这里拿得到 sessionId（两种自救都要用它）。
+          const sessionId = store?.get?.(channelId, botId, key)?.sessionId ?? null;
           const failed = modelUnavailableOf(error);
-          if (!failed) throw error;
-          // ensure() 已经绑定过会话，所以这里拿得到 sessionId（自救要用它 selectModel）。
-          return {
-            sessionId: store?.get?.(channelId, botId, key)?.sessionId ?? null,
-            text: '',
-            reason: { kind: 'error', error: sessionError(error) },
-            tools: [],
-            files: [],
-            aborted: false,
-            failed,
-          };
+          if (failed) {
+            return {
+              sessionId,
+              text: '',
+              reason: { kind: 'error', error: sessionError(error) },
+              tools: [],
+              files: [],
+              aborted: false,
+              failed,
+            };
+          }
+          throw error;
         }
       };
 
-      let result = await runOnce();
+      /**
+       * 当前模型不收图片（`session/prompt` 直接用会话当前模型的模态拒掉图片内容块）：
+       * 把图片换成"本会话的文件"再试一次。转换失败就**原样抛**——不能静默把用户的图片丢掉。
+       *
+       * 只试一次：重试时内容里已经没有图片块了。
+       */
+      const runWithImageFallback = async () => {
+        try {
+          return await runOnce();
+        } catch (error) {
+          const rejected = imageRejectionOf(error);
+          const sessionId = store?.get?.(channelId, botId, key)?.sessionId ?? null;
+          if (!rejected || !hasImageParts(content) || typeof sessionId !== 'string' || !sessionId) {
+            throw error;
+          }
+          const fallback = await imagesAsFiles({ sessionId, content, signal }).catch((failure) => {
+            logger.warn?.(`[dsh-chat] 把图片转成会话文件失败：${failure?.message ?? failure}`);
+            return null;
+          });
+          if (!fallback) throw error;
+          imageFallback = fallback;
+          content = fallback.content;
+          logger.info?.(`[dsh-chat] 当前模型不支持图片，已改为作为文件交给会话：`
+            + `${queueKey} 会话=${sessionId} 图片=${fallback.saved}`
+            + `${fallback.failed.length > 0 ? ` 失败=${fallback.failed.length}` : ''}`);
+          return await runOnce();
+        }
+      };
+
+      let result = await runWithImageFallback();
       const failed = result?.failed ?? modelUnavailableOf(result?.reason?.error);
       if (failed && typeof result?.sessionId === 'string' && result.sessionId) {
         const target = await recoverUnavailableModel({ sessionId: result.sessionId, failed, signal });
         if (target) {
           recovered = { failed, target };
-          result = await runOnce();
+          // 换完的模型也可能不收图片：同一条回退路径再走一次。
+          result = await runWithImageFallback();
         }
       }
       /**
@@ -620,14 +704,24 @@ export function createSessionBridge({
           logger.warn?.(`[dsh-chat] 登记延迟交付失败：${error?.message ?? error}`);
         }
       }
-      if (!recovered) return result;
-      const notice = `⚠️ 会话原来选的模型 ${recovered.failed.provider ?? '?'}/${recovered.failed.model ?? '?'}`
-        + ` 已不可用，已自动切到 ${recovered.target.provider}/${recovered.target.model} 并重试了这一轮。`;
-      // 说明放在答案前面：用户必须知道这次回复换了模型（失败必须可见）。
+      // 说明放在答案前面：用户必须知道这次回复换了模型 / 图片是怎么处理的（失败必须可见）。
+      const notices = [];
+      if (recovered) {
+        notices.push(`⚠️ 会话原来选的模型 ${recovered.failed.provider ?? '?'}/${recovered.failed.model ?? '?'}`
+          + ` 已不可用，已自动切到 ${recovered.target.provider}/${recovered.target.model} 并重试了这一轮。`);
+      }
+      if (imageFallback) {
+        notices.push(`⚠️ 当前模型不支持图片输入，已把 ${imageFallback.saved} 张图片作为文件交给会话`
+          + '（用工具分析后回答）'
+          + `${imageFallback.failed.length > 0 ? `；另有 ${imageFallback.failed.length} 张没能交给会话` : ''}。`
+          + '想直接看图，用 /model 换一个支持图片的模型再发一次。');
+      }
+      if (notices.length === 0) return result;
       return {
         ...result,
-        text: `${notice}\n\n${result.text ?? ''}`.trim(),
-        recovered,
+        text: `${notices.join('\n\n')}\n\n${result.text ?? ''}`.trim(),
+        ...(recovered ? { recovered } : {}),
+        ...(imageFallback ? { imageFallback: { saved: imageFallback.saved, failed: imageFallback.failed } } : {}),
       };
     } finally {
       const left = (queueDepth.get(queueKey) ?? 1) - 1;
@@ -1053,6 +1147,52 @@ export function createSessionBridge({
     } catch (error) {
       throw fileUploadFailure(error);
     }
+  }
+
+  /**
+   * 把这一轮里的图片块换成"本会话的文件"（`{ type:'file', receiptId }`）。
+   *
+   * 只在 `session/prompt` 因模型不支持图片被拒后调用一次：字节不变、只是换一条路——
+   * 纯文本模型拿到的是"只读副本已保存在 <path>"，可以用工具去分析。
+   *
+   * @returns `{ content, saved, failed }`；一张都没存下时返回 null（由调用方原样抛错）。
+   */
+  async function imagesAsFiles({ sessionId, content: parts, signal }) {
+    const images = parts.filter((part) => part?.type === 'image');
+    if (images.length === 0) return null;
+    const files = [];
+    const failed = [];
+    for (const [index, part] of images.entries()) {
+      const name = imageFileName(part.name, part.mediaType, index);
+      try {
+        const uploaded = await uploadFile({
+          sessionId,
+          name,
+          bytes: Buffer.from(typeof part.data === 'string' ? part.data : '', 'base64'),
+          signal,
+        });
+        if (!uploaded?.receiptId) throw new Error('上传后没有拿到 receiptId');
+        files.push({ type: 'file', receiptId: uploaded.receiptId });
+      } catch (error) {
+        failed.push({ name, reason: error?.message ?? String(error) });
+      }
+    }
+    if (files.length === 0) return null;
+    const lines = [
+      `当前会话模型不支持直接接收图片输入。用户发的 ${files.length} 张图片已作为只读文件保存到会话`
+      + '（见下面的文件说明）。请用可用工具读取这些图片文件后回答（例如用代码读取字节、解析元数据、'
+      + '调用图像处理或 OCR 库），**不要假设自己能直接看到图片内容**。',
+    ];
+    if (failed.length > 0) {
+      lines.push(`另有 ${failed.length} 张图片没能保存：`
+        + failed.map((row) => `${row.name}（${row.reason}）`).join('、') + '。');
+    }
+    return {
+      // 原始的文本/上下文块保持在原位，图片位置换成文件，最后补一段"该怎么用它们"。
+      content: [...parts.filter((part) => part?.type !== 'image'), ...files, { type: 'text', text: lines.join('') }],
+      saved: files.length,
+      failed,
+    };
   }
 
   /**
