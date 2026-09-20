@@ -8,11 +8,12 @@
  *
  * 所以这里定死四条：
  * ① **只有本模块可以拉起 `lark-cli`**（`scripts/verify-package.mjs` 的守门会强制）；
- * ② 每次调用都必然带 `--profile <本插件专用 profile（dsh-chat-<appId>）>`——找不到就失败，
+ * ② 每次调用都必然带 `--profile <本应用在 lark-cli 里的那份 profile>`——找不到就失败，
  *    **绝不回退**到当前生效 profile（lark-cli 自己也会以退出码 3 + `error.field === '--profile'` 拒绝）。
- *    专用 profile 只归本插件管：它的 `strict-mode` / `default-as` 跟着身份策略走，
- *    于是"只用应用身份"由 **lark-cli 自己**保证（`--as user` 会失败、省略 `--as` 也落到 bot），
- *    而用户自己那份同应用 profile 一个字节都不碰；
+ *    **profile 是按 appId 唯一的**（真机实测：`profile add` 同 appId 会被 lark-cli 拒——
+ *    `each profile must have a unique app-id`），所以身份策略**不能**靠改它的
+ *    `strict-mode` / `default-as` 来实现（那份 profile 用户自己也在用）。
+ *    身份由这里逐次核对 + 调用方显式声明，模型自己跑的那条路由 `lark-guard.mjs` 兜底；
  * ③ 身份（`--as`）由 intent 显式声明，**绝不省略**（省略时 lark-cli 会自己"看着办"，不可控）；
  * ④ 用 `--as user` 需要该机器人在设置页显式开启，且**钉住用户**：`whoami` 报回来的
  *    `appId` / `onBehalfOf.openId` 与预期不符就失败，**目标命令一次都不执行**。
@@ -28,9 +29,6 @@ import { spawn } from 'node:child_process';
 
 /** 身份策略取值：只用应用身份，或允许该应用在 lark-cli 里登录的那个用户。 */
 export const LARK_IDENTITY_MODES = Object.freeze(['bot-only', 'user-allowed']);
-
-/** 插件自建 profile 的名字前缀（`dsh-chat-<appId>`）。 */
-export const PROFILE_PREFIX = 'dsh-chat-';
 
 /** App ID 的合法形状（与控制器同一份判据）。 */
 const APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
@@ -56,13 +54,16 @@ export function normalizeLarkUserIdentity(value) {
 }
 
 /**
- * 本机器人在 lark-cli 里的专用 profile 名。
+ * 本机器人在 lark-cli 里的 profile 名**兜底值**（只在"还没有 profile、我们要新建"时用）。
+ *
+ * lark-cli 自己就按 appId 命名（一个应用一份 profile），所以这里也用它；
+ * 但**权威的名字永远来自 `lark-cli profile list`**——用户可能当初起了别的名字。
  *
  * @param appId - 飞书 App ID。
- * @returns profile 名（`dsh-chat-<appId>`）。
+ * @returns profile 名。
  */
 export function profileNameFor(appId) {
-  return `${PROFILE_PREFIX}${cleanString(appId) ?? 'unknown'}`;
+  return cleanString(appId) ?? 'unknown';
 }
 
 function larkError(code, message, details = {}) {
@@ -142,8 +143,6 @@ export function createLarkCli({
   /** 进程内缓存：解析出的 profile（一个进程只解析一次）。 */
   let resolved = null;
   let resolving = null;
-  /** 本进程给"我们自己的" profile 设过的身份策略（避免每次调用都重复写）。 */
-  let appliedPolicy = null;
 
   /** 现读身份策略：设置页改完这一条立刻生效。 */
   function policy() {
@@ -259,68 +258,20 @@ export function createLarkCli({
   }
 
   /**
-   * 找到**本插件自己的** profile：名字必须是 `dsh-chat-<appId>`，且 appId 对得上。
+   * 找到本应用在 lark-cli 里的那份 profile：**按 appId**（不认名字）。
    *
-   * 为什么不"按 appId 收编任意同名应用 profile"（真机踩过）：那会把用户自己那个 profile
-   * 当成我们的——而它的 `strict-mode` / `default-as` 是用户自己的用法（比如拿 lark-cli 做
-   * 文档同步要 user 身份）。插件一旦去改它，就是替用户改了别的工具的行为。
-   * 所以：我们只用自己的那一份；同 appId 的别的 profile 一个字节都不碰。
+   * 为什么不能另建一份"插件专用 profile"（真机实测踩到）：
+   * `lark-cli profile add --app-id <已存在的 appId>` 会被直接拒——
+   * `app-id "cli_…" is already used by profile "cli_…"; each profile must have a unique app-id`。
+   * 也就是说**一个应用在这个 CLI 里只有一份 profile**，名字是用户当初起的（多数就是 appId）。
+   * 于是插件既不能另开一份、也不该去改那一份的 `strict-mode` / `default-as`
+   * （用户自己也在用它做别的 user 身份的事），身份只能靠**逐次核对 + 门禁**保证。
    *
    * @returns profile 记录或 null。
    */
-  async function findOwnProfile() {
+  async function findProfile() {
     const list = await listProfiles();
-    return list.find((item) => item.name === managedName && item.appId === ownAppId) ?? null;
-  }
-
-  /** 同一个应用在别的 profile 里的痕迹（只用于提示，绝不使用、绝不修改）。 */
-  async function sameAppElsewhere() {
-    const list = await listProfiles();
-    return list.filter((item) => item.appId === ownAppId && item.name !== managedName).map((item) => item.name);
-  }
-
-  /** 读一行文本形式的配置（`strict-mode: off (source: …)` / `default-as: auto`）。 */
-  async function readConfigValue(args, pattern) {
-    const result = await exec(args, { allowPlainText: true });
-    const text = typeof result?.plain === 'string' ? result.plain : '';
-    const found = pattern.exec(text);
-    return found ? found[1] : null;
-  }
-
-  /** 身份策略在 lark-cli 里对应的一组"这台 profile 自己的"设置。 */
-  function desiredPolicy(mode) {
-    return mode === 'user-allowed'
-      ? { strictMode: 'off', defaultAs: 'auto' }
-      : { strictMode: 'bot', defaultAs: 'bot' };
-  }
-
-  /**
-   * 把身份策略同步到**我们自己的** profile 上，让 lark-cli 自己兜底。
-   *
-   * - 只用应用身份 → `strict-mode bot` + `default-as bot`：
-   *   前者让 `--as user` 直接失败，后者让**省略 `--as`** 的调用也落到 bot
-   *   （这台机器上 `auto` 会挑 user，正是真机上"设了只用应用身份、消息还是以我名义发出"的成因之一）。
-   * - 允许用户身份 → `strict-mode off` + `default-as auto`（要用 user 时显式 `--as user`）。
-   *
-   * 两条都**只作用于这一个 profile**，绝不 `--global`。
-   */
-  async function syncProfilePolicy(profile, mode) {
-    if (profile?.name !== managedName) return;
-    const desired = desiredPolicy(mode);
-    if (appliedPolicy
-      && appliedPolicy.strictMode === desired.strictMode
-      && appliedPolicy.defaultAs === desired.defaultAs) return;
-    const currentStrict = await readConfigValue(['config', 'strict-mode'], /strict-mode:\s*(bot|user|off)/);
-    if (currentStrict !== desired.strictMode) {
-      await exec(['config', 'strict-mode', desired.strictMode], { allowPlainText: true });
-      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} 的 strict-mode 已设为 ${desired.strictMode}`);
-    }
-    const currentDefault = await readConfigValue(['config', 'default-as'], /default-as:\s*(bot|user|auto)/);
-    if (currentDefault !== desired.defaultAs) {
-      await exec(['config', 'default-as', desired.defaultAs], { allowPlainText: true });
-      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} 的默认身份已设为 ${desired.defaultAs}`);
-    }
-    appliedPolicy = desired;
+    return list.find((item) => item.appId === ownAppId) ?? null;
   }
 
   /**
@@ -331,45 +282,26 @@ export function createLarkCli({
    * @returns 解析出的 profile 记录。
    */
   async function ensureProfile() {
-    if (resolved) {
-      // 策略可能刚被改过（设置页切换）：我们自己的 profile 要跟着走。
-      await syncProfilePolicy(resolved, policy().mode);
-      return resolved;
-    }
+    if (resolved) return resolved;
     if (resolving) return resolving;
     resolving = (async () => {
-      const own = await findOwnProfile();
-      if (own) {
-        resolved = own;
-        await syncProfilePolicy(resolved, policy().mode);
+      const found = await findProfile();
+      if (found) {
+        resolved = found;
         return resolved;
-      }
-      const list = await listProfiles();
-      const clash = list.find((item) => item.name === managedName && item.appId !== ownAppId);
-      if (clash) {
-        throw larkError(
-          'feishu/lark-cli-profile-unavailable',
-          `profile 名 ${managedName} 已被另一个应用（${clash.appId}）占用，不能拿它给 ${ownAppId} 用。`,
-          { hint: '把那个 profile 改名或删掉后重试；本插件不会覆盖别人的 profile。' },
-        );
-      }
-      const others = list.filter((item) => item.appId === ownAppId).map((item) => item.name);
-      if (others.length > 0) {
-        logger.info?.(`[dsh-chat-feishu] lark-cli 里已有同应用（${ownAppId}）的 profile ${others.join('、')}；`
-          + `本插件不动它，另建自己的 ${managedName}`);
       }
       if (typeof resolveSecret !== 'function' || !cleanString(secretRef)) {
         throw larkError(
           'feishu/lark-cli-profile-unavailable',
-          `lark-cli 里没有${managedName}（这台机器人自己的 profile），且当前拿不到 App Secret，无法为它新建。`,
-          { hint: `请执行 lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin` },
+          `lark-cli 里没有 ${ownAppId} 的 profile，且当前拿不到 App Secret，无法为它新建。`,
+          { hint: `请执行 lark-cli profile add --name ${ownAppId} --app-id ${ownAppId} --app-secret-stdin` },
         );
       }
       const secret = await resolveSecret(secretRef);
       if (!cleanString(secret)) {
         throw larkError(
           'feishu/lark-cli-profile-unavailable',
-          `lark-cli 里没有${managedName}，且 DSH 里这台机器人的 App Secret 读不到。`,
+          `lark-cli 里没有 ${ownAppId} 的 profile，且 DSH 里这台机器人的 App Secret 读不到。`,
           { hint: '到设置页重新接入这台机器人（填 App ID + App Secret），或手工 lark-cli profile add。' },
         );
       }
@@ -380,23 +312,23 @@ export function createLarkCli({
           { input: secret, pin: false },
         );
       } catch (error) {
-        // 并发建同名 profile 是可能的：再查一次，查到了就当成功（幂等）。
-        const again = await findOwnProfile().catch(() => null);
+        // 真机上出现过这一类：lark-cli 说 app-id 已被某个 profile 占用（一个 app 只有一份 profile）。
+        // 再查一次：查到了就用它（那本来就是本应用的那一份），查不到才把原错误抛出去。
+        const again = await findProfile().catch(() => null);
         if (!again) throw error;
         resolved = again;
         return resolved;
       }
-      const created = await findOwnProfile();
+      const created = await findProfile();
       if (!created) {
         throw larkError(
           'feishu/lark-cli-profile-unavailable',
-          `lark-cli 说 profile 建好了，但列表里读不到 ${managedName}。`,
+          `lark-cli 说 profile 建好了，但列表里读不到 ${ownAppId}。`,
           { hint: '查看 lark-cli profile list；若确实是权限/钥匙串问题，请手工执行 profile add。' },
         );
       }
       resolved = created;
-      logger.info?.(`[dsh-chat-feishu] lark-cli 里为 ${ownAppId} 新建了专用 profile ${created.name}`);
-      await syncProfilePolicy(created, policy().mode);
+      logger.info?.(`[dsh-chat-feishu] lark-cli 里为 ${ownAppId} 新建了 profile ${created.name}`);
       return resolved;
     })();
     try {
@@ -445,9 +377,7 @@ export function createLarkCli({
           { hint: '到设置页重新开启一次「允许用户身份」，让插件记录下当前登录的用户。' },
         );
       }
-      const profile = await ensureProfile();
-      // 允许用户身份时，我们自己的 profile 不能停在 strict-mode=bot（那会把 --as user 挡住）。
-      await syncProfilePolicy(profile, 'user-allowed');
+      await ensureProfile();
     }
     const info = await whoami({ as });
     if (cleanString(info?.appId) !== ownAppId) {
@@ -488,10 +418,8 @@ export function createLarkCli({
     const current = policy();
     const checkedAt = new Date().toISOString();
     let profile = null;
-    let otherProfiles = [];
     try {
-      otherProfiles = await sameAppElsewhere();
-      const found = await findOwnProfile();
+      const found = await findProfile();
       if (found) {
         // 只读路径也走同一份解析结果，避免设置页看到的状态与真实调用不一致。
         resolved = resolved ?? found;
@@ -507,12 +435,7 @@ export function createLarkCli({
       });
     }
     if (!profile) {
-      return Object.freeze({
-        policy: current,
-        profile: { found: false, name: managedName, otherProfiles },
-        identity: null,
-        checkedAt,
-      });
+      return Object.freeze({ policy: current, profile: { found: false, name: managedName }, identity: null, checkedAt });
     }
     const identity = { bot: null, user: null };
     for (const as of ['bot', 'user']) {
@@ -524,7 +447,7 @@ export function createLarkCli({
     }
     return Object.freeze({
       policy: current,
-      profile: Object.freeze({ found: true, otherProfiles, ...profile }),
+      profile: Object.freeze({ found: true, ...profile }),
       identity: Object.freeze(identity),
       checkedAt,
     });

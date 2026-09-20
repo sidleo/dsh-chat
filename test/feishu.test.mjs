@@ -4585,12 +4585,18 @@ const IDENTITY_SESSION = 'session-lark-guard-1';
 
 /** 控制器测试用的假 lark-cli：只实现设置页/端点会碰的那几个方法。 */
 function createFakeLarkCli(options = {}) {
-  const calls = { inspect: 0, whoami: [] };
+  const calls = { inspect: 0, whoami: [], ensureProfile: 0 };
   return {
     calls,
     cli: {
       appId: options.appId ?? 'cli_lark_identity_1',
-      profileName: options.profileName ?? 'dsh-chat-cli_lark_identity_1',
+      // 真机形态：profile 名就是应用当初被命名的那个（lark-cli 一个 appId 只有一份 profile）。
+      profileName: options.profileName ?? 'cli_lark_identity_1',
+      async ensureProfile() {
+        calls.ensureProfile = (calls.ensureProfile ?? 0) + 1;
+        if (options.ensureProfileError) throw options.ensureProfileError;
+        return { name: options.profileName ?? 'cli_lark_identity_1', appId: options.appId ?? 'cli_lark_identity_1' };
+      },
       async inspect() {
         calls.inspect += 1;
         if (options.inspectError) throw options.inspectError;
@@ -4791,7 +4797,7 @@ test('lark-cli 门禁：聊天会话里的调用按身份策略判，别的会�
     const owner = controller.chatOwnership(IDENTITY_SESSION);
     assert.equal(owner.botId, 'bot_lark');
     assert.equal(owner.mode, 'bot-only', '默认只用应用身份');
-    assert.equal(owner.profileName, 'dsh-chat-cli_lark_identity_1', 'profile 名由 appId 推出');
+    assert.equal(owner.profileName, 'cli_lark_identity_1', 'profile 名来自 lark-cli（不是猜的）');
     assert.equal(controller.chatOwnership('session-not-ours'), null, '不是聊天会话就不管');
 
     /** 一次 bash 调用（真机上就是模型跑 lark-cli 的那条路）。 */
@@ -4806,11 +4812,11 @@ test('lark-cli 门禁：聊天会话里的调用按身份策略判，别的会�
       'lark-cli im +messages-send --as user --user-id ou_x --text "测试"',
     ));
     assert.equal(denied?.kind, 'deny');
-    assert.match(denied.reason, /dsh-chat-cli_lark_identity_1/);
+    assert.match(denied.reason, /cli_lark_identity_1/);
 
     // 合规写法放行。
     assert.equal(await controller.larkGuard.evaluate(call(
-      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as bot --text x',
+      'lark-cli --profile cli_lark_identity_1 im +messages-send --as bot --text x',
     )), null);
 
     // 用户自己的会话（不是聊天会话）跑同样的命令，不管。
@@ -4824,13 +4830,13 @@ test('lark-cli 门禁：聊天会话里的调用按身份策略判，别的会�
     });
     assert.equal(enabled.ok, true, JSON.stringify(enabled));
     assert.equal(await controller.larkGuard.evaluate(call(
-      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as user --text x',
+      'lark-cli --profile cli_lark_identity_1 im +messages-send --as user --text x',
     )), null);
 
     // 关回 bot-only：再次拦下（不用重启）。
     await controller.endpoints['bot.lark-identity.set']({ botId: 'bot_lark', value: 'bot-only' });
     assert.equal((await controller.larkGuard.evaluate(call(
-      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as user --text x',
+      'lark-cli --profile cli_lark_identity_1 im +messages-send --as user --text x',
     )))?.kind, 'deny');
 
     await controller.stop();

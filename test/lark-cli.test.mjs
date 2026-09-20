@@ -191,7 +191,7 @@ test('lark-cli 里只有别的应用：拿不到 secret 时失败，绝不借用
   }
 });
 
-test('自建 profile：secret 只走 stdin、不带 --use，建完只给自己设 strict-mode', async () => {
+test('没有 profile 时才建：secret 只走 stdin、不带 --use、不动全局设置', async () => {
   // 第一次 list 为空；add 之后再 list 要能看到（否则会判成"建好了却读不到"）。
   let added = false;
   const fake = createFakeRunner(({ args }) => {
@@ -225,101 +225,104 @@ test('自建 profile：secret 只走 stdin、不带 --use，建完只给自己�
     assert.ok(!call.args.includes('app-secret-value'), 'secret 不许出现在 argv 里');
     assert.ok(!JSON.stringify(call.args).includes('--global'), 'strict-mode 不许写全局');
   }
-  const strict = fake.calls.find((call) => call.args.includes('strict-mode') && call.args.includes('bot'));
-  assert.ok(strict, 'bot-only 策略下应给自己那个 profile 设 strict-mode=bot');
-  assert.deepEqual(profilesIn(strict.args), [OWN_PROFILE]);
+  // 不许去改那份 profile 的设置：一个 app 只有一份，用户自己也在用它做别的 user 身份的事。
+  assert.equal(fake.calls.some((call) => call.args.includes('strict-mode')), false);
+  assert.equal(fake.calls.some((call) => call.args.includes('default-as')), false);
 });
 
-test('专用 profile：同应用的别的 profile 一概不用（只提示，不碰）', async () => {
+test('profile 按 appId 认：名字是用户起的也照用（lark-cli 里一个应用只有一份）', async () => {
   const fake = createFakeRunner(({ args }) => {
     if (args.includes('list')) {
-      // 只有"用户自己那份"同应用 profile（名字不是我们的）——必须另建自己的。
       return { json: [{ name: 'my-personal-profile', appId: APP_ID, brand: 'feishu', user: '张三' }] };
     }
-    if (args.includes('add')) return { json: { ok: true } };
-    if (args.includes('strict-mode')) return { raw: 'strict-mode: off (source: global (default))\n' };
-    if (args.includes('default-as')) return { raw: 'default-as: auto\n' };
     return { json: { ok: true } };
   });
-  let created = false;
-  const runner = async (call) => {
-    if (call.args.includes('list') && created) {
-      fake.calls.push(call);
-      return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID, brand: 'feishu' }]), stderr: '' };
-    }
-    if (call.args.includes('add')) created = true;
-    return fake.runner(call);
-  };
   const cli = createLarkCli({
     appId: APP_ID,
     secretRef: 'DSH_FEISHU_APP_SECRET',
     resolveSecret: async () => 'app-secret-value',
     identityPolicy: () => ({ mode: 'bot-only', userOpenId: null }),
-    runner,
+    runner: fake.runner,
     logger: silentLogger,
   });
   const profile = await cli.ensureProfile();
-  assert.equal(profile.name, OWN_PROFILE, '必须用自己的专用 profile');
-  assert.ok(fake.calls.some((call) => call.args.includes('add')), '同应用只有别人的 profile 时要自己建一个');
-  for (const call of fake.calls) {
-    assert.ok(!call.args.includes('my-personal-profile'), '不许把别人的 profile 当成自己的');
-  }
+  assert.equal(profile.name, 'my-personal-profile', '应该用 appId 匹配到的那一份，而不是自己造一个名字');
+  assert.equal(fake.calls.some((call) => call.args.includes('add')), false, '已存在就不该再建');
+  // 而且之后所有调用都带这个名字（不是我们凭空拼的名字）。
+  await cli.whoami({ as: 'bot' }).catch(() => undefined);
+  const who = fake.calls.find((call) => call.args.includes('whoami'));
+  assert.equal(who.args[1], 'my-personal-profile');
 });
 
-test('身份策略同步到自己的 profile：bot-only → strict-mode bot + default-as bot；user-allowed → off + auto', async () => {
-  const calls = [];
-  const runner = async ({ args, input }) => {
-    calls.push({ args, input });
-    if (args.includes('list')) return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID }]), stderr: '' };
-    if (args.includes('strict-mode') || args.includes('default-as')) return { code: 0, stdout: 'strict-mode: off (source: global (default))\n', stderr: '' };
-    return { code: 0, stdout: JSON.stringify({ ok: true }), stderr: '' };
-  };
+test('同 appId 已被占用（真机那次报错）：自愈用上那一份，而不是把错误丢给用户', async () => {
+  // 真机错误：app-id "cli_x" is already used by profile "cli_x"; each profile must have a unique app-id
+  let listed = false;
+  const fake = createFakeRunner(({ args }) => {
+    if (args.includes('list')) {
+      return { json: listed ? [{ name: APP_ID, appId: APP_ID, brand: 'feishu' }] : [] };
+    }
+    if (args.includes('add')) {
+      listed = true; // 建失败的同时，profile 其实已经在（另一处并发建的 / 我们先前没看到）
+      return {
+        code: 1,
+        json: {
+          ok: false,
+          error: {
+            type: 'validation',
+            subtype: 'failed_precondition',
+            message: `app-id "${APP_ID}" is already used by profile "${APP_ID}"; each profile must have a unique app-id`,
+          },
+        },
+      };
+    }
+    return { json: { ok: true } };
+  });
   const cli = createLarkCli({
     appId: APP_ID,
+    secretRef: 'DSH_FEISHU_APP_SECRET',
+    resolveSecret: async () => 'app-secret-value',
     identityPolicy: () => ({ mode: 'bot-only', userOpenId: null }),
-    runner,
+    runner: fake.runner,
     logger: silentLogger,
   });
-  await cli.ensureProfile();
-  assert.ok(calls.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config strict-mode bot`),
-    'bot-only 要给自己的 profile 设 strict-mode bot');
-  assert.ok(calls.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config default-as bot`),
-    'bot-only 还要把默认身份设成 bot（省略 --as 时不能落到 user）');
-  for (const call of calls) assert.ok(!call.args.includes('--global'), '绝不写全局');
-
-  const calls2 = [];
-  const cli2 = createLarkCli({
-    appId: APP_ID,
-    identityPolicy: () => ({ mode: 'user-allowed', userOpenId: USER_OPEN_ID }),
-    runner: async ({ args }) => {
-      calls2.push({ args });
-      if (args.includes('list')) return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID }]), stderr: '' };
-      if (args.includes('strict-mode')) return { code: 0, stdout: 'strict-mode: bot (source: profile)\n', stderr: '' };
-      if (args.includes('default-as')) return { code: 0, stdout: 'default-as: bot\n', stderr: '' };
-      return { code: 0, stdout: JSON.stringify({ ok: true }), stderr: '' };
-    },
-    logger: silentLogger,
-  });
-  await cli2.assertIdentity({ as: 'user' }).catch(() => undefined);
-  assert.ok(calls2.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config strict-mode off`),
-    '允许用户身份时要把 strict-mode 改回 off，否则 --as user 会被 lark-cli 自己挡住');
-  assert.ok(calls2.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config default-as auto`));
+  const profile = await cli.ensureProfile();
+  assert.equal(profile.appId, APP_ID);
+  assert.equal(profile.name, APP_ID);
 });
 
-test('profile 名被别的应用占用：失败并说明，不覆盖别人的 profile', async () => {
-  const { cli } = createCli({
-    reply: ({ args }) => {
-      if (args.includes('list')) {
-        return { json: [{ name: OWN_PROFILE, appId: OTHER_APP_ID, brand: 'feishu' }] };
-      }
-      return { json: { ok: true } };
-    },
+test('列表里只有别的应用：新建失败就如实报错，绝不借用别人的 profile', async () => {
+  const fake = createFakeRunner(({ args }) => {
+    if (args.includes('list')) {
+      return { json: [{ name: 'someone-elses-profile', appId: OTHER_APP_ID, brand: 'feishu' }] };
+    }
+    if (args.includes('add')) {
+      // 真机上 lark-cli 会拒（名字被占 / app-id 已被用），插件不该把它吞掉当成成功。
+      return {
+        code: 1,
+        json: {
+          ok: false,
+          error: { type: 'validation', subtype: 'failed_precondition', message: `profile name "${APP_ID}" is already used` },
+        },
+      };
+    }
+    return { json: { ok: true } };
+  });
+  const cli = createLarkCli({
+    appId: APP_ID,
+    secretRef: 'DSH_FEISHU_APP_SECRET',
+    resolveSecret: async () => 'app-secret-value',
+    identityPolicy: () => ({ mode: 'bot-only', userOpenId: null }),
+    runner: fake.runner,
+    logger: silentLogger,
   });
   await assert.rejects(cli.ensureProfile(), (error) => {
-    assert.equal(error.code, 'feishu/lark-cli-profile-unavailable');
-    assert.match(error.message, /占用/);
+    assert.equal(error.code, 'feishu/lark-cli-failed');
+    assert.match(error.message, /already used/);
     return true;
   });
+  for (const call of fake.calls) {
+    assert.ok(!call.args.includes('someone-elses-profile'), `不许把别人的 profile 当成自己的：${call.args.join(' ')}`);
+  }
 });
 
 test('profile 半路消失（lark-cli 报 field=--profile）：按不可用失败，不重试、不降级', async () => {

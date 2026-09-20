@@ -688,8 +688,8 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 
 **调 `lark-cli`（飞书/Lark 命令行）有两个入口，职责不同**：插件自己调走
 `packages/dsh-chat-feishu/host/lark-cli.mjs`（唯一会拉起 lark-cli 的地方）；**模型在聊天会话里自己调**
-（skill + bash）由 `host/lark-guard.mjs` 接 `tools/pre-execute` 拦——两者都只允许本机器人的专用
-profile（`dsh-chat-<appId>`）与显式身份。下面是"插件自己调"那条的规矩：
+（skill + bash）由 `host/lark-guard.mjs` 接 `tools/pre-execute` 拦——两者都只允许本应用那一份
+profile（按 appId 从 `lark-cli profile list` 读回真实名字）与显式身份。下面是"插件自己调"那条的规矩：
 
 lark-cli 允许同一台机器登录**多个应用**，还有一个**全局可变的"生效 profile"**：谁不显式指定 profile，
 谁就可能在用**别人的授权**（甚至是别人的用户身份）。那个模块是全仓库**唯一**会拉起 lark-cli 的地方

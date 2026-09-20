@@ -128626,7 +128626,6 @@ import { dirname } from "node:path";
 // packages/dsh-chat-feishu/host/lark-cli.mjs
 import { spawn } from "node:child_process";
 var LARK_IDENTITY_MODES = Object.freeze(["bot-only", "user-allowed"]);
-var PROFILE_PREFIX = "dsh-chat-";
 var APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
 var WORKSPACE_ENV_KEYS = Object.freeze(["LARK_CHANNEL", "OPENCLAW_HOME", "HERMES_HOME"]);
 function cleanString(value) {
@@ -128636,7 +128635,7 @@ function normalizeLarkUserIdentity(value) {
   return value === "user-allowed" ? "user-allowed" : "bot-only";
 }
 function profileNameFor(appId) {
-  return `${PROFILE_PREFIX}${cleanString(appId) ?? "unknown"}`;
+  return cleanString(appId) ?? "unknown";
 }
 function larkError(code, message, details = {}) {
   const error = new Error(message);
@@ -128695,7 +128694,6 @@ function createLarkCli({
   const managedName = profileNameFor(ownAppId);
   let resolved = null;
   let resolving = null;
-  let appliedPolicy = null;
   function policy() {
     let value;
     try {
@@ -128784,77 +128782,31 @@ function createLarkCli({
       effective: item?.effective === true
     }));
   }
-  async function findOwnProfile() {
+  async function findProfile() {
     const list = await listProfiles();
-    return list.find((item) => item.name === managedName && item.appId === ownAppId) ?? null;
-  }
-  async function sameAppElsewhere() {
-    const list = await listProfiles();
-    return list.filter((item) => item.appId === ownAppId && item.name !== managedName).map((item) => item.name);
-  }
-  async function readConfigValue(args, pattern) {
-    const result = await exec(args, { allowPlainText: true });
-    const text = typeof result?.plain === "string" ? result.plain : "";
-    const found = pattern.exec(text);
-    return found ? found[1] : null;
-  }
-  function desiredPolicy(mode) {
-    return mode === "user-allowed" ? { strictMode: "off", defaultAs: "auto" } : { strictMode: "bot", defaultAs: "bot" };
-  }
-  async function syncProfilePolicy(profile, mode) {
-    if (profile?.name !== managedName) return;
-    const desired = desiredPolicy(mode);
-    if (appliedPolicy && appliedPolicy.strictMode === desired.strictMode && appliedPolicy.defaultAs === desired.defaultAs) return;
-    const currentStrict = await readConfigValue(["config", "strict-mode"], /strict-mode:\s*(bot|user|off)/);
-    if (currentStrict !== desired.strictMode) {
-      await exec(["config", "strict-mode", desired.strictMode], { allowPlainText: true });
-      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684 strict-mode \u5DF2\u8BBE\u4E3A ${desired.strictMode}`);
-    }
-    const currentDefault = await readConfigValue(["config", "default-as"], /default-as:\s*(bot|user|auto)/);
-    if (currentDefault !== desired.defaultAs) {
-      await exec(["config", "default-as", desired.defaultAs], { allowPlainText: true });
-      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684\u9ED8\u8BA4\u8EAB\u4EFD\u5DF2\u8BBE\u4E3A ${desired.defaultAs}`);
-    }
-    appliedPolicy = desired;
+    return list.find((item) => item.appId === ownAppId) ?? null;
   }
   async function ensureProfile() {
-    if (resolved) {
-      await syncProfilePolicy(resolved, policy().mode);
-      return resolved;
-    }
+    if (resolved) return resolved;
     if (resolving) return resolving;
     resolving = (async () => {
-      const own2 = await findOwnProfile();
-      if (own2) {
-        resolved = own2;
-        await syncProfilePolicy(resolved, policy().mode);
+      const found = await findProfile();
+      if (found) {
+        resolved = found;
         return resolved;
-      }
-      const list = await listProfiles();
-      const clash = list.find((item) => item.name === managedName && item.appId !== ownAppId);
-      if (clash) {
-        throw larkError(
-          "feishu/lark-cli-profile-unavailable",
-          `profile \u540D ${managedName} \u5DF2\u88AB\u53E6\u4E00\u4E2A\u5E94\u7528\uFF08${clash.appId}\uFF09\u5360\u7528\uFF0C\u4E0D\u80FD\u62FF\u5B83\u7ED9 ${ownAppId} \u7528\u3002`,
-          { hint: "\u628A\u90A3\u4E2A profile \u6539\u540D\u6216\u5220\u6389\u540E\u91CD\u8BD5\uFF1B\u672C\u63D2\u4EF6\u4E0D\u4F1A\u8986\u76D6\u522B\u4EBA\u7684 profile\u3002" }
-        );
-      }
-      const others = list.filter((item) => item.appId === ownAppId).map((item) => item.name);
-      if (others.length > 0) {
-        logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u5DF2\u6709\u540C\u5E94\u7528\uFF08${ownAppId}\uFF09\u7684 profile ${others.join("\u3001")}\uFF1B\u672C\u63D2\u4EF6\u4E0D\u52A8\u5B83\uFF0C\u53E6\u5EFA\u81EA\u5DF1\u7684 ${managedName}`);
       }
       if (typeof resolveSecret2 !== "function" || !cleanString(secretRef)) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u91CC\u6CA1\u6709${managedName}\uFF08\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684 profile\uFF09\uFF0C\u4E14\u5F53\u524D\u62FF\u4E0D\u5230 App Secret\uFF0C\u65E0\u6CD5\u4E3A\u5B83\u65B0\u5EFA\u3002`,
-          { hint: `\u8BF7\u6267\u884C lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin` }
+          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14\u5F53\u524D\u62FF\u4E0D\u5230 App Secret\uFF0C\u65E0\u6CD5\u4E3A\u5B83\u65B0\u5EFA\u3002`,
+          { hint: `\u8BF7\u6267\u884C lark-cli profile add --name ${ownAppId} --app-id ${ownAppId} --app-secret-stdin` }
         );
       }
       const secret = await resolveSecret2(secretRef);
       if (!cleanString(secret)) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u91CC\u6CA1\u6709${managedName}\uFF0C\u4E14 DSH \u91CC\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 App Secret \u8BFB\u4E0D\u5230\u3002`,
+          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14 DSH \u91CC\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 App Secret \u8BFB\u4E0D\u5230\u3002`,
           { hint: "\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u63A5\u5165\u8FD9\u53F0\u673A\u5668\u4EBA\uFF08\u586B App ID + App Secret\uFF09\uFF0C\u6216\u624B\u5DE5 lark-cli profile add\u3002" }
         );
       }
@@ -128864,22 +128816,21 @@ function createLarkCli({
           { input: secret, pin: false }
         );
       } catch (error) {
-        const again = await findOwnProfile().catch(() => null);
+        const again = await findProfile().catch(() => null);
         if (!again) throw error;
         resolved = again;
         return resolved;
       }
-      const created = await findOwnProfile();
+      const created = await findProfile();
       if (!created) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u8BF4 profile \u5EFA\u597D\u4E86\uFF0C\u4F46\u5217\u8868\u91CC\u8BFB\u4E0D\u5230 ${managedName}\u3002`,
+          `lark-cli \u8BF4 profile \u5EFA\u597D\u4E86\uFF0C\u4F46\u5217\u8868\u91CC\u8BFB\u4E0D\u5230 ${ownAppId}\u3002`,
           { hint: "\u67E5\u770B lark-cli profile list\uFF1B\u82E5\u786E\u5B9E\u662F\u6743\u9650/\u94A5\u5319\u4E32\u95EE\u9898\uFF0C\u8BF7\u624B\u5DE5\u6267\u884C profile add\u3002" }
         );
       }
       resolved = created;
-      logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u4E3A ${ownAppId} \u65B0\u5EFA\u4E86\u4E13\u7528 profile ${created.name}`);
-      await syncProfilePolicy(created, policy().mode);
+      logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u4E3A ${ownAppId} \u65B0\u5EFA\u4E86 profile ${created.name}`);
       return resolved;
     })();
     try {
@@ -128912,8 +128863,7 @@ function createLarkCli({
           { hint: "\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u5F00\u542F\u4E00\u6B21\u300C\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D\uFF0C\u8BA9\u63D2\u4EF6\u8BB0\u5F55\u4E0B\u5F53\u524D\u767B\u5F55\u7684\u7528\u6237\u3002" }
         );
       }
-      const profile = await ensureProfile();
-      await syncProfilePolicy(profile, "user-allowed");
+      await ensureProfile();
     }
     const info = await whoami({ as });
     if (cleanString(info?.appId) !== ownAppId) {
@@ -128952,10 +128902,8 @@ function createLarkCli({
     const current = policy();
     const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
     let profile = null;
-    let otherProfiles = [];
     try {
-      otherProfiles = await sameAppElsewhere();
-      const found = await findOwnProfile();
+      const found = await findProfile();
       if (found) {
         resolved = resolved ?? found;
         profile = found;
@@ -128970,12 +128918,7 @@ function createLarkCli({
       });
     }
     if (!profile) {
-      return Object.freeze({
-        policy: current,
-        profile: { found: false, name: managedName, otherProfiles },
-        identity: null,
-        checkedAt
-      });
+      return Object.freeze({ policy: current, profile: { found: false, name: managedName }, identity: null, checkedAt });
     }
     const identity2 = { bot: null, user: null };
     for (const as of ["bot", "user"]) {
@@ -128987,7 +128930,7 @@ function createLarkCli({
     }
     return Object.freeze({
       policy: current,
-      profile: Object.freeze({ found: true, otherProfiles, ...profile }),
+      profile: Object.freeze({ found: true, ...profile }),
       identity: Object.freeze(identity2),
       checkedAt
     });
@@ -130845,6 +130788,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const probeFactory = internals.createProbe ?? createLarkProbe;
   const larkCliFactory = internals.createLarkCli ?? createLarkCli;
   const larkCliInstances = /* @__PURE__ */ new Map();
+  const profileNames = /* @__PURE__ */ new Map();
   function larkCliFor(botId) {
     const existing = larkCliInstances.get(botId);
     if (existing) return existing;
@@ -130937,9 +130881,10 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       record.phase = "running";
       record.error = null;
       logger.info?.(`[dsh-chat-feishu] ${bot.botName ?? bot.id} \u957F\u8FDE\u63A5\u5DF2\u5C31\u7EEA`);
-      void larkCliFor(bot.id)?.ensureProfile?.().catch((error) => {
+      await resolveProfileName(bot.id).catch((error) => {
         const level = error?.code === "feishu/lark-cli-missing" ? "info" : "warn";
-        logger[level]?.(`[dsh-chat-feishu] ${bot.id} \u51C6\u5907 lark-cli \u4E13\u7528 profile \u5931\u8D25\uFF1A${error?.message ?? error}`);
+        logger[level]?.(`[dsh-chat-feishu] ${bot.id} \u89E3\u6790 lark-cli profile \u5931\u8D25\uFF1A${error?.message ?? error}`);
+        return null;
       });
     } catch (error) {
       record.phase = "failed";
@@ -131004,6 +130949,16 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       nameHint: nameCache.get(bot.id)?.nameHint ?? null
     });
   }
+  async function resolveProfileName(botId) {
+    const cached = profileNames.get(botId);
+    if (cached) return cached;
+    const cli = larkCliFor(botId);
+    if (!cli) throw new Error(`\u672A\u627E\u5230\u673A\u5668\u4EBA ${botId}\uFF0C\u65E0\u6CD5\u89E3\u6790 lark-cli profile\u3002`);
+    const profile = await cli.ensureProfile();
+    const name2 = typeof profile?.name === "string" && profile.name ? profile.name : cli.profileName;
+    profileNames.set(botId, name2);
+    return name2;
+  }
   function chatOwnership(sessionId) {
     if (typeof sessionId !== "string" || !sessionId) return null;
     const locate = deps.sessions?.bindings?.locate;
@@ -131017,17 +130972,24 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       botName: bot.botName ?? null,
       chatKey: located.key,
       mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
-      profileName: profileNameFor(bot.appId)
+      // 还没解析出来时为 null：提示词段会退化成"用 profile list 查 appId 对应的那份"，
+      // 而不是编一个不存在的名字（编错了模型写什么都不对）。
+      profileName: profileNames.get(bot.id) ?? null,
+      appId: bot.appId
     });
   }
   async function larkPolicyFor(botId) {
     await configStore.load();
     const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
     if (!bot) return null;
-    return {
-      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
-      profileName: profileNameFor(bot.appId)
-    };
+    let profileName = profileNames.get(bot.id) ?? null;
+    if (!profileName) {
+      profileName = await resolveProfileName(bot.id).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] \u89E3\u6790 ${bot.id} \u7684 lark-cli profile \u5931\u8D25\uFF0C\u95E8\u7981\u6682\u65F6\u4E0D\u751F\u6548\uFF1A${error?.message ?? error}`);
+        return null;
+      });
+    }
+    return { mode: normalizeLarkUserIdentity(bot.larkUserIdentity), profileName };
   }
   const larkGuard = createLarkCliGuard({
     locate: (sessionId) => deps.sessions?.bindings?.locate?.(sessionId),

@@ -14,7 +14,7 @@ import test from 'node:test';
 import { apply, installLarkIdentitySection, registerShellFacts } from '../packages/dsh-chat-feishu/host/index.mjs';
 
 const SESSION = 'session-e6fb1928-946a-4f60-82ed-56a6076eb008';
-const PROFILE = 'dsh-chat-cli_a9fa3aebe7f89cef';
+const PROFILE = 'cli_a9fa3aebe7f89cef';
 
 const OWNER = Object.freeze({
   botId: 'bot_b6e11ebfaedb4413bf7c5eaa65387204',

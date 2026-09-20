@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
-import { createLarkCli, normalizeLarkUserIdentity, profileNameFor } from './lark-cli.mjs';
+import { createLarkCli, normalizeLarkUserIdentity } from './lark-cli.mjs';
 import { createLarkCliGuard } from './lark-guard.mjs';
 import { createLarkGateway, createLarkProbe } from './lark-gateway.mjs';
 import { createProvisionManager } from './provision.mjs';
@@ -93,6 +93,14 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const larkCliFactory = internals.createLarkCli ?? createLarkCli;
   /** @type {Map<string, object>} botId → lark-cli 调用器（懒建，一个进程一份） */
   const larkCliInstances = new Map();
+  /**
+   * @type {Map<string, string>} botId → 该应用在 lark-cli 里的 profile 名。
+   *
+   * **profile 名不能猜**：lark-cli 里一个 appId 只有一份 profile，名字由用户当初起
+   * （多数就是 appId，但也可能是别的）。门禁与提示词都要报出**真实**的那个名字，
+   * 报错了模型写什么都不对——所以这里存的是从 `lark-cli profile list` 读回来的值。
+   */
+  const profileNames = new Map();
 
   /**
    * 取某台机器人的 lark-cli 调用器。
@@ -215,16 +223,17 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       record.error = null;
       logger.info?.(`[dsh-chat-feishu] ${bot.botName ?? bot.id} 长连接已就绪`);
       /**
-       * 顺手把"这台机器人在 lark-cli 里的专用 profile"准备好（懒建一次、幂等）。
+       * 顺手把"这台机器人在 lark-cli 里那份 profile"解析并记住（懒建一次、幂等）。
        *
-       * 为什么在这儿做：聊天会话里的 lark-cli 调用被门禁要求**必须**带这个 profile，
-       * 而 profile 不存在时 lark-cli 会直接报 profile not found——模型会卡在
-       * "按要求写了参数却跑不起来"。所以机器人一起来就把它备好。
+       * 为什么在这儿做：聊天会话里的 lark-cli 调用被门禁要求**必须**带这个 profile；
+       * profile 不存在时 lark-cli 会直接报 profile not found（模型会卡在"按要求写了参数
+       * 却跑不起来"），名字报错了模型写什么都不对——所以机器人一起来就把它备好、记准。
        * 拿不到 secret / 没装 lark-cli 都只记一条日志，**绝不影响机器人启动**。
        */
-      void larkCliFor(bot.id)?.ensureProfile?.().catch((error) => {
+      await resolveProfileName(bot.id).catch((error) => {
         const level = error?.code === 'feishu/lark-cli-missing' ? 'info' : 'warn';
-        logger[level]?.(`[dsh-chat-feishu] ${bot.id} 准备 lark-cli 专用 profile 失败：${error?.message ?? error}`);
+        logger[level]?.(`[dsh-chat-feishu] ${bot.id} 解析 lark-cli profile 失败：${error?.message ?? error}`);
+        return null;
       });
     } catch (error) {
       record.phase = 'failed';
@@ -294,6 +303,23 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   }
 
   /**
+   * 解析（必要时创建）该机器人在 lark-cli 里的 profile，并记住它的**真实名字**。
+   *
+   * @param botId - 机器人 id。
+   * @returns profile 名；拿不到时抛错（调用方决定是记日志还是拒绝）。
+   */
+  async function resolveProfileName(botId) {
+    const cached = profileNames.get(botId);
+    if (cached) return cached;
+    const cli = larkCliFor(botId);
+    if (!cli) throw new Error(`未找到机器人 ${botId}，无法解析 lark-cli profile。`);
+    const profile = await cli.ensureProfile();
+    const name = typeof profile?.name === 'string' && profile.name ? profile.name : cli.profileName;
+    profileNames.set(botId, name);
+    return name;
+  }
+
+  /**
    * 这个会话是不是本渠道的**聊天会话**，以及它属于哪台机器人。
    *
    * 门禁、会话环境事实、身份策略提示词都靠它——三处必须用同一份判据，
@@ -317,7 +343,10 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       botName: bot.botName ?? null,
       chatKey: located.key,
       mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
-      profileName: profileNameFor(bot.appId),
+      // 还没解析出来时为 null：提示词段会退化成"用 profile list 查 appId 对应的那份"，
+      // 而不是编一个不存在的名字（编错了模型写什么都不对）。
+      profileName: profileNames.get(bot.id) ?? null,
+      appId: bot.appId,
     });
   }
 
@@ -326,10 +355,16 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     await configStore.load();
     const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
     if (!bot) return null;
-    return {
-      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
-      profileName: profileNameFor(bot.appId),
-    };
+    let profileName = profileNames.get(bot.id) ?? null;
+    if (!profileName) {
+      // 门禁要报出真实 profile 名才有意义：这里现解析一次（拿不到就让门禁放行 + 留日志）。
+      profileName = await resolveProfileName(bot.id).catch((error) => {
+        logger.warn?.(`[dsh-chat-feishu] 解析 ${bot.id} 的 lark-cli profile 失败，门禁暂时不生效：`
+          + `${error?.message ?? error}`);
+        return null;
+      });
+    }
+    return { mode: normalizeLarkUserIdentity(bot.larkUserIdentity), profileName };
   }
 
   /**
