@@ -173,8 +173,10 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      同一工作目录的会话 ∪ 这台机器人其它聊天绑定过的会话，排除空会话与子代理会话；
    *      `session.failed` 表示会话列表**读失败**（此时 options 只含当前绑定，不能显示成"没绑定"）。
    *      `fields` 是**渠道自带的面板字段**（渠道相关设置，如飞书的「任务过程展示」）：
-   *      渠道实现可选方法 `panel.fields` 就多一行下拉，hub 只做形状校验与透传——
-   *      hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
+   *      渠道实现可选方法 `panel.fields({ botId, key, conversationType, isOwner })` 就多一行下拉，
+   *      hub 只做形状校验与透传——hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
+   *      渠道想列几项就列几项（飞书把「任务过程展示」私聊/群聊两份都列出来，
+   *      卡片在哪不影响能改哪一份）；`isOwner` 也一并透传，渠道要按身份收窄候选就自己判。
    * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session
    *      **不在内置字段表（model/reasoning/preset/workspace/session）里的 field 一律透传给渠道**：

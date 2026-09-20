@@ -199,9 +199,28 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     { value: 'post', label: '逐步直播（每步一条消息）' },
   ]);
 
-  /** 过程展示是"按会话类型"存的：卡片里只改**当前会话类型**的那一份。 */
-  function stepPushScope(conversationType) {
-    return conversationType === 'group' ? 'group' : 'direct';
+  /**
+   * 过程展示是"按会话类型"存的两份设置（私聊 / 群聊），卡片上**两份都列出来**：
+   * 只看当前会话类型那一份时，用户在群里想改私聊的展示方式就得先回私聊发一次 `/menu`。
+   */
+  const STEP_PUSH_FIELDS = Object.freeze([
+    { field: 'stepPushDirect', scope: 'direct', label: '任务过程展示（私聊）' },
+    { field: 'stepPushGroup', scope: 'group', label: '任务过程展示（群聊）' },
+  ]);
+
+  /** 卡片字段名 → 该改哪一份；旧的会话类型字段名（stepPush）也认，保持兼容。 */
+  function stepPushTarget(fieldName, conversationType) {
+    const hit = STEP_PUSH_FIELDS.find((item) => item.field === fieldName);
+    if (hit) return hit;
+    if (fieldName !== 'stepPush') return null;
+    return conversationType === 'group'
+      ? STEP_PUSH_FIELDS[1]
+      : STEP_PUSH_FIELDS[0];
+  }
+
+  /** 过程展示的两份当前值（面板字段用）。 */
+  function stepPushValues(bot) {
+    return { direct: bot.stepPushDirect, group: bot.stepPushGroup };
   }
 
   function patchRuntime(botId, patch) {
@@ -598,16 +617,17 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         if (!bot) {
           return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
         }
-        const scope = stepPushScope(payload.conversationType);
+        const values = stepPushValues(bot);
         return {
           ok: true,
           value: {
-            fields: [{
-              field: 'stepPush',
-              label: `任务过程展示（${scope === 'group' ? '群聊' : '私聊'}）`,
-              value: scope === 'group' ? bot.stepPushGroup : bot.stepPushDirect,
+            // 两份都列出来：改哪一份不由"卡在哪"决定，而由用户选的那个下拉决定。
+            fields: STEP_PUSH_FIELDS.map((item) => ({
+              field: item.field,
+              label: item.label,
+              value: values[item.scope],
               options: STEP_PUSH_FIELD_OPTIONS,
-            }],
+            })),
           },
         };
       },
@@ -617,7 +637,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         if (typeof payload?.botId !== 'string' || !payload.botId || typeof payload?.field !== 'string') {
           return { ok: false, error: { code: 'chat/bad-request', message: 'panel.apply 需要 botId 与 field。', details: {} } };
         }
-        if (payload.field !== 'stepPush') {
+        const target = stepPushTarget(payload.field, payload.conversationType);
+        if (!target) {
           return {
             ok: false,
             error: { code: 'chat/unknown-field', message: `飞书面板不支持 ${payload.field}。`, details: {} },
@@ -639,10 +660,9 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         if (!bot) {
           return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
         }
-        const scope = stepPushScope(payload.conversationType);
         const next = {
-          direct: scope === 'direct' ? payload.value : bot.stepPushDirect,
-          group: scope === 'group' ? payload.value : bot.stepPushGroup,
+          direct: target.scope === 'direct' ? payload.value : bot.stepPushDirect,
+          group: target.scope === 'group' ? payload.value : bot.stepPushGroup,
         };
         const saved = await configStore.setStepPush(payload.botId, next);
         // 立刻生效：运行期那份 bot 对象要被就地改掉（与设置页那条路一致）。
@@ -655,7 +675,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
           ok: true,
           value: {
             value: payload.value,
-            message: `${scope === 'group' ? '群聊' : '私聊'}过程展示已设为「${label}」，立即生效。`,
+            message: `${target.scope === 'group' ? '群聊' : '私聊'}过程展示已设为「${label}」，立即生效。`,
           },
         };
       },

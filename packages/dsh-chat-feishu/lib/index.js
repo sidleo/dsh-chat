@@ -127237,6 +127237,7 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
   }
   if (presetCells.length > 0) elements.push(grid(presetCells));
+  const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
       name: `panel_field_${item.field}`,
@@ -127245,7 +127246,10 @@ function panelCard(state, { last = null, at = null } = {}) {
       items: (item.options ?? []).map((option) => ({ value: option.value, label: option.label })),
       current: item.value ?? null
     });
-    if (picker.element) elements.push(grid([field(item.label ?? item.field, picker.element)]));
+    if (picker.element) channelCells.push(field(item.label ?? item.field, picker.element));
+  }
+  for (let index = 0; index < channelCells.length; index += 2) {
+    elements.push(grid(channelCells.slice(index, index + 2)));
   }
   if (state?.fieldsFailed === true) {
     elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u8BBE\u7F6E\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });
@@ -129825,8 +129829,18 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     { value: "streaming_card", label: "\u5B9E\u65F6\u8FC7\u7A0B\u5361\uFF08\u4E00\u5F20\u5361\u52A8\u6001\u66F4\u65B0\uFF09" },
     { value: "post", label: "\u9010\u6B65\u76F4\u64AD\uFF08\u6BCF\u6B65\u4E00\u6761\u6D88\u606F\uFF09" }
   ]);
-  function stepPushScope(conversationType) {
-    return conversationType === "group" ? "group" : "direct";
+  const STEP_PUSH_FIELDS = Object.freeze([
+    { field: "stepPushDirect", scope: "direct", label: "\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\uFF08\u79C1\u804A\uFF09" },
+    { field: "stepPushGroup", scope: "group", label: "\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\uFF08\u7FA4\u804A\uFF09" }
+  ]);
+  function stepPushTarget(fieldName, conversationType) {
+    const hit = STEP_PUSH_FIELDS.find((item) => item.field === fieldName);
+    if (hit) return hit;
+    if (fieldName !== "stepPush") return null;
+    return conversationType === "group" ? STEP_PUSH_FIELDS[1] : STEP_PUSH_FIELDS[0];
+  }
+  function stepPushValues(bot) {
+    return { direct: bot.stepPushDirect, group: bot.stepPushGroup };
   }
   function patchRuntime(botId, patch) {
     const record = runtimes.get(botId);
@@ -130142,16 +130156,17 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         if (!bot) {
           return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
         }
-        const scope = stepPushScope(payload.conversationType);
+        const values = stepPushValues(bot);
         return {
           ok: true,
           value: {
-            fields: [{
-              field: "stepPush",
-              label: `\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\uFF08${scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\uFF09`,
-              value: scope === "group" ? bot.stepPushGroup : bot.stepPushDirect,
+            // 两份都列出来：改哪一份不由"卡在哪"决定，而由用户选的那个下拉决定。
+            fields: STEP_PUSH_FIELDS.map((item) => ({
+              field: item.field,
+              label: item.label,
+              value: values[item.scope],
               options: STEP_PUSH_FIELD_OPTIONS
-            }]
+            }))
           }
         };
       },
@@ -130160,7 +130175,8 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         if (typeof payload?.botId !== "string" || !payload.botId || typeof payload?.field !== "string") {
           return { ok: false, error: { code: "chat/bad-request", message: "panel.apply \u9700\u8981 botId \u4E0E field\u3002", details: {} } };
         }
-        if (payload.field !== "stepPush") {
+        const target = stepPushTarget(payload.field, payload.conversationType);
+        if (!target) {
           return {
             ok: false,
             error: { code: "chat/unknown-field", message: `\u98DE\u4E66\u9762\u677F\u4E0D\u652F\u6301 ${payload.field}\u3002`, details: {} }
@@ -130182,10 +130198,9 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         if (!bot) {
           return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
         }
-        const scope = stepPushScope(payload.conversationType);
         const next = {
-          direct: scope === "direct" ? payload.value : bot.stepPushDirect,
-          group: scope === "group" ? payload.value : bot.stepPushGroup
+          direct: target.scope === "direct" ? payload.value : bot.stepPushDirect,
+          group: target.scope === "group" ? payload.value : bot.stepPushGroup
         };
         const saved = await configStore.setStepPush(payload.botId, next);
         patchRuntime(payload.botId, {
@@ -130197,7 +130212,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
           ok: true,
           value: {
             value: payload.value,
-            message: `${scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\u8FC7\u7A0B\u5C55\u793A\u5DF2\u8BBE\u4E3A\u300C${label}\u300D\uFF0C\u7ACB\u5373\u751F\u6548\u3002`
+            message: `${target.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\u8FC7\u7A0B\u5C55\u793A\u5DF2\u8BBE\u4E3A\u300C${label}\u300D\uFF0C\u7ACB\u5373\u751F\u6548\u3002`
           }
         };
       },

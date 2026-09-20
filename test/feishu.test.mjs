@@ -861,18 +861,21 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
 
     /**
      * 渠道自带的面板字段：hub 的 panel.read/apply 调这两个，卡片上就能改过程展示。
-     * 只报**当前会话类型**那一份（群卡里给私聊的取值会让人改错）。
+     * **私聊与群聊两份都列出来**：在群里也能改私聊那份，不用先回私聊发一次 /menu。
      */
     const fields = await controller.endpoints['panel.fields']({ botId: 'bot_ctl', conversationType: 'direct' });
     assert.equal(fields.ok, true);
-    assert.equal(fields.value.fields[0].field, 'stepPush');
+    assert.deepEqual(fields.value.fields.map((item) => item.field), ['stepPushDirect', 'stepPushGroup']);
     assert.match(fields.value.fields[0].label, /私聊/);
+    assert.match(fields.value.fields[1].label, /群聊/);
     assert.equal(fields.value.fields[0].value, 'off', '私聊那份刚被改成 off');
+    assert.equal(fields.value.fields[1].value, 'streaming_card', '群聊那份是另一份设置');
+    // 卡片在哪不影响列出什么：群卡里同样是两份。
     const groupFields = await controller.endpoints['panel.fields']({ botId: 'bot_ctl', conversationType: 'group' });
-    assert.equal(groupFields.value.fields[0].value, 'streaming_card', '群聊那份是另一份设置');
+    assert.deepEqual(groupFields.value.fields.map((item) => item.field), ['stepPushDirect', 'stepPushGroup']);
 
     const applied = await controller.endpoints['panel.apply']({
-      botId: 'bot_ctl', field: 'stepPush', value: 'post', conversationType: 'direct',
+      botId: 'bot_ctl', field: 'stepPushDirect', value: 'post', conversationType: 'group',
     });
     assert.equal(applied.ok, true);
     assert.equal(applied.value.value, 'post');
@@ -880,9 +883,27 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     const afterApply = await controller.endpoints['connection.status']({});
     assert.deepEqual(afterApply.value.bots[0].stepPush, { direct: 'post', group: 'streaming_card' },
       '改完要立刻生效（运行期那份 bot 对象就地改掉）');
+    // 改群聊那份：只动群聊，私聊不受影响。
+    const groupApply = await controller.endpoints['panel.apply']({
+      botId: 'bot_ctl', field: 'stepPushGroup', value: 'off',
+    });
+    assert.equal(groupApply.ok, true);
+    assert.match(groupApply.value.message, /群聊过程展示已设为/);
+    const afterGroup = await controller.endpoints['connection.status']({});
+    assert.deepEqual(afterGroup.value.bots[0].stepPush, { direct: 'post', group: 'off' });
+    // 旧的会话类型字段名仍然认（老卡片/老客户端还在用）。
+    const legacy = await controller.endpoints['panel.apply']({
+      botId: 'bot_ctl', field: 'stepPush', value: 'streaming_card', conversationType: 'group',
+    });
+    assert.equal(legacy.ok, true);
+    assert.deepEqual(
+      (await controller.endpoints['connection.status']({})).value.bots[0].stepPush,
+      { direct: 'post', group: 'streaming_card' },
+      'stepPush 按会话类型落到对应那一份',
+    );
 
     const badValue = await controller.endpoints['panel.apply']({
-      botId: 'bot_ctl', field: 'stepPush', value: 'nope', conversationType: 'direct',
+      botId: 'bot_ctl', field: 'stepPushDirect', value: 'nope', conversationType: 'direct',
     });
     assert.equal(badValue.ok, false);
     const unknownField = await controller.endpoints['panel.apply']({
@@ -2343,6 +2364,41 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.equal(byName.reasoning_pick.options[0].value, '__default__');
   // 当前值要有 ✓ 标记，用户一眼看到现在是什么。
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
+});
+
+test('控制面板卡：渠道自带字段一行两格——过程展示（私聊）与（群聊）都在卡上', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const options = [
+    { value: 'off', label: '不显示过程（只回最终答案）' },
+    { value: 'streaming_card', label: '实时过程卡（一张卡动态更新）' },
+    { value: 'post', label: '逐步直播（每步一条消息）' },
+  ];
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+    fields: [
+      { field: 'stepPushDirect', label: '任务过程展示（私聊）', value: 'streaming_card', options },
+      { field: 'stepPushGroup', label: '任务过程展示（群聊）', value: 'post', options },
+    ],
+  });
+  const byName = Object.fromEntries(cardSelects(card).map((el) => [el.name, el]));
+  assert.ok(byName.panel_field_stepPushDirect, '私聊那份要在卡上');
+  assert.ok(byName.panel_field_stepPushGroup, '群聊那份也要在卡上（在群里就能改私聊的）');
+  assert.equal(byName.panel_field_stepPushDirect.options[byName.panel_field_stepPushDirect.initial_index - 1].value,
+    'streaming_card');
+  assert.equal(byName.panel_field_stepPushGroup.options[byName.panel_field_stepPushGroup.initial_index - 1].value,
+    'post');
+  // 两格并排：同一个 column_set 里，名称也各自写在格子内（select_static 没有 label 字段）。
+  const paired = cardElements(card).filter((el) => el.tag === 'column_set'
+    && JSON.stringify(el).includes('panel_field_stepPushDirect')
+    && JSON.stringify(el).includes('panel_field_stepPushGroup'));
+  assert.equal(paired.length, 1, '两个渠道字段渲染在同一行里');
+  const body = JSON.stringify(card);
+  assert.match(body, /任务过程展示（私聊）/);
+  assert.match(body, /任务过程展示（群聊）/);
 });
 
 test('控制面板卡：没有会话也能选模型——改的是"机器人默认模型"，文案要写清生效范围', async () => {

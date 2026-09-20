@@ -371,6 +371,7 @@ export function panelCard(state, { last = null, at = null } = {}) {
    *
    * 标签与选项都由渠道给（`panel.fields`），hub 只负责画——这样新增这类设置不用改 hub。
    */
+  const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
       name: `panel_field_${item.field}`,
@@ -379,7 +380,11 @@ export function panelCard(state, { last = null, at = null } = {}) {
       items: (item.options ?? []).map((option) => ({ value: option.value, label: option.label })),
       current: item.value ?? null,
     });
-    if (picker.element) elements.push(grid([field(item.label ?? item.field, picker.element)]));
+    if (picker.element) channelCells.push(field(item.label ?? item.field, picker.element));
+  }
+  // 一行两格（与上面几组同宽），奇数个时最后一个单独占一行——窄屏由 stretch 自动堆叠。
+  for (let index = 0; index < channelCells.length; index += 2) {
+    elements.push(grid(channelCells.slice(index, index + 2)));
   }
   if (state?.fieldsFailed === true) {
     elements.push({ tag: 'markdown', content: '读不到渠道设置，稍后再试。' });
