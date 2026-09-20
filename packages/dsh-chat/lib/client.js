@@ -671,9 +671,10 @@ function fromDraft(draft) {
   });
   return { direct: scopeOf(draft.direct), group: scopeOf(draft.group) };
 }
-function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
+function ScopeBlock({ scopeKey, label, scope, busy, t, onChange, names = null }) {
   const [entry, setEntry] = React2.useState("");
   const inputId = `dchat-policy-${scopeKey}`;
+  const nameOf = (id) => names?.[id] ?? null;
   const update = (patch) => onChange({ ...scope, ...patch });
   const addUser = () => {
     const id = entry.trim();
@@ -691,7 +692,14 @@ function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
         key: user.id,
         className: "dchat-listItem"
       },
-      h("code", { className: "dchat-code" }, user.id),
+      // 名字 + id：只显示 id 时，"这条是谁"在设置页上根本认不出来（真机反馈）；
+      // 但 id 才是判定用的那个值，所以两个都留（与「属主」那一行同一个形态）。
+      h(
+        "span",
+        { className: "dchat-policyEntry" },
+        nameOf(user.id) ? h("span", { className: "dchat-policyName" }, nameOf(user.id)) : null,
+        h("code", { className: "dchat-code" }, user.id)
+      ),
       h(
         "span",
         { className: "dchat-actions" },
@@ -776,7 +784,7 @@ function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
     scope.mode === "open" ? openScope : allowlist
   );
 }
-function AccessPolicyEditor({ value, translate, onSave }) {
+function AccessPolicyEditor({ value, translate, onSave, names = null, namesHint = null }) {
   const t = translatorOf(translate);
   const [draft, setDraft] = React2.useState(() => toDraft(value));
   const { busy, failed, run } = useSaver(onSave);
@@ -804,6 +812,7 @@ function AccessPolicyEditor({ value, translate, onSave }) {
         scope: draft.direct,
         busy,
         t,
+        names,
         onChange: (next) => {
           void commit({ ...draft, direct: next });
         }
@@ -814,11 +823,13 @@ function AccessPolicyEditor({ value, translate, onSave }) {
         scope: draft.group,
         busy,
         t,
+        names,
         onChange: (next) => {
           void commit({ ...draft, group: next });
         }
       })
     ),
+    namesHint ? h("p", { className: "dchat-cardDescription" }, namesHint.message ?? String(namesHint)) : null,
     failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
   );
 }
@@ -2304,6 +2315,23 @@ var CSS = `
 .dchat-listItem > :not(.dchat-actions) {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* \u767D\u540D\u5355\u884C\uFF1A\u540D\u5B57 + id \u653E\u540C\u4E00\u4E2A\u5757\u91CC\uFF08id \u624D\u662F\u5224\u5B9A\u7528\u7684\u503C\uFF0C\u540D\u5B57\u53EA\u662F\u7ED9\u4EBA\u770B\u7684\uFF09\u3002
+   \u4E24\u4E2A\u90FD\u5141\u8BB8\u6536\u7F29\u5E76\u7701\u7565\u53F7\uFF0C\u8C01\u957F\u8C01\u8BA9\u4F4D\u2014\u2014\u540D\u5B57\u5F88\u957F\u65F6\u4E0D\u8BB8\u628A id \u9876\u51FA\u5BB9\u5668\u3002 */
+.dchat-policyEntry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.dchat-policyEntry > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dchat-policyName {
+  color: var(--dsw-alias-label-primary);
 }
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);

@@ -130047,6 +130047,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   }
   const OWNER_ID_PATTERN = /^(\*|ou_[A-Za-z0-9_-]{1,64})$/;
   const MAX_OWNERS = 10;
+  const MAX_RESOLVE_IDS = 50;
   const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
   const targetFor = (kind, rawId, name2) => ({
     id: ids(`${kind}:${rawId}`),
@@ -130163,6 +130164,15 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     })();
     cache.userPromises.set(openId, task);
     return task;
+  }
+  async function resolveName(botId, id) {
+    if (id.startsWith("oc_")) {
+      const cached = cacheFor(botId).chats.get(id);
+      if (cached) return cached;
+      await allChats(botId, { minIntervalMs: 6e4 });
+      return cacheFor(botId).chats.get(id) ?? null;
+    }
+    return await userName(botId, id) || null;
   }
   const delivery = Object.freeze({
     /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
@@ -130333,6 +130343,47 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         runtimes.delete(payload.botId);
         await configStore.removeBot(payload.botId);
         return { ok: true, value: { removed: true, botId: payload.botId } };
+      },
+      /**
+       * id → 名字（设置页画白名单用）。
+       *
+       * 白名单存的是平台 id；只显示 id 的话，一排 `ou_4f6a8c0e…` 里认不出是谁、
+       * 也没法确认自己加错了人。查不到就**不放进结果**（界面退回显示 id），
+       * 原因放在 `hint` 里，避免"名字没了却不知道为什么"。
+       */
+      "names.resolve": async (payload) => {
+        const raw = Array.isArray(payload?.ids) ? payload.ids : null;
+        if (typeof payload?.botId !== "string" || !payload.botId || raw === null) {
+          return {
+            ok: false,
+            error: {
+              code: "chat/bad-request",
+              message: "names.resolve \u9700\u8981 { botId, ids: string[] }\u3002",
+              details: {}
+            }
+          };
+        }
+        await configStore.load();
+        if (!configStore.get(payload.botId)) {
+          return {
+            ok: false,
+            error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} }
+          };
+        }
+        const ids2 = [...new Set(raw.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))];
+        const limited = ids2.slice(0, MAX_RESOLVE_IDS);
+        const pairs = await Promise.all(
+          limited.map(async (id) => [id, await resolveName(payload.botId, id)])
+        );
+        return {
+          ok: true,
+          value: {
+            names: Object.fromEntries(pairs.filter(([, name2]) => Boolean(name2))),
+            // 名单特别长时只查前 N 个：界面据此说明"还有几个没查"。
+            truncated: ids2.length > limited.length,
+            hint: nameCache.get(payload.botId)?.nameHint ?? null
+          }
+        };
       },
       /** 任务过程展示：私聊/群聊两份，原子保存并立即生效。 */
       /**

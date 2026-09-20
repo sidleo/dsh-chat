@@ -184,6 +184,24 @@ try {
     }
   }
 
+  // 访问策略白名单：有名字时必须显示"名字 + id"（只显示 id 时一排 ou_… 认不出是谁，
+  // 真机反馈"白名单只显示 id 不显示名称，不方便管理"）；查不到的照样显示 id。
+  // 只看专门那个场景：渠道卡与 shared 里也有白名单行，但它们不该背这条断言。
+  const namedFrames = results.filter((frame) => frame.scenario === 'policyNames');
+  if (namedFrames.length === 0) failures.push('没测到白名单行（守门本身失效了）');
+  for (const frame of namedFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const named = frame.policyNames.find((text) => text.includes('李四'));
+    if (!named) {
+      failures.push(`${where}: 换到名字的白名单行没显示名字（实际：${frame.policyNames.join(' | ')}）`);
+    } else if (!named.includes('ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5')) {
+      failures.push(`${where}: 白名单行显示了名字但丢了 id（判决仍按 id 走）`);
+    }
+    if (!frame.policyNames.some((text) => text.includes('ou_unknown_person_'))) {
+      failures.push(`${where}: 查不到名字的白名单行没退回显示 id`);
+    }
+  }
+
   // 默认打开的渠道 = 排在最前面的那个（不是注册顺序里的第一个）。
   for (const frame of results.filter((item) => (item.railOrder ?? []).length > 0)) {
     const where = `${frame.scenario} @${frame.width}px`;

@@ -658,6 +658,13 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 `deps.sessions.bindings.adopt(channelId, botId, { 'p2p:ou_xxx': 'session-…' })`，
 已有绑定不会被覆盖。
 
+**可选：`names.resolve({ botId, ids })`** —— 把平台 id 换成人能认出的名字，给设置页的
+「访问策略」白名单用（名单里只存 id，一排 `ou_4f6a8c0e…` 认不出是谁，也没法确认自己加错了人）。
+返回 `{ names: { id: name }, truncated, hint }`：**查不到的 id 不要放进 `names`**（界面退回显示 id），
+`hint` 放"为什么没换到"（多为缺权限，形如 `{ code, message, url }`）；接口本身失败也没关系——
+hub 的编辑器 `AccessPolicyEditor` 收不到 `names` 就只显示 id，不会因此挡住改名单。
+只有能查名字的渠道才实现它（飞书查群名要 `im:chat:readonly`、人名要通讯录权限；微信没有名字，不实现）。
+
 ---
 
 ## 6. 每机器人共享设置

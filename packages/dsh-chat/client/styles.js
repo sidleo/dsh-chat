@@ -238,6 +238,23 @@ const CSS = `
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* 白名单行：名字 + id 放同一个块里（id 才是判定用的值，名字只是给人看的）。
+   两个都允许收缩并省略号，谁长谁让位——名字很长时不许把 id 顶出容器。 */
+.dchat-policyEntry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.dchat-policyEntry > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dchat-policyName {
+  color: var(--dsw-alias-label-primary);
+}
 .dchat-code {
   font-family: var(--dsw-font-markdown-code-block-small, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;

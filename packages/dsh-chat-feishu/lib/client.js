@@ -85,6 +85,7 @@ var zh = {
   "\u53EF\u6267\u884C\u547D\u4EE4": "\u53EF\u6267\u884C\u547D\u4EE4",
   "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002",
   "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0",
+  "\u8BFB\u4E0D\u5230\u540D\u5355\u91CC\u7684\u540D\u5B57": "\u8BFB\u4E0D\u5230\u540D\u5355\u91CC\u7684\u540D\u5B57",
   "\u5C5E\u4E3B": "\u5C5E\u4E3B",
   "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002",
   "\u5DE5\u4F5C\u533A": "\u5DE5\u4F5C\u533A",
@@ -199,6 +200,7 @@ var en = {
   "\u53EF\u6267\u884C\u547D\u4EE4": "Allow commands",
   "\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u53EF\u7528\u3002": "An empty allowlist means only the owner can use it.",
   "\u5BF9\u65B9\u7684\u5E73\u53F0 id\uFF0C\u56DE\u8F66\u6DFB\u52A0": "Their platform id \u2014 press Enter to add",
+  "\u8BFB\u4E0D\u5230\u540D\u5355\u91CC\u7684\u540D\u5B57": "Could not resolve names for the allowlist",
   "\u5C5E\u4E3B": "Owner",
   "\u5C5E\u4E3B\u4E0D\u9700\u8981\u8FDB\u767D\u540D\u5355\uFF1A\u6D88\u606F\u4E0E\u547D\u4EE4\u90FD\u76F4\u63A5\u653E\u884C\u3002\u8FD9\u91CC\u6539\u5B8C\u4F1A\u91CD\u8FDE\u4E00\u6B21\uFF0C\u7ACB\u523B\u751F\u6548\u3002": "An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.",
   "\u5DE5\u4F5C\u533A": "Workspace",
@@ -308,6 +310,41 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     name: item.name,
     kind: item.kind
   })).filter((item) => typeof item.id === "string" && item.id);
+  const policyIds = React.useMemo(() => {
+    const policy = settings.record?.accessPolicy;
+    const users = [
+      ...policy?.direct?.allowlist?.users ?? [],
+      ...policy?.group?.allowlist?.users ?? []
+    ];
+    return [...new Set(users.map((user) => user?.id).filter((id) => typeof id === "string" && id))];
+  }, [settings.record?.accessPolicy]);
+  const policyIdsKey = policyIds.join(",");
+  const [policyNames, setPolicyNames] = React.useState({ names: null, hint: null });
+  React.useEffect(() => {
+    if (policyIdsKey === "") {
+      setPolicyNames({ names: null, hint: null });
+      return void 0;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "names.resolve", {
+          botId: bot.id,
+          ids: policyIdsKey.split(",")
+        });
+        const value = chatUi.unwrapRpc(result);
+        if (!cancelled) setPolicyNames({ names: value?.names ?? {}, hint: value?.hint ?? null });
+      } catch (cause) {
+        if (!cancelled) setPolicyNames({
+          names: null,
+          hint: { message: `${t("\u8BFB\u4E0D\u5230\u540D\u5355\u91CC\u7684\u540D\u5B57")}\uFF1A${cause.message}` }
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatUi, connection, bot.id, policyIdsKey, t]);
   const saveOwners = async (owners) => {
     const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.owner.set", {
       botId: bot.id,
@@ -451,6 +488,9 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     }),
     h(AccessPolicyEditor, {
       value: shared.accessPolicy,
+      // 名单里的 id 换成名字（渠道查的）；查不到就只显示 id + 原因。
+      names: policyNames.names,
+      namesHint: policyNames.hint,
       translate: t,
       onSave: settings.saveAccessPolicy
     }),

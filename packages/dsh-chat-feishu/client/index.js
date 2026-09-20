@@ -63,6 +63,7 @@ const zh = {
   '可执行命令': '可执行命令',
   '名单为空时只有属主可用。': '名单为空时只有属主可用。',
   '对方的平台 id，回车添加': '对方的平台 id，回车添加',
+  '读不到名单里的名字': '读不到名单里的名字',
   '属主': '属主',
   '属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。': '属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。',
   '工作区': '工作区',
@@ -184,6 +185,7 @@ const en = {
   '可执行命令': 'Allow commands',
   '名单为空时只有属主可用。': 'An empty allowlist means only the owner can use it.',
   '对方的平台 id，回车添加': 'Their platform id — press Enter to add',
+  '读不到名单里的名字': 'Could not resolve names for the allowlist',
   '属主': 'Owner',
   '属主不需要进白名单：消息与命令都直接放行。这里改完会重连一次，立刻生效。': 'An owner does not need to be on the allowlist: their messages and commands always pass. Saving reconnects this bot once so the change takes effect immediately.',
   '工作区': 'Workspace',
@@ -299,6 +301,50 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
       kind: item.kind,
     }))
     .filter((item) => typeof item.id === 'string' && item.id);
+  /**
+   * 访问策略白名单里那些 id 是谁。
+   *
+   * 名单里存的只有 `ou_…` / `oc_…`：设置页上只显示 id 的话，一排 id 认不出是谁、
+   * 也看不出加错了人（真机反馈"群了白名单 只显示 id 不显示名称，不方便管理"）。
+   * 换名字只有渠道能做（要 `contact` / `im:chat:readonly` 权限），所以这一步放在渠道里，
+   * 共享的编辑器只负责画"名字 + id"。查不到就退回只显示 id，并把原因写在下面。
+   */
+  const policyIds = React.useMemo(() => {
+    const policy = settings.record?.accessPolicy;
+    const users = [
+      ...(policy?.direct?.allowlist?.users ?? []),
+      ...(policy?.group?.allowlist?.users ?? []),
+    ];
+    return [...new Set(users
+      .map((user) => user?.id)
+      .filter((id) => typeof id === 'string' && id))];
+  }, [settings.record?.accessPolicy]);
+  const policyIdsKey = policyIds.join(',');
+  const [policyNames, setPolicyNames] = React.useState({ names: null, hint: null });
+  React.useEffect(() => {
+    if (policyIdsKey === '') {
+      setPolicyNames({ names: null, hint: null });
+      return undefined;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'names.resolve', {
+          botId: bot.id, ids: policyIdsKey.split(','),
+        });
+        const value = chatUi.unwrapRpc(result);
+        if (!cancelled) setPolicyNames({ names: value?.names ?? {}, hint: value?.hint ?? null });
+      } catch (cause) {
+        // 换不到名字不影响策略本身：照样能改名单，只是显示 id，并把原因说清楚。
+        if (!cancelled) setPolicyNames({
+          names: null,
+          hint: { message: `${t('读不到名单里的名字')}：${cause.message}` },
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [chatUi, connection, bot.id, policyIdsKey, t]);
+
   /** 设属主：写配置 + 渠道重连一次，然后刷新状态。 */
   const saveOwners = async (owners) => {
     const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.owner.set', {
@@ -441,6 +487,9 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
 
   h(AccessPolicyEditor, {
     value: shared.accessPolicy,
+    // 名单里的 id 换成名字（渠道查的）；查不到就只显示 id + 原因。
+    names: policyNames.names,
+    namesHint: policyNames.hint,
     translate: t,
     onSave: settings.saveAccessPolicy,
   }),

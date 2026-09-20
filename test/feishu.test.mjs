@@ -2124,6 +2124,110 @@ test('名字解析：并发查询合并成一次、缺权限长退避、「重�
   }
 });
 
+test('names.resolve：白名单里的 id 换成名字（人 / 群各按各的查，查不到就不编）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-names-'));
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_ctl_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '控制器机器人',
+      }],
+    }), 'utf8');
+
+    const calls = { chats: 0, users: [] };
+    const gateway = createFakeGateway();
+    gateway.listChats = async () => {
+      calls.chats += 1;
+      return [{ chatId: 'oc_group_1', name: '日报临时推送群' }];
+    };
+    gateway.getUserName = async (openId) => {
+      calls.users.push(openId);
+      if (openId === 'ou_unknown') throw new Error('user not found');
+      return `名字(${openId})`;
+    };
+
+    const makeController = () => createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+    const controller = makeController();
+    await controller.start();
+
+    const resolved = await controller.endpoints['names.resolve']({
+      botId: 'bot_ctl',
+      // 重复的 id 只查一次；查不到的**不进结果**（界面退回显示 id）。
+      ids: ['ou_a', 'oc_group_1', 'ou_a', 'ou_unknown'],
+    });
+    assert.equal(resolved.ok, true);
+    assert.deepEqual(resolved.value.names, {
+      ou_a: '名字(ou_a)',
+      oc_group_1: '日报临时推送群',
+    }, '群按群名查、人按人名查；查不到的留空');
+    assert.equal(resolved.value.truncated, false);
+    assert.equal(calls.users.filter((id) => id === 'ou_a').length, 1, '同一个 id 只查一次');
+    assert.equal(calls.chats, 1, '群列表只取一次（缓存）');
+
+    // 非字符串 / 空白 id 不该被当成 id 去查（粘贴时带空格是常态）。
+    const messy = await controller.endpoints['names.resolve']({
+      botId: 'bot_ctl', ids: ['  ou_b  ', null, 42, ''],
+    });
+    assert.deepEqual(Object.keys(messy.value.names), ['ou_b']);
+    assert.equal(calls.users.includes('  ou_b  '), false, '要先 trim 再查');
+
+    // 名单特别长时只查前 50 个，并如实告诉界面被截断了。
+    const many = await controller.endpoints['names.resolve']({
+      botId: 'bot_ctl', ids: Array.from({ length: 51 }, (_, index) => `ou_many_${index}`),
+    });
+    assert.equal(many.value.truncated, true);
+    await controller.stop();
+
+    // 缺权限：名字一个都拿不到，但原因要带出来（界面显示"为什么没有名字"）。
+    gateway.listChats = async () => {
+      throw Object.assign(new Error(
+        'Access denied. One of the following scopes is required: [im:chat:readonly]',
+      ), { code: 99991672 });
+    };
+    gateway.getUserName = async () => {
+      throw Object.assign(new Error(
+        'Access denied. One of the following scopes is required: [contact:user.base:readonly]',
+      ), { code: 99991672 });
+    };
+    const denied = makeController();
+    await denied.start();
+    const failed = await denied.endpoints['names.resolve']({ botId: 'bot_ctl', ids: ['ou_z'] });
+    assert.deepEqual(failed.value.names, {});
+    assert.equal(failed.value.hint.code, 'feishu/scope-missing');
+    await denied.stop();
+
+    // 非法输入：缺 ids、未知机器人。
+    assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_ctl' })).ok, false);
+    assert.equal((await controller.endpoints['names.resolve']({ ids: [] })).ok, false);
+    assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_nope', ids: [] })).ok, false);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('菜单卡片：点按钮就地更新同一张卡（显示点了什么 + 输出，按钮保留）', async () => {
   const menu = [{ label: '帮助', command: '/help' }, { label: '状态', command: '/status' }];
   const calls = [];

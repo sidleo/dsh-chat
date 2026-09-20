@@ -334,9 +334,35 @@ const FRAGMENTS = {
           allowlist: { users: [] },
         },
       },
+      // 渠道换回来的名字（`names.resolve`）：白名单行要显示"名字 + id"。
+      names: { ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5: '李四' },
       translate: t,
       onSave: async () => {},
     })),
+  // 白名单显示名：有名字的显示"名字 + id"，查不到的只显示 id，且把原因写在下面。
+  policyNames: () => h(AccessPolicyEditor, {
+    value: {
+      direct: {
+        mode: 'allowlist',
+        open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+        allowlist: {
+          users: [
+            { id: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5', canExecuteCommands: false },
+            { id: 'ou_unknown_person_000000000000000000', canExecuteCommands: false },
+          ],
+        },
+      },
+      group: {
+        mode: 'allowlist',
+        open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+        allowlist: { users: [] },
+      },
+    },
+    names: { ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5: '李四' },
+    namesHint: { message: '读不到名单里的名字：飞书应用还没开通通讯录权限。' },
+    translate: t,
+    onSave: async () => {},
+  }),
   scoped: () => h(ScopedModeEditor, {
     title: '任务过程展示',
     description: '设置执行过程的呈现方式；私聊与群聊分别生效',
@@ -439,6 +465,9 @@ function measure() {
     const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
       .filter((el) => el.getAttribute('aria-label').includes(' · '))
       .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
+    // 访问策略白名单行的文字（"名字 + id"）：只显示 id 时认不出是谁（真机反馈）。
+    const policyNames = [...frame.querySelectorAll('.dchat-policyEntry')]
+      .map((el) => (el.textContent ?? '').trim());
     results.push({
       scenario: frame.dataset.scenario,
       width: Number(frame.dataset.frame),
@@ -453,6 +482,7 @@ function measure() {
       activeChannel,
       panelButtons,
       emptyHint,
+      policyNames,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();

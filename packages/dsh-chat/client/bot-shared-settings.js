@@ -248,9 +248,11 @@ function fromDraft(draft) {
 }
 
 /** 一个作用域（私聊 / 群聊）的编辑块。 */
-function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
+function ScopeBlock({ scopeKey, label, scope, busy, t, onChange, names = null }) {
   const [entry, setEntry] = React.useState('');
   const inputId = `dchat-policy-${scopeKey}`;
+  /** 名单里那串 id 是谁：渠道换来的名字，换不到就只有 id（不编名字）。 */
+  const nameOf = (id) => names?.[id] ?? null;
 
   const update = (patch) => onChange({ ...scope, ...patch });
   const addUser = () => {
@@ -268,7 +270,11 @@ function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
         key: user.id,
         className: 'dchat-listItem',
       },
-      h('code', { className: 'dchat-code' }, user.id),
+      // 名字 + id：只显示 id 时，"这条是谁"在设置页上根本认不出来（真机反馈）；
+      // 但 id 才是判定用的那个值，所以两个都留（与「属主」那一行同一个形态）。
+      h('span', { className: 'dchat-policyEntry' },
+        nameOf(user.id) ? h('span', { className: 'dchat-policyName' }, nameOf(user.id)) : null,
+        h('code', { className: 'dchat-code' }, user.id)),
       h('span', { className: 'dchat-actions' },
         h('label', { className: 'dchat-check' },
           h('input', {
@@ -342,8 +348,12 @@ function ScopeBlock({ scopeKey, label, scope, busy, t, onChange }) {
  *
  * 改一项存一次（策略是开关/名单，没有"改到一半"的中间态）。
  * 校验用的是与 host 拦消息时**同一份** `access-policy.mjs`。
+ *
+ * @param props - { value, translate, onSave, names?, namesHint? }。
+ *   `names` 是渠道换回来的「id → 名字」（`names.resolve`）；渠道不给就只显示 id。
+ *   `namesHint` 是"名字为什么没换到"（多为缺权限），有就说明，免得用户以为功能坏了。
  */
-export function AccessPolicyEditor({ value, translate, onSave }) {
+export function AccessPolicyEditor({ value, translate, onSave, names = null, namesHint = null }) {
   const t = translatorOf(translate);
   const [draft, setDraft] = React.useState(() => toDraft(value));
   const { busy, failed, run } = useSaver(onSave);
@@ -365,13 +375,14 @@ export function AccessPolicyEditor({ value, translate, onSave }) {
   },
   h('div', { className: 'dchat-policyGrid' },
     h(ScopeBlock, {
-      scopeKey: 'direct', label: t('私聊'), scope: draft.direct, busy, t,
+      scopeKey: 'direct', label: t('私聊'), scope: draft.direct, busy, t, names,
       onChange: (next) => { void commit({ ...draft, direct: next }); },
     }),
     h(ScopeBlock, {
-      scopeKey: 'group', label: t('群聊'), scope: draft.group, busy, t,
+      scopeKey: 'group', label: t('群聊'), scope: draft.group, busy, t, names,
       onChange: (next) => { void commit({ ...draft, group: next }); },
     })),
+  namesHint ? h('p', { className: 'dchat-cardDescription' }, namesHint.message ?? String(namesHint)) : null,
   failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
 }
 

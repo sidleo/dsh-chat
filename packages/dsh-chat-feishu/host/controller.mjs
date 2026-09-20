@@ -257,6 +257,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const OWNER_ID_PATTERN = /^(\*|ou_[A-Za-z0-9_-]{1,64})$/;
   /** 一台机器人的属主上限（属主绕过所有策略，不该是个长名单）。 */
   const MAX_OWNERS = 10;
+  /** 一次最多换多少个 id 的名字（每个都要打一次通讯录/群接口）。 */
+  const MAX_RESOLVE_IDS = 50;
 
   /**
    * 会话键 → 可投递目标（`p2p:ou_x` → 私聊，`group:oc_y` → 群聊）。
@@ -428,6 +430,24 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     })();
     cache.userPromises.set(openId, task);
     return task;
+  }
+
+  /**
+   * 平台 id → 名字（`oc_` 群查群名，`ou_` 人查人名）；换不到就返回 null。
+   *
+   * 为什么要它：访问策略的白名单里存的只有平台 id，设置页上就是一排
+   * `ou_4f6a8c0e2b1d9753…`——认不出是谁、也看不出加错了人（真机反馈
+   * "群了白名单 只显示id不显示名称，不方便管理"）。
+   */
+  async function resolveName(botId, id) {
+    if (id.startsWith('oc_')) {
+      const cached = cacheFor(botId).chats.get(id);
+      if (cached) return cached;
+      // 缓存里没有这个群（刚被拉进去 / 还没列过）：以更短的间隔重取一次群列表。
+      await allChats(botId, { minIntervalMs: 60_000 });
+      return cacheFor(botId).chats.get(id) ?? null;
+    }
+    return (await userName(botId, id)) || null;
   }
 
   const delivery = Object.freeze({
@@ -618,6 +638,50 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         runtimes.delete(payload.botId);
         await configStore.removeBot(payload.botId);
         return { ok: true, value: { removed: true, botId: payload.botId } };
+      },
+
+      /**
+       * id → 名字（设置页画白名单用）。
+       *
+       * 白名单存的是平台 id；只显示 id 的话，一排 `ou_4f6a8c0e…` 里认不出是谁、
+       * 也没法确认自己加错了人。查不到就**不放进结果**（界面退回显示 id），
+       * 原因放在 `hint` 里，避免"名字没了却不知道为什么"。
+       */
+      'names.resolve': async (payload) => {
+        const raw = Array.isArray(payload?.ids) ? payload.ids : null;
+        if (typeof payload?.botId !== 'string' || !payload.botId || raw === null) {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: 'names.resolve 需要 { botId, ids: string[] }。',
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        if (!configStore.get(payload.botId)) {
+          return {
+            ok: false,
+            error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} },
+          };
+        }
+        const ids = [...new Set(raw
+          .filter((id) => typeof id === 'string' && id.trim())
+          .map((id) => id.trim()))];
+        const limited = ids.slice(0, MAX_RESOLVE_IDS);
+        const pairs = await Promise.all(
+          limited.map(async (id) => [id, await resolveName(payload.botId, id)]),
+        );
+        return {
+          ok: true,
+          value: {
+            names: Object.fromEntries(pairs.filter(([, name]) => Boolean(name))),
+            // 名单特别长时只查前 N 个：界面据此说明"还有几个没查"。
+            truncated: ids.length > limited.length,
+            hint: nameCache.get(payload.botId)?.nameHint ?? null,
+          },
+        };
       },
 
       /** 任务过程展示：私聊/群聊两份，原子保存并立即生效。 */
