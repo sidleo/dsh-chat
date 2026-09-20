@@ -125,6 +125,8 @@ const RPC_FIXTURES = {
         group: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
       },
       contextEnhancement: null,
+      // 显示项：群聊关掉"访问策略"（渲染出来的勾选框要反映它）。
+      panelSections: { direct: { policy: false }, group: { policy: false, commands: true } },
     },
   }),
   'bot.settings.options': () => ({
@@ -387,6 +389,16 @@ function measure() {
       .filter((item) => item.over > 1)
       .sort((left, right) => right.over - left.over)
       .slice(0, 3);
+    /**
+     * 设置页「控制面板显示项」的勾选状态也要量。
+     *
+     * 只测"没溢出"是不够的：真机上翻过车——渠道卡把 `shared` 里的字段漏了一项，
+     * 组件拿到 null 就**永远显示全勾**，用户保存过的关闭项看起来根本没生效。
+     * 假数据里 direct.policy=false / group.actions=false，渲染出来的勾选状态必须对得上。
+     */
+    const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
+      .filter((el) => el.getAttribute('aria-label').includes(' · '))
+      .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
     results.push({
       scenario: frame.dataset.scenario,
       width: Number(frame.dataset.frame),
@@ -394,6 +406,7 @@ function measure() {
       overflow,
       tall,
       widest,
+      sectionChecks,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();

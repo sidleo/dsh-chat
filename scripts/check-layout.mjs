@@ -120,6 +120,18 @@ body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw
     }
   }
 
+  // 设置页的显示项必须**反映已保存的配置**（假数据里私聊关了"访问策略"、群聊关了"渠道动作按钮"）：
+  // 漏传字段的后果是"永远全勾"，它在真机上表现为"我明明关了却没生效"。
+  const checks = results.flatMap((frame) => frame.sectionChecks ?? []);
+  if (checks.length > 0) {
+    if (!checks.some((item) => item.checked === false)) {
+      failures.push('「控制面板显示项」的勾选状态全是勾上的——渠道卡很可能漏传了 panelSections');
+    }
+    const policyDirect = checks.find((item) => item.label === '访问策略（本会话） · 私聊');
+    if (!policyDirect) failures.push('「控制面板显示项」里找不到「访问策略（本会话） · 私聊」');
+    else if (policyDirect.checked !== false) failures.push('配了关闭的「访问策略（本会话） · 私聊」渲染成了勾上');
+  }
+
   if (failures.length > 0) {
     console.error(`布局守门失败（${failures.length} 项）：`);
     for (const failure of failures) console.error(`  ✗ ${failure}`);

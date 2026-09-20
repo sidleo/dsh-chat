@@ -56,6 +56,10 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
+- **界面样式改完 / 设置页加了字段**：跑 `npm run check`（含布局守门）。布局守门除了"不溢出、
+  不逐字竖排"，还会核对**设置页控件的状态是否反映了假数据**——渠道卡把 `shared` 里的字段漏一项，
+  组件拿到 null 就永远显示"全勾"，真机上就是"我明明关了却没生效"。**新加这类字段就往
+  `scripts/layout-fixture.mjs` 的假数据里放一个非默认值**，守门会替你盯着这条线。
 - **界面样式改完**：跑 `npm run check`（含布局守门）。窄栏下的两类问题是"构建通过、单测全绿、
   真机才炸"——① 中文被 flex 压成一字一行（`min-content` 只有一个字）；② `flex: none` 打在
   `width: 100%` 的下拉框上、或打在操作块上（内容再宽也不缩），把同排按钮挤出容器、整页横向滚动。

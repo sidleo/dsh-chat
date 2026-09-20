@@ -320,7 +320,9 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     agentPreset: settings.record?.agentPreset ?? null,
     // 机器人默认模型（还没有会话时用它）：与工作区/预设同一条口径，只对新建会话生效。
     model: settings.record?.model ?? null,
-    accessPolicy: settings.record?.accessPolicy ?? null
+    accessPolicy: settings.record?.accessPolicy ?? null,
+    // 控制面板卡片的显示项（null = 全显示）。
+    panelSections: settings.record?.panelSections ?? null
   };
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
