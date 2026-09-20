@@ -36,6 +36,7 @@ var index_exports = {};
 __export(index_exports, {
   BotCard: () => BotCard,
   FeishuOnboard: () => FeishuOnboard,
+  FeishuPage: () => FeishuPage,
   apply: () => apply,
   inject: () => inject,
   name: () => name
@@ -871,26 +872,19 @@ function FeishuPage(props) {
   const { EmptyState } = chatUi.components;
   const allBots = state.value?.bots ?? [];
   const scoped = Boolean(botId);
-  const bots = scoped ? allBots.filter((bot) => (bot?.botId ?? bot?.id ?? null) === botId) : allBots;
+  const bots = scoped ? allBots.filter((bot) => (bot?.botId ?? bot?.id ?? null) === botId) : [];
   const missing = scoped && state.phase === "ready" && bots.length === 0;
   return h(
     React.Fragment,
     null,
-    /**
-     * 渠道级页面 = **新建机器人接入**（机器人设置页是另一个视图，`scoped` 时才进来）。
-     * 错误照旧要显示：读状态失败时不能只留一行日志。
-     */
-    !scoped ? h(FeishuOnboard, { chatUi, connection, translate: t, onAdded: load }) : null,
+    // 读状态失败照旧要显示：这个页面上不能只留一行日志。
     state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
-    !scoped && state.phase === "ready" && bots.length === 0 ? h(EmptyState, {
-      title: t("\u6CA1\u6709\u5DF2\u63A5\u5165\u7684\u98DE\u4E66\u673A\u5668\u4EBA"),
-      description: t(FEISHU_SETUP_HINT)
-    }) : null,
+    scoped ? null : h(FeishuOnboard, { chatUi, connection, translate: t, onAdded: load }),
     missing ? h(EmptyState, {
       title: t("\u627E\u4E0D\u5230\u8FD9\u53F0\u673A\u5668\u4EBA"),
       description: `${t("\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09")}\uFF1A${botId}`
     }) : null,
-    bots.map((bot) => h(BotCard, {
+    scoped ? bots.map((bot) => h(BotCard, {
       key: bot.id,
       bot,
       status: bot,
@@ -898,7 +892,7 @@ function FeishuPage(props) {
       connection,
       translate: t,
       onChanged: load
-    }))
+    })) : null
   );
 }
 function apply(ctx) {

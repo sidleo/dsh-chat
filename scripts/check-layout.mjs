@@ -224,6 +224,31 @@ try {
     }
   }
 
+  // 「接入页」只能是接入相关的东西：已接入的机器人/账号属于左栏那份列表，
+  // 点它们的「设置」才是各自的配置页（真机反馈：接入页里混着已接入机器人的配置，
+  // 分不清哪些是"新建"、哪些是"已经在用的"）。
+  const feishuEntry = results.filter((frame) => frame.scenario === 'feishuPage');
+  if (feishuEntry.length === 0) failures.push('没测到飞书的接入页（守门本身失效了）');
+  for (const frame of feishuEntry) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const titles = frame.entryPage?.cardTitles ?? [];
+    if (!titles.includes('新建机器人接入')) {
+      failures.push(`${where}: 接入页没有「新建机器人接入」卡片（实际：${titles.join('、')}）`);
+    }
+    // 假数据里那台已接入机器人的掩码 appId 只会出现在它的配置卡上。
+    if ((frame.entryPage?.text ?? '').includes('cli_7b9d1a****')) {
+      failures.push(`${where}: 接入页里混进了已接入机器人的配置（应只看得到接入相关的东西）`);
+    }
+  }
+  const weixinEntry = results.filter((frame) => frame.scenario === 'weixinPage');
+  if (weixinEntry.length === 0) failures.push('没测到微信的接入页（守门本身失效了）');
+  for (const frame of weixinEntry) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    if ((frame.entryPage?.cardTitles ?? []).includes('微信渠道')) {
+      failures.push(`${where}: 扫码接入页里还留着「微信渠道」那张渠道级面板`);
+    }
+  }
+
   // 默认打开的渠道 = 排在最前面的那个（不是注册顺序里的第一个）。
   for (const frame of results.filter((item) => (item.railOrder ?? []).length > 0)) {
     const where = `${frame.scenario} @${frame.width}px`;

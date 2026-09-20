@@ -511,8 +511,18 @@ export function AccountCard({ account, chatUi, connection, translate, onChanged 
   }));
 }
 
-function WeixinPage(props) {
-  // hub 从机器人列表点「设置」进来时会带上 botId：只展示这一台机器人的设置。
+/**
+ * 渠道设置页（`chat.channel.page`）。
+ *
+ * **两个视图严格分开，页面上不混**（与飞书同一条口径）：
+ * - `botId` 为空 = 「扫码接入」：**只画扫码相关的东西**。已绑定的账号属于左栏那份列表，
+ *   点它们的「设置」才是各自的配置页。
+ * - `botId` 给了 = 这一个账号的设置页。
+ *
+ * 导出给布局守门用：守门断言"扫码页里不出现已绑定账号的配置"。
+ */
+export function WeixinPage(props) {
+  // hub 从机器人列表点「设置」进来时会带上 botId：只展示这一个账号的设置。
   const { chatUi, connection, translate, botId = null } = props;
   const t = typeof translate === 'function' ? translate : (key) => key;
   const [state, setState] = React.useState({ phase: 'idle', value: null, error: null });
@@ -531,49 +541,30 @@ function WeixinPage(props) {
     void load();
   }, [load]);
 
-  const { Panel, EmptyState } = chatUi.components;
+  const { EmptyState } = chatUi.components;
   const allAccounts = state.value?.accounts ?? state.value?.bots ?? [];
-  /**
-   * 从机器人列表点「设置」进来时带上 botId：**只渲染这一个账号**，
-   * 渠道级的「微信渠道」「扫码接入」都不渲染——用户点的是"这个机器人的设置"。
-   */
   const scoped = Boolean(botId);
   const accounts = scoped
     ? allAccounts.filter((account) => (account?.botId ?? account?.id ?? null) === botId)
-    : allAccounts;
+    : [];
   // 指定了 botId 却没匹配到：明确报出来，绝不退回"显示全部账号"。
   const missing = scoped && state.phase === 'ready' && accounts.length === 0;
 
   return h(React.Fragment, null,
-    scoped ? null : h(Panel, {
-      title: t('微信渠道'),
-      description: `dataDir：${state.value?.dataDir ?? '—'}`,
-      actions: h('button', {
-        type: 'button', className: 'dchat-button',
-        disabled: state.phase === 'loading',
-        onClick: () => { void load(); },
-      }, state.phase === 'loading' ? t('读取中…') : t('读取状态')),
-    },
+    // 读状态失败照旧要显示：这个页面上不能只留一行日志。
     state.error ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message) : null,
-    state.phase === 'ready' && accounts.length === 0
-      ? h(EmptyState, {
-        title: t('没有已绑定的微信账号'),
-        description: t('本机还没有微信账号。点上方「扫码接入」用手机微信扫码绑定。'),
-      })
-      : null),
-    scoped && state.error
-      ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message)
-      : null,
+    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
     missing
       ? h(EmptyState, {
         title: t('找不到这个机器人'),
         description: `${t('它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）')}：${botId}`,
       })
       : null,
-    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
-    accounts.map((account) => h(AccountCard, {
-      key: account.botId, account, chatUi, connection, translate: t, onChanged: load,
-    })));
+    scoped
+      ? accounts.map((account) => h(AccountCard, {
+        key: account.botId, account, chatUi, connection, translate: t, onChanged: load,
+      }))
+      : null);
 }
 
 /**

@@ -35,6 +35,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var index_exports = {};
 __export(index_exports, {
   AccountCard: () => AccountCard,
+  WeixinPage: () => WeixinPage,
   apply: () => apply,
   inject: () => inject,
   name: () => name
@@ -570,48 +571,29 @@ function WeixinPage(props) {
   React.useEffect(() => {
     void load();
   }, [load]);
-  const { Panel, EmptyState } = chatUi.components;
+  const { EmptyState } = chatUi.components;
   const allAccounts = state.value?.accounts ?? state.value?.bots ?? [];
   const scoped = Boolean(botId);
-  const accounts = scoped ? allAccounts.filter((account) => (account?.botId ?? account?.id ?? null) === botId) : allAccounts;
+  const accounts = scoped ? allAccounts.filter((account) => (account?.botId ?? account?.id ?? null) === botId) : [];
   const missing = scoped && state.phase === "ready" && accounts.length === 0;
   return h(
     React.Fragment,
     null,
-    scoped ? null : h(
-      Panel,
-      {
-        title: t("\u5FAE\u4FE1\u6E20\u9053"),
-        description: `dataDir\uFF1A${state.value?.dataDir ?? "\u2014"}`,
-        actions: h("button", {
-          type: "button",
-          className: "dchat-button",
-          disabled: state.phase === "loading",
-          onClick: () => {
-            void load();
-          }
-        }, state.phase === "loading" ? t("\u8BFB\u53D6\u4E2D\u2026") : t("\u8BFB\u53D6\u72B6\u6001"))
-      },
-      state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
-      state.phase === "ready" && accounts.length === 0 ? h(EmptyState, {
-        title: t("\u6CA1\u6709\u5DF2\u7ED1\u5B9A\u7684\u5FAE\u4FE1\u8D26\u53F7"),
-        description: t("\u672C\u673A\u8FD8\u6CA1\u6709\u5FAE\u4FE1\u8D26\u53F7\u3002\u70B9\u4E0A\u65B9\u300C\u626B\u7801\u63A5\u5165\u300D\u7528\u624B\u673A\u5FAE\u4FE1\u626B\u7801\u7ED1\u5B9A\u3002")
-      }) : null
-    ),
-    scoped && state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
+    // 读状态失败照旧要显示：这个页面上不能只留一行日志。
+    state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
+    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
     missing ? h(EmptyState, {
       title: t("\u627E\u4E0D\u5230\u8FD9\u4E2A\u673A\u5668\u4EBA"),
       description: `${t("\u5B83\u4E0D\u5728\u5F53\u524D\u6E20\u9053\u7684\u540D\u5355\u91CC\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u9664\uFF0C\u6216 Host \u4E0E\u9875\u9762\u7248\u672C\u4E0D\u4E00\u81F4\uFF09")}\uFF1A${botId}`
     }) : null,
-    scoped ? null : h(QrLogin, { chatUi, connection, translate: t, onDone: load }),
-    accounts.map((account) => h(AccountCard, {
+    scoped ? accounts.map((account) => h(AccountCard, {
       key: account.botId,
       account,
       chatUi,
       connection,
       translate: t,
       onChanged: load
-    }))
+    })) : null
   );
 }
 function apply(ctx) {

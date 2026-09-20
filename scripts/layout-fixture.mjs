@@ -28,8 +28,10 @@ import { ChatSettingsSection } from '../packages/dsh-chat/client/section.js';
 import { createChannelRail } from '../packages/dsh-chat/shared/channel-rail.mjs';
 import { installChatStyles } from '../packages/dsh-chat/client/styles.js';
 // 整张渠道卡：真机上"卡片头逐字竖排"就是它们炸的，而单测与构建都发现不了。
-import { BotCard as FeishuBotCard, FeishuOnboard } from '../packages/dsh-chat-feishu/client/index.js';
-import { AccountCard as WeixinAccountCard } from '../packages/dsh-chat-weixin/client/index.js';
+import {
+  BotCard as FeishuBotCard, FeishuOnboard, FeishuPage,
+} from '../packages/dsh-chat-feishu/client/index.js';
+import { AccountCard as WeixinAccountCard, WeixinPage } from '../packages/dsh-chat-weixin/client/index.js';
 
 const h = React.createElement;
 
@@ -322,6 +324,10 @@ const FRAGMENTS = {
   feishuOnboardQr: () => h(FeishuOnboard, {
     chatUi, connection, translate: t, onAdded: async () => {},
   }),
+  // 整张「接入页」（真实渠道页 + botId 为空）：只能有接入相关的东西，
+  // 不许把已接入机器人的配置混进来（真机反馈过一次）。
+  feishuPage: () => h(FeishuPage, { chatUi, connection, translate: t, botId: null }),
+  weixinPage: () => h(WeixinPage, { chatUi, connection, translate: t, botId: null }),
   // hub 页头 + 左栏 + 机器人列表：右上角两个入口（诊断 / 版本与更新）在窄栏下也得排得下。
   hubPage: () => h(HubPage),
   hubPageOpen: () => h(HubPage),
@@ -500,6 +506,12 @@ function measure() {
     // 访问策略白名单行的文字（"名字 + id"）：只显示 id 时认不出是谁（真机反馈）。
     const policyNames = [...frame.querySelectorAll('.dchat-policyEntry')]
       .map((el) => (el.textContent ?? '').trim());
+    // 接入页的边界：卡片标题清单 + 有没有混进"已接入机器人/账号"的痕迹。
+    const entryPage = {
+      cardTitles: [...frame.querySelectorAll('.dchat-cardTitle')]
+        .map((el) => (el.textContent ?? '').trim()),
+      text: (frame.textContent ?? '').trim(),
+    };
     // 接入页的两条路与二维码（守门断言"两条路都在、点完真的出二维码"）。
     const onboard = {
       headings: [...frame.querySelectorAll('.dchat-onboardTitle')]
@@ -522,6 +534,7 @@ function measure() {
       emptyHint,
       policyNames,
       onboard,
+      entryPage,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();

@@ -870,7 +870,18 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
     : null);
 }
 
-function FeishuPage(props) {
+/**
+ * 渠道设置页（`chat.channel.page`）。
+ *
+ * **两个视图严格分开，页面上不混**：
+ * - `botId` 为空 = 「新建机器人接入」：**只画接入相关的东西**。已接入的机器人属于左栏那份列表，
+ *   点它们的「设置」才是各自的配置页——真机反馈：这个页面里混着已接入机器人的配置，
+ *   分不清哪些是"新建"、哪些是"已经在用的"。
+ * - `botId` 给了 = 这一台机器人的设置页。
+ *
+ * 导出给布局守门用：守门断言"接入页里不出现已接入机器人的配置"（真机就是这么翻的车）。
+ */
+export function FeishuPage(props) {
   // hub 从机器人列表点「设置」进来时会带上 botId：只展示这一台机器人的设置。
   const { chatUi, connection, translate, botId = null } = props;
   const t = typeof translate === 'function' ? translate : (key) => key;
@@ -892,48 +903,35 @@ function FeishuPage(props) {
 
   const { EmptyState } = chatUi.components;
   const allBots = state.value?.bots ?? [];
-  /**
-   * 从机器人列表点「设置」进来时带上 botId：**只渲染这一台**。
-   * 这时渠道级的东西（dataDir、读取状态）一概不渲染——用户点的是"这台机器人的设置"。
-   */
   const scoped = Boolean(botId);
   const bots = scoped
     ? allBots.filter((bot) => (bot?.botId ?? bot?.id ?? null) === botId)
-    : allBots;
+    : [];
   // 指定了 botId 却一台都没匹配到：明确报出来，**绝不退回"显示全部"**——
   // 静默显示全部会让人以为自己点错了机器人，而真正的问题（版本错位/已被移除）被藏起来。
   const missing = scoped && state.phase === 'ready' && bots.length === 0;
 
   return h(React.Fragment, null,
-    /**
-     * 渠道级页面 = **新建机器人接入**（机器人设置页是另一个视图，`scoped` 时才进来）。
-     * 错误照旧要显示：读状态失败时不能只留一行日志。
-     */
-    !scoped
-      ? h(FeishuOnboard, { chatUi, connection, translate: t, onAdded: load })
-      : null,
+    // 读状态失败照旧要显示：这个页面上不能只留一行日志。
     state.error ? h('p', { className: 'dchat-error', role: 'alert' }, state.error.message) : null,
-    !scoped && state.phase === 'ready' && bots.length === 0
-      ? h(EmptyState, {
-        title: t('没有已接入的飞书机器人'),
-        description: t(FEISHU_SETUP_HINT),
-      })
-      : null,
+    scoped ? null : h(FeishuOnboard, { chatUi, connection, translate: t, onAdded: load }),
     missing
       ? h(EmptyState, {
         title: t('找不到这台机器人'),
         description: `${t('它不在当前渠道的名单里（可能已被移除，或 Host 与页面版本不一致）')}：${botId}`,
       })
       : null,
-    bots.map((bot) => h(BotCard, {
-      key: bot.id,
-      bot,
-      status: bot,
-      chatUi,
-      connection,
-      translate: t,
-      onChanged: load,
-    })));
+    scoped
+      ? bots.map((bot) => h(BotCard, {
+        key: bot.id,
+        bot,
+        status: bot,
+        chatUi,
+        connection,
+        translate: t,
+        onChanged: load,
+      }))
+      : null);
 }
 
 /**
