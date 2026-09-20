@@ -43,7 +43,7 @@ function maskAppId(appId) {
  * 创建飞书控制器。
  *
  * @param options - { deps, logger, config, internals }。
- *   `internals` 可注入 sdk / createGateway（测试用）。
+ *   `internals` 可注入 sdk / createGateway / createBridge（测试用）。
  * @returns 控制器。
  */
 export function createFeishuController({ deps, logger = console, config = {}, internals = {} }) {
@@ -60,13 +60,25 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const runtimes = new Map();
 
   const sdkLoader = internals.sdk ?? (() => import('@larksuiteoapi/node-sdk'));
+  /** 建桥：测试可注入一份替身，用来断言"桥拿到的是哪份 bot 对象"。 */
+  const bridgeFactory = internals.createBridge ?? createFeishuBridge;
 
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
     if (existing?.phase === 'running' || existing?.phase === 'starting') return existing;
 
+    /**
+     * **可变的一份运行期配置**：桥、状态、补丁都读它。
+     *
+     * 为什么不是直接用 `bot` 那个冻结对象：设置页/控制面板改完过程展示后会调
+     * `patchRuntime()`，早先那里是 `record.bot = { ...record.bot, ...patch }`——换了引用，
+     * 而桥在创建时已经把旧对象**闭包**进去了，于是"改了设置、群里的卡照旧"
+     * （真机现象：群聊已设「不显示过程」，回复仍带着工具与思考面板）。
+     * 现在桥拿到的就是这份可变的副本，`patchRuntime` 就地改它，改完立刻生效。
+     */
+    const liveBot = { ...bot };
     const record = {
-      bot,
+      bot: liveBot,
       phase: 'starting',
       error: null,
       gateway: null,
@@ -95,7 +107,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       if (deps.sessions?.bindings?.adopt) {
         await deps.sessions.bindings.adopt(deps.channelId, bot.id, state.sessions());
       }
-      const bridge = createFeishuBridge({ bot, deps, gateway, state, logger });
+      const bridge = bridgeFactory({ bot: liveBot, deps, gateway, state, logger });
       record.gateway = gateway;
       record.bridge = bridge;
       await gateway.connect({
@@ -223,9 +235,15 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     return { direct: bot.stepPushDirect, group: bot.stepPushGroup };
   }
 
+  /**
+   * 就地改运行期那份 bot 配置。
+   *
+   * **必须就地改**：桥、状态这些读者都持有同一个对象（见 `startBot` 里的 `liveBot`），
+   * 换成新引用等于它们全都看不到——过程展示这类"改完要立刻生效"的设置就会静默失效。
+   */
   function patchRuntime(botId, patch) {
     const record = runtimes.get(botId);
-    if (record) record.bot = Object.freeze({ ...record.bot, ...patch });
+    if (record) Object.assign(record.bot, patch);
   }
 
   async function startAll() {

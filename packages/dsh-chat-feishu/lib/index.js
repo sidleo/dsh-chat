@@ -129907,11 +129907,13 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const gatewayFactory = internals.createGateway ?? createLarkGateway;
   const runtimes = /* @__PURE__ */ new Map();
   const sdkLoader = internals.sdk ?? (() => Promise.resolve().then(() => (init_es(), es_exports)));
+  const bridgeFactory = internals.createBridge ?? createFeishuBridge;
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
     if (existing?.phase === "running" || existing?.phase === "starting") return existing;
+    const liveBot = { ...bot };
     const record = {
-      bot,
+      bot: liveBot,
       phase: "starting",
       error: null,
       gateway: null,
@@ -129939,7 +129941,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       if (deps.sessions?.bindings?.adopt) {
         await deps.sessions.bindings.adopt(deps.channelId, bot.id, state.sessions());
       }
-      const bridge = createFeishuBridge({ bot, deps, gateway, state, logger });
+      const bridge = bridgeFactory({ bot: liveBot, deps, gateway, state, logger });
       record.gateway = gateway;
       record.bridge = bridge;
       await gateway.connect({
@@ -130045,7 +130047,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   }
   function patchRuntime(botId, patch) {
     const record = runtimes.get(botId);
-    if (record) record.bot = Object.freeze({ ...record.bot, ...patch });
+    if (record) Object.assign(record.bot, patch);
   }
   async function startAll() {
     await configStore.load();

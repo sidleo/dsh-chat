@@ -930,6 +930,83 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
   }
 });
 
+test('过程展示改完立刻生效：桥持有的那份 bot 必须**就地**更新（换引用 = 设置静默失效）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-patch-'));
+  try {
+    await mkdir(join(dataDir, 'bots'), { recursive: true });
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_patch',
+        appId: 'cli_patch_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '配置机器人',
+        stepPushDirect: 'streaming_card',
+        stepPushGroup: 'streaming_card',
+      }],
+    }), 'utf8');
+
+    /** 捕获"桥拿到的到底是哪份 bot 对象"，并记下 dispose。 */
+    const handedToBridge = [];
+    const gateway = createFakeGateway();
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: { ask: async () => ({ text: '', reason: { kind: 'completed' } }), bindings: { adopt: async () => 0 } },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createBridge: (options) => {
+          handedToBridge.push(options.bot);
+          return {
+            accept: async () => {},
+            handleCardAction: async () => {},
+            status: () => ({ handled: 0, lastError: null }),
+            dispose: () => {},
+          };
+        },
+      },
+    });
+    await controller.start();
+    assert.equal(handedToBridge.length, 1);
+    const liveBot = handedToBridge[0];
+    assert.equal(liveBot.stepPushGroup, 'streaming_card');
+
+    // 真机现场：群里设成"不显示过程"，下一轮却还带着工具与思考面板——
+    // 根因是 patchRuntime 换了引用，而桥闭包住的是旧对象。
+    const saved = await controller.endpoints['bot.step-push.set']({
+      botId: 'bot_patch', stepPush: { direct: 'post', group: 'off' },
+    });
+    assert.equal(saved.ok, true);
+    assert.equal(liveBot.stepPushGroup, 'off', '桥持有的那份必须就地更新（设置页那条路）');
+    assert.equal(liveBot.stepPushDirect, 'post');
+
+    // 控制面板那条路（卡上下拉）同样要就地生效。
+    const applied = await controller.endpoints['panel.apply']({
+      botId: 'bot_patch', field: 'stepPushGroup', value: 'streaming_card',
+    });
+    assert.equal(applied.ok, true);
+    assert.equal(liveBot.stepPushGroup, 'streaming_card', '面板那条路也要就地更新');
+
+    // 状态页读到的仍是同一份值。
+    const status = await controller.endpoints['connection.status']({});
+    assert.deepEqual(status.value.bots[0].stepPush, { direct: 'post', group: 'streaming_card' });
+
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('控制器：渠道动作按钮只给属主；点重连会真的重建长连接', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-act-'));
   try {
