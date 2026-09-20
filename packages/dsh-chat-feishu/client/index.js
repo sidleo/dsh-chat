@@ -130,6 +130,21 @@ const zh = {
   '保存': '保存',
   '保存中…': '保存中…',
   '新建机器人接入': '新建机器人接入',
+  '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。': '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。',
+  '扫码新建机器人': '扫码新建机器人',
+  '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。': '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。',
+  '手动接入已有机器人': '手动接入已有机器人',
+  '打开授权页面': '打开授权页面',
+  '这台 Host 没能生成二维码，请点上面的链接继续。': '这台 Host 没能生成二维码，请点上面的链接继续。',
+  '剩余': '剩余',
+  '正在向飞书申请二维码…': '正在向飞书申请二维码…',
+  '已授权，正在启动机器人…': '已授权，正在启动机器人…',
+  '等待扫码': '等待扫码',
+  '等待你在飞书里确认…': '等待你在飞书里确认…',
+  '二维码已失效，请重新生成': '二维码已失效，请重新生成',
+  '扫码接入失败': '扫码接入失败',
+  '已取消': '已取消',
+  '重新生成二维码': '重新生成二维码',
   '填自建应用的 App ID 与 App Secret（飞书开放平台 → 凭证与基础信息）。应用需要开启机器人能力。': '填自建应用的 App ID 与 App Secret（飞书开放平台 → 凭证与基础信息）。应用需要开启机器人能力。',
   '应用凭证里的 App Secret': '应用凭证里的 App Secret',
   '域名': '域名',
@@ -255,6 +270,21 @@ const en = {
   '保存': 'Save',
   '保存中…': 'Saving…',
   '新建机器人接入': 'Add a bot',
+  '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。': 'Two ways: scan to create a new Feishu bot (recommended — whoever scans becomes the owner), or paste the credentials of an existing bot.',
+  '扫码新建机器人': 'Scan to create a bot',
+  '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。': 'This requests a one-time authorization link from Feishu. Scan it with Feishu (or open it in your browser) and a new app is created and connected automatically.',
+  '手动接入已有机器人': 'Connect an existing bot manually',
+  '打开授权页面': 'Open the authorization page',
+  '这台 Host 没能生成二维码，请点上面的链接继续。': 'This Host could not render the QR code — use the link above instead.',
+  '剩余': 'expires in',
+  '正在向飞书申请二维码…': 'Requesting the QR code from Feishu…',
+  '已授权，正在启动机器人…': 'Authorized — starting the bot…',
+  '等待扫码': 'Waiting for the scan',
+  '等待你在飞书里确认…': 'Waiting for you to confirm in Feishu…',
+  '二维码已失效，请重新生成': 'The link expired — generate a new one',
+  '扫码接入失败': 'Scan-based setup failed',
+  '已取消': 'Cancelled',
+  '重新生成二维码': 'Generate a new QR code',
   '填自建应用的 App ID 与 App Secret（飞书开放平台 → 凭证与基础信息）。应用需要开启机器人能力。': 'Paste the App ID and App Secret of your own app (Feishu Open Platform → Credentials & Basic Info). The app must have the bot capability enabled.',
   '应用凭证里的 App Secret': 'The App Secret from the app credentials',
   '域名': 'Domain',
@@ -564,13 +594,18 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
 }
 
 /**
- * 新建机器人接入：填自建应用的 App ID + App Secret，就能把一只新机器人接进来。
+ * 机器人接入：**两条路**（与 dsh-im 一致）。
+ *
+ * ① 扫码新建：向飞书申请一次性授权链接，用飞书扫一下（或在浏览器里打开）就自动创建应用并
+ *    返回凭据；**扫码的人就是属主**，不用再去设置里选人。
+ * ② 手动接入已有机器人：填 App ID + App Secret（属主可留空，留空时接入后把私聊放宽到
+ *    「任何人可用」，让属主先跟它说上第一句话）。
  *
  * 之前只能手工往渠道的 `config.json` 里写凭据（旧版 dsh-im 的配置启动时自动导入），
  * 真机反馈「飞书缺少接入机器人的入口」——所以这个入口做在渠道页上，
- * 左栏机器人列表头部的「新建机器人接入」打开的就是这一页。
+ * 机器人列表头部的「新建机器人接入」打开的就是这一页。
  *
- * 导出给布局守门用：四个控件（两个输入框 + 一个下拉 + 一个可留空的属主）在 320px 下要排得下。
+ * 导出给布局守门用：二维码、状态行与四个控件（三个输入框 + 一个下拉）在 320px 下都要排得下。
  *
  * @param props - { chatUi, connection, translate, onAdded }。
  * @returns React 元素。
@@ -584,11 +619,39 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
   /** 刚接进来的机器人（`{ name, id }`）与"策略没放宽成"的告警。 */
   const [added, setAdded] = React.useState(null);
   const [warning, setWarning] = React.useState(null);
+  /** 扫码那条路的状态（`bot.register.*` 的返回原样存着）。 */
+  const [scan, setScan] = React.useState({ state: 'idle' });
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => () => { aliveRef.current = false; }, []);
   const busy = phase === 'busy';
   const ready = form.appId.trim().length > 0 && form.appSecret.trim().length > 0;
 
   const patch = (next) => setForm((current) => ({ ...current, ...next }));
+  /** 扫码进行中的状态（这些状态下才轮询、才显示二维码与取消）。 */
+  const SCAN_ACTIVE = ['starting', 'qr_ready', 'polling', 'slow_down', 'domain_switched', 'saving'];
 
+  /**
+   * 接进来的机器人如果**没有属主**，把私聊访问策略放宽到「任何人可用」。
+   *
+   * 为什么：属主只能从"它聊过的会话"里选，而新机器人一个会话都没有，默认
+   * 「仅名单内可用」+ 空名单 = 谁都进不来，属主自己也没法说上第一句话。
+   * 扫码那条路通常是知道属主的（扫码的人），这条路只在真的没有属主时才走。
+   * 失败只告警：机器人已经加上了，用户能自己去「访问策略」改。
+   */
+  const relaxIfOwnerless = async (bot) => {
+    if (bot?.ownersWildcard !== true) return;
+    const botId = bot?.botId ?? bot?.id ?? null;
+    if (!botId) return;
+    try {
+      await chatUi.callControlRpc(connection, 'bot.access-policy.open-scope', {
+        channelId: CHANNEL_ID, botId, conversationType: 'direct',
+      });
+    } catch (cause) {
+      setWarning(`${t('私聊访问策略没能自动放宽')}：${cause?.message ?? String(cause)}`);
+    }
+  };
+
+  /** 手动接入：填已有机器人的 App ID + App Secret。 */
   const submit = async () => {
     if (!ready || busy) return;
     setPhase('busy');
@@ -612,27 +675,70 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
       setPhase('error');
       return;
     }
-    const botId = bot?.botId ?? bot?.id ?? null;
-    /**
-     * 刚接进来的机器人**还没有属主**（属主只能从"它聊过的会话"里选），而默认访问策略是
-     * 「仅名单内可用」+ 空名单 = 谁都进不来：属主自己也没法跟它说上第一句话。
-     * 所以接入完成后把**私聊**放宽到「任何人可用」（用户选的口径），属主先聊一句，
-     * 再回这台机器人的设置里把自己选成属主。
-     */
-    if (botId) {
-      try {
-        await chatUi.callControlRpc(connection, 'bot.access-policy.open-scope', {
-          channelId: CHANNEL_ID, botId, conversationType: 'direct',
-        });
-      } catch (cause) {
-        setWarning(`${t('私聊访问策略没能自动放宽')}：${cause?.message ?? String(cause)}`);
-      }
-    }
-    setAdded({ id: botId, name: bot?.name ?? null });
+    await relaxIfOwnerless(bot);
+    setAdded({ id: bot?.botId ?? bot?.id ?? null, name: bot?.name ?? null });
     patch({ appId: '', appSecret: '', owner: '' });
     setPhase('done');
     onAdded?.();
   };
+
+  /** 扫码新建：发起一次尝试（之后靠轮询推进）。 */
+  const beginScan = async () => {
+    setError(null);
+    setWarning(null);
+    setAdded(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.register.start', {});
+      const value = chatUi.unwrapRpc(result);
+      if (aliveRef.current) setScan(value);
+    } catch (cause) {
+      if (aliveRef.current) setError(cause?.message ?? String(cause));
+    }
+  };
+
+  const cancelScan = async () => {
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.register.cancel', {});
+      const value = chatUi.unwrapRpc(result);
+      if (aliveRef.current) setScan(value);
+    } catch (cause) {
+      if (aliveRef.current) setError(cause?.message ?? String(cause));
+    }
+  };
+
+  // 轮询扫码状态：服务端不做长轮询，这里每 2 秒问一次（与微信那条路一致）。
+  React.useEffect(() => {
+    if (!SCAN_ACTIVE.includes(scan.state)) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.register.status', {});
+        const value = chatUi.unwrapRpc(result);
+        if (stopped || !aliveRef.current) return;
+        setScan(value);
+        if (!SCAN_ACTIVE.includes(value.state)) return;
+      } catch (cause) {
+        if (!stopped && aliveRef.current) setError(cause?.message ?? String(cause));
+        return;
+      }
+      if (!stopped) timer = setTimeout(tick, 2_000);
+    };
+    let timer = setTimeout(tick, 1_000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.state, chatUi, connection]);
+
+  // 扫码成功：刷新列表、顺手把"没有属主"的私聊策略放宽，并回头看一眼渲染。
+  React.useEffect(() => {
+    if (scan.state !== 'succeeded' || !scan.bot) return;
+    setAdded({ id: scan.bot.botId ?? scan.bot.id ?? null, name: scan.bot.name ?? null });
+    void relaxIfOwnerless(scan.bot);
+    onAdded?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.state, scan.bot]);
 
   const field = (key, options) => h('div', { className: 'dchat-scopeRow' },
     // `label` 由调用方给：界面文案传 t(…) 的结果，飞书自己的术语（App ID / App Secret）原样传。
@@ -662,33 +768,99 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
         },
       }));
 
+  const scanActive = SCAN_ACTIVE.includes(scan.state);
+  const scanLabel = scan.state === 'starting' ? t('正在向飞书申请二维码…')
+    : scan.state === 'saving' ? t('已授权，正在启动机器人…')
+      : scan.state === 'succeeded' ? t('已接入')
+        : scan.state === 'expired' ? t('二维码已失效，请重新生成')
+          : scan.state === 'cancelled' ? t('已取消')
+            : scan.state === 'error' ? t('扫码接入失败')
+              : scan.state === 'polling' || scan.state === 'slow_down' || scan.state === 'domain_switched'
+                ? t('等待你在飞书里确认…')
+                : t('等待扫码');
+
   return h(Panel, {
     title: t('新建机器人接入'),
-    description: t('填自建应用的 App ID 与 App Secret（飞书开放平台 → 凭证与基础信息）。应用需要开启机器人能力。'),
-    actions: h('button', {
-      type: 'button',
-      className: 'dchat-button dchat-buttonPrimary',
-      disabled: busy || !ready,
-      onClick: () => { void submit(); },
-    }, busy ? t('接入中…') : t('接入')),
+    description: t('两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。'),
+    actions: null,
   },
-  h('div', { className: 'dchat-scopeGrid' },
-    field('appId', { id: 'dchat-onboard-appId', label: 'App ID', placeholder: 'cli_xxxxxxxxxxxx' }),
-    field('appSecret', {
-      id: 'dchat-onboard-appSecret', label: 'App Secret', type: 'password', placeholder: t('应用凭证里的 App Secret'),
-    }),
-    field('domain', {
-      id: 'dchat-onboard-domain',
-      label: t('域名'),
-      select: [{ value: 'feishu', label: '飞书（open.feishu.cn）' }, { value: 'lark', label: 'Lark（open.larksuite.com）' }],
-    }),
-    field('owner', {
-      id: 'dchat-onboard-owner',
-      label: t('属主 open_id（可留空）'),
-      placeholder: 'ou_xxxxxxxxxxxx',
-    }),
+  // ① 扫码新建
+  h('div', { className: 'dchat-onboardSection' },
+    h('h4', { className: 'dchat-onboardTitle' }, t('扫码新建机器人')),
     h('p', { className: 'dchat-cardDescription' },
-      t('属主留空 = 这台机器人暂时没有属主：接入后私聊会被设为「任何人可用」，属主先跟它说一句话，再回它的设置里把自己选成属主。'))),
+      t('点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。')),
+    h('div', { className: 'dchat-actions' },
+      h('button', {
+        type: 'button',
+        className: 'dchat-button dchat-buttonPrimary',
+        disabled: scanActive,
+        onClick: () => { void beginScan(); },
+      }, scan.state === 'idle' || scan.state === 'cancelled' || scan.state === 'expired' || scan.state === 'error'
+        ? t('扫码新建机器人')
+        : t('重新生成二维码')),
+      scanActive
+        ? h('button', {
+          type: 'button', className: 'dchat-button', onClick: () => { void cancelScan(); },
+        }, t('取消'))
+        : null),
+    scan.qrCodeDataUrl
+      ? h('img', {
+        className: 'dchat-onboardQr',
+        src: scan.qrCodeDataUrl,
+        alt: t('扫码新建机器人'),
+        width: 200,
+        height: 200,
+      })
+      : null,
+    // Host 没能把链接编码成二维码（缺 qrcode 模块）时**必须说清**，并给一条还能走的路。
+    scan.verificationUrl && !scan.qrCodeDataUrl
+      ? h('div', null,
+        h('a', {
+          className: 'dchat-onboardLink', href: scan.verificationUrl, target: '_blank', rel: 'noreferrer',
+        }, t('打开授权页面')),
+        h('p', { className: 'dchat-cardDescription' },
+          `${t('这台 Host 没能生成二维码，请点上面的链接继续。')}`))
+      : null,
+    h('p', { className: 'dchat-cardDescription', role: 'status' },
+      scan.remainingSeconds !== null && scan.remainingSeconds !== undefined && scanActive
+        ? `${scanLabel}（${t('剩余')} ${scan.remainingSeconds}s）`
+        : scanLabel),
+    scan.state === 'error' && scan.error
+      ? h('p', { className: 'dchat-error', role: 'alert' }, `${scan.error.message}（${scan.error.code}）`)
+      : null),
+
+  h('hr', { className: 'dchat-onboardDivider' }),
+
+  // ② 手动接入已有机器人
+  h('div', { className: 'dchat-onboardSection' },
+    h('h4', { className: 'dchat-onboardTitle' }, t('手动接入已有机器人')),
+    h('p', { className: 'dchat-cardDescription' },
+      t('填自建应用的 App ID 与 App Secret（飞书开放平台 → 凭证与基础信息）。应用需要开启机器人能力。')),
+    h('div', { className: 'dchat-scopeGrid' },
+      field('appId', { id: 'dchat-onboard-appId', label: 'App ID', placeholder: 'cli_xxxxxxxxxxxx' }),
+      field('appSecret', {
+        id: 'dchat-onboard-appSecret', label: 'App Secret', type: 'password', placeholder: t('应用凭证里的 App Secret'),
+      }),
+      field('domain', {
+        id: 'dchat-onboard-domain',
+        label: t('域名'),
+        select: [{ value: 'feishu', label: '飞书（open.feishu.cn）' }, { value: 'lark', label: 'Lark（open.larksuite.com）' }],
+      }),
+      field('owner', {
+        id: 'dchat-onboard-owner',
+        label: t('属主 open_id（可留空）'),
+        placeholder: 'ou_xxxxxxxxxxxx',
+      }),
+      h('p', { className: 'dchat-cardDescription' },
+        t('属主留空 = 这台机器人暂时没有属主：接入后私聊会被设为「任何人可用」，属主先跟它说一句话，再回它的设置里把自己选成属主。'))),
+    h('div', { className: 'dchat-actions' },
+      h('button', {
+        type: 'button',
+        className: 'dchat-button dchat-buttonPrimary',
+        disabled: busy || !ready,
+        onClick: () => { void submit(); },
+      }, busy ? t('接入中…') : t('接入')))),
+
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
   warning ? h('p', { className: 'dchat-warning', role: 'alert' }, warning) : null,
   added

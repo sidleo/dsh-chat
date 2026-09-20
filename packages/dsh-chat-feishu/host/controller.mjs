@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
 import { createLarkGateway, createLarkProbe } from './lark-gateway.mjs';
+import { createProvisionManager } from './provision.mjs';
 import { createFeishuStateStore } from './state-store.mjs';
 
 /**
@@ -86,6 +87,22 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
   /** 凭据探针：测试注入替身，避免真去打飞书接口。 */
   const probeFactory = internals.createProbe ?? createLarkProbe;
+  /**
+   * 扫码接入用的 SDK 入口（`registerApp`）。
+   *
+   * 测试注入替身；真机走 SDK。**先确认它存在**：SDK 换版本后少这个方法时，
+   * 用户该看到"当前 SDK 不支持扫码创建"，而不是一个 undefined is not a function。
+   */
+  const registerApp = internals.registerApp ?? (async (options) => {
+    const sdk = await sdkLoader();
+    if (typeof sdk?.registerApp !== 'function') {
+      const error = new Error('当前 @larksuiteoapi/node-sdk 不支持扫码创建应用（缺 registerApp）；'
+        + '请改用「手动接入已有机器人」填 App ID 与 App Secret。');
+      error.code = 'feishu/register-unsupported';
+      throw error;
+    }
+    return sdk.registerApp(options);
+  });
 
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
@@ -283,6 +300,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const MAX_OWNERS = 10;
   /** 一次最多换多少个 id 的名字（每个都要打一次通讯录/群接口）。 */
   const MAX_RESOLVE_IDS = 50;
+  /** 走"共同群成员"这条退路时最多翻几个群（成员接口是一群一次）。 */
+  const MAX_MEMBER_CHATS = 20;
 
   /**
    * 会话键 → 可投递目标（`p2p:ou_x` → 私聊，`group:oc_y` → 群聊）。
@@ -363,14 +382,15 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     return isScopeMissing(error) ? SCOPE_MISSING_TTL_MS : 0;
   }
 
-  const nameCache = new Map(); // botId → { chats, chatsAt, chatsBlockMs, users, usersAt, usersBlockMs, nameHint }
+  const nameCache = new Map(); // botId → { chats, chatsAt, chatsBlockMs, users, usersAt, usersBlockMs, members, membersAt, membersBlockMs, nameHint }
 
   function cacheFor(botId) {
     let entry = nameCache.get(botId);
     if (!entry) {
       entry = {
         chats: new Map(), chatsAt: 0, chatsBlockMs: 0, chatsPromise: null,
-        users: new Map(), usersAt: 0, usersBlockMs: 0, userPromises: new Map(),
+        users: new Map(), usersAt: 0, usersBlockMs: 0, userPromises: new Map(), userError: null,
+        members: new Map(), membersAt: 0, membersBlockMs: 0, membersPromise: null,
         nameHint: null,
       };
       nameCache.set(botId, entry);
@@ -443,6 +463,7 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         return name;
       } catch (error) {
         cache.nameHint = nameHintFrom(error, '读不到人名');
+        cache.userError = error;
         cache.usersBlockMs = backoffMs(error);
         logger.warn?.(`[dsh-chat-feishu] 读取用户信息失败，人名将退回 id：${error?.message ?? error}`);
         cache.users.set(openId, '');
@@ -457,11 +478,71 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   }
 
   /**
+   * 从"机器人所在的群"里查成员名字——**没有通讯录权限时的退路**。
+   *
+   * 真机上常见的是 `no user authority error (code 41050)`：应用没有通讯录权限，
+   * 或者这个人不在应用的可见范围里。但"读群成员"要的是 `im:chat:readonly` 系权限
+   * （读群列表本来就要它），所以只要这个人和机器人同群，名字就还能换出来。
+   * 整张表按 `NAME_TTL_MS` 缓存：群成员变得很慢，而设置页每次刷新都会问一遍。
+   */
+  async function memberNames(botId) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway) return new Map();
+    const cache = cacheFor(botId);
+    if (Date.now() - cache.membersAt < Math.max(NAME_TTL_MS, cache.membersBlockMs)) {
+      return cache.members;
+    }
+    if (cache.membersPromise) return cache.membersPromise;
+    cache.membersPromise = (async () => {
+      const map = new Map();
+      try {
+        const chats = await allChats(botId);
+        for (const chat of chats.slice(0, MAX_MEMBER_CHATS)) {
+          const members = await record.gateway.listChatMembers({ chatId: chat.chatId });
+          for (const member of members) {
+            if (member.name && !map.has(member.openId)) map.set(member.openId, member.name);
+          }
+        }
+        cache.members = map;
+        cache.membersBlockMs = 0;
+      } catch (error) {
+        // 失败也退避一个 TTL：换个群照样会失败，不该每次刷新都逐群重试。
+        cache.membersBlockMs = backoffMs(error) || NAME_TTL_MS;
+        logger.warn?.(`[dsh-chat-feishu] 读取群成员失败，人名将退回 id：${error?.message ?? error}`);
+      } finally {
+        cache.membersAt = Date.now();
+        cache.membersPromise = null;
+      }
+      return cache.members;
+    })();
+    return cache.membersPromise;
+  }
+
+  /**
+   * 人名换不到时的说明：**必须能指导用户去做一件事**。
+   *
+   * `no user authority error (code 41050)` 这种原始报错本身完全无法行动，
+   * 所以补上要开通哪个权限、以及这台应用的开通链接。
+   */
+  function personNameHint(botId, error) {
+    const bot = configStore.get(botId);
+    const fromError = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(String(error?.message ?? ''))?.[0] ?? null;
+    return Object.freeze({
+      code: 'feishu/name-scope-missing',
+      message: '读不到人名：这个飞书应用需要「通讯录 · 获取用户基本信息」权限，并且该用户要在应用的'
+        + '通讯录可见范围里（或者让他和机器人待在同一个群，群成员名单也能换出名字）。'
+        + '到开放平台开通后点「重新连接」立刻重取。',
+      url: fromError ?? (bot?.appId ? `https://open.feishu.cn/app/${bot.appId}/auth?q=contact:user.base:readonly` : null),
+    });
+  }
+
+  /**
    * 平台 id → 名字（`oc_` 群查群名，`ou_` 人查人名）；换不到就返回 null。
    *
    * 为什么要它：访问策略的白名单里存的只有平台 id，设置页上就是一排
    * `ou_4f6a8c0e2b1d9753…`——认不出是谁、也看不出加错了人（真机反馈
    * "群了白名单 只显示id不显示名称，不方便管理"）。
+   * 人名的顺序是**通讯录 → 共同群成员**：前者更准但常缺权限，后者要的权限读群列表时本来就有。
    */
   async function resolveName(botId, id) {
     if (id.startsWith('oc_')) {
@@ -471,7 +552,14 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       await allChats(botId, { minIntervalMs: 60_000 });
       return cacheFor(botId).chats.get(id) ?? null;
     }
-    return (await userName(botId, id)) || null;
+    const direct = await userName(botId, id);
+    if (direct) return direct;
+    const fromGroup = (await memberNames(botId)).get(id);
+    if (fromGroup) return fromGroup;
+    // 两条路都没换到：留一条能行动的说明（缺权限 / 不在可见范围 / 没和机器人同群）。
+    const cache = cacheFor(botId);
+    cache.nameHint = personNameHint(botId, cache.userError);
+    return null;
   }
 
   const delivery = Object.freeze({
@@ -572,10 +660,140 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     },
   });
 
+  /**
+   * 把一组**已验证**的凭据落成一只机器人并起长连接（`bot.add` 与扫码接入共用）。
+   *
+   * 顺序：写 DSH 凭据服务 → 写渠道 `config.json` → 起长连接。
+   * 落盘失败要把刚写的凭据删掉（不留一个谁也读不到的引用）；
+   * 长连接起不来**不算没加上**（配置已在，状态里会显示 failed + 原因）。
+   *
+   * @returns `{ saved, record }`。
+   */
+  async function storeAndStart({ appId, appSecret, domain, ownerOpenIds, botName, botOpenId }) {
+    const { botId, secretRef } = deriveFeishuIdentity(appId);
+    try {
+      await deps.credentials.set(secretRef, appSecret);
+    } catch (error) {
+      const wrapped = new Error(`保存 App Secret 失败：${error?.message ?? error}`);
+      wrapped.code = 'feishu/credential-write-failed';
+      throw wrapped;
+    }
+    let saved;
+    try {
+      saved = await configStore.saveBot({
+        id: botId,
+        appId,
+        secretRef,
+        domain,
+        ownerOpenIds,
+        botName: botName ?? null,
+        botOpenId: botOpenId ?? null,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      try {
+        await deps.credentials.unset?.(secretRef);
+      } catch (cleanupError) {
+        logger.warn?.(`[dsh-chat-feishu] 回滚凭据 ${secretRef} 失败：${cleanupError?.message ?? cleanupError}`);
+      }
+      const wrapped = new Error(`写入机器人配置失败：${error?.message ?? error}`);
+      wrapped.code = 'feishu/bot-save-failed';
+      throw wrapped;
+    }
+    logger.info?.(`[dsh-chat-feishu] 接入机器人：${saved.botName ?? saved.id}`
+      + `（appId=${maskAppId(saved.appId)} 属主=${saved.ownerOpenIds.join('、')}）`);
+    const record = await startBot(saved);
+    return { saved, record };
+  }
+
+  /**
+   * 二维码缓存：同一个授权链接只编码一次（`status` 会被前端每 2 秒轮一次）。
+   */
+  const qrCache = new Map();
+  let qrModule;
+  /**
+   * 把授权链接转成 data URL。
+   *
+   * `qrcode` 是构建期外置依赖（由 profile 的 node_modules 提供）。**拿不到就返回 null**：
+   * 前端会退回"打开链接/复制链接"，绝不因为缺一个可选依赖就让这条路走不通。
+   */
+  async function encodeQrDataUrl(url) {
+    if (qrCache.has(url)) return qrCache.get(url);
+    if (qrModule === undefined) {
+      try {
+        const loaded = await import('qrcode');
+        qrModule = loaded?.default ?? loaded;
+      } catch (error) {
+        qrModule = null;
+        logger.warn?.('[dsh-chat-feishu] 没能加载 qrcode，二维码将只给链接：'
+          + `${error?.message ?? error}`);
+      }
+    }
+    let dataUrl = null;
+    if (typeof qrModule?.toDataURL === 'function') {
+      try {
+        dataUrl = await qrModule.toDataURL(url, { errorCorrectionLevel: 'M', margin: 1, width: 320 });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] 生成二维码失败，将只给链接：${error?.message ?? error}`);
+        dataUrl = null;
+      }
+    }
+    if (qrCache.size >= 8) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(url, dataUrl);
+    return dataUrl;
+  }
+
+  /** 扫码接入的对外状态：二维码 data URL + 链接 + 剩余秒数 + 成功后的机器人。 */
+  async function provisionStatus(raw) {
+    const url = typeof raw?.qrCodeUrl === 'string' && /^https?:\/\//u.test(raw.qrCodeUrl) ? raw.qrCodeUrl : null;
+    const bot = raw?.bot?.botId ? provisionBotStatus(raw.bot.botId) : null;
+    return Object.freeze({
+      state: raw?.state ?? 'idle',
+      attempt: raw?.attempt ?? 0,
+      verificationUrl: url,
+      qrCodeDataUrl: url
+        ? await (internals.encodeQr ?? encodeQrDataUrl)(url)
+        : null,
+      remainingSeconds: raw?.remainingSeconds ?? null,
+      error: raw?.error ? Object.freeze({ ...raw.error }) : null,
+      bot,
+    });
+  }
+
+  /** 扫码接入成功后的机器人状态（读配置 + 运行时，与 `connection.status` 同一份形状）。 */
+  function provisionBotStatus(botId) {
+    const bot = configStore.get(botId);
+    if (!bot) return null;
+    return botStatus(runtimes.get(botId) ?? { bot, phase: 'stopped', error: null, bridge: null });
+  }
+
+  const provision = createProvisionManager({
+    registerApp,
+    logger,
+    onCredentials: async ({ appId, appSecret, userInfo }) => {
+      // 扫码的人就是属主（飞书在这个回调里把人一起给回来）；域名跟着租户品牌走。
+      const domain = userInfo?.tenant_brand === 'lark' ? 'lark' : 'feishu';
+      const ownerOpenIds = typeof userInfo?.open_id === 'string' && userInfo.open_id
+        ? [userInfo.open_id]
+        : ['*'];
+      const info = await probeFactory({ appId, appSecret, domain, sdk: await sdkLoader(), logger }).verify();
+      const { saved, record } = await storeAndStart({
+        appId,
+        appSecret,
+        domain,
+        ownerOpenIds,
+        botName: info?.botName ?? null,
+        botOpenId: info?.botOpenId ?? null,
+      });
+      return { botId: saved.id, name: record?.bot?.botName ?? saved.botName ?? null };
+    },
+  });
+
   return Object.freeze({
     start: startAll,
     delivery,
     async stop() {
+      provision.dispose();
       await Promise.all([...runtimes.keys()].map((botId) => stopBot(botId)));
     },
     status,
@@ -720,53 +938,47 @@ export function createFeishuController({ deps, logger = console, config = {}, in
             },
           };
         }
-        // ② 记凭据（放最前面：落盘时要有它，否则配置指向一个读不到的引用）。
+        // ② 记凭据 → ③ 落盘 → ④ 起连接（与扫码接入共用同一条流水线）。
+        let record;
         try {
-          await deps.credentials.set(secretRef, appSecret);
-        } catch (error) {
-          return {
-            ok: false,
-            error: {
-              code: 'feishu/credential-write-failed',
-              message: `保存 App Secret 失败：${error?.message ?? error}`,
-              details: {},
-            },
-          };
-        }
-        // ③ 落盘；失败要把刚写的凭据删掉，免得留下一个谁也读不到的引用。
-        let saved;
-        try {
-          saved = await configStore.saveBot({
-            id: botId,
+          ({ record } = await storeAndStart({
             appId,
-            secretRef,
+            appSecret,
             domain,
             ownerOpenIds: rawOwners.map((id) => id.trim()),
             botName: info?.botName ?? null,
             botOpenId: info?.botOpenId ?? null,
-            createdAt: new Date().toISOString(),
-          });
+          }));
         } catch (error) {
-          try {
-            await deps.credentials.unset?.(secretRef);
-          } catch (cleanupError) {
-            logger.warn?.(`[dsh-chat-feishu] 回滚凭据 ${secretRef} 失败：${cleanupError?.message ?? cleanupError}`);
-          }
           return {
             ok: false,
             error: {
-              code: 'feishu/bot-save-failed',
-              message: `写入机器人配置失败：${error?.message ?? error}`,
+              code: typeof error?.code === 'string' ? error.code : 'feishu/bot-save-failed',
+              message: error?.message ?? String(error),
               details: {},
             },
           };
         }
-        logger.info?.(`[dsh-chat-feishu] 新建机器人接入：${saved.botName ?? saved.id}`
-          + `（appId=${maskAppId(saved.appId)} 属主=${saved.ownerOpenIds.join('、')}）`);
-        // ④ 起连接。起不来也算"加上了"：状态里会显示 failed + 原因。
-        const record = await startBot(saved);
         return { ok: true, value: { bot: botStatus(record) } };
       },
+
+      /**
+       * 扫码接入（**新建机器人**那条路）：向飞书申请一个一次性链接，
+       * 用户用飞书扫一下（或在浏览器里打开）就自动创建应用并返回凭据；**扫码的人就是属主**。
+       *
+       * 三个方法：`start` 发起（同一个时刻只有一个进行中的尝试）、`status` 轮询
+       * （回显二维码/链接、剩余秒数、失败原因、成功后的机器人）、`cancel` 取消。
+       * 二维码由 host 转成 data URL（`qrcode` 是构建期外置依赖）：拿不到就只回链接，
+       * 前端照样能让人打开——**不静默**，状态里会写清为什么没有二维码。
+       */
+      'bot.register.start': async () => ({
+        ok: true,
+        value: await provisionStatus(provision.start()),
+      }),
+
+      'bot.register.status': async () => ({ ok: true, value: await provisionStatus(provision.status()) }),
+
+      'bot.register.cancel': async () => ({ ok: true, value: await provisionStatus(provision.cancel()) }),
 
       'bot.delete': async (payload) => {
         if (typeof payload?.botId !== 'string' || payload.confirm !== true) {

@@ -206,6 +206,24 @@ try {
     }
   }
 
+  // 接入页两条路都得在（扫码新建 / 手动接入），而且点了「扫码新建机器人」之后
+  // 真的渲染出二维码——只测初始态会漏掉"二维码图片撑破窄栏"这种只在点击后才出现的问题。
+  const onboardFrames = results.filter((frame) => frame.scenario === 'feishuOnboard'
+    || frame.scenario === 'feishuOnboardQr');
+  if (onboardFrames.length === 0) failures.push('没测到接入页（守门本身失效了）');
+  for (const frame of onboardFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const headings = frame.onboard?.headings ?? [];
+    for (const expected of ['扫码新建机器人', '手动接入已有机器人']) {
+      if (!headings.includes(expected)) {
+        failures.push(`${where}: 接入页缺「${expected}」（实际：${headings.join('、')}）`);
+      }
+    }
+    if (frame.scenario === 'feishuOnboardQr' && frame.onboard?.qr !== true) {
+      failures.push(`${where}: 点了「扫码新建机器人」之后没有渲染二维码`);
+    }
+  }
+
   // 默认打开的渠道 = 排在最前面的那个（不是注册顺序里的第一个）。
   for (const frame of results.filter((item) => (item.railOrder ?? []).length > 0)) {
     const where = `${frame.scenario} @${frame.width}px`;

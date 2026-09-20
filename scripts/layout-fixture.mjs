@@ -112,6 +112,27 @@ const WEIXIN_ACCOUNT = {
  * 与整张渠道卡才会走完整链路渲染——这正是"真机才炸"的那一层。
  */
 const RPC_FIXTURES = {
+  // 扫码接入：给一个"二维码已就绪"的状态，让守门能量到图片在窄栏里的真实占位
+  // （1x1 的 PNG 撑到 200×200 显示，和真机一模一样）。
+  'bot.register.start': () => ({
+    state: 'qr_ready',
+    attempt: 1,
+    verificationUrl: 'https://open.feishu.cn/register/abc',
+    qrCodeDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+    remainingSeconds: 599,
+    error: null,
+    bot: null,
+  }),
+  'bot.register.status': () => RPC_FIXTURES['bot.register.start'](),
+  'bot.register.cancel': () => ({
+    state: 'cancelled',
+    attempt: 1,
+    verificationUrl: null,
+    qrCodeDataUrl: null,
+    remainingSeconds: null,
+    error: { code: 'abort', message: '已取消。' },
+    bot: null,
+  }),
   'bot.settings.get': () => ({
     settings: {
       workspace: '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat',
@@ -293,8 +314,12 @@ const FRAGMENTS = {
   // 整张渠道卡：数据全部由上面的假传输层供给，组件与 hook 都是产品代码。
   feishuCard,
   weixinCard,
-  // 新建机器人接入的表单：四个控件（三个输入框 + 一个下拉）在 320px 下也要排得下。
+  // 新建机器人接入的表单：两条路（扫码新建 / 手动接入）在 320px 下都要排得下。
   feishuOnboard: () => h(FeishuOnboard, {
+    chatUi, connection, translate: t, onAdded: async () => {},
+  }),
+  // 点了「扫码新建机器人」之后的形态：二维码图片 + 状态行 + 取消按钮。
+  feishuOnboardQr: () => h(FeishuOnboard, {
     chatUi, connection, translate: t, onAdded: async () => {},
   }),
   // hub 页头 + 左栏 + 机器人列表：右上角两个入口（诊断 / 版本与更新）在窄栏下也得排得下。
@@ -475,6 +500,12 @@ function measure() {
     // 访问策略白名单行的文字（"名字 + id"）：只显示 id 时认不出是谁（真机反馈）。
     const policyNames = [...frame.querySelectorAll('.dchat-policyEntry')]
       .map((el) => (el.textContent ?? '').trim());
+    // 接入页的两条路与二维码（守门断言"两条路都在、点完真的出二维码"）。
+    const onboard = {
+      headings: [...frame.querySelectorAll('.dchat-onboardTitle')]
+        .map((el) => (el.textContent ?? '').trim()),
+      qr: Boolean(frame.querySelector('.dchat-onboardQr')),
+    };
     results.push({
       scenario: frame.dataset.scenario,
       width: Number(frame.dataset.frame),
@@ -490,6 +521,7 @@ function measure() {
       panelButtons,
       emptyHint,
       policyNames,
+      onboard,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();
@@ -517,6 +549,8 @@ async function settle() {
     weixinCard: ['上下文增强'],
     // hub 页头两个入口都展开：诊断面板 + 版本面板都得在窄栏里排得下。
     hubPageOpen: ['诊断', '版本与更新'],
+    // 扫码接入：点一次才会出现二维码图片与状态行（那才是会撑破窄栏的东西）。
+    feishuOnboardQr: ['扫码新建机器人'],
   };
   for (const [scenario, labels] of Object.entries(clicks)) {
     for (const frame of document.querySelectorAll(`[data-scenario="${scenario}"]`)) {

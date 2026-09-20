@@ -26,6 +26,8 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | 微信 iLink 协议客户端（扫码登录、长轮询、发消息、输入状态） | P3 ✅ | 协议无公开文档，只能按参考实现的协议行为重写客户端；已收窄到私聊文本链路，文件头注明出处（图片/文件的 AES 与 CDN 上传留到 P5） |
 | ~~`@larksuiteoapi/node-sdk@1.73.0` WSClient 生命周期构建期补丁~~ | — | **不移植**：改为让 SDK 永远不走那条有缺陷的路径——网关显式传 `handshakeTimeoutMs: 0`（该超时路径会先摘掉 socket 的全部 error 监听再 terminate，随后任何 error 都会变成未捕获异常），握手超时与重连由 `lark-gateway.mjs` 自己用 Promise.race + 丢弃旧 WSClient 实现。少一处需要跟着 SDK 版本维护的源码补丁 |
 
+| 飞书「扫码接入」（应用注册：`registerApp` 一次性授权链接 → 自动创建应用并拿到凭据） | P7 ✅ | **收窄重写**（`packages/dsh-chat-feishu/host/provision.mjs`）：同一套状态（starting/qr_ready/polling/slow_down/domain_switched/saving/succeeded/expired/cancelled/error）、同一个 SDK 入口与同样的"Secret 只经回调交出去、不进状态"；只做**新建**，不做上游那条"用扫码给已有应用增量补权限"（`repair-manager.mjs`）。二维码在上游由 `qrcode` 编码成 data URL，我们沿用同一条路 |
+| 接入机器人的**两种方式**（扫码新建 / 手动填 App ID + App Secret） | P7 ✅ | 上游客户端是"扫码接入机器人" + 可展开的"手动接入"；我们做成渠道页上的两条路。**属主**沿用上游口径：扫码返回的 `user_info.open_id` 就是属主、`user_info.tenant_brand` 决定域名；手动那条路属主可留空（留空 = 没有属主，接入后把私聊放宽到「任何人可用」，让属主先聊上第一句） |
 | 超时后的延迟交付（deferred delivery） | P5⁺ ✅ | **收窄重写**（`packages/dsh-chat/host/deferred.mjs`，未逐行移植）：沿用"超时只登记、之后有界复查、拿到结果补发"的思路与"不承诺恰好一次"的语义，复查节奏与字段形状按本仓库定；probe 由 hub 提供（`probeTurn`），渠道只注册 `deliver` |
 
 移植进来的文件必须在文件头写明来源与 MIT 许可，并在 `THIRD_PARTY_NOTICES.md` 登记。

@@ -2201,7 +2201,8 @@ test('names.resolve：白名单里的 id 换成名字（人 / 群各按各的查
     assert.equal(many.value.truncated, true);
     await controller.stop();
 
-    // 缺权限：名字一个都拿不到，但原因要带出来（界面显示"为什么没有名字"）。
+    // 缺权限且没有共同群：名字一个都拿不到，但说明必须**能行动**——
+    // 指出要开通的权限，并给出这台应用的开通链接（原始报错 41050 本身没法行动）。
     gateway.listChats = async () => {
       throw Object.assign(new Error(
         'Access denied. One of the following scopes is required: [im:chat:readonly]',
@@ -2216,13 +2217,90 @@ test('names.resolve：白名单里的 id 换成名字（人 / 群各按各的查
     await denied.start();
     const failed = await denied.endpoints['names.resolve']({ botId: 'bot_ctl', ids: ['ou_z'] });
     assert.deepEqual(failed.value.names, {});
-    assert.equal(failed.value.hint.code, 'feishu/scope-missing');
+    assert.equal(failed.value.hint.code, 'feishu/name-scope-missing');
+    assert.match(failed.value.hint.message, /通讯录/);
+    assert.match(failed.value.hint.url, /open\.feishu\.cn\/app\/cli_ctl_12345678\/auth/);
     await denied.stop();
 
     // 非法输入：缺 ids、未知机器人。
     assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_ctl' })).ok, false);
     assert.equal((await controller.endpoints['names.resolve']({ ids: [] })).ok, false);
     assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_nope', ids: [] })).ok, false);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('names.resolve：通讯录权限不够时，从"共同群成员"里把人名换出来', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-members-'));
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_ctl_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '控制器机器人',
+      }],
+    }), 'utf8');
+
+    const calls = { members: 0 };
+    const gateway = createFakeGateway();
+    gateway.listChats = async () => [
+      { chatId: 'oc_group_1', name: '日报临时推送群' },
+      { chatId: 'oc_group_2', name: '另一个群' },
+    ];
+    // 通讯录这条路真机上的常见失败：41050（没权限 / 不在应用的可见范围）。
+    gateway.getUserName = async () => {
+      throw new Error('读取用户信息失败：no user authority error（code 41050）');
+    };
+    gateway.listChatMembers = async ({ chatId }) => {
+      calls.members += 1;
+      if (chatId === 'oc_group_1') {
+        return [{ openId: 'ou_4f6a8c0e2b1d9753a5c7e9f1b3d5a7c9', name: '李四' }];
+      }
+      return [{ openId: 'ou_other', name: '王五' }];
+    };
+
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+    await controller.start();
+
+    const resolved = await controller.endpoints['names.resolve']({
+      botId: 'bot_ctl',
+      ids: ['ou_4f6a8c0e2b1d9753a5c7e9f1b3d5a7c9', 'ou_other', 'ou_nowhere'],
+    });
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.value.names['ou_4f6a8c0e2b1d9753a5c7e9f1b3d5a7c9'], '李四',
+      '通讯录失败时要退回到共同群成员');
+    assert.equal(resolved.value.names.ou_other, '王五');
+    assert.equal('ou_nowhere' in resolved.value.names, false, '哪里都查不到就不编名字');
+
+    // 群成员表按 TTL 缓存：再问一次不该把两个群的成员接口重打一遍。
+    const first = calls.members;
+    await controller.endpoints['names.resolve']({ botId: 'bot_ctl', ids: ['ou_other'] });
+    assert.equal(calls.members, first, '同一份群成员表要复用（设置页每次刷新都会问）');
+
+    await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
@@ -2351,6 +2429,205 @@ test('bot.add：验凭据 → 写凭据 → 落盘 → 起连接；重复接入�
     }
 
     await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('bot.register：扫码接入（新建机器人）——扫码的人成为属主，成功后才落盘', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-register-'));
+  try {
+    const secrets = new Map();
+    const gateway = createFakeGateway();
+    /** 假 SDK 的 registerApp：把回调攥在手里，测试自己决定什么时候"扫码成功"。 */
+    const pending = {};
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: {
+          resolve: async (ref) => ({ value: secrets.get(ref), configured: secrets.has(ref) }),
+          set: async (ref, value) => { secrets.set(ref, value); },
+          unset: async (ref) => { secrets.delete(ref); },
+        },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createProbe: () => ({ async verify() { return { botName: '扫码建的机器人', botOpenId: 'ou_bot' }; } }),
+        encodeQr: async (url) => `data:image/png;base64,${Buffer.from(url).toString('base64')}`,
+        registerApp: (options) => {
+          pending.options = options;
+          return new Promise((resolve, reject) => {
+            pending.resolve = resolve;
+            pending.reject = reject;
+          });
+        },
+      },
+    });
+    await controller.start();
+
+    // ① 发起：状态是 starting 且没有二维码；SDK 回链接后变 qr_ready（含 data URL 与剩余秒数）。
+    const started = await controller.endpoints['bot.register.start']({});
+    assert.equal(started.ok, true);
+    assert.equal(started.value.state, 'starting');
+    assert.equal(started.value.qrCodeDataUrl, null);
+
+    pending.options.onQRCodeReady({ url: 'https://open.feishu.cn/register/abc', expireIn: 600 });
+    const ready = await controller.endpoints['bot.register.status']({});
+    assert.equal(ready.value.state, 'qr_ready');
+    assert.equal(ready.value.verificationUrl, 'https://open.feishu.cn/register/abc');
+    assert.match(ready.value.qrCodeDataUrl, /^data:image\/png;base64,/);
+    assert.ok(ready.value.remainingSeconds > 0 && ready.value.remainingSeconds <= 600);
+    assert.equal(ready.value.bot, null, '还没成功时不该有机器人');
+
+    // 轮询状态（SDK 的回调）要如实反映。
+    pending.options.onStatusChange({ status: 'polling' });
+    assert.equal((await controller.endpoints['bot.register.status']({})).value.state, 'polling');
+
+    // ② 成功：凭据落进凭据服务 + config.json，**属主 = 扫码的人**，机器人被拉起来。
+    pending.resolve({
+      client_id: 'cli_registered_0001',
+      client_secret: 'registered-secret-0001',
+      user_info: { open_id: 'ou_scanner', tenant_brand: 'feishu' },
+    });
+    let done = null;
+    for (let index = 0; index < 50 && done?.state !== 'succeeded'; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      done = (await controller.endpoints['bot.register.status']({})).value;
+    }
+    assert.equal(done.state, 'succeeded', JSON.stringify(done));
+    assert.equal(done.qrCodeDataUrl, null, '成功后不该再回二维码');
+    assert.equal(done.bot.name, '扫码建的机器人');
+    assert.equal(done.bot.state, 'running');
+    const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    const saved = onDisk.bots.find((bot) => bot.appId === 'cli_registered_0001');
+    assert.deepEqual(saved.ownerOpenIds, ['ou_scanner'], '扫码的人就是属主');
+    assert.equal(saved.domain, 'feishu');
+    assert.equal(secrets.get(saved.secretRef), 'registered-secret-0001');
+    assert.equal(JSON.stringify(done).includes('registered-secret-0001'), false, 'Secret 不进状态');
+
+    // ③ 已经结束的尝试再取消：原样返回（不把成功改写成 cancelled），之后可以重新发起。
+    const cancelled = await controller.endpoints['bot.register.cancel']({});
+    assert.equal(cancelled.value.state, 'succeeded', '没有进行中的尝试时取消不改写状态');
+    const idleAgain = await controller.endpoints['bot.register.start']({});
+    assert.equal(idleAgain.value.state, 'starting');
+    assert.equal((await controller.endpoints['bot.register.cancel']({})).value.state, 'cancelled');
+
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('bot.register：SDK 报错/没有二维码能力时如实回报（不静默、不落盘）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-register-fail-'));
+  try {
+    const secrets = new Map();
+    const gateway = createFakeGateway();
+    let rejectWith = null;
+    let registerAvailable = true;
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: {
+          resolve: async (ref) => ({ value: secrets.get(ref), configured: secrets.has(ref) }),
+          set: async (ref, value) => { secrets.set(ref, value); },
+          unset: async (ref) => { secrets.delete(ref); },
+        },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createProbe: () => ({ async verify() { return { botName: null, botOpenId: null }; } }),
+        encodeQr: async () => null,
+        ...(registerAvailable
+          ? { registerApp: () => Promise.reject(rejectWith ?? new Error('未知失败')) }
+          : {}),
+      },
+    });
+    await controller.start();
+
+    // ① SDK 拒绝：状态变 error，原因带出来。
+    registerAvailable = true;
+    rejectWith = Object.assign(new Error('access denied'), { code: 'access_denied' });
+    await controller.endpoints['bot.register.start']({});
+    let state = null;
+    for (let index = 0; index < 50 && state?.state !== 'error'; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      state = (await controller.endpoints['bot.register.status']({})).value;
+    }
+    assert.equal(state.state, 'error');
+    assert.equal(state.error.code, 'access_denied');
+    assert.match(state.error.message, /access denied/);
+
+    // ② 二维码过期：SDK 报 expired_token → 状态是 expired。
+    rejectWith = Object.assign(new Error('expired'), { code: 'expired_token' });
+    await controller.endpoints['bot.register.start']({});
+    for (let index = 0; index < 50 && state?.state !== 'expired'; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      state = (await controller.endpoints['bot.register.status']({})).value;
+    }
+    assert.equal(state.state, 'expired');
+
+    // ③ 没有 registerApp（SDK 版本不对）：给一句能照做的提示，别的什么都不写。
+    await controller.stop();
+    registerAvailable = false;
+    const bare = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: {
+          resolve: async () => ({ value: 'x', configured: true }),
+          set: async () => {},
+          unset: async () => {},
+        },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createProbe: () => ({ async verify() { return { botName: null, botOpenId: null }; } }),
+      },
+    });
+    await bare.start();
+    await bare.endpoints['bot.register.start']({});
+    let missing = null;
+    for (let index = 0; index < 50 && missing?.state !== 'error'; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      missing = (await bare.endpoints['bot.register.status']({})).value;
+    }
+    assert.equal(missing.state, 'error');
+    assert.equal(missing.error.code, 'feishu/register-unsupported');
+    assert.match(missing.error.message, /手动接入/);
+    await bare.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }

@@ -417,7 +417,8 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 | `connection.status` | `{}` | hub 机器人列表 | 见下一节（**必须**实现） |
 | `panel.fields` / `panel.apply` / `panel.actions` / `panel.act` | 见 §4 上方 | hub 的 `/menu` 卡片 | 渠道自带的面板字段与动作；**可选** |
 | `names.resolve` | `{ botId, ids }` | 渠道自己的设置页 | 白名单里的 id → 名字；**可选**（见下） |
-| `bot.add` | `{ appId, appSecret, domain?, ownerOpenIds? }` | 渠道自己的设置页 | 「新建机器人接入」：**先验凭据再写任何东西**，成功后返回新机器人的状态；**可选**，名字自定 |
+| `bot.add` | `{ appId, appSecret, domain?, ownerOpenIds? }` | 渠道自己的设置页 | 「手动接入已有机器人」：**先验凭据再写任何东西**，成功后返回新机器人的状态；**可选**，名字自定 |
+| `bot.register.start` / `bot.register.status` / `bot.register.cancel` | 三者都无参数 | 渠道自己的设置页 | 「扫码接入」那条路：`start` 向平台申请一次性授权链接（同一时刻只有一个进行中的尝试），前端轮 `status` 拿 `{ state, verificationUrl, qrCodeDataUrl, remainingSeconds, error, bot }`，`cancel` 取消。**可选**，状态名与状态机由渠道自己定 |
 
 渠道的投递实现（`instance.delivery`）有三块，后两块可选、缺席要能被查出来（`supportsFile`）：
 

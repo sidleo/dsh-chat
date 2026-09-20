@@ -129777,9 +129777,53 @@ function createLarkGateway({
       return chats;
     },
     /**
+     * 群成员（`open_id` → 名字）。
+     *
+     * 为什么需要它：`getUserName` 要**通讯录权限**（还要人在这台应用的可见范围里），
+     * 真机上常见的失败是 `no user authority error (code 41050)`——那排白名单就只剩 id。
+     * 而"读群成员"用的是 `im:chat:readonly` 系权限（读群列表本来就要它），
+     * 于是只要这个人在机器人所在的任一群里，名字就还能换出来。
+     * 拿不到（应用没进群 / 缺权限）抛可读错误，由调用方决定要不要留空。
+     *
+     * @param options - { chatId, pageSize, maxPages }。
+     * @returns `[{ openId, name }]`。
+     */
+    async listChatMembers({ chatId, pageSize = 100, maxPages = 10 } = {}) {
+      if (typeof chatId !== "string" || !chatId) return [];
+      const members = [];
+      let pageToken = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        let response;
+        try {
+          response = await client.im.v1.chatMembers.get({
+            path: { chat_id: chatId },
+            params: {
+              member_id_type: "open_id",
+              page_size: pageSize,
+              ...pageToken ? { page_token: pageToken } : {}
+            }
+          });
+        } catch (error) {
+          throw new Error(`\u8BFB\u53D6\u7FA4\u6210\u5458\u5931\u8D25\uFF1A${readableApiError(error)}`);
+        }
+        const data = assertSuccess("\u8BFB\u53D6\u7FA4\u6210\u5458", response)?.data ?? {};
+        for (const item of data.items ?? []) {
+          if (typeof item?.member_id !== "string" || !item.member_id) continue;
+          members.push({
+            openId: item.member_id,
+            name: typeof item.name === "string" ? item.name : ""
+          });
+        }
+        if (!data.has_more || !data.page_token) break;
+        pageToken = data.page_token;
+      }
+      return members;
+    },
+    /**
      * 用 open_id 反查人名。
      *
-     * 需要通讯录权限（`contact:user.base:readonly` 等）；没开通就抛出可读错误。
+     * 需要通讯录权限（`contact:user.base:readonly` 等）**且这个人在应用的可见范围里**；
+     * 没开通就抛出可读错误（调用方会退回"从共同群里查名字"）。
      *
      * @param openId - 用户 open_id。
      * @returns 名字（查不到返回空串）。
@@ -129800,6 +129844,196 @@ function createLarkGateway({
       return typeof name2 === "string" ? name2 : "";
     }
   });
+}
+
+// packages/dsh-chat-feishu/host/provision.mjs
+var PROVISION_ACTIVE_STATES = Object.freeze([
+  "starting",
+  "qr_ready",
+  "polling",
+  "slow_down",
+  "domain_switched"
+]);
+var SDK_POLLING_STATES = Object.freeze(["polling", "slow_down", "domain_switched"]);
+function positiveSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new TypeError("registerApp \u7684 onQRCodeReady \u6CA1\u7ED9\u5408\u6CD5\u7684 expireIn\u3002");
+  }
+  return seconds;
+}
+function createProvisionManager({
+  registerApp: registerApp2,
+  onCredentials,
+  logger = console,
+  now = Date.now,
+  setTimeout: setTimeoutFn = globalThis.setTimeout,
+  clearTimeout: clearTimeoutFn = globalThis.clearTimeout
+} = {}) {
+  if (typeof registerApp2 !== "function") throw new TypeError("\u626B\u7801\u63A5\u5165\u9700\u8981 registerApp\u3002");
+  if (typeof onCredentials !== "function") throw new TypeError("\u626B\u7801\u63A5\u5165\u9700\u8981 onCredentials\u3002");
+  let attempt = 0;
+  let active = null;
+  let snapshot = { state: "idle", attempt: 0, updatedAt: now(), error: null };
+  function isCurrent(run) {
+    return active === run;
+  }
+  function clearTimer(run) {
+    if (run?.expiryTimer) {
+      clearTimeoutFn(run.expiryTimer);
+      run.expiryTimer = null;
+    }
+  }
+  function makeSnapshot(run, state, extra = {}) {
+    const next = {
+      state,
+      attempt: run?.id ?? attempt,
+      updatedAt: now(),
+      error: null,
+      ...extra
+    };
+    if (state === "succeeded" && run?.bot) next.bot = run.bot;
+    if (run?.qrCodeUrl && PROVISION_ACTIVE_STATES.includes(state)) {
+      next.qrCodeUrl = run.qrCodeUrl;
+      next.expiresAt = run.expiresAt;
+    }
+    return next;
+  }
+  function setState(run, state, extra = {}) {
+    if (!isCurrent(run)) return;
+    snapshot = makeSnapshot(run, state, extra);
+  }
+  function finish(run, state, extra = {}) {
+    if (!isCurrent(run)) return;
+    clearTimer(run);
+    snapshot = makeSnapshot(run, state, extra);
+    active = null;
+  }
+  function expire(run) {
+    if (!isCurrent(run)) return;
+    finish(run, "expired", {
+      error: { code: "expired_token", message: "\u4E8C\u7EF4\u7801/\u6388\u6743\u94FE\u63A5\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210\u3002" }
+    });
+    run.controller.abort();
+  }
+  function publicError(error) {
+    const code = error?.code === "abort" || error?.code === "expired_token" ? error.code : typeof error?.code === "string" ? error.code : "registration_failed";
+    const messages = {
+      abort: "\u5DF2\u53D6\u6D88\u3002",
+      expired_token: "\u6388\u6743\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210\u3002"
+    };
+    return {
+      code,
+      message: messages[code] ?? (error?.message ?? "\u626B\u7801\u63A5\u5165\u5931\u8D25\u3002")
+    };
+  }
+  function onQrCodeReady(run, info) {
+    if (!isCurrent(run)) return;
+    if (typeof info?.url !== "string" || !info.url) {
+      throw new TypeError("registerApp \u7684 onQRCodeReady \u6CA1\u7ED9 URL\u3002");
+    }
+    const seconds = positiveSeconds(info.expireIn);
+    run.qrCodeUrl = info.url;
+    run.expiresAt = now() + seconds * 1e3;
+    clearTimer(run);
+    run.expiryTimer = setTimeoutFn(() => expire(run), seconds * 1e3);
+    run.expiryTimer?.unref?.();
+    setState(run, "qr_ready");
+  }
+  function onStatusChange(run, info) {
+    if (!isCurrent(run) || !SDK_POLLING_STATES.includes(info?.status)) return;
+    setState(run, info.status);
+  }
+  async function onSucceeded(run, result) {
+    if (!isCurrent(run)) return;
+    const appId = result?.client_id ?? result?.appId;
+    const appSecret = result?.client_secret ?? result?.appSecret;
+    if (typeof appId !== "string" || !appId || typeof appSecret !== "string" || !appSecret) {
+      finish(run, "error", {
+        error: { code: "invalid_credentials", message: "\u98DE\u4E66\u8FD4\u56DE\u7684\u5E94\u7528\u51ED\u636E\u4E0D\u5B8C\u6574\u3002" }
+      });
+      return;
+    }
+    clearTimer(run);
+    run.qrCodeUrl = null;
+    run.expiresAt = null;
+    setState(run, "saving");
+    try {
+      const userInfo = result?.user_info ?? result?.userInfo ?? null;
+      const saved = await onCredentials({ appId, appSecret, userInfo });
+      if (isCurrent(run)) {
+        run.bot = saved ?? null;
+        finish(run, "succeeded");
+      }
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u626B\u7801\u63A5\u5165\u843D\u76D8\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      if (isCurrent(run)) {
+        finish(run, "error", { error: publicError(error) });
+      }
+    }
+  }
+  function start(options = {}) {
+    if (active) {
+      clearTimer(active);
+      const previous = active;
+      active = null;
+      previous.controller.abort();
+    }
+    const run = {
+      id: ++attempt,
+      controller: new AbortController(),
+      qrCodeUrl: null,
+      expiresAt: null,
+      expiryTimer: null,
+      bot: null
+    };
+    active = run;
+    snapshot = makeSnapshot(run, "starting");
+    const registerOptions = {
+      ...options,
+      signal: run.controller.signal,
+      onQRCodeReady: (info) => onQrCodeReady(run, info),
+      onStatusChange: (info) => onStatusChange(run, info)
+    };
+    const task = Promise.resolve().then(() => registerApp2(registerOptions));
+    void task.then(
+      (result) => onSucceeded(run, result),
+      (error) => {
+        if (!isCurrent(run)) return;
+        const mapped = publicError(error);
+        logger.warn?.(`[dsh-chat-feishu] \u626B\u7801\u63A5\u5165\u5931\u8D25\uFF1A${mapped.code} ${mapped.message}`);
+        finish(run, mapped.code === "expired_token" ? "expired" : "error", { error: mapped });
+      }
+    );
+    return status();
+  }
+  function status() {
+    if (active?.expiresAt !== null && active?.expiresAt !== void 0 && now() >= active.expiresAt) {
+      expire(active);
+    }
+    const out = { ...snapshot };
+    if (out.error) out.error = { ...out.error };
+    if (active && active.expiresAt !== null && PROVISION_ACTIVE_STATES.includes(out.state)) {
+      out.remainingSeconds = Math.max(0, Math.ceil((active.expiresAt - now()) / 1e3));
+    }
+    return out;
+  }
+  function cancel() {
+    const run = active;
+    if (!run) return status();
+    finish(run, "cancelled", { error: { code: "abort", message: "\u5DF2\u53D6\u6D88\u3002" } });
+    run.controller.abort();
+    return status();
+  }
+  function dispose() {
+    if (active) {
+      const run = active;
+      clearTimer(run);
+      active = null;
+      run.controller.abort();
+    }
+  }
+  return Object.freeze({ start, status, cancel, dispose });
 }
 
 // packages/dsh-chat-feishu/host/state-store.mjs
@@ -129968,6 +130202,15 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const sdkLoader = internals.sdk ?? (() => Promise.resolve().then(() => (init_es(), es_exports)));
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
   const probeFactory = internals.createProbe ?? createLarkProbe;
+  const registerApp2 = internals.registerApp ?? (async (options) => {
+    const sdk = await sdkLoader();
+    if (typeof sdk?.registerApp !== "function") {
+      const error = new Error("\u5F53\u524D @larksuiteoapi/node-sdk \u4E0D\u652F\u6301\u626B\u7801\u521B\u5EFA\u5E94\u7528\uFF08\u7F3A registerApp\uFF09\uFF1B\u8BF7\u6539\u7528\u300C\u624B\u52A8\u63A5\u5165\u5DF2\u6709\u673A\u5668\u4EBA\u300D\u586B App ID \u4E0E App Secret\u3002");
+      error.code = "feishu/register-unsupported";
+      throw error;
+    }
+    return sdk.registerApp(options);
+  });
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
     if (existing?.phase === "running" || existing?.phase === "starting") return existing;
@@ -130118,6 +130361,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const OWNER_ID_PATTERN = /^(\*|ou_[A-Za-z0-9_-]{1,64})$/;
   const MAX_OWNERS = 10;
   const MAX_RESOLVE_IDS = 50;
+  const MAX_MEMBER_CHATS = 20;
   const ids = (value) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
   const targetFor = (kind, rawId, name2) => ({
     id: ids(`${kind}:${rawId}`),
@@ -130166,6 +130410,11 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         usersAt: 0,
         usersBlockMs: 0,
         userPromises: /* @__PURE__ */ new Map(),
+        userError: null,
+        members: /* @__PURE__ */ new Map(),
+        membersAt: 0,
+        membersBlockMs: 0,
+        membersPromise: null,
         nameHint: null
       };
       nameCache.set(botId, entry);
@@ -130223,6 +130472,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         return name2;
       } catch (error) {
         cache.nameHint = nameHintFrom(error, "\u8BFB\u4E0D\u5230\u4EBA\u540D");
+        cache.userError = error;
         cache.usersBlockMs = backoffMs(error);
         logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7528\u6237\u4FE1\u606F\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
         cache.users.set(openId, "");
@@ -130235,6 +130485,46 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     cache.userPromises.set(openId, task);
     return task;
   }
+  async function memberNames(botId) {
+    const record = runtimes.get(botId);
+    if (!record?.gateway) return /* @__PURE__ */ new Map();
+    const cache = cacheFor(botId);
+    if (Date.now() - cache.membersAt < Math.max(NAME_TTL_MS, cache.membersBlockMs)) {
+      return cache.members;
+    }
+    if (cache.membersPromise) return cache.membersPromise;
+    cache.membersPromise = (async () => {
+      const map = /* @__PURE__ */ new Map();
+      try {
+        const chats = await allChats(botId);
+        for (const chat of chats.slice(0, MAX_MEMBER_CHATS)) {
+          const members = await record.gateway.listChatMembers({ chatId: chat.chatId });
+          for (const member of members) {
+            if (member.name && !map.has(member.openId)) map.set(member.openId, member.name);
+          }
+        }
+        cache.members = map;
+        cache.membersBlockMs = 0;
+      } catch (error) {
+        cache.membersBlockMs = backoffMs(error) || NAME_TTL_MS;
+        logger.warn?.(`[dsh-chat-feishu] \u8BFB\u53D6\u7FA4\u6210\u5458\u5931\u8D25\uFF0C\u4EBA\u540D\u5C06\u9000\u56DE id\uFF1A${error?.message ?? error}`);
+      } finally {
+        cache.membersAt = Date.now();
+        cache.membersPromise = null;
+      }
+      return cache.members;
+    })();
+    return cache.membersPromise;
+  }
+  function personNameHint(botId, error) {
+    const bot = configStore.get(botId);
+    const fromError = /https:\/\/open\.feishu\.cn\/app\/[^\s，]+/u.exec(String(error?.message ?? ""))?.[0] ?? null;
+    return Object.freeze({
+      code: "feishu/name-scope-missing",
+      message: "\u8BFB\u4E0D\u5230\u4EBA\u540D\uFF1A\u8FD9\u4E2A\u98DE\u4E66\u5E94\u7528\u9700\u8981\u300C\u901A\u8BAF\u5F55 \xB7 \u83B7\u53D6\u7528\u6237\u57FA\u672C\u4FE1\u606F\u300D\u6743\u9650\uFF0C\u5E76\u4E14\u8BE5\u7528\u6237\u8981\u5728\u5E94\u7528\u7684\u901A\u8BAF\u5F55\u53EF\u89C1\u8303\u56F4\u91CC\uFF08\u6216\u8005\u8BA9\u4ED6\u548C\u673A\u5668\u4EBA\u5F85\u5728\u540C\u4E00\u4E2A\u7FA4\uFF0C\u7FA4\u6210\u5458\u540D\u5355\u4E5F\u80FD\u6362\u51FA\u540D\u5B57\uFF09\u3002\u5230\u5F00\u653E\u5E73\u53F0\u5F00\u901A\u540E\u70B9\u300C\u91CD\u65B0\u8FDE\u63A5\u300D\u7ACB\u523B\u91CD\u53D6\u3002",
+      url: fromError ?? (bot?.appId ? `https://open.feishu.cn/app/${bot.appId}/auth?q=contact:user.base:readonly` : null)
+    });
+  }
   async function resolveName(botId, id) {
     if (id.startsWith("oc_")) {
       const cached = cacheFor(botId).chats.get(id);
@@ -130242,7 +130532,13 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       await allChats(botId, { minIntervalMs: 6e4 });
       return cacheFor(botId).chats.get(id) ?? null;
     }
-    return await userName(botId, id) || null;
+    const direct = await userName(botId, id);
+    if (direct) return direct;
+    const fromGroup = (await memberNames(botId)).get(id);
+    if (fromGroup) return fromGroup;
+    const cache = cacheFor(botId);
+    cache.nameHint = personNameHint(botId, cache.userError);
+    return null;
   }
   const delivery = Object.freeze({
     /** 主动发文本：群用 chat_id，私聊用用户的 open_id。 */
@@ -130338,10 +130634,108 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       return decorated;
     }
   });
+  async function storeAndStart({ appId, appSecret, domain, ownerOpenIds, botName, botOpenId }) {
+    const { botId, secretRef } = deriveFeishuIdentity(appId);
+    try {
+      await deps.credentials.set(secretRef, appSecret);
+    } catch (error) {
+      const wrapped = new Error(`\u4FDD\u5B58 App Secret \u5931\u8D25\uFF1A${error?.message ?? error}`);
+      wrapped.code = "feishu/credential-write-failed";
+      throw wrapped;
+    }
+    let saved;
+    try {
+      saved = await configStore.saveBot({
+        id: botId,
+        appId,
+        secretRef,
+        domain,
+        ownerOpenIds,
+        botName: botName ?? null,
+        botOpenId: botOpenId ?? null,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (error) {
+      try {
+        await deps.credentials.unset?.(secretRef);
+      } catch (cleanupError) {
+        logger.warn?.(`[dsh-chat-feishu] \u56DE\u6EDA\u51ED\u636E ${secretRef} \u5931\u8D25\uFF1A${cleanupError?.message ?? cleanupError}`);
+      }
+      const wrapped = new Error(`\u5199\u5165\u673A\u5668\u4EBA\u914D\u7F6E\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      wrapped.code = "feishu/bot-save-failed";
+      throw wrapped;
+    }
+    logger.info?.(`[dsh-chat-feishu] \u63A5\u5165\u673A\u5668\u4EBA\uFF1A${saved.botName ?? saved.id}\uFF08appId=${maskAppId(saved.appId)} \u5C5E\u4E3B=${saved.ownerOpenIds.join("\u3001")}\uFF09`);
+    const record = await startBot(saved);
+    return { saved, record };
+  }
+  const qrCache = /* @__PURE__ */ new Map();
+  let qrModule;
+  async function encodeQrDataUrl(url2) {
+    if (qrCache.has(url2)) return qrCache.get(url2);
+    if (qrModule === void 0) {
+      try {
+        const loaded = await import("qrcode");
+        qrModule = loaded?.default ?? loaded;
+      } catch (error) {
+        qrModule = null;
+        logger.warn?.(`[dsh-chat-feishu] \u6CA1\u80FD\u52A0\u8F7D qrcode\uFF0C\u4E8C\u7EF4\u7801\u5C06\u53EA\u7ED9\u94FE\u63A5\uFF1A${error?.message ?? error}`);
+      }
+    }
+    let dataUrl = null;
+    if (typeof qrModule?.toDataURL === "function") {
+      try {
+        dataUrl = await qrModule.toDataURL(url2, { errorCorrectionLevel: "M", margin: 1, width: 320 });
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] \u751F\u6210\u4E8C\u7EF4\u7801\u5931\u8D25\uFF0C\u5C06\u53EA\u7ED9\u94FE\u63A5\uFF1A${error?.message ?? error}`);
+        dataUrl = null;
+      }
+    }
+    if (qrCache.size >= 8) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(url2, dataUrl);
+    return dataUrl;
+  }
+  async function provisionStatus(raw) {
+    const url2 = typeof raw?.qrCodeUrl === "string" && /^https?:\/\//u.test(raw.qrCodeUrl) ? raw.qrCodeUrl : null;
+    const bot = raw?.bot?.botId ? provisionBotStatus(raw.bot.botId) : null;
+    return Object.freeze({
+      state: raw?.state ?? "idle",
+      attempt: raw?.attempt ?? 0,
+      verificationUrl: url2,
+      qrCodeDataUrl: url2 ? await (internals.encodeQr ?? encodeQrDataUrl)(url2) : null,
+      remainingSeconds: raw?.remainingSeconds ?? null,
+      error: raw?.error ? Object.freeze({ ...raw.error }) : null,
+      bot
+    });
+  }
+  function provisionBotStatus(botId) {
+    const bot = configStore.get(botId);
+    if (!bot) return null;
+    return botStatus(runtimes.get(botId) ?? { bot, phase: "stopped", error: null, bridge: null });
+  }
+  const provision = createProvisionManager({
+    registerApp: registerApp2,
+    logger,
+    onCredentials: async ({ appId, appSecret, userInfo }) => {
+      const domain = userInfo?.tenant_brand === "lark" ? "lark" : "feishu";
+      const ownerOpenIds = typeof userInfo?.open_id === "string" && userInfo.open_id ? [userInfo.open_id] : ["*"];
+      const info = await probeFactory({ appId, appSecret, domain, sdk: await sdkLoader(), logger }).verify();
+      const { saved, record } = await storeAndStart({
+        appId,
+        appSecret,
+        domain,
+        ownerOpenIds,
+        botName: info?.botName ?? null,
+        botOpenId: info?.botOpenId ?? null
+      });
+      return { botId: saved.id, name: record?.bot?.botName ?? saved.botName ?? null };
+    }
+  });
   return Object.freeze({
     start: startAll,
     delivery,
     async stop() {
+      provision.dispose();
       await Promise.all([...runtimes.keys()].map((botId) => stopBot(botId)));
     },
     status,
@@ -130467,49 +130861,43 @@ function createFeishuController({ deps, logger = console, config = {}, internals
             }
           };
         }
+        let record;
         try {
-          await deps.credentials.set(secretRef, appSecret);
-        } catch (error) {
-          return {
-            ok: false,
-            error: {
-              code: "feishu/credential-write-failed",
-              message: `\u4FDD\u5B58 App Secret \u5931\u8D25\uFF1A${error?.message ?? error}`,
-              details: {}
-            }
-          };
-        }
-        let saved;
-        try {
-          saved = await configStore.saveBot({
-            id: botId,
+          ({ record } = await storeAndStart({
             appId,
-            secretRef,
+            appSecret,
             domain,
             ownerOpenIds: rawOwners.map((id) => id.trim()),
             botName: info?.botName ?? null,
-            botOpenId: info?.botOpenId ?? null,
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
+            botOpenId: info?.botOpenId ?? null
+          }));
         } catch (error) {
-          try {
-            await deps.credentials.unset?.(secretRef);
-          } catch (cleanupError) {
-            logger.warn?.(`[dsh-chat-feishu] \u56DE\u6EDA\u51ED\u636E ${secretRef} \u5931\u8D25\uFF1A${cleanupError?.message ?? cleanupError}`);
-          }
           return {
             ok: false,
             error: {
-              code: "feishu/bot-save-failed",
-              message: `\u5199\u5165\u673A\u5668\u4EBA\u914D\u7F6E\u5931\u8D25\uFF1A${error?.message ?? error}`,
+              code: typeof error?.code === "string" ? error.code : "feishu/bot-save-failed",
+              message: error?.message ?? String(error),
               details: {}
             }
           };
         }
-        logger.info?.(`[dsh-chat-feishu] \u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165\uFF1A${saved.botName ?? saved.id}\uFF08appId=${maskAppId(saved.appId)} \u5C5E\u4E3B=${saved.ownerOpenIds.join("\u3001")}\uFF09`);
-        const record = await startBot(saved);
         return { ok: true, value: { bot: botStatus(record) } };
       },
+      /**
+       * 扫码接入（**新建机器人**那条路）：向飞书申请一个一次性链接，
+       * 用户用飞书扫一下（或在浏览器里打开）就自动创建应用并返回凭据；**扫码的人就是属主**。
+       *
+       * 三个方法：`start` 发起（同一个时刻只有一个进行中的尝试）、`status` 轮询
+       * （回显二维码/链接、剩余秒数、失败原因、成功后的机器人）、`cancel` 取消。
+       * 二维码由 host 转成 data URL（`qrcode` 是构建期外置依赖）：拿不到就只回链接，
+       * 前端照样能让人打开——**不静默**，状态里会写清为什么没有二维码。
+       */
+      "bot.register.start": async () => ({
+        ok: true,
+        value: await provisionStatus(provision.start())
+      }),
+      "bot.register.status": async () => ({ ok: true, value: await provisionStatus(provision.status()) }),
+      "bot.register.cancel": async () => ({ ok: true, value: await provisionStatus(provision.cancel()) }),
       "bot.delete": async (payload) => {
         if (typeof payload?.botId !== "string" || payload.confirm !== true) {
           return {

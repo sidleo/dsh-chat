@@ -582,6 +582,37 @@ const CSS = `
   border-color: transparent;
   color: #fff;
 }
+/* 接入表单：两条路（扫码新建 / 手动接入）各占一段，段间一条细线。 */
+.dchat-onboardSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.dchat-onboardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.dchat-onboardDivider {
+  width: 100%;
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+/* 二维码：固定尺寸、别被 flex 压扁（窄栏里 width:100% 的图片会变形）。 */
+.dchat-onboardQr {
+  flex: none;
+  align-self: flex-start;
+  border-radius: 6px;
+  background: #fff;
+}
+.dchat-onboardLink {
+  color: var(--dsw-alias-brand-primary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .dchat-entry {
   display: flex;
   align-items: center;

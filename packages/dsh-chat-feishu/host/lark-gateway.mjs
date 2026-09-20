@@ -1291,9 +1291,54 @@ export function createLarkGateway({
     },
 
     /**
+     * 群成员（`open_id` → 名字）。
+     *
+     * 为什么需要它：`getUserName` 要**通讯录权限**（还要人在这台应用的可见范围里），
+     * 真机上常见的失败是 `no user authority error (code 41050)`——那排白名单就只剩 id。
+     * 而"读群成员"用的是 `im:chat:readonly` 系权限（读群列表本来就要它），
+     * 于是只要这个人在机器人所在的任一群里，名字就还能换出来。
+     * 拿不到（应用没进群 / 缺权限）抛可读错误，由调用方决定要不要留空。
+     *
+     * @param options - { chatId, pageSize, maxPages }。
+     * @returns `[{ openId, name }]`。
+     */
+    async listChatMembers({ chatId, pageSize = 100, maxPages = 10 } = {}) {
+      if (typeof chatId !== 'string' || !chatId) return [];
+      const members = [];
+      let pageToken = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        let response;
+        try {
+          response = await client.im.v1.chatMembers.get({
+            path: { chat_id: chatId },
+            params: {
+              member_id_type: 'open_id',
+              page_size: pageSize,
+              ...(pageToken ? { page_token: pageToken } : {}),
+            },
+          });
+        } catch (error) {
+          throw new Error(`读取群成员失败：${readableApiError(error)}`);
+        }
+        const data = assertSuccess('读取群成员', response)?.data ?? {};
+        for (const item of data.items ?? []) {
+          if (typeof item?.member_id !== 'string' || !item.member_id) continue;
+          members.push({
+            openId: item.member_id,
+            name: typeof item.name === 'string' ? item.name : '',
+          });
+        }
+        if (!data.has_more || !data.page_token) break;
+        pageToken = data.page_token;
+      }
+      return members;
+    },
+
+    /**
      * 用 open_id 反查人名。
      *
-     * 需要通讯录权限（`contact:user.base:readonly` 等）；没开通就抛出可读错误。
+     * 需要通讯录权限（`contact:user.base:readonly` 等）**且这个人在应用的可见范围里**；
+     * 没开通就抛出可读错误（调用方会退回"从共同群里查名字"）。
      *
      * @param openId - 用户 open_id。
      * @returns 名字（查不到返回空串）。

@@ -2660,6 +2660,37 @@ var CSS = `
   border-color: transparent;
   color: #fff;
 }
+/* \u63A5\u5165\u8868\u5355\uFF1A\u4E24\u6761\u8DEF\uFF08\u626B\u7801\u65B0\u5EFA / \u624B\u52A8\u63A5\u5165\uFF09\u5404\u5360\u4E00\u6BB5\uFF0C\u6BB5\u95F4\u4E00\u6761\u7EC6\u7EBF\u3002 */
+.dchat-onboardSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.dchat-onboardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.dchat-onboardDivider {
+  width: 100%;
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+/* \u4E8C\u7EF4\u7801\uFF1A\u56FA\u5B9A\u5C3A\u5BF8\u3001\u522B\u88AB flex \u538B\u6241\uFF08\u7A84\u680F\u91CC width:100% \u7684\u56FE\u7247\u4F1A\u53D8\u5F62\uFF09\u3002 */
+.dchat-onboardQr {
+  flex: none;
+  align-self: flex-start;
+  border-radius: 6px;
+  background: #fff;
+}
+.dchat-onboardLink {
+  color: var(--dsw-alias-brand-primary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .dchat-entry {
   display: flex;
   align-items: center;

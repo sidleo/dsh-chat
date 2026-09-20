@@ -45,11 +45,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## 运行时依赖（由各包 package.json 声明）
+## 运行时依赖
+
+由安装插件的 DSH profile 的 `node_modules` 在运行期提供（`scripts/build-host.mjs` 的
+`DEFAULT_EXTERNAL` 列出哪些不打包）；飞书 SDK 是例外——它打进 bundle，避免运行期解析到版本不一致的副本。
 
 | 依赖 | 用途 | 许可 |
 |---|---|---|
-| `@larksuiteoapi/node-sdk` | 飞书长连接与开放接口（P2） | MIT |
+| `@larksuiteoapi/node-sdk` | 飞书长连接与开放接口（P2，**已打进 bundle**） | MIT |
 | `undici` | 微信 iLink HTTP 客户端（P3） | MIT |
-| `qrcode` | 微信扫码登录二维码渲染（P3） | MIT |
+| `qrcode` | 二维码渲染：微信扫码登录（P3）、飞书「扫码新建机器人」的授权链接（P7，缺它就只给链接） | MIT |
 | `react` / `react-dom` | 设置页 UI（由 DSH 提供，bundle 里外置） | MIT |

@@ -150,6 +150,21 @@ var zh = {
   "\u4FDD\u5B58": "\u4FDD\u5B58",
   "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
   "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165": "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165",
+  "\u4E24\u79CD\u65B9\u5F0F\uFF1A\u626B\u7801\u65B0\u5EFA\u4E00\u4E2A\u98DE\u4E66\u673A\u5668\u4EBA\uFF08\u63A8\u8350\uFF0C\u626B\u7801\u7684\u4EBA\u5C31\u662F\u5C5E\u4E3B\uFF09\uFF0C\u6216\u624B\u52A8\u586B\u5DF2\u6709\u673A\u5668\u4EBA\u7684\u51ED\u636E\u3002": "\u4E24\u79CD\u65B9\u5F0F\uFF1A\u626B\u7801\u65B0\u5EFA\u4E00\u4E2A\u98DE\u4E66\u673A\u5668\u4EBA\uFF08\u63A8\u8350\uFF0C\u626B\u7801\u7684\u4EBA\u5C31\u662F\u5C5E\u4E3B\uFF09\uFF0C\u6216\u624B\u52A8\u586B\u5DF2\u6709\u673A\u5668\u4EBA\u7684\u51ED\u636E\u3002",
+  "\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA": "\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA",
+  "\u70B9\u4E0B\u9762\u7684\u6309\u94AE\u4F1A\u5411\u98DE\u4E66\u7533\u8BF7\u4E00\u4E2A\u4E00\u6B21\u6027\u6388\u6743\u94FE\u63A5\uFF1A\u7528\u98DE\u4E66\u626B\u4E00\u626B\uFF0C\u6216\u5728\u6D4F\u89C8\u5668\u91CC\u6253\u5F00\u5B83\uFF0C\u5C31\u4F1A\u81EA\u52A8\u521B\u5EFA\u5E94\u7528\u5E76\u63A5\u5165\u3002": "\u70B9\u4E0B\u9762\u7684\u6309\u94AE\u4F1A\u5411\u98DE\u4E66\u7533\u8BF7\u4E00\u4E2A\u4E00\u6B21\u6027\u6388\u6743\u94FE\u63A5\uFF1A\u7528\u98DE\u4E66\u626B\u4E00\u626B\uFF0C\u6216\u5728\u6D4F\u89C8\u5668\u91CC\u6253\u5F00\u5B83\uFF0C\u5C31\u4F1A\u81EA\u52A8\u521B\u5EFA\u5E94\u7528\u5E76\u63A5\u5165\u3002",
+  "\u624B\u52A8\u63A5\u5165\u5DF2\u6709\u673A\u5668\u4EBA": "\u624B\u52A8\u63A5\u5165\u5DF2\u6709\u673A\u5668\u4EBA",
+  "\u6253\u5F00\u6388\u6743\u9875\u9762": "\u6253\u5F00\u6388\u6743\u9875\u9762",
+  "\u8FD9\u53F0 Host \u6CA1\u80FD\u751F\u6210\u4E8C\u7EF4\u7801\uFF0C\u8BF7\u70B9\u4E0A\u9762\u7684\u94FE\u63A5\u7EE7\u7EED\u3002": "\u8FD9\u53F0 Host \u6CA1\u80FD\u751F\u6210\u4E8C\u7EF4\u7801\uFF0C\u8BF7\u70B9\u4E0A\u9762\u7684\u94FE\u63A5\u7EE7\u7EED\u3002",
+  "\u5269\u4F59": "\u5269\u4F59",
+  "\u6B63\u5728\u5411\u98DE\u4E66\u7533\u8BF7\u4E8C\u7EF4\u7801\u2026": "\u6B63\u5728\u5411\u98DE\u4E66\u7533\u8BF7\u4E8C\u7EF4\u7801\u2026",
+  "\u5DF2\u6388\u6743\uFF0C\u6B63\u5728\u542F\u52A8\u673A\u5668\u4EBA\u2026": "\u5DF2\u6388\u6743\uFF0C\u6B63\u5728\u542F\u52A8\u673A\u5668\u4EBA\u2026",
+  "\u7B49\u5F85\u626B\u7801": "\u7B49\u5F85\u626B\u7801",
+  "\u7B49\u5F85\u4F60\u5728\u98DE\u4E66\u91CC\u786E\u8BA4\u2026": "\u7B49\u5F85\u4F60\u5728\u98DE\u4E66\u91CC\u786E\u8BA4\u2026",
+  "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210": "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210",
+  "\u626B\u7801\u63A5\u5165\u5931\u8D25": "\u626B\u7801\u63A5\u5165\u5931\u8D25",
+  "\u5DF2\u53D6\u6D88": "\u5DF2\u53D6\u6D88",
+  "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801": "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801",
   "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002": "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002",
   "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret": "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret",
   "\u57DF\u540D": "\u57DF\u540D",
@@ -266,6 +281,21 @@ var en = {
   "\u4FDD\u5B58": "Save",
   "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
   "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165": "Add a bot",
+  "\u4E24\u79CD\u65B9\u5F0F\uFF1A\u626B\u7801\u65B0\u5EFA\u4E00\u4E2A\u98DE\u4E66\u673A\u5668\u4EBA\uFF08\u63A8\u8350\uFF0C\u626B\u7801\u7684\u4EBA\u5C31\u662F\u5C5E\u4E3B\uFF09\uFF0C\u6216\u624B\u52A8\u586B\u5DF2\u6709\u673A\u5668\u4EBA\u7684\u51ED\u636E\u3002": "Two ways: scan to create a new Feishu bot (recommended \u2014 whoever scans becomes the owner), or paste the credentials of an existing bot.",
+  "\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA": "Scan to create a bot",
+  "\u70B9\u4E0B\u9762\u7684\u6309\u94AE\u4F1A\u5411\u98DE\u4E66\u7533\u8BF7\u4E00\u4E2A\u4E00\u6B21\u6027\u6388\u6743\u94FE\u63A5\uFF1A\u7528\u98DE\u4E66\u626B\u4E00\u626B\uFF0C\u6216\u5728\u6D4F\u89C8\u5668\u91CC\u6253\u5F00\u5B83\uFF0C\u5C31\u4F1A\u81EA\u52A8\u521B\u5EFA\u5E94\u7528\u5E76\u63A5\u5165\u3002": "This requests a one-time authorization link from Feishu. Scan it with Feishu (or open it in your browser) and a new app is created and connected automatically.",
+  "\u624B\u52A8\u63A5\u5165\u5DF2\u6709\u673A\u5668\u4EBA": "Connect an existing bot manually",
+  "\u6253\u5F00\u6388\u6743\u9875\u9762": "Open the authorization page",
+  "\u8FD9\u53F0 Host \u6CA1\u80FD\u751F\u6210\u4E8C\u7EF4\u7801\uFF0C\u8BF7\u70B9\u4E0A\u9762\u7684\u94FE\u63A5\u7EE7\u7EED\u3002": "This Host could not render the QR code \u2014 use the link above instead.",
+  "\u5269\u4F59": "expires in",
+  "\u6B63\u5728\u5411\u98DE\u4E66\u7533\u8BF7\u4E8C\u7EF4\u7801\u2026": "Requesting the QR code from Feishu\u2026",
+  "\u5DF2\u6388\u6743\uFF0C\u6B63\u5728\u542F\u52A8\u673A\u5668\u4EBA\u2026": "Authorized \u2014 starting the bot\u2026",
+  "\u7B49\u5F85\u626B\u7801": "Waiting for the scan",
+  "\u7B49\u5F85\u4F60\u5728\u98DE\u4E66\u91CC\u786E\u8BA4\u2026": "Waiting for you to confirm in Feishu\u2026",
+  "\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210": "The link expired \u2014 generate a new one",
+  "\u626B\u7801\u63A5\u5165\u5931\u8D25": "Scan-based setup failed",
+  "\u5DF2\u53D6\u6D88": "Cancelled",
+  "\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801": "Generate a new QR code",
   "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002": "Paste the App ID and App Secret of your own app (Feishu Open Platform \u2192 Credentials & Basic Info). The app must have the bot capability enabled.",
   "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret": "The App Secret from the app credentials",
   "\u57DF\u540D": "Domain",
@@ -568,9 +598,29 @@ function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
   const [error, setError] = React.useState(null);
   const [added, setAdded] = React.useState(null);
   const [warning, setWarning] = React.useState(null);
+  const [scan, setScan] = React.useState({ state: "idle" });
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => () => {
+    aliveRef.current = false;
+  }, []);
   const busy = phase === "busy";
   const ready = form.appId.trim().length > 0 && form.appSecret.trim().length > 0;
   const patch = (next) => setForm((current) => ({ ...current, ...next }));
+  const SCAN_ACTIVE = ["starting", "qr_ready", "polling", "slow_down", "domain_switched", "saving"];
+  const relaxIfOwnerless = async (bot) => {
+    if (bot?.ownersWildcard !== true) return;
+    const botId = bot?.botId ?? bot?.id ?? null;
+    if (!botId) return;
+    try {
+      await chatUi.callControlRpc(connection, "bot.access-policy.open-scope", {
+        channelId: CHANNEL_ID,
+        botId,
+        conversationType: "direct"
+      });
+    } catch (cause) {
+      setWarning(`${t("\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD")}\uFF1A${cause?.message ?? String(cause)}`);
+    }
+  };
   const submit = async () => {
     if (!ready || busy) return;
     setPhase("busy");
@@ -592,23 +642,61 @@ function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
       setPhase("error");
       return;
     }
-    const botId = bot?.botId ?? bot?.id ?? null;
-    if (botId) {
-      try {
-        await chatUi.callControlRpc(connection, "bot.access-policy.open-scope", {
-          channelId: CHANNEL_ID,
-          botId,
-          conversationType: "direct"
-        });
-      } catch (cause) {
-        setWarning(`${t("\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD")}\uFF1A${cause?.message ?? String(cause)}`);
-      }
-    }
-    setAdded({ id: botId, name: bot?.name ?? null });
+    await relaxIfOwnerless(bot);
+    setAdded({ id: bot?.botId ?? bot?.id ?? null, name: bot?.name ?? null });
     patch({ appId: "", appSecret: "", owner: "" });
     setPhase("done");
     onAdded?.();
   };
+  const beginScan = async () => {
+    setError(null);
+    setWarning(null);
+    setAdded(null);
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.register.start", {});
+      const value = chatUi.unwrapRpc(result);
+      if (aliveRef.current) setScan(value);
+    } catch (cause) {
+      if (aliveRef.current) setError(cause?.message ?? String(cause));
+    }
+  };
+  const cancelScan = async () => {
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.register.cancel", {});
+      const value = chatUi.unwrapRpc(result);
+      if (aliveRef.current) setScan(value);
+    } catch (cause) {
+      if (aliveRef.current) setError(cause?.message ?? String(cause));
+    }
+  };
+  React.useEffect(() => {
+    if (!SCAN_ACTIVE.includes(scan.state)) return void 0;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.register.status", {});
+        const value = chatUi.unwrapRpc(result);
+        if (stopped || !aliveRef.current) return;
+        setScan(value);
+        if (!SCAN_ACTIVE.includes(value.state)) return;
+      } catch (cause) {
+        if (!stopped && aliveRef.current) setError(cause?.message ?? String(cause));
+        return;
+      }
+      if (!stopped) timer = setTimeout(tick, 2e3);
+    };
+    let timer = setTimeout(tick, 1e3);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [scan.state, chatUi, connection]);
+  React.useEffect(() => {
+    if (scan.state !== "succeeded" || !scan.bot) return;
+    setAdded({ id: scan.bot.botId ?? scan.bot.id ?? null, name: scan.bot.name ?? null });
+    void relaxIfOwnerless(scan.bot);
+    onAdded?.();
+  }, [scan.state, scan.bot]);
   const field = (key, options) => h(
     "div",
     { className: "dchat-scopeRow" },
@@ -637,44 +725,122 @@ function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
       }
     })
   );
+  const scanActive = SCAN_ACTIVE.includes(scan.state);
+  const scanLabel = scan.state === "starting" ? t("\u6B63\u5728\u5411\u98DE\u4E66\u7533\u8BF7\u4E8C\u7EF4\u7801\u2026") : scan.state === "saving" ? t("\u5DF2\u6388\u6743\uFF0C\u6B63\u5728\u542F\u52A8\u673A\u5668\u4EBA\u2026") : scan.state === "succeeded" ? t("\u5DF2\u63A5\u5165") : scan.state === "expired" ? t("\u4E8C\u7EF4\u7801\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210") : scan.state === "cancelled" ? t("\u5DF2\u53D6\u6D88") : scan.state === "error" ? t("\u626B\u7801\u63A5\u5165\u5931\u8D25") : scan.state === "polling" || scan.state === "slow_down" || scan.state === "domain_switched" ? t("\u7B49\u5F85\u4F60\u5728\u98DE\u4E66\u91CC\u786E\u8BA4\u2026") : t("\u7B49\u5F85\u626B\u7801");
   return h(
     Panel,
     {
       title: t("\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165"),
-      description: t("\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002"),
-      actions: h("button", {
-        type: "button",
-        className: "dchat-button dchat-buttonPrimary",
-        disabled: busy || !ready,
-        onClick: () => {
-          void submit();
-        }
-      }, busy ? t("\u63A5\u5165\u4E2D\u2026") : t("\u63A5\u5165"))
+      description: t("\u4E24\u79CD\u65B9\u5F0F\uFF1A\u626B\u7801\u65B0\u5EFA\u4E00\u4E2A\u98DE\u4E66\u673A\u5668\u4EBA\uFF08\u63A8\u8350\uFF0C\u626B\u7801\u7684\u4EBA\u5C31\u662F\u5C5E\u4E3B\uFF09\uFF0C\u6216\u624B\u52A8\u586B\u5DF2\u6709\u673A\u5668\u4EBA\u7684\u51ED\u636E\u3002"),
+      actions: null
     },
+    // ① 扫码新建
     h(
       "div",
-      { className: "dchat-scopeGrid" },
-      field("appId", { id: "dchat-onboard-appId", label: "App ID", placeholder: "cli_xxxxxxxxxxxx" }),
-      field("appSecret", {
-        id: "dchat-onboard-appSecret",
-        label: "App Secret",
-        type: "password",
-        placeholder: t("\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret")
-      }),
-      field("domain", {
-        id: "dchat-onboard-domain",
-        label: t("\u57DF\u540D"),
-        select: [{ value: "feishu", label: "\u98DE\u4E66\uFF08open.feishu.cn\uFF09" }, { value: "lark", label: "Lark\uFF08open.larksuite.com\uFF09" }]
-      }),
-      field("owner", {
-        id: "dchat-onboard-owner",
-        label: t("\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09"),
-        placeholder: "ou_xxxxxxxxxxxx"
-      }),
+      { className: "dchat-onboardSection" },
+      h("h4", { className: "dchat-onboardTitle" }, t("\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA")),
       h(
         "p",
         { className: "dchat-cardDescription" },
-        t("\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002")
+        t("\u70B9\u4E0B\u9762\u7684\u6309\u94AE\u4F1A\u5411\u98DE\u4E66\u7533\u8BF7\u4E00\u4E2A\u4E00\u6B21\u6027\u6388\u6743\u94FE\u63A5\uFF1A\u7528\u98DE\u4E66\u626B\u4E00\u626B\uFF0C\u6216\u5728\u6D4F\u89C8\u5668\u91CC\u6253\u5F00\u5B83\uFF0C\u5C31\u4F1A\u81EA\u52A8\u521B\u5EFA\u5E94\u7528\u5E76\u63A5\u5165\u3002")
+      ),
+      h(
+        "div",
+        { className: "dchat-actions" },
+        h("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonPrimary",
+          disabled: scanActive,
+          onClick: () => {
+            void beginScan();
+          }
+        }, scan.state === "idle" || scan.state === "cancelled" || scan.state === "expired" || scan.state === "error" ? t("\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA") : t("\u91CD\u65B0\u751F\u6210\u4E8C\u7EF4\u7801")),
+        scanActive ? h("button", {
+          type: "button",
+          className: "dchat-button",
+          onClick: () => {
+            void cancelScan();
+          }
+        }, t("\u53D6\u6D88")) : null
+      ),
+      scan.qrCodeDataUrl ? h("img", {
+        className: "dchat-onboardQr",
+        src: scan.qrCodeDataUrl,
+        alt: t("\u626B\u7801\u65B0\u5EFA\u673A\u5668\u4EBA"),
+        width: 200,
+        height: 200
+      }) : null,
+      // Host 没能把链接编码成二维码（缺 qrcode 模块）时**必须说清**，并给一条还能走的路。
+      scan.verificationUrl && !scan.qrCodeDataUrl ? h(
+        "div",
+        null,
+        h("a", {
+          className: "dchat-onboardLink",
+          href: scan.verificationUrl,
+          target: "_blank",
+          rel: "noreferrer"
+        }, t("\u6253\u5F00\u6388\u6743\u9875\u9762")),
+        h(
+          "p",
+          { className: "dchat-cardDescription" },
+          `${t("\u8FD9\u53F0 Host \u6CA1\u80FD\u751F\u6210\u4E8C\u7EF4\u7801\uFF0C\u8BF7\u70B9\u4E0A\u9762\u7684\u94FE\u63A5\u7EE7\u7EED\u3002")}`
+        )
+      ) : null,
+      h(
+        "p",
+        { className: "dchat-cardDescription", role: "status" },
+        scan.remainingSeconds !== null && scan.remainingSeconds !== void 0 && scanActive ? `${scanLabel}\uFF08${t("\u5269\u4F59")} ${scan.remainingSeconds}s\uFF09` : scanLabel
+      ),
+      scan.state === "error" && scan.error ? h("p", { className: "dchat-error", role: "alert" }, `${scan.error.message}\uFF08${scan.error.code}\uFF09`) : null
+    ),
+    h("hr", { className: "dchat-onboardDivider" }),
+    // ② 手动接入已有机器人
+    h(
+      "div",
+      { className: "dchat-onboardSection" },
+      h("h4", { className: "dchat-onboardTitle" }, t("\u624B\u52A8\u63A5\u5165\u5DF2\u6709\u673A\u5668\u4EBA")),
+      h(
+        "p",
+        { className: "dchat-cardDescription" },
+        t("\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002")
+      ),
+      h(
+        "div",
+        { className: "dchat-scopeGrid" },
+        field("appId", { id: "dchat-onboard-appId", label: "App ID", placeholder: "cli_xxxxxxxxxxxx" }),
+        field("appSecret", {
+          id: "dchat-onboard-appSecret",
+          label: "App Secret",
+          type: "password",
+          placeholder: t("\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret")
+        }),
+        field("domain", {
+          id: "dchat-onboard-domain",
+          label: t("\u57DF\u540D"),
+          select: [{ value: "feishu", label: "\u98DE\u4E66\uFF08open.feishu.cn\uFF09" }, { value: "lark", label: "Lark\uFF08open.larksuite.com\uFF09" }]
+        }),
+        field("owner", {
+          id: "dchat-onboard-owner",
+          label: t("\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09"),
+          placeholder: "ou_xxxxxxxxxxxx"
+        }),
+        h(
+          "p",
+          { className: "dchat-cardDescription" },
+          t("\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002")
+        )
+      ),
+      h(
+        "div",
+        { className: "dchat-actions" },
+        h("button", {
+          type: "button",
+          className: "dchat-button dchat-buttonPrimary",
+          disabled: busy || !ready,
+          onClick: () => {
+            void submit();
+          }
+        }, busy ? t("\u63A5\u5165\u4E2D\u2026") : t("\u63A5\u5165"))
       )
     ),
     error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
