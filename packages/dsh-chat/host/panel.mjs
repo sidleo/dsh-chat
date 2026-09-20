@@ -17,6 +17,7 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 
+import { normalizeContextConfig, TARGET_LIMIT } from '../shared/context-enhancement.mjs';
 import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
 
 function panelError(code, message) {
@@ -88,6 +89,73 @@ export async function readModelCatalog(sessions, logger = console) {
   const rawDefault = catalog?.default;
   const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
   return { options, hostDefault, failures };
+}
+
+/**
+ * 会话键 → 上下文增强的命中身份。
+ *
+ * 会话键是 hub 自己的约定（`p2p:<平台用户 id>` / `group:<平台群 id>`），而指定设置
+ * （`targets[]`）也是按**平台 id** 命中的：私聊按 senderId 命中 `user` 目标、
+ * 群聊按 chatId 命中 `group` 目标。所以"本会话用的是哪一份、要不要单独来一份"
+ * 可以直接算出来，不用去猜。
+ *
+ * 认不出的键返回 null：这时宁可不提供这一项，也不能照着错误的方向去改设置。
+ *
+ * @param key - 会话键。
+ * @returns `{ kind: 'user'|'group', id }` 或 null。
+ */
+export function conversationTarget(key) {
+  const text = typeof key === 'string' ? key : '';
+  const separator = text.indexOf(':');
+  if (separator <= 0) return null;
+  const head = text.slice(0, separator);
+  if (head !== 'p2p' && head !== 'group') return null;
+  const id = text.slice(separator + 1).trim();
+  if (!id) return null;
+  return { kind: head === 'group' ? 'group' : 'user', id };
+}
+
+/**
+ * 本会话的上下文增强（面板字段 `context`）。
+ *
+ * 语义：**本会话用哪一份设置**——
+ * - `''` 跟随该会话类型的全局设置（= 没有本会话的指定设置）；
+ * - `own` 本会话有自己的指定设置（内容在设置页编辑）；
+ * - `copy:<id>` 套用该机器人另一条**同类型**指定设置的字段与提示词。
+ *
+ * 只给属主：它写的是机器人级配置（与设置页同一份数据），普通成员不该改。
+ *
+ * @returns 面板状态，或 null（不该/没法提供这一项）。
+ */
+function contextPanelState({ record, key, isOwner }) {
+  if (isOwner !== true) return null;
+  const target = conversationTarget(key);
+  if (!target) return null;
+  const config = normalizeContextConfig(record.contextEnhancement);
+  const scope = target.kind === 'group' ? config.group : config.direct;
+  const kindLabel = target.kind === 'group' ? '群聊' : '私聊';
+  const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
+  const options = [
+    { value: '', label: `跟随${kindLabel}全局（${scope.enabled === true ? '已启用' : '未启用'}）` },
+    { value: 'own', label: `本会话专属设置（复制${kindLabel}全局作为起点）` },
+  ];
+  for (const item of config.targets) {
+    if (item.kind !== target.kind || item.id === target.id) continue;
+    options.push({ value: `copy:${item.id}`, label: `套用「${item.label?.trim() || item.id}」的字段与提示词` });
+  }
+  return {
+    // 下拉里"当前选中的那一项"，与 `panel.apply` 的取值一一对应。
+    current: own ? 'own' : '',
+    scopeEnabled: scope.enabled === true,
+    kind: target.kind,
+    /** 平台 id：卡片上写出来，用户才知道这条设置是给谁的（也便于与设置页对账）。 */
+    identity: target.id,
+    label: target.kind === 'group' ? '本群' : '本私聊',
+    own: own
+      ? { label: own.label?.trim() || null, fields: own.fields.length, guidanceLength: own.guidance.length }
+      : null,
+    options,
+  };
 }
 
 /**
@@ -165,7 +233,83 @@ export function createPanelService({
   }
 
   /** 面板内置字段：其它字段一律交给**渠道自己**处理（如飞书的「任务过程展示」）。 */
-  const BUILT_IN_FIELDS = new Set(['model', 'reasoning', 'preset', 'workspace', 'session']);
+  const BUILT_IN_FIELDS = new Set(['model', 'reasoning', 'preset', 'workspace', 'session', 'context']);
+
+  /**
+   * 应用「本会话的上下文增强」这个选择（三种取值，语义见 `contextPanelState`）。
+   *
+   * 三种情况都**不碰其他会话的设置**：`own` 是"复制全局"、`copy:<id>` 是"复制另一条"，
+   * 都只是新增/替换本会话这一条；`''` 只删本会话这一条。
+   */
+  async function applyContextScope({ channelId, botId, key, value, record, field }) {
+    const target = conversationTarget(key);
+    if (!target) {
+      throw panelError('chat/bad-request', '认不出这个会话的平台 id，没法给它单独设上下文增强。');
+    }
+    const config = normalizeContextConfig(record.contextEnhancement);
+    const scope = target.kind === 'group' ? config.group : config.direct;
+    const kindLabel = target.kind === 'group' ? '本群' : '本私聊';
+    const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
+    /** 复制出来的那一条：`label` 留空（备注名由用户在设置页起），`enabled` 明确打开。 */
+    const copyOf = (source, extra) => ({
+      kind: target.kind,
+      id: target.id,
+      label: '',
+      enabled: true,
+      fields: [...source.fields],
+      guidance: source.guidance,
+      merge: source.merge,
+      ...(extra ?? {}),
+    });
+
+    if (value === '' || value === null) {
+      if (!own) return { field, value: '', message: `${kindLabel}本来就跟随全局，没有改动。` };
+      await settings.write(channelId, botId, {
+        contextEnhancement: { ...config, targets: config.targets.filter((item) => item !== own) },
+      });
+      return { field, value: '', message: `已删除${kindLabel}的专属设置，改为跟随全局（下一条消息生效）。` };
+    }
+
+    if (value === 'own') {
+      if (own) return { field, value: 'own', message: `${kindLabel}已经是专属设置，内容请在设置页编辑。` };
+      if (config.targets.length >= TARGET_LIMIT) {
+        throw panelError('chat/context-target-limit',
+          `指定设置最多 ${TARGET_LIMIT} 条，先到设置页删掉几条。`);
+      }
+      await settings.write(channelId, botId, {
+        contextEnhancement: { ...config, targets: [...config.targets, copyOf({ ...scope, merge: 'replace' })] },
+      });
+      return {
+        field,
+        value: 'own',
+        message: scope.enabled === true
+          ? `已为${kindLabel}创建专属设置（内容与全局相同），要改内容请到设置页（下一条消息生效）。`
+          : `全局的${target.kind === 'group' ? '群聊' : '私聊'}增强本来是关闭的：已为${kindLabel}单独开启，`
+            + '来源字段已带好、提示词为空，请到设置页填写（下一条消息生效）。',
+      };
+    }
+
+    if (typeof value !== 'string' || !value.startsWith('copy:')) {
+      throw panelError('chat/bad-request', `上下文增强不支持这个取值：${String(value)}`);
+    }
+    const sourceId = value.slice('copy:'.length);
+    const source = config.targets.find((item) => item.kind === target.kind && item.id === sourceId);
+    if (!source) throw panelError('chat/unknown-context-target', `找不到这条指定设置：${sourceId}`);
+    const copied = copyOf(source);
+    const targets = own
+      ? config.targets.map((item) => (item === own ? copied : item))
+      : [...config.targets, copied];
+    if (!own && targets.length > TARGET_LIMIT) {
+      throw panelError('chat/context-target-limit', `指定设置最多 ${TARGET_LIMIT} 条，先到设置页删掉几条。`);
+    }
+    await settings.write(channelId, botId, { contextEnhancement: { ...config, targets } });
+    return {
+      field,
+      value,
+      message: `已把「${source.label?.trim() || source.id}」的字段与提示词套用到${kindLabel}`
+        + '（复制，不影响原来那条；下一条消息生效）。',
+    };
+  }
 
   /**
    * 渠道自带的面板字段（渠道相关的设置，如飞书的「任务过程展示」）。
@@ -386,6 +530,11 @@ export function createPanelService({
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null,
         },
+        /**
+         * 本会话的上下文增强（用哪一份设置）：只给属主，且只在认得出会话键时给。
+         * 内容（来源字段 / 提示词）在设置页编辑，卡片只决定"本会话用哪一份"。
+         */
+        context: contextPanelState({ record, key, isOwner }),
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
@@ -438,6 +587,19 @@ export function createPanelService({
        * （`session/create` 没有模型参数），所以未绑定时的落点就是机器人设置。
        */
       const botDefault = normalizeBotModel(record.model);
+      /**
+       * 本会话的上下文增强：改的是**机器人级配置**（`record.contextEnhancement`），
+       * 与设置页同一份数据——所以只限属主，和预设/工作区同一条口径。
+       */
+      if (field === 'context') {
+        if (isOwner !== true) {
+          throw panelError('chat/owner-only', '上下文增强是机器人级设置，只有属主能改。');
+        }
+        return applyContextScope({
+          channelId, botId, key, value, record, field,
+        });
+      }
+
       // 渠道自带字段：交给渠道自己落盘（hub 不认识过程展示之类的语义）。
       if (!BUILT_IN_FIELDS.has(field)) {
         return applyChannelField({

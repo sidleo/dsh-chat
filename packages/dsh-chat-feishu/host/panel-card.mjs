@@ -26,6 +26,14 @@ const MAX_OPTIONS = 30;
  */
 const FOLLOW_DEFAULT = '__default__';
 
+/**
+ * 「跟随全局」（本会话的上下文增强）的哨兵值。
+ *
+ * 与 `FOLLOW_DEFAULT` 同理：飞书对 `value: ''` 的选项不可靠，而且空取值在 `panelPick`
+ * 里是"没认出来"的信号——真正的"跟随全局"必须有自己的值，回调时再翻译回空串。
+ */
+const CONTEXT_GLOBAL = '__global__';
+
 const h = (value) => String(value ?? '');
 
 function mark(current, value, label) {
@@ -371,6 +379,35 @@ export function panelCard(state, { last = null, at = null } = {}) {
    *
    * 标签与选项都由渠道给（`panel.fields`），hub 只负责画——这样新增这类设置不用改 hub。
    */
+  /**
+   * 本会话的上下文增强：**只决定"本会话用哪一份"**（跟随全局 / 本会话专属 / 套用另一条），
+   * 内容（来源字段与提示词）仍在设置页编辑——卡片上传不了那么长的文本。
+   * 非属主时 hub 不给这一项（`state.context` 为 null）。
+   */
+  if (state?.context) {
+    const context = state.context;
+    const picker = dropdown({
+      name: 'context_pick',
+      action: 'context_pick',
+      placeholder: '选择本会话的上下文增强',
+      items: (context.options ?? []).map((option) => ({
+        value: option.value === '' ? CONTEXT_GLOBAL : option.value,
+        label: option.label,
+      })),
+      current: (context.current ?? '') === '' ? CONTEXT_GLOBAL : context.current,
+    });
+    if (picker.element) {
+      elements.push(grid([field(`上下文增强（${context.label}）`, picker.element)]));
+    }
+    elements.push({
+      tag: 'markdown',
+      content: context.own
+        ? `已有专属设置（来源字段 ${context.own.fields} 个、提示词 ${context.own.guidanceLength} 字）`
+          + `，内容到设置页编辑；本项只决定本会话用哪一份（\`${h(context.identity)}\`）。`
+        : '内容（来源字段与提示词）在设置页编辑；本项只决定本会话用哪一份。',
+    });
+  }
+
   const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
@@ -449,6 +486,7 @@ export function panelPick(action, options) {
     reasoning_pick: { field: 'reasoning', label: '设置推理等级' },
     preset_pick: { field: 'preset', label: '设置 Agent 预设' },
     workspace_pick: { field: 'workspace', label: '切换工作区' },
+    context_pick: { field: 'context', label: '设置本会话的上下文增强' },
   };
   /**
    * 渠道自带字段（如飞书的「任务过程展示」）：动作名是 `panel_field_<字段名>`。
@@ -466,7 +504,8 @@ export function panelPick(action, options) {
   if (values.length === 0) return { field: target.field, label: target.label, invalid: true };
   const picked = values[0];
   // 哨兵 → 空串：hub 侧的空值语义是"恢复默认/清除"（这个才是用户明确选的）。
-  const value = picked === FOLLOW_DEFAULT ? '' : String(picked);
+  const sentinel = picked === FOLLOW_DEFAULT || (target.field === 'context' && picked === CONTEXT_GLOBAL);
+  const value = sentinel ? '' : String(picked);
   return { field: target.field, value, label: target.label };
 }
 

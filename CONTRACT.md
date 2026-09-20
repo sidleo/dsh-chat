@@ -177,8 +177,17 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      hub 只做形状校验与透传——hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
    *      渠道想列几项就列几项（飞书把「任务过程展示」私聊/群聊两份都列出来，
    *      卡片在哪不影响能改哪一份）；`isOwner` 也一并透传，渠道要按身份收窄候选就自己判。
+   *      `context` 是**本会话的上下文增强**（用哪一份设置），只给属主（写的是机器人级配置）：
+   *      `{ current, label, identity, kind, scopeEnabled, own, options }`。
+   *      `current = ''` 跟随该会话类型的全局设置、`'own'` 本会话有专属设置；
+   *      `options` 里还有 `copy:<指定设置 id>`（套用另一条同类设置的字段与提示词）。
+   *      **会话语义**：会话键 `p2p:<平台用户 id>` / `group:<平台群 id>` 决定命中身份
+   *      （私聊按 senderId 命中 user 目标、群聊按 chatId 命中 group 目标），
+   *      认不出的键就不提供这一项（宁可不给，也不能照错方向改设置）。
+   *      `own` 有值时带 `{ label, fields, guidanceLength }`——卡片据此显示"已有专属设置"，
+   *      **内容（来源字段与提示词）在设置页编辑**，卡片只决定"本会话用哪一份"。
    * apply({ channelId, botId, key, field, value, isOwner })
-   *      field ∈ model | reasoning | preset | workspace | session
+   *      field ∈ model | reasoning | preset | workspace | session | context
    *      **不在内置字段表（model/reasoning/preset/workspace/session）里的 field 一律透传给渠道**：
    *      调渠道的 `panel.apply({botId,key,conversationType,field,value}) -> {value,message}`，
    *      渠道返回 `ok:false` 时原样抛它的 code/message（失败必须可见）。
@@ -193,9 +202,12 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      -> { field, value, message }；失败抛带 code 的错（chat/no-session / chat/unknown-model /
    *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /
    *         chat/unknown-session / chat/session-check-failed / chat/model-selection-unavailable /
-   *         chat/owner-only /
+   *         chat/owner-only / chat/context-target-limit / chat/unknown-context-target /
    *         chat/unknown-field），渠道把 message 原样给用户看。
-   * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**。
+   * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**；
+   * `context` 是**机器人级**且**下一条消息生效**（上下文增强在收到消息时捕获），
+   * 它只动本会话那一条指定设置（`own` 复制全局、`copy:<id>` 复制另一条、`''` 删掉本会话那条），
+   * 不改其他会话的设置，也不改全局那份。
    */
   panel: { read, apply },
 }

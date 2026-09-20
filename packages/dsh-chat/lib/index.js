@@ -2563,6 +2563,44 @@ async function readModelCatalog(sessions, logger = console) {
   const hostDefault = rawDefault?.provider && rawDefault?.model ? rawDefault : null;
   return { options, hostDefault, failures };
 }
+function conversationTarget(key) {
+  const text = typeof key === "string" ? key : "";
+  const separator = text.indexOf(":");
+  if (separator <= 0) return null;
+  const head = text.slice(0, separator);
+  if (head !== "p2p" && head !== "group") return null;
+  const id = text.slice(separator + 1).trim();
+  if (!id) return null;
+  return { kind: head === "group" ? "group" : "user", id };
+}
+function contextPanelState({ record, key, isOwner }) {
+  if (isOwner !== true) return null;
+  const target = conversationTarget(key);
+  if (!target) return null;
+  const config = normalizeContextConfig(record.contextEnhancement);
+  const scope = target.kind === "group" ? config.group : config.direct;
+  const kindLabel = target.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
+  const options = [
+    { value: "", label: `\u8DDF\u968F${kindLabel}\u5168\u5C40\uFF08${scope.enabled === true ? "\u5DF2\u542F\u7528" : "\u672A\u542F\u7528"}\uFF09` },
+    { value: "own", label: `\u672C\u4F1A\u8BDD\u4E13\u5C5E\u8BBE\u7F6E\uFF08\u590D\u5236${kindLabel}\u5168\u5C40\u4F5C\u4E3A\u8D77\u70B9\uFF09` }
+  ];
+  for (const item of config.targets) {
+    if (item.kind !== target.kind || item.id === target.id) continue;
+    options.push({ value: `copy:${item.id}`, label: `\u5957\u7528\u300C${item.label?.trim() || item.id}\u300D\u7684\u5B57\u6BB5\u4E0E\u63D0\u793A\u8BCD` });
+  }
+  return {
+    // 下拉里"当前选中的那一项"，与 `panel.apply` 的取值一一对应。
+    current: own ? "own" : "",
+    scopeEnabled: scope.enabled === true,
+    kind: target.kind,
+    /** 平台 id：卡片上写出来，用户才知道这条设置是给谁的（也便于与设置页对账）。 */
+    identity: target.id,
+    label: target.kind === "group" ? "\u672C\u7FA4" : "\u672C\u79C1\u804A",
+    own: own ? { label: own.label?.trim() || null, fields: own.fields.length, guidanceLength: own.guidance.length } : null,
+    options
+  };
+}
 async function validateWorkspacePath(raw) {
   if (typeof raw !== "string" || !raw.trim()) {
     throw panelError("chat/workspace-invalid", "\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u3002");
@@ -2612,7 +2650,68 @@ function createPanelService({
       reasoningEffort: selection.reasoningEffort ?? null
     };
   }
-  const BUILT_IN_FIELDS = /* @__PURE__ */ new Set(["model", "reasoning", "preset", "workspace", "session"]);
+  const BUILT_IN_FIELDS = /* @__PURE__ */ new Set(["model", "reasoning", "preset", "workspace", "session", "context"]);
+  async function applyContextScope({ channelId, botId, key, value, record, field }) {
+    const target = conversationTarget(key);
+    if (!target) {
+      throw panelError("chat/bad-request", "\u8BA4\u4E0D\u51FA\u8FD9\u4E2A\u4F1A\u8BDD\u7684\u5E73\u53F0 id\uFF0C\u6CA1\u6CD5\u7ED9\u5B83\u5355\u72EC\u8BBE\u4E0A\u4E0B\u6587\u589E\u5F3A\u3002");
+    }
+    const config = normalizeContextConfig(record.contextEnhancement);
+    const scope = target.kind === "group" ? config.group : config.direct;
+    const kindLabel = target.kind === "group" ? "\u672C\u7FA4" : "\u672C\u79C1\u804A";
+    const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
+    const copyOf = (source2, extra) => ({
+      kind: target.kind,
+      id: target.id,
+      label: "",
+      enabled: true,
+      fields: [...source2.fields],
+      guidance: source2.guidance,
+      merge: source2.merge,
+      ...extra ?? {}
+    });
+    if (value === "" || value === null) {
+      if (!own) return { field, value: "", message: `${kindLabel}\u672C\u6765\u5C31\u8DDF\u968F\u5168\u5C40\uFF0C\u6CA1\u6709\u6539\u52A8\u3002` };
+      await settings.write(channelId, botId, {
+        contextEnhancement: { ...config, targets: config.targets.filter((item) => item !== own) }
+      });
+      return { field, value: "", message: `\u5DF2\u5220\u9664${kindLabel}\u7684\u4E13\u5C5E\u8BBE\u7F6E\uFF0C\u6539\u4E3A\u8DDF\u968F\u5168\u5C40\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002` };
+    }
+    if (value === "own") {
+      if (own) return { field, value: "own", message: `${kindLabel}\u5DF2\u7ECF\u662F\u4E13\u5C5E\u8BBE\u7F6E\uFF0C\u5185\u5BB9\u8BF7\u5728\u8BBE\u7F6E\u9875\u7F16\u8F91\u3002` };
+      if (config.targets.length >= TARGET_LIMIT) {
+        throw panelError(
+          "chat/context-target-limit",
+          `\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\uFF0C\u5148\u5230\u8BBE\u7F6E\u9875\u5220\u6389\u51E0\u6761\u3002`
+        );
+      }
+      await settings.write(channelId, botId, {
+        contextEnhancement: { ...config, targets: [...config.targets, copyOf({ ...scope, merge: "replace" })] }
+      });
+      return {
+        field,
+        value: "own",
+        message: scope.enabled === true ? `\u5DF2\u4E3A${kindLabel}\u521B\u5EFA\u4E13\u5C5E\u8BBE\u7F6E\uFF08\u5185\u5BB9\u4E0E\u5168\u5C40\u76F8\u540C\uFF09\uFF0C\u8981\u6539\u5185\u5BB9\u8BF7\u5230\u8BBE\u7F6E\u9875\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002` : `\u5168\u5C40\u7684${target.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}\u589E\u5F3A\u672C\u6765\u662F\u5173\u95ED\u7684\uFF1A\u5DF2\u4E3A${kindLabel}\u5355\u72EC\u5F00\u542F\uFF0C\u6765\u6E90\u5B57\u6BB5\u5DF2\u5E26\u597D\u3001\u63D0\u793A\u8BCD\u4E3A\u7A7A\uFF0C\u8BF7\u5230\u8BBE\u7F6E\u9875\u586B\u5199\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002`
+      };
+    }
+    if (typeof value !== "string" || !value.startsWith("copy:")) {
+      throw panelError("chat/bad-request", `\u4E0A\u4E0B\u6587\u589E\u5F3A\u4E0D\u652F\u6301\u8FD9\u4E2A\u53D6\u503C\uFF1A${String(value)}`);
+    }
+    const sourceId = value.slice("copy:".length);
+    const source = config.targets.find((item) => item.kind === target.kind && item.id === sourceId);
+    if (!source) throw panelError("chat/unknown-context-target", `\u627E\u4E0D\u5230\u8FD9\u6761\u6307\u5B9A\u8BBE\u7F6E\uFF1A${sourceId}`);
+    const copied = copyOf(source);
+    const targets = own ? config.targets.map((item) => item === own ? copied : item) : [...config.targets, copied];
+    if (!own && targets.length > TARGET_LIMIT) {
+      throw panelError("chat/context-target-limit", `\u6307\u5B9A\u8BBE\u7F6E\u6700\u591A ${TARGET_LIMIT} \u6761\uFF0C\u5148\u5230\u8BBE\u7F6E\u9875\u5220\u6389\u51E0\u6761\u3002`);
+    }
+    await settings.write(channelId, botId, { contextEnhancement: { ...config, targets } });
+    return {
+      field,
+      value,
+      message: `\u5DF2\u628A\u300C${source.label?.trim() || source.id}\u300D\u7684\u5B57\u6BB5\u4E0E\u63D0\u793A\u8BCD\u5957\u7528\u5230${kindLabel}\uFF08\u590D\u5236\uFF0C\u4E0D\u5F71\u54CD\u539F\u6765\u90A3\u6761\uFF1B\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002`
+    };
+  }
   async function channelPanelFields({ channelId, botId, key, conversationType }) {
     if (typeof channelRpc !== "function") return { fields: [], failed: false };
     try {
@@ -2779,6 +2878,11 @@ function createPanelService({
           efforts: effectiveModel?.efforts ?? [],
           currentEffort: effective?.reasoningEffort ?? null
         },
+        /**
+         * 本会话的上下文增强（用哪一份设置）：只给属主，且只在认得出会话键时给。
+         * 内容（来源字段 / 提示词）在设置页编辑，卡片只决定"本会话用哪一份"。
+         */
+        context: contextPanelState({ record, key, isOwner }),
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
@@ -2822,6 +2926,19 @@ function createPanelService({
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const botDefault = normalizeBotModel(record.model);
+      if (field === "context") {
+        if (isOwner !== true) {
+          throw panelError("chat/owner-only", "\u4E0A\u4E0B\u6587\u589E\u5F3A\u662F\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002");
+        }
+        return applyContextScope({
+          channelId,
+          botId,
+          key,
+          value,
+          record,
+          field
+        });
+      }
       if (!BUILT_IN_FIELDS.has(field)) {
         return applyChannelField({
           channelId,

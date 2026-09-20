@@ -127008,6 +127008,7 @@ function createTurnPresenter({
 // packages/dsh-chat-feishu/host/panel-card.mjs
 var MAX_OPTIONS = 30;
 var FOLLOW_DEFAULT = "__default__";
+var CONTEXT_GLOBAL = "__global__";
 var h = (value) => String(value ?? "");
 function mark(current, value, label) {
   return `${current === value ? "\u2713 " : ""}${label}`;
@@ -127237,6 +127238,26 @@ function panelCard(state, { last = null, at = null } = {}) {
     });
   }
   if (presetCells.length > 0) elements.push(grid(presetCells));
+  if (state?.context) {
+    const context = state.context;
+    const picker = dropdown({
+      name: "context_pick",
+      action: "context_pick",
+      placeholder: "\u9009\u62E9\u672C\u4F1A\u8BDD\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A",
+      items: (context.options ?? []).map((option) => ({
+        value: option.value === "" ? CONTEXT_GLOBAL : option.value,
+        label: option.label
+      })),
+      current: (context.current ?? "") === "" ? CONTEXT_GLOBAL : context.current
+    });
+    if (picker.element) {
+      elements.push(grid([field(`\u4E0A\u4E0B\u6587\u589E\u5F3A\uFF08${context.label}\uFF09`, picker.element)]));
+    }
+    elements.push({
+      tag: "markdown",
+      content: context.own ? `\u5DF2\u6709\u4E13\u5C5E\u8BBE\u7F6E\uFF08\u6765\u6E90\u5B57\u6BB5 ${context.own.fields} \u4E2A\u3001\u63D0\u793A\u8BCD ${context.own.guidanceLength} \u5B57\uFF09\uFF0C\u5185\u5BB9\u5230\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\uFF08\`${h(context.identity)}\`\uFF09\u3002` : "\u5185\u5BB9\uFF08\u6765\u6E90\u5B57\u6BB5\u4E0E\u63D0\u793A\u8BCD\uFF09\u5728\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\u3002"
+    });
+  }
   const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
@@ -127290,7 +127311,8 @@ function panelPick(action, options) {
     model_pick: { field: "model", label: "\u5207\u6362\u6A21\u578B" },
     reasoning_pick: { field: "reasoning", label: "\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7" },
     preset_pick: { field: "preset", label: "\u8BBE\u7F6E Agent \u9884\u8BBE" },
-    workspace_pick: { field: "workspace", label: "\u5207\u6362\u5DE5\u4F5C\u533A" }
+    workspace_pick: { field: "workspace", label: "\u5207\u6362\u5DE5\u4F5C\u533A" },
+    context_pick: { field: "context", label: "\u8BBE\u7F6E\u672C\u4F1A\u8BDD\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A" }
   };
   const dynamic = typeof action === "string" && action.startsWith("panel_field_") ? { field: action.slice("panel_field_".length), label: "\u6E20\u9053\u8BBE\u7F6E" } : null;
   const target = map[action] ?? dynamic;
@@ -127298,7 +127320,8 @@ function panelPick(action, options) {
   const values = (Array.isArray(options) ? options : [options]).filter((item) => typeof item === "string" && item !== "");
   if (values.length === 0) return { field: target.field, label: target.label, invalid: true };
   const picked = values[0];
-  const value = picked === FOLLOW_DEFAULT ? "" : String(picked);
+  const sentinel = picked === FOLLOW_DEFAULT || target.field === "context" && picked === CONTEXT_GLOBAL;
+  const value = sentinel ? "" : String(picked);
   return { field: target.field, value, label: target.label };
 }
 function panelButton(action) {

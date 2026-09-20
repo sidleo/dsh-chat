@@ -2366,6 +2366,56 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
 });
 
+test('控制面板卡：本会话的上下文增强下拉——只决定用哪一份，内容指路设置页', async () => {
+  const { panelCard, panelPick } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const base = {
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  };
+  const options = [
+    { value: '', label: '跟随私聊全局（已启用）' },
+    { value: 'own', label: '本会话专属设置（复制私聊全局作为起点）' },
+    { value: 'copy:ou_b', label: '套用「爱丽丝」的字段与提示词' },
+  ];
+  const following = panelCard({
+    ...base,
+    context: { current: '', label: '本私聊', identity: 'ou_a', own: null, options },
+  });
+  const picker = cardSelects(following).find((el) => el.name === 'context_pick');
+  assert.ok(picker, '卡上要有本会话的上下文增强下拉');
+  assert.equal(picker.initial_index, 1, '跟随全局是第 1 项并被勾选');
+  assert.match(picker.options[0].text.content, /^✓ /);
+  // 空值是"没认出来"的信号，也是飞书不可靠的取值：'跟随全局' 有自己的哨兵。
+  assert.equal(picker.options[0].value, '__global__');
+  const body = JSON.stringify(following);
+  assert.match(body, /上下文增强（本私聊）/);
+  assert.match(body, /内容（来源字段与提示词）在设置页编辑/);
+
+  const owned = panelCard({
+    ...base,
+    context: {
+      current: 'own', label: '本群', identity: 'oc_g',
+      own: { label: '客户群', fields: 3, guidanceLength: 128 },
+      options,
+    },
+  });
+  assert.match(JSON.stringify(owned), /已有专属设置（来源字段 3 个、提示词 128 字）/);
+  assert.match(JSON.stringify(owned), /oc_g/, '把平台 id 写出来，便于与设置页对账');
+
+  // 非属主时 hub 不给这一项：卡上不能出现"改得动"的假控件。
+  assert.equal(cardSelects(panelCard(base)).some((el) => el.name === 'context_pick'), false);
+
+  // 回调翻译：值原样交给 hub（含空串 = 跟随全局、own、copy:<id>）。
+  assert.deepEqual(panelPick('context_pick', ['own']), { field: 'context', value: 'own', label: '设置本会话的上下文增强' });
+  assert.deepEqual(panelPick('context_pick', ['copy:ou_b']).value, 'copy:ou_b');
+  assert.equal(panelPick('context_pick', ['__global__']).value, '', '哨兵翻译回空串（= 跟随全局）');
+  assert.deepEqual(panelPick('context_pick', ['']), { field: 'context', label: '设置本会话的上下文增强', invalid: true },
+    '空取值 = 回调里没认出来，不能当成"跟随全局"静默改设置');
+});
+
 test('控制面板卡：渠道自带字段一行两格——过程展示（私聊）与（群聊）都在卡上', async () => {
   const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
   const options = [

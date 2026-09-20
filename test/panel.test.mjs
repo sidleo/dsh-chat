@@ -617,3 +617,119 @@ test('渠道自带的面板字段：读得到就带出来，apply 透传给渠�
     (error) => error.code === 'feishu/boom' && /渠道炸了/.test(error.message),
   );
 });
+
+test('本会话的上下文增强：跟全局 / 本会话专属 / 套用另一条（只限属主）', async () => {
+  const globalDirect = {
+    enabled: true, fields: ['senderId', 'senderName'], guidance: '私聊全局提示词',
+  };
+  const other = {
+    kind: 'user', id: 'ou_b', label: '爱丽丝', enabled: true,
+    fields: ['senderName'], guidance: '给爱丽丝的提示词', merge: 'replace',
+  };
+  const { panel, state, calls } = makePanel({
+    record: { contextEnhancement: { direct: globalDirect, group: { enabled: false, fields: ['senderId'], guidance: '' }, targets: [other] } },
+  });
+
+  // ① 读：私聊里认出"本私聊"，给出跟随全局 / 专属 / 套用另一条三种选择。
+  const read = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.equal(read.context.current, '', '还没有专属设置 = 跟随全局');
+  assert.equal(read.context.label, '本私聊');
+  assert.equal(read.context.identity, 'ou_a');
+  assert.equal(read.context.own, null);
+  assert.deepEqual(read.context.options.map((item) => item.value), ['', 'own', 'copy:ou_b']);
+  assert.match(read.context.options[0].label, /跟随私聊全局（已启用）/);
+  assert.match(read.context.options[2].label, /套用「爱丽丝」的字段与提示词/);
+
+  // ② 非属主 / 认不出的会话键：不给这一项（也不给"改得动"的错觉）。
+  const asMember = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(asMember.context, null, '非属主不给');
+  const unknownKey = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'ou_a', isOwner: true });
+  assert.equal(unknownKey.context, null, '认不出会话键就不提供（免得照错方向改设置）');
+
+  // ③ 创建专属设置：把全局那份复制过来作为起点（merge=replace，效果与跟随全局一致）。
+  const own = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'own', isOwner: true,
+  });
+  assert.match(own.message, /已为本私聊创建专属设置/);
+  assert.match(own.message, /设置页/);
+  assert.match(own.message, /下一条消息生效/);
+  const created = state.contextEnhancement.targets.find((item) => item.id === 'ou_a');
+  assert.equal(created.kind, 'user');
+  assert.deepEqual([...created.fields], ['senderId', 'senderName']);
+  assert.equal(created.guidance, '私聊全局提示词');
+  assert.equal(created.merge, 'replace');
+  assert.equal(created.enabled, true);
+  assert.equal(state.contextEnhancement.targets.length, 2, '另一条设置不受影响');
+
+  const again = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'own', isOwner: true,
+  });
+  assert.match(again.message, /已经是专属设置/);
+  assert.equal(state.contextEnhancement.targets.length, 2, '重复选不叠加');
+
+  // ④ 套用另一条指定设置：复制字段与提示词，不动原来那条。
+  const copied = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'copy:ou_b', isOwner: true,
+  });
+  assert.match(copied.message, /已把「爱丽丝」的字段与提示词套用到本私聊/);
+  const mine = state.contextEnhancement.targets.find((item) => item.id === 'ou_a');
+  assert.deepEqual([...mine.fields], ['senderName']);
+  assert.equal(mine.guidance, '给爱丽丝的提示词');
+  assert.equal(state.contextEnhancement.targets.find((item) => item.id === 'ou_b').guidance, '给爱丽丝的提示词',
+    '复制不影响被套用的那条');
+
+  // ⑤ 回到跟随全局：只删本会话这一条。
+  const back = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: '', isOwner: true,
+  });
+  assert.match(back.message, /已删除本私聊的专属设置/);
+  assert.deepEqual(state.contextEnhancement.targets.map((item) => item.id), ['ou_b']);
+  assert.equal(state.contextEnhancement.direct.guidance, '私聊全局提示词', '全局那份原样');
+
+  // ⑥ 群会话：按群 id 建 group 目标；非属主与未知取值都被挡下。
+  const group = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', field: 'context', value: 'own', isOwner: true,
+  });
+  assert.match(group.message, /全局的群聊增强本来是关闭的/);
+  const groupTarget = state.contextEnhancement.targets.find((item) => item.id === 'oc_g');
+  assert.equal(groupTarget.kind, 'group');
+  assert.equal(groupTarget.enabled, true);
+  assert.equal(groupTarget.guidance, '', '全局关闭时提示词为空，等用户在设置页填');
+
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'own',
+    }),
+    (error) => error.code === 'chat/owner-only',
+  );
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'nope', isOwner: true,
+    }),
+    (error) => error.code === 'chat/bad-request',
+  );
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'context', value: 'copy:ou_ghost', isOwner: true,
+    }),
+    (error) => error.code === 'chat/unknown-context-target',
+  );
+  const writes = calls.filter((call) => call.kind === 'write');
+  assert.ok(writes.every((call) => Object.keys(call.patch).length === 1
+    && Object.hasOwn(call.patch, 'contextEnhancement')), '只写 contextEnhancement 一个键');
+});
+
+test('本会话的上下文增强：指定设置条数到顶时给出可读错误', async () => {
+  const targets = Array.from({ length: 50 }, (_, index) => ({
+    kind: 'user', id: `ou_${index}`, label: '', enabled: true, fields: ['senderId'], guidance: '', merge: 'replace',
+  }));
+  const { panel } = makePanel({
+    record: { contextEnhancement: { direct: { enabled: true, fields: ['senderId'], guidance: 'x' }, group: { enabled: false, fields: ['senderId'], guidance: '' }, targets } },
+  });
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_new', field: 'context', value: 'own', isOwner: true,
+    }),
+    (error) => error.code === 'chat/context-target-limit' && /最多 50 条/.test(error.message),
+  );
+});
