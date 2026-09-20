@@ -22,10 +22,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { apply as applyFixture } from '../packages/dsh-chat-fixture/host/index.mjs';
+import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
 import { panelCard } from '../packages/dsh-chat-feishu/host/panel-card.mjs';
+import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
 import { apply as applyHub } from '../packages/dsh-chat/host/plugin.mjs';
+import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { evaluateAccess } from '../packages/dsh-chat/shared/access-policy.mjs';
 import { resolveContextScope } from '../packages/dsh-chat/shared/context-enhancement.mjs';
+import { enhanceReplyReference } from '../packages/dsh-chat/shared/reply-reference.mjs';
 
 const BOT = 'bot_rehearsal';
 const KEY = 'p2p:ou_owner';
@@ -56,8 +60,10 @@ function createFakeAgent() {
     invites: 0,
     /** 下一次 `session/prompt` 抛的错（用来演"模型不收图片"）。 */
     failPromptOnce: null,
-    /** 每轮答案的正文（按 turn 段拼接，验"多 step 不丢段"）。 */
-    texts: [],
+    /** `session/rename` 的入参（`/retitle` 用）。 */
+    renames: [],
+    /** 会话标题：rename 之后 `session/list` 要能读到新标题（`/retitle` 的幂等靠它）。 */
+    titles: new Map(),
   };
   /**
    * 一段脚本化回合。
@@ -145,7 +151,7 @@ function createFakeAgent() {
               running: index === 0,
               cwd: '/tmp/rehearsal-ws',
               updatedAt: Date.now(),
-              projections: { values: { title: '演练会话' } },
+              projections: { values: { title: state.titles.get(sessionId) ?? '演练会话' } },
             })),
           };
         }
@@ -170,7 +176,12 @@ function createFakeAgent() {
           return { records: [], hasMore: false };
         }
         if (namespace === 'session' && method === 'cancel') return { accepted: true };
-        if (namespace === 'session' && method === 'rename') return {};
+        if (namespace === 'session' && method === 'rename') {
+          const request = args?.request ?? {};
+          state.renames.push(request);
+          if (request.sessionId) state.titles.set(request.sessionId, request.title);
+          return {};
+        }
         if (namespace === 'commands' && method === 'execute') {
           return { commandId: 'cmd_1', result: { kind: 'success', text: '压缩完成。' } };
         }
@@ -259,6 +270,38 @@ function createFakeCtx(agent) {
     disposeAll() {
       for (const dispose of effects.reverse()) if (typeof dispose === 'function') dispose();
     },
+  };
+}
+
+/**
+ * 最小的假 Lark 网关：只实现"卡片交互"这条路要用到的几个方法。
+ *
+ * 用真实桥跑这一步是为了验**顺序**——"卡片更新排在回调应答之后"这条真机教训，
+ * 只有在真实桥上跑一遍才算数（hub 侧看不出来）。
+ */
+function createFakeLarkGateway() {
+  const calls = { created: [], updated: [], patched: [], texts: [] };
+  return {
+    calls,
+    async sendCard({ chatId, card }) {
+      calls.created.push({ chatId, card });
+      return { messageId: `om_sent_${calls.created.length}` };
+    },
+    async updateCard({ token, card }) {
+      calls.updated.push({ token, card });
+      return {};
+    },
+    async patchCard({ messageId, card }) {
+      calls.patched.push({ messageId, card });
+      return {};
+    },
+    async replyText({ messageId, text }) {
+      calls.texts.push({ messageId, text });
+      return {};
+    },
+    async addReaction() { return {}; },
+    async removeReaction() { return {}; },
+    async markCardAnswered() { return {}; },
   };
 }
 
@@ -525,6 +568,132 @@ async function main() {
       assert.match(diag.reply, /数据目录/);
       return `渠道=${result.value.channels.length}`;
     });
+    // ⑩ 真实飞书桥：卡片更新排在应答之后（真机栽过"闪一下又变回去"），访问策略确认走完整回路
+    await step('真实飞书桥：按钮更新排在应答之后；访问策略放宽先在卡上确认', async () => {
+      const gateway = createFakeLarkGateway();
+      const feishuState = createFeishuStateStore({
+        path: join(dataDir, 'feishu-state.json'), logger: silentLogger,
+      });
+      await feishuState.load();
+      /** 应答之后的重画排期先收集起来：这样能显式断言"应答前一次都没更新"。 */
+      const paints = [];
+      const deps = {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        ready: () => service.ready(),
+        scheduleAfterResponse: (task) => { paints.push(task); },
+        storage: service.bots.storageFor('feishu'),
+        contextEnhancement: service.contextEnhancement,
+        replyReference: service.replyReference,
+        accessPolicy,
+        commands: service.commands,
+        panel: service.panel,
+        sessions: service.sessions,
+        deferred: service.deferred,
+      };
+      const bot = {
+        id: 'bot_rehearsal_feishu',
+        appId: 'cli_rehearsal',
+        ownerOpenIds: [OWNER],
+        botName: '演练机器人',
+        stepPushDirect: 'off',
+        stepPushGroup: 'off',
+      };
+      const bridge = createFeishuBridge({ bot, deps, gateway, state: feishuState, logger: silentLogger });
+      // 先把这个会话绑上，面板状态才是"有会话"的样子。
+      await service.bots.write('feishu', bot.id, { workspace: '/tmp/rehearsal-ws' });
+      await service.sessions.ensure({
+        channelId: 'feishu', botId: bot.id, key: KEY, workspacePath: '/tmp/rehearsal-ws',
+      });
+
+      const button = await bridge.handleCardAction({
+        chatId: 'oc_rehearsal',
+        messageId: 'om_card_1',
+        token: 'tk_button',
+        operator: { openId: OWNER },
+        action: { tag: 'button', value: { dsh_panel: 'status' } },
+      });
+      assert.ok(button?.toast, '按钮要有应答');
+      assert.equal(gateway.calls.updated.length, 0, '应答之前一次都不该更新卡片');
+      assert.equal(gateway.calls.patched.length, 0);
+      for (const task of paints.splice(0)) await task();
+      assert.equal(gateway.calls.updated.length, 1, '重画发生在应答之后（token 路径）');
+      assert.match(JSON.stringify(gateway.calls.updated[0].card), /机器人/);
+
+      const picked = await bridge.handleCardAction({
+        chatId: 'oc_rehearsal',
+        messageId: 'om_card_1',
+        token: 'tk_policy',
+        operator: { openId: OWNER },
+        action: {
+          tag: 'select_static', name: 'policy_pick', options: ['open'], value: { action: 'policy_pick' },
+        },
+      });
+      assert.match(picked.toast.content, /需要确认/);
+      for (const task of paints.splice(0)) await task();
+      const pendingCard = JSON.stringify(gateway.calls.updated.at(-1).card);
+      assert.match(pendingCard, /待确认/, '确认做在同一张卡上');
+      assert.match(pendingCard, /✅ 确认/);
+      const saved = service.bots.read('feishu', bot.id).accessPolicy;
+      assert.notEqual(saved?.direct?.mode, 'open', '确认之前一个字节都不该写盘');
+
+      const confirmed = await bridge.handleCardAction({
+        chatId: 'oc_rehearsal',
+        messageId: 'om_card_1',
+        token: 'tk_confirm',
+        operator: { openId: OWNER },
+        action: { tag: 'button', value: { dsh_confirm: true } },
+      });
+      assert.match(confirmed.toast.content, /任何人可用|已生效/);
+      for (const task of paints.splice(0)) await task();
+      assert.equal(service.bots.read('feishu', bot.id).accessPolicy?.direct?.mode, 'open',
+        '确认后才真的落盘');
+      return `应答后更新=${gateway.calls.updated.length} 次、确认前未落盘、确认后 direct=open`;
+    });
+
+    // ⑪ 引用回复：被引用正文进提示词；读不到也不能丢当前问题
+    await step('引用回复：被引用正文进提示词，读不到只加标记、不丢当前问题', async () => {
+      const ok = enhanceReplyReference(
+        [{ type: 'text', text: '那昨天呢' }],
+        { messageId: 'om_q', senderId: 'ou_boss', kind: 'text', text: '上周的销售额是多少？' },
+      );
+      const text = ok.map((part) => part.text ?? '').join('');
+      assert.match(text, /<dsh_im_reply>/);
+      assert.match(text, /上周的销售额是多少？/);
+      assert.match(text, /那昨天呢/);
+      const missing = enhanceReplyReference(
+        [{ type: 'text', text: '那昨天呢' }],
+        { messageId: 'om_gone', kind: 'text', reason: '读不到被引用的消息' },
+      );
+      const missingText = missing.map((part) => part.text ?? '').join('');
+      assert.match(missingText, /引用内容不可用/);
+      assert.match(missingText, /那昨天呢/, '读不到引用也要保住当前问题');
+      return `<dsh_im_reply> 标签 + 读不到时的标记都在`;
+    });
+
+    // ⑫ /retitle：一次性给历史会话补「渠道 ·」前缀（幂等）
+    await step('/retitle：历史会话补「渠道 ·」前缀，重复执行不重复加', async () => {
+      const first = await service.commands.handle({
+        channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
+        senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
+      });
+      assert.match(first.reply, /检查了 3 个绑定会话：补上 3 个/, first.reply);
+      assert.equal(agent.state.renames.length, 3, '三个绑定会话各改一次标题');
+      assert.match(agent.state.renames[0].title, /^试用渠道 · /, `标题要带渠道前缀：${JSON.stringify(agent.state.renames[0])}`);
+      const second = await service.commands.handle({
+        channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
+        senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
+      });
+      assert.match(second.reply, /已有前缀 3 个/, `第二次应是幂等的：${second.reply}`);
+      assert.equal(agent.state.renames.length, 3, '幂等：第二次不再改名');
+      const member = await service.commands.handle({
+        channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle', senderId: 'ou_x', isOwner: false,
+      });
+      assert.match(member.reply, /只限属主/);
+      return `重命名 ${agent.state.renames.length} 次，第二次幂等（已有前缀 3 个）`;
+    });
+
   } finally {
     harness.disposeAll();
     clearInterval(keepAlive);

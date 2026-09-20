@@ -27,9 +27,10 @@ packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
 scripts/check-layout.mjs       布局守门：真实组件在 549/360/320px 下渲染并断言不溢出、不逐字竖排
-scripts/rehearsal.mjs          离线端到端演练（`npm run rehearsal`）：挂起真实 hub 与假渠道，
-                               用脚本化假 DSH 网关把主要用户路径走一遍（渠道依赖自检/一问一答/命令/
-                               控制面板与飞书卡片/访问策略确认/上下文增强/图片回退/延迟交付/诊断），
+scripts/rehearsal.mjs          离线端到端演练（`npm run rehearsal`）：挂起真实 hub 与假渠道、
+                               **真实飞书桥**，配脚本化假 DSH 与假 Lark 网关，把主要用户路径走一遍
+                               （渠道依赖自检/一问一答/命令/控制面板与卡片/访问策略确认/上下文增强/
+                               图片回退/延迟交付/诊断/按钮更新排在应答之后/引用回复/`/retitle`），
                                逐条打印 ✅/❌；**不含** Lark 长连接与真实平台（那只能真机验）
 scripts/layout-fixture.mjs     上面那个守门的页面入口（headless Chrome 里跑，用 flushSync 同步提交）：
                                共享组件 + **整张飞书/微信渠道卡** + hub 整页（页头两个入口、左栏、机器人列表），
@@ -63,9 +64,10 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **改完 host / 卡片逻辑，先跑 `npm run rehearsal`**：它在几秒内把主要用户路径走一遍并逐条 ✅/❌，
   不需要凭据也不联网（真实 hub + 真实飞书卡片构建器 + 脚本化假 DSH 网关）。
   **它不替代真机**：Lark 长连接、真实平台回调、真机卡片渲染只能重启后验。
-  逐条覆盖：渠道依赖自检（少一个依赖就亮红）→ 一问一答（多段正文拼接）→ 命令内核 →
+  逐条覆盖（12 条）：渠道依赖自检（少一个依赖就亮红）→ 一问一答（多段正文拼接）→ 命令内核 →
   控制面板状态经真实卡片渲染 + 下拉回调落盘 → 访问策略"放宽要先确认" → 上下文增强本会话专属 →
-  图片回退 → 延迟交付（超时登记→补发）→ 诊断。
+  图片回退 → 延迟交付（超时登记→补发）→ 诊断 → **真实飞书桥**（按钮更新排在应答之后、
+  访问策略确认走完整卡片回路）→ 引用回复（拼装 + 读不到）→ `/retitle`（幂等回填）。
 - **隔离调试**：`config.channelDataDirs` 可把渠道数据目录指到临时目录，避免用真实凭据建长连接；覆盖时**不做**旧设置导入。
 - **飞书卡片按钮没反应**：按"事件到没到"分三步查——
   ① 重启时带 `DSH_CHAT_FEISHU_SDK_LOG=debug`（SDK 日志会进 `logs/feishu.log`），点一次按钮后看日志：
