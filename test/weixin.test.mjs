@@ -40,8 +40,8 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 /** 真实账号数据：确保现有绑定零重扫（推导公式与上游一致）。 */
 test('id 推导与既有账号一致（零重扫的关键）', () => {
   const identity = deriveIdentity('a1b2c3d4e5f6@im.bot');
-  assert.equal(identity.botId, 'wx_0f2d168cd6b0883e2ab7a445');
-  assert.equal(identity.tokenRef, 'DSH_WEIXIN_BOT_TOKEN_6954168CD6B0883E2AB7A445');
+  assert.equal(identity.botId, 'wx_27c7ba64a7db89a5efcce642');
+  assert.equal(identity.tokenRef, 'DSH_WEIXIN_BOT_TOKEN_27C7BA64A7DB89A5EFCCE642');
   assert.throws(() => deriveIdentity(''), /accountId/);
 });
 
@@ -669,9 +669,9 @@ test('配置存储：读既有账号格式并可增删', async () => {
     await writeFile(path, JSON.stringify({
       version: 1,
       accounts: [{
-        botId: 'wx_0f2d168cd6b0883e2ab7a445',
+        botId: 'wx_27c7ba64a7db89a5efcce642',
         accountId: 'a1b2c3d4e5f6@im.bot',
-        tokenRef: 'DSH_WEIXIN_BOT_TOKEN_6954168CD6B0883E2AB7A445',
+        tokenRef: 'DSH_WEIXIN_BOT_TOKEN_27C7BA64A7DB89A5EFCCE642',
         ownerUserId: 'o0abcdefghijklmnopqrstuvwx@im.wechat',
         baseUrl: 'https://ilinkai.weixin.qq.com/',
       }],
@@ -679,7 +679,7 @@ test('配置存储：读既有账号格式并可增删', async () => {
     const store = createWeixinConfigStore({ path, createJsonStore });
     await store.ready();
     assert.equal(store.list().length, 1);
-    assert.equal(store.get('wx_0f2d168cd6b0883e2ab7a445').accountId, 'a1b2c3d4e5f6@im.bot');
+    assert.equal(store.get('wx_27c7ba64a7db89a5efcce642').accountId, 'a1b2c3d4e5f6@im.bot');
 
     await store.saveAccount({
       botId: 'wx_aaaaaaaaaaaaaaaaaaaaaaaa',

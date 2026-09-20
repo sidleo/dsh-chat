@@ -85,7 +85,7 @@ const SECOND_BOT_STATUS = {
   nameHint: null,
 };
 const WEIXIN_STATUS = {
-  id: 'wx_0f2d168cd6b0883e2ab7a445',
+  id: 'wx_27c7ba64a7db89a5efcce642',
   state: 'running',
   connected: true,
   handled: 12,
