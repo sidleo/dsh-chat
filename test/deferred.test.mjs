@@ -40,6 +40,9 @@ async function makeApp({ probe, options = {} } = {}) {
     dataDir,
     async cleanup() {
       service.stop();
+      // 停掉定时器时可能有一次复查正在跑（它还会落一次盘）：等它收尾再删目录，
+      // 否则会撞出 "ENOENT: deferred.json.tmp-…"。
+      await sleep(30);
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     },
   };
@@ -143,6 +146,8 @@ test('渠道还没注册发送器：记录留着继续等，注册后自动续�
     assert.ok(await waitFor(() => service.list().length === 0));
   } finally {
     service.stop();
+    // 同上：等在途的那次复查收尾再删目录。
+    await sleep(30);
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
@@ -174,6 +179,8 @@ test('补发失败：记录保留并写 lastError，下次复查再试', async (
     assert.ok(attempts >= 2);
   } finally {
     service.stop();
+    // 同上：等在途的那次复查收尾再删目录。
+    await sleep(30);
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
@@ -287,6 +294,8 @@ test('残缺的 deferred.json 不能让服务起不来（按保守方向补齐�
     assert.equal(rows[0].reason, 'timeout');
   } finally {
     service.stop();
+    // 同上：等在途的那次复查收尾再删目录。
+    await sleep(30);
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });

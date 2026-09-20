@@ -189,7 +189,15 @@ export function createDeferredDelivery({
   function arm(id, delay) {
     clearTimer(id);
     if (stopped) return;
-    const timer = setTimeout(() => { void check(id); }, delay);
+    /**
+     * 定时复查是**后台**跑的：它自己抛错没人接——一次落盘失败就会变成
+     * unhandledRejection（进程可能因此退出）。这里必须自己收口并留日志。
+     */
+    const timer = setTimeout(() => {
+      void check(id).catch((error) => {
+        logger.warn?.(`[dsh-chat] 延迟交付复查异常（${id}）：${error?.message ?? error}`);
+      });
+    }, delay);
     timer.unref?.();
     timers.set(id, timer);
   }

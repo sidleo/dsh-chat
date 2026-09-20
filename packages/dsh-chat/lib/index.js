@@ -1993,7 +1993,9 @@ function createDeferredDelivery({
     clearTimer(id);
     if (stopped) return;
     const timer = setTimeout(() => {
-      void check(id);
+      void check(id).catch((error) => {
+        logger.warn?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u590D\u67E5\u5F02\u5E38\uFF08${id}\uFF09\uFF1A${error?.message ?? error}`);
+      });
     }, delay);
     timer.unref?.();
     timers.set(id, timer);
