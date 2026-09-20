@@ -13,6 +13,8 @@
 
 import * as React from 'react';
 
+import { botOrderKey, orderedItems, useListOrder } from './list-order.js';
+
 const h = React.createElement;
 
 /** 渠道状态 → 文案键。 */
@@ -99,7 +101,26 @@ export function BotList(props) {
   }, [load]);
 
   const { Panel, EmptyState, StatusPill } = chatUi.components;
-  const bots = state.bots;
+  /**
+   * 机器人顺序：用户拖动过就按用户顺序（每个渠道一份，存浏览器）。
+   * 身份取不到的机器人（老 host 没给 botId）用行下标兜底，至少不会被排到看不见的地方。
+   */
+  const botOrder = useListOrder(botOrderKey(channelId), (row) => botKeyOf(row.bot));
+  const rows = React.useMemo(
+    () => orderedItems(
+      state.bots.map((bot, index) => ({ bot, fallback: `row-${index}` })),
+      botOrder.order,
+      (row) => botKeyOf(row.bot) ?? row.fallback,
+    ),
+    [state.bots, botOrder.order],
+  );
+  /**
+   * 拖动中的机器人：**ref 记"拖的是谁"**，state 只管高亮（原因同 section.js：
+   * 同一任务里连着派发 dragstart/drop 时，state 的闭包可能还是旧值）。
+   */
+  const dragBotRef = React.useRef(null);
+  const [dragBot, setDragBot] = React.useState(null);
+  const [dropBot, setDropBot] = React.useState(null);
 
   return h(Panel, {
     title: `${label()} · ${t('机器人')}`,
@@ -122,7 +143,7 @@ export function BotList(props) {
   state.error
     ? h('p', { className: 'dchat-error' }, `${t('读取失败')}：${state.error}`)
     : null,
-  state.phase !== 'loading' && bots.length === 0
+  state.phase !== 'loading' && state.bots.length === 0
     ? h(EmptyState, {
       title: t('这个渠道还没有机器人'),
       description: t('在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。'),
@@ -132,15 +153,50 @@ export function BotList(props) {
       onClick: () => onOpenSettings(null),
     }, t('打开渠道设置页')))
     : null,
-  bots.length > 0
-    ? h('ul', { className: 'dchat-botList' }, bots.map((bot, index) => {
+  state.bots.length > 0
+    ? h('ul', { className: 'dchat-botList' }, rows.map((row) => {
+      const { bot } = row;
       const identity = botKeyOf(bot);
+      const rowKey = identity ?? row.fallback;
       const title = bot.name || identity || t('未命名机器人');
       // 没有名称时标题已经兜底成身份串，账号这一项就不再重复一遍。
       const showIdentity = Boolean(identity) && identity !== title;
       return h('li', {
-        key: identity ?? `row-${index}`, className: 'dchat-botRow',
+        key: rowKey,
+        className: `dchat-botRow${dropBot === rowKey && dragBot !== rowKey ? ' dchat-dropTarget' : ''}`,
+        onDragOver: (event) => {
+          const from = dragBotRef.current;
+          if (!from || from === rowKey) return;
+          event.preventDefault();
+          setDropBot(rowKey);
+        },
+        onDrop: (event) => {
+          event.preventDefault();
+          const from = dragBotRef.current;
+          if (from && from !== rowKey) botOrder.move(rows, from, rowKey);
+          dragBotRef.current = null;
+          setDropBot(null);
+          setDragBot(null);
+        },
       },
+      h('span', {
+        className: 'dchat-grip',
+        draggable: true,
+        title: t('拖动可调整顺序'),
+        'aria-hidden': 'true',
+        onDragStart: (event) => {
+          dragBotRef.current = rowKey;
+          setDragBot(rowKey);
+          // Firefox 不设 dataTransfer 就不会开始拖。
+          event.dataTransfer?.setData('text/plain', rowKey);
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+        },
+        onDragEnd: () => {
+          dragBotRef.current = null;
+          setDragBot(null);
+          setDropBot(null);
+        },
+      }, '⋮⋮'),
       h('div', { className: 'dchat-botMain' },
         h('div', { className: 'dchat-botTitle' },
           h('strong', { title }, title),

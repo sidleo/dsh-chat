@@ -279,6 +279,28 @@ const CSS = `
   padding: 10px 12px;
 }
 /* 「设置」按钮永远是内容宽度：flex 默认的 min-width:auto 会让它在窄栏里被压成一个字宽。 */
+.dchat-grip {
+  /*
+   * 拖动把手：只能拖它，不让整行可拖——整行可拖会与"点一下切换渠道/机器人"抢手势，
+   * 而且 button 元素在部分浏览器上 draggable 不生效。移动端不支持 HTML5 拖放，
+   * 所以它只是桌面端的便利功能（顺序本身不影响任何行为）。
+   */
+  flex: none;
+  cursor: grab;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: -1px;
+  user-select: none;
+}
+.dchat-grip:active {
+  cursor: grabbing;
+}
+/* 拖动经过的可落点：只做高亮，不改布局（改动布局会让拖动手感抖）。 */
+.dchat-dropTarget {
+  border-color: var(--dsw-alias-brand-primary) !important;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary);
+}
 .dchat-botRow > .dchat-button {
   flex: none;
 }
@@ -318,6 +340,14 @@ const CSS = `
 }
 .dchat-botMeta > * {
   white-space: nowrap;
+  /*
+   * 加拖动把手之后窄栏（320px）会差几个像素：flex 项默认 min-width:auto 不会缩，
+   * 于是「最近 09-19 10:21」整块顶出去。允许这些片段自己收成省略号，
+   * 而不是把整行撑破——标题与名称在上面一行，仍然读得到。
+   */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* 账号可能很长：让它省略号截断，别把卡片撑破（flex 项默认 min-width:auto 不会缩）。 */
 .dchat-botMeta > .dchat-code {

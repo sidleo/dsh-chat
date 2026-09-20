@@ -148,6 +148,14 @@ body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw
     }
   }
 
+  // 拖动排序：模拟一次真实拖放，顺序必须真的变了（排序函数单测覆盖不到"事件接对了没"）。
+  const drag = results.find((frame) => frame.dragResult?.before)?.dragResult ?? null;
+  if (!drag) {
+    failures.push('没能模拟渠道列表的拖动（守门本身失效了）');
+  } else if (JSON.stringify(drag.before) === JSON.stringify(drag.after)) {
+    failures.push(`拖动后顺序没变：${JSON.stringify(drag.before)} → ${JSON.stringify(drag.after)}`);
+  }
+
   if (failures.length > 0) {
     console.error(`布局守门失败（${failures.length} 项）：`);
     for (const failure of failures) console.error(`  ✗ ${failure}`);

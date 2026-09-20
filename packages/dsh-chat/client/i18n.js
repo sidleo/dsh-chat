@@ -50,6 +50,7 @@ export const zh = {
   '渠道设置（任务过程展示等）': '渠道设置（任务过程展示等）',
   '渠道动作按钮（重连等）': '渠道动作按钮（重连等）',
   '命令按钮（新会话/状态/诊断…）': '命令按钮（新会话/状态/诊断…）',
+  '拖动可调整顺序': '拖动可调整顺序',
   '私聊': '私聊',
   '群聊': '群聊',
   '候选': '候选',
@@ -219,6 +220,7 @@ export const en = {
   '主动投递': 'Proactive delivery',
   '让定时任务或 agent 把结果直接发到指定会话。':
     'Let a scheduled job or an agent push results straight into a conversation.',
+  '拖动可调整顺序': 'Drag to reorder',
   '私聊': 'Direct',
   '群聊': 'Group',
   '候选': 'Candidate',

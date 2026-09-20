@@ -422,6 +422,7 @@ function measure() {
       widest,
       sectionChecks,
       dialogs,
+      dragResult,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();
@@ -461,9 +462,45 @@ async function settle() {
       }
     }
   }
+  await simulateDrag();
   for (let index = 0; index < 5; index += 1) await Promise.resolve();
   measure();
   measured += 1;
+}
+
+/**
+ * 拖动排序：模拟一次真实的 HTML5 拖放（dragstart → dragover → drop）。
+ *
+ * 为什么要在这儿做：拖动是纯前端的交互，单测只能覆盖排序函数，覆盖不到"事件接对了没"。
+ * 只跑一次（两轮 settle 各拖一次会把顺序换回去，等于没测）。
+ * 记录拖动前后的顺序，交给守门断言"顺序真的变了"。
+ */
+let dragAttempted = false;
+const dragResult = { before: null, after: null };
+async function simulateDrag() {
+  if (dragAttempted) return;
+  dragAttempted = true;
+  const frame = document.querySelector('[data-scenario="hubPage"][data-frame="360"]')
+    ?? document.querySelector('[data-scenario="hubPage"]');
+  if (!frame) return;
+  const labels = () => [...frame.querySelectorAll('.dchat-rail .dchat-channel strong')]
+    .map((el) => el.textContent);
+  dragResult.before = labels();
+  const items = [...frame.querySelectorAll('.dchat-rail .dchat-channel')];
+  const grip = items[0]?.querySelector('.dchat-grip');
+  const target = items[1];
+  if (!grip || !target || typeof DataTransfer !== 'function') return;
+  const transfer = new DataTransfer();
+  const fire = async (element, type, cancelable = false) => {
+    element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable, dataTransfer: transfer }));
+    // 真实浏览器里这几次事件分属不同任务，中间会渲染；这里也让它落一轮宏任务。
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+  };
+  await fire(grip, 'dragstart');
+  await fire(target, 'dragover', true);
+  await fire(target, 'drop', true);
+  await fire(grip, 'dragend');
+  dragResult.after = labels();
 }
 settle();
 setTimeout(settle, 50);

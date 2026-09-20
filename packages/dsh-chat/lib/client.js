@@ -2346,6 +2346,28 @@ var CSS = `
   padding: 10px 12px;
 }
 /* \u300C\u8BBE\u7F6E\u300D\u6309\u94AE\u6C38\u8FDC\u662F\u5185\u5BB9\u5BBD\u5EA6\uFF1Aflex \u9ED8\u8BA4\u7684 min-width:auto \u4F1A\u8BA9\u5B83\u5728\u7A84\u680F\u91CC\u88AB\u538B\u6210\u4E00\u4E2A\u5B57\u5BBD\u3002 */
+.dchat-grip {
+  /*
+   * \u62D6\u52A8\u628A\u624B\uFF1A\u53EA\u80FD\u62D6\u5B83\uFF0C\u4E0D\u8BA9\u6574\u884C\u53EF\u62D6\u2014\u2014\u6574\u884C\u53EF\u62D6\u4F1A\u4E0E"\u70B9\u4E00\u4E0B\u5207\u6362\u6E20\u9053/\u673A\u5668\u4EBA"\u62A2\u624B\u52BF\uFF0C
+   * \u800C\u4E14 button \u5143\u7D20\u5728\u90E8\u5206\u6D4F\u89C8\u5668\u4E0A draggable \u4E0D\u751F\u6548\u3002\u79FB\u52A8\u7AEF\u4E0D\u652F\u6301 HTML5 \u62D6\u653E\uFF0C
+   * \u6240\u4EE5\u5B83\u53EA\u662F\u684C\u9762\u7AEF\u7684\u4FBF\u5229\u529F\u80FD\uFF08\u987A\u5E8F\u672C\u8EAB\u4E0D\u5F71\u54CD\u4EFB\u4F55\u884C\u4E3A\uFF09\u3002
+   */
+  flex: none;
+  cursor: grab;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: -1px;
+  user-select: none;
+}
+.dchat-grip:active {
+  cursor: grabbing;
+}
+/* \u62D6\u52A8\u7ECF\u8FC7\u7684\u53EF\u843D\u70B9\uFF1A\u53EA\u505A\u9AD8\u4EAE\uFF0C\u4E0D\u6539\u5E03\u5C40\uFF08\u6539\u52A8\u5E03\u5C40\u4F1A\u8BA9\u62D6\u52A8\u624B\u611F\u6296\uFF09\u3002 */
+.dchat-dropTarget {
+  border-color: var(--dsw-alias-brand-primary) !important;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary);
+}
 .dchat-botRow > .dchat-button {
   flex: none;
 }
@@ -2385,6 +2407,14 @@ var CSS = `
 }
 .dchat-botMeta > * {
   white-space: nowrap;
+  /*
+   * \u52A0\u62D6\u52A8\u628A\u624B\u4E4B\u540E\u7A84\u680F\uFF08320px\uFF09\u4F1A\u5DEE\u51E0\u4E2A\u50CF\u7D20\uFF1Aflex \u9879\u9ED8\u8BA4 min-width:auto \u4E0D\u4F1A\u7F29\uFF0C
+   * \u4E8E\u662F\u300C\u6700\u8FD1 09-19 10:21\u300D\u6574\u5757\u9876\u51FA\u53BB\u3002\u5141\u8BB8\u8FD9\u4E9B\u7247\u6BB5\u81EA\u5DF1\u6536\u6210\u7701\u7565\u53F7\uFF0C
+   * \u800C\u4E0D\u662F\u628A\u6574\u884C\u6491\u7834\u2014\u2014\u6807\u9898\u4E0E\u540D\u79F0\u5728\u4E0A\u9762\u4E00\u884C\uFF0C\u4ECD\u7136\u8BFB\u5F97\u5230\u3002
+   */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* \u8D26\u53F7\u53EF\u80FD\u5F88\u957F\uFF1A\u8BA9\u5B83\u7701\u7565\u53F7\u622A\u65AD\uFF0C\u522B\u628A\u5361\u7247\u6491\u7834\uFF08flex \u9879\u9ED8\u8BA4 min-width:auto \u4E0D\u4F1A\u7F29\uFF09\u3002 */
 .dchat-botMeta > .dchat-code {
@@ -3070,6 +3100,7 @@ var zh = {
   "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09": "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09",
   "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09": "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09",
   "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09": "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09",
+  "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F": "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F",
   "\u79C1\u804A": "\u79C1\u804A",
   "\u7FA4\u804A": "\u7FA4\u804A",
   "\u5019\u9009": "\u5019\u9009",
@@ -3229,6 +3260,7 @@ var en = {
   // 主动投递
   "\u4E3B\u52A8\u6295\u9012": "Proactive delivery",
   "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\u3002": "Let a scheduled job or an agent push results straight into a conversation.",
+  "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F": "Drag to reorder",
   "\u79C1\u804A": "Direct",
   "\u7FA4\u804A": "Group",
   "\u5019\u9009": "Candidate",
@@ -3554,11 +3586,89 @@ function installSessionBadges({
 }
 
 // packages/dsh-chat/client/section.js
-var React10 = __toESM(require("react"), 1);
+var React11 = __toESM(require("react"), 1);
 
 // packages/dsh-chat/client/bot-list.js
+var React8 = __toESM(require("react"), 1);
+
+// packages/dsh-chat/client/list-order.js
 var React7 = __toESM(require("react"), 1);
-var h6 = React7.createElement;
+var PREFIX = "dsh-chat:order:";
+var CHANNEL_ORDER_KEY = `${PREFIX}channels`;
+function botOrderKey(channelId) {
+  return `${PREFIX}bots:${channelId}`;
+}
+function storageOf(storage) {
+  if (storage) return storage;
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+function readOrder(key, storage = null) {
+  const store = storageOf(storage);
+  if (!store || typeof store.getItem !== "function") return [];
+  try {
+    const raw = store.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string" && item) : [];
+  } catch {
+    return [];
+  }
+}
+function writeOrder(key, keys, storage = null) {
+  const store = storageOf(storage);
+  if (!store || typeof store.setItem !== "function") return false;
+  try {
+    store.setItem(key, JSON.stringify([...keys]));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function orderedItems(items, order, keyOf) {
+  const list = Array.isArray(items) ? items : [];
+  if (!Array.isArray(order) || order.length === 0) return [...list];
+  const rank = /* @__PURE__ */ new Map();
+  order.forEach((key, index) => rank.set(key, index));
+  return [...list].sort((left, right) => {
+    const a = rank.has(keyOf(left)) ? rank.get(keyOf(left)) : Number.MAX_SAFE_INTEGER;
+    const b = rank.has(keyOf(right)) ? rank.get(keyOf(right)) : Number.MAX_SAFE_INTEGER;
+    return a - b;
+  });
+}
+function moveKey(keys, fromKey, toKey) {
+  const list = Array.isArray(keys) ? [...keys] : [];
+  const from = list.indexOf(fromKey);
+  const to = list.indexOf(toKey);
+  if (from < 0 || to < 0 || from === to) return list;
+  list.splice(from, 1);
+  list.splice(to, 0, fromKey);
+  return list;
+}
+function useListOrder(key, keyOf) {
+  const [order, setOrder] = React7.useState(() => readOrder(key));
+  React7.useEffect(() => {
+    setOrder(readOrder(key));
+  }, [key]);
+  const move = React7.useCallback((items, fromKey, toKey) => {
+    const current = (Array.isArray(items) ? items : []).map(keyOf);
+    const next = moveKey(current, fromKey, toKey);
+    setOrder(next);
+    writeOrder(key, next);
+    return next;
+  }, [key, keyOf]);
+  const reset = React7.useCallback(() => {
+    setOrder([]);
+    writeOrder(key, []);
+  }, [key]);
+  return { order, move, reset };
+}
+
+// packages/dsh-chat/client/bot-list.js
+var h6 = React8.createElement;
 var STATE_TEXT = Object.freeze({
   running: "\u8FD0\u884C\u6B63\u5E38",
   starting: "\u6B63\u5728\u542F\u52A8",
@@ -3592,8 +3702,8 @@ function formatTime(value) {
 function BotList(props) {
   const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React7.useState({ phase: "loading", bots: [], error: null });
-  const load = React7.useCallback(() => {
+  const [state, setState] = React8.useState({ phase: "loading", bots: [], error: null });
+  const load = React8.useCallback(() => {
     setState((current) => ({ ...current, phase: "loading", error: null }));
     chatUi.callChannelRpc(connection, channelId, "connection.status", {}).then((result) => {
       setState({ phase: "ready", bots: normalizeBots(chatUi.unwrapRpc(result)), error: null });
@@ -3601,11 +3711,22 @@ function BotList(props) {
       setState({ phase: "error", bots: [], error: error?.message ?? String(error) });
     });
   }, [channelId, chatUi, connection]);
-  React7.useEffect(() => {
+  React8.useEffect(() => {
     load();
   }, [load]);
   const { Panel: Panel2, EmptyState: EmptyState2, StatusPill: StatusPill2 } = chatUi.components;
-  const bots = state.bots;
+  const botOrder = useListOrder(botOrderKey(channelId), (row) => botKeyOf(row.bot));
+  const rows = React8.useMemo(
+    () => orderedItems(
+      state.bots.map((bot, index) => ({ bot, fallback: `row-${index}` })),
+      botOrder.order,
+      (row) => botKeyOf(row.bot) ?? row.fallback
+    ),
+    [state.bots, botOrder.order]
+  );
+  const dragBotRef = React8.useRef(null);
+  const [dragBot, setDragBot] = React8.useState(null);
+  const [dropBot, setDropBot] = React8.useState(null);
   return h6(
     Panel2,
     {
@@ -3630,7 +3751,7 @@ function BotList(props) {
       )
     },
     state.error ? h6("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
-    state.phase !== "loading" && bots.length === 0 ? h6(EmptyState2, {
+    state.phase !== "loading" && state.bots.length === 0 ? h6(EmptyState2, {
       title: t("\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA"),
       description: t("\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
     }, h6("button", {
@@ -3638,16 +3759,49 @@ function BotList(props) {
       className: "dchat-button",
       onClick: () => onOpenSettings(null)
     }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
-    bots.length > 0 ? h6("ul", { className: "dchat-botList" }, bots.map((bot, index) => {
+    state.bots.length > 0 ? h6("ul", { className: "dchat-botList" }, rows.map((row) => {
+      const { bot } = row;
       const identity = botKeyOf(bot);
+      const rowKey = identity ?? row.fallback;
       const title = bot.name || identity || t("\u672A\u547D\u540D\u673A\u5668\u4EBA");
       const showIdentity = Boolean(identity) && identity !== title;
       return h6(
         "li",
         {
-          key: identity ?? `row-${index}`,
-          className: "dchat-botRow"
+          key: rowKey,
+          className: `dchat-botRow${dropBot === rowKey && dragBot !== rowKey ? " dchat-dropTarget" : ""}`,
+          onDragOver: (event) => {
+            const from = dragBotRef.current;
+            if (!from || from === rowKey) return;
+            event.preventDefault();
+            setDropBot(rowKey);
+          },
+          onDrop: (event) => {
+            event.preventDefault();
+            const from = dragBotRef.current;
+            if (from && from !== rowKey) botOrder.move(rows, from, rowKey);
+            dragBotRef.current = null;
+            setDropBot(null);
+            setDragBot(null);
+          }
         },
+        h6("span", {
+          className: "dchat-grip",
+          draggable: true,
+          title: t("\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F"),
+          "aria-hidden": "true",
+          onDragStart: (event) => {
+            dragBotRef.current = rowKey;
+            setDragBot(rowKey);
+            event.dataTransfer?.setData("text/plain", rowKey);
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          },
+          onDragEnd: () => {
+            dragBotRef.current = null;
+            setDragBot(null);
+            setDropBot(null);
+          }
+        }, "\u22EE\u22EE"),
         h6(
           "div",
           { className: "dchat-botMain" },
@@ -3680,8 +3834,8 @@ function BotList(props) {
 }
 
 // packages/dsh-chat/client/diagnostics.js
-var React8 = __toESM(require("react"), 1);
-var h7 = React8.createElement;
+var React9 = __toESM(require("react"), 1);
+var h7 = React9.createElement;
 var STATE_TEXT2 = Object.freeze({
   running: "\u8FD0\u884C\u4E2D",
   starting: "\u542F\u52A8\u4E2D",
@@ -3703,9 +3857,9 @@ function formatTime2(iso) {
 function DiagnosticsPanel(props) {
   const { connection, chatUi, translate, t: frameworkT } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React8.useState({ loading: true, error: null, info: null });
-  const [openLog, setOpenLog] = React8.useState(null);
-  const load = React8.useCallback(() => {
+  const [state, setState] = React9.useState({ loading: true, error: null, info: null });
+  const [openLog, setOpenLog] = React9.useState(null);
+  const load = React9.useCallback(() => {
     setState((current) => ({ ...current, loading: true, error: null }));
     chatUi.callControlRpc(connection, "diagnostics.read", {}).then((result) => {
       setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
@@ -3713,7 +3867,7 @@ function DiagnosticsPanel(props) {
       setState({ loading: false, error: error?.message ?? String(error), info: null });
     });
   }, [chatUi, connection]);
-  React8.useEffect(() => {
+  React9.useEffect(() => {
     load();
   }, [load]);
   const Panel2 = chatUi.components.Panel;
@@ -3832,8 +3986,8 @@ function DiagnosticsPanel(props) {
 }
 
 // packages/dsh-chat/client/version-panel.js
-var React9 = __toESM(require("react"), 1);
-var h8 = React9.createElement;
+var React10 = __toESM(require("react"), 1);
+var h8 = React10.createElement;
 var CHANNEL_PACKAGE_HINTS = Object.freeze({
   feishu: "dsh-chat-feishu",
   weixin: "dsh-chat-weixin"
@@ -3841,8 +3995,8 @@ var CHANNEL_PACKAGE_HINTS = Object.freeze({
 function VersionPanel(props) {
   const { connection, chatUi, translate, t: frameworkT } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const [state, setState] = React9.useState({ loading: true, error: null, info: null });
-  const load = React9.useCallback(() => {
+  const [state, setState] = React10.useState({ loading: true, error: null, info: null });
+  const load = React10.useCallback(() => {
     setState((current) => ({ ...current, loading: true, error: null }));
     chatUi.callControlRpc(connection, "channel.list", {}).then((result) => {
       setState({ loading: false, error: null, info: chatUi.unwrapRpc(result) });
@@ -3850,7 +4004,7 @@ function VersionPanel(props) {
       setState({ loading: false, error: error?.message ?? String(error), info: null });
     });
   }, [chatUi, connection]);
-  React9.useEffect(() => {
+  React10.useEffect(() => {
     load();
   }, [load]);
   const Panel2 = chatUi.components.Panel;
@@ -3937,7 +4091,7 @@ function VersionPanel(props) {
 }
 
 // packages/dsh-chat/client/section.js
-var h9 = React10.createElement;
+var h9 = React11.createElement;
 var KNOWN_CHANNEL_PACKAGES = Object.freeze([
   "dsh-chat-feishu",
   "dsh-chat-weixin"
@@ -3959,16 +4113,24 @@ function ChannelMark({ entry }) {
 }
 function ChatSettingsSection(props) {
   const { channels, chatUi, translate, t: frameworkT, renderSlot, connection } = props;
-  const [showVersions, setShowVersions] = React10.useState(false);
-  const [showDiagnostics, setShowDiagnostics] = React10.useState(false);
-  const [view, setView] = React10.useState({ kind: "bots", botId: null });
+  const [showVersions, setShowVersions] = React11.useState(false);
+  const [showDiagnostics, setShowDiagnostics] = React11.useState(false);
+  const [view, setView] = React11.useState({ kind: "bots", botId: null });
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
-  const entries = React10.useSyncExternalStore(
+  const entries = React11.useSyncExternalStore(
     (onChange) => channels.subscribe(onChange),
     () => channels.getSnapshot(),
     () => channels.getSnapshot()
   );
-  const [selected, setSelected] = React10.useState(null);
+  const channelOrder = useListOrder(CHANNEL_ORDER_KEY, (entry) => entry?.id);
+  const orderedEntries = React11.useMemo(
+    () => orderedItems(entries, channelOrder.order, (entry) => entry?.id),
+    [entries, channelOrder.order]
+  );
+  const dragChannelRef = React11.useRef(null);
+  const [dragChannel, setDragChannel] = React11.useState(null);
+  const [dropChannel, setDropChannel] = React11.useState(null);
+  const [selected, setSelected] = React11.useState(null);
   const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
   const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
   const openSettings = (botId) => setView({ kind: "channel", botId });
@@ -3990,7 +4152,7 @@ function ChatSettingsSection(props) {
   }
   function channelView() {
     return h9(
-      React10.Fragment,
+      React11.Fragment,
       null,
       typeof renderSlot === "function" ? renderSlot(
         CHANNEL_PAGE_SLOT,
@@ -4033,21 +4195,54 @@ function ChatSettingsSection(props) {
       h9(
         "nav",
         { className: "dchat-rail", role: "tablist", "aria-label": t("\u6E20\u9053\u5BFC\u822A") },
-        entries.map((entry) => h9(
+        orderedEntries.map((entry) => h9(
           "button",
           {
             key: entry.id,
             type: "button",
             role: "tab",
             id: `dchat-tab-${entry.id}`,
-            className: "dchat-channel",
+            className: `dchat-channel${dropChannel === entry.id && dragChannel !== entry.id ? " dchat-dropTarget" : ""}`,
             "aria-selected": entry.id === activeId,
             "aria-controls": `dchat-panel-${entry.id}`,
             onClick: () => {
               setSelected(entry.id);
               backToBots();
+            },
+            // 拖动排序：把手是那个 grip（button 自己 draggable 在部分浏览器上不灵，
+            // 而且整行可拖会与"点一下切换渠道"抢手势）。
+            onDragOver: (event) => {
+              const from = dragChannelRef.current;
+              if (!from || from === entry.id) return;
+              event.preventDefault();
+              setDropChannel(entry.id);
+            },
+            onDrop: (event) => {
+              event.preventDefault();
+              const from = dragChannelRef.current;
+              if (from && from !== entry.id) channelOrder.move(orderedEntries, from, entry.id);
+              dragChannelRef.current = null;
+              setDropChannel(null);
+              setDragChannel(null);
             }
           },
+          h9("span", {
+            className: "dchat-grip",
+            draggable: true,
+            title: t("\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F"),
+            "aria-hidden": "true",
+            onDragStart: (event) => {
+              dragChannelRef.current = entry.id;
+              setDragChannel(entry.id);
+              event.dataTransfer?.setData("text/plain", entry.id);
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+            },
+            onDragEnd: () => {
+              dragChannelRef.current = null;
+              setDragChannel(null);
+              setDropChannel(null);
+            }
+          }, "\u22EE\u22EE"),
           h9(ChannelMark, { entry }),
           h9(
             "span",
