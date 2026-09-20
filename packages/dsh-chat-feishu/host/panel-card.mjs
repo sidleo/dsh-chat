@@ -145,6 +145,30 @@ function button(label, action, type = 'default') {
   };
 }
 
+/**
+ * 渠道自带的动作按钮（飞书：重连）。
+ *
+ * 与面板按钮的区别：它的动作名由**渠道**给（`panel.actions`），点击后走 `panel.act`。
+ * `confirm` 用卡片原生的二次确认弹窗——重连这类动作不该一按就执行（真机上误触就是掉线）。
+ */
+function channelActionButton(item) {
+  return {
+    tag: 'button',
+    type: item.type ?? 'default',
+    width: 'fill',
+    text: { tag: 'plain_text', content: String(item.label ?? '').slice(0, 40) },
+    behaviors: [{ type: 'callback', value: { dsh_action: item.action, dsh_action_label: item.label } }],
+    ...(item.confirm
+      ? {
+        confirm: {
+          title: { tag: 'plain_text', content: item.confirm.title },
+          text: { tag: 'plain_text', content: item.confirm.text },
+        },
+      }
+      : {}),
+  };
+}
+
 function row(elements) {
   return { tag: 'column_set', flex_mode: 'none', columns: elements.map((el) => ({ tag: 'column', width: 'weighted', weight: 1, elements: [el] })) };
 }
@@ -455,6 +479,14 @@ export function panelCard(state, { last = null, at = null } = {}) {
     button('🗜 压缩', 'compact'),
     button('⏹ 停止', 'stop', 'danger'),
   ]));
+  // 渠道动作（飞书：重连）：一行最多 4 个，超了另起一行——与命令按钮同一条规则，不截断。
+  const actionButtons = (state?.actions ?? []).map(channelActionButton);
+  for (let index = 0; index < actionButtons.length; index += 4) {
+    elements.push(row(actionButtons.slice(index, index + 4)));
+  }
+  if (state?.actionsFailed === true) {
+    elements.push({ tag: 'markdown', content: '读不到渠道动作按钮，稍后再试。' });
+  }
 
   return {
     schema: '2.0',
@@ -507,6 +539,20 @@ export function panelPick(action, options) {
   const sentinel = picked === FOLLOW_DEFAULT || (target.field === 'context' && picked === CONTEXT_GLOBAL);
   const value = sentinel ? '' : String(picked);
   return { field: target.field, value, label: target.label };
+}
+
+/**
+ * 渠道动作按钮 → `{ action, label }`。
+ *
+ * 回调里带的是 `dsh_action`（渠道自己的动作名，hub 不解释它），
+ * 认不出来时返回 null（按钮是别人发的/旧版本卡）。
+ */
+export function panelAction(value) {
+  if (typeof value?.dsh_action !== 'string' || !value.dsh_action) return null;
+  const label = typeof value.dsh_action_label === 'string' && value.dsh_action_label
+    ? value.dsh_action_label
+    : value.dsh_action;
+  return { action: value.dsh_action, label };
 }
 
 /** 面板按钮 → 动作：新会话 / 状态 / 命令清单 / 停止 / 回到面板。 */

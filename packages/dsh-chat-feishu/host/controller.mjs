@@ -632,6 +632,72 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         };
       },
 
+      /**
+       * 渠道自带的**动作按钮**（hub 的 `panel.read` 调这里）：卡片上多几个"点一下做事"的按钮。
+       *
+       * 只给属主：重连会断开并重建长连接（期间消息可能延迟），这是机器人级操作。
+       */
+      'panel.actions': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId) {
+          return { ok: false, error: { code: 'chat/bad-request', message: 'panel.actions 需要 botId。', details: {} } };
+        }
+        if (payload.isOwner !== true) return { ok: true, value: { actions: [] } };
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        return {
+          ok: true,
+          value: {
+            actions: [{
+              action: 'reconnect',
+              label: '🔌 重连',
+              type: 'default',
+              // 原生二次确认：重连会短暂断开长连接，别让误触把机器人踢下线。
+              confirm: {
+                title: '重连这台机器人？',
+                text: '会断开并重建长连接，几秒内收不到消息；刚开通的权限/群列表会重新读取。',
+              },
+            }],
+          },
+        };
+      },
+
+      /** 执行渠道自带的面板动作（hub 的 `panel.act` 调这里）。 */
+      'panel.act': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId || typeof payload?.action !== 'string') {
+          return { ok: false, error: { code: 'chat/bad-request', message: 'panel.act 需要 botId 与 action。', details: {} } };
+        }
+        if (payload.isOwner !== true) {
+          return {
+            ok: false,
+            error: { code: 'chat/owner-only', message: '重连是机器人级操作，只有属主能做。', details: {} },
+          };
+        }
+        if (payload.action !== 'reconnect') {
+          return {
+            ok: false,
+            error: { code: 'chat/unknown-action', message: `飞书面板没有这个动作：${payload.action}`, details: {} },
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) return { ok: false, error: { code: 'feishu/unknown-bot', message: `未找到机器人 ${payload.botId}。`, details: {} } };
+        await stopBot(bot.id);
+        // 手动重连是用户"我刚去开了权限"的信号：清掉名字缓存与缺权限的退避（与 RPC 那条路同一套）。
+        resetNameCache(bot.id);
+        const record = await startBot(bot);
+        const status = botStatus(record);
+        return {
+          ok: true,
+          value: {
+            action: 'reconnect',
+            message: status?.connected === true
+              ? '已重连（长连接已重建）。'
+              : `重连完成，但当前未连上${status?.errorMessage ? `：${status.errorMessage}` : ''}。`,
+          },
+        };
+      },
+
       /** 改渠道自带的面板字段（hub 的 `panel.apply` 调这里）。 */
       'panel.apply': async (payload) => {
         if (typeof payload?.botId !== 'string' || !payload.botId || typeof payload?.field !== 'string') {

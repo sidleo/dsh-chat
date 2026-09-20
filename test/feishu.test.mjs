@@ -930,6 +930,76 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
   }
 });
 
+test('控制器：渠道动作按钮只给属主；点重连会真的重建长连接', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-act-'));
+  try {
+    await mkdir(join(dataDir, 'bots'), { recursive: true });
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_act',
+        appId: 'cli_act_12345678',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '动作机器人',
+      }],
+    }), 'utf8');
+
+    const gateway = createFakeGateway();
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: { resolve: async () => ({ value: 'secret-value', configured: true }) },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+        replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+      },
+    });
+    await controller.start();
+    const connectsBefore = gateway.calls.connects;
+
+    const noOwner = await controller.endpoints['panel.actions']({ botId: 'bot_act', isOwner: false });
+    assert.deepEqual(noOwner.value.actions, [], '非属主不给动作按钮');
+    const listed = await controller.endpoints['panel.actions']({ botId: 'bot_act', isOwner: true });
+    assert.deepEqual(listed.value.actions.map((item) => item.action), ['reconnect']);
+    assert.equal(listed.value.actions[0].label, '🔌 重连');
+    assert.ok(listed.value.actions[0].confirm?.title, '重连要带原生二次确认（误触就是掉线）');
+    assert.equal((await controller.endpoints['panel.actions']({ botId: 'bot_none', isOwner: true })).ok, false);
+
+    // 非属主 / 未知动作都被挡下；属主点了才真的重连（断开再连上）。
+    const denied = await controller.endpoints['panel.act']({ botId: 'bot_act', action: 'reconnect' });
+    assert.equal(denied.error.code, 'chat/owner-only');
+    assert.equal((await controller.endpoints['panel.act']({ botId: 'bot_act', action: 'ghost', isOwner: true })).error.code,
+      'chat/unknown-action');
+    assert.equal((await controller.endpoints['panel.act']({ botId: 'bot_act', action: 'reconnect' })).error.code,
+      'chat/owner-only');
+    assert.equal(gateway.calls.disconnects, 0, '被拒时不该碰连接');
+
+    const done = await controller.endpoints['panel.act']({ botId: 'bot_act', action: 'reconnect', isOwner: true });
+    assert.equal(done.ok, true);
+    assert.match(done.value.message, /已重连|未连上/, '要如实报告重连结果');
+    assert.equal(gateway.calls.disconnects, 1, '重连 = 先断开');
+    assert.equal(gateway.calls.connects, connectsBefore + 1, '再连上');
+    const status = await controller.endpoints['connection.status']({});
+    assert.equal(status.value.bots[0].state, 'running');
+
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
 test('控制器：凭据缺失时该机器人标记失败，但不影响其他机器人', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-ctl2-'));
   try {
@@ -2174,8 +2244,10 @@ function makePanelStub({ fail = null } = {}) {
     preset: { current: null, options: [{ id: 'standard' }] },
     workspace: { current: '/ws/a', options: ['/ws/a', '/ws/b'] },
   };
+  const acted = [];
   return {
     applied,
+    acted,
     async read() {
       return state;
     },
@@ -2183,6 +2255,11 @@ function makePanelStub({ fail = null } = {}) {
       applied.push({ field, value, key, isOwner });
       if (fail && fail.field === field) throw Object.assign(new Error(fail.message), { code: fail.code });
       return { field, value, message: `已应用 ${field}=${value}` };
+    },
+    async act({ action, key, isOwner }) {
+      acted.push({ action, key, isOwner });
+      if (fail && fail.action === action) throw Object.assign(new Error(fail.message), { code: fail.code });
+      return { action, message: `已执行 ${action}` };
     },
   };
 }
@@ -2364,6 +2441,83 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.equal(byName.reasoning_pick.options[0].value, '__default__');
   // 当前值要有 ✓ 标记，用户一眼看到现在是什么。
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
+});
+
+test('控制面板卡：渠道动作按钮带原生二次确认；点击走 panel.act 并排在应答之后重画', async () => {
+  const { panelCard, panelAction } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const card = panelCard({
+    bound: true,
+    sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+    actions: [{
+      action: 'reconnect', label: '🔌 重连', type: 'default',
+      confirm: { title: '重连这台机器人？', text: '会断开并重建长连接。' },
+    }],
+  });
+  const buttons = cardElements(card).filter((el) => el.tag === 'button'
+    && el.behaviors?.some((behavior) => behavior.value?.dsh_action === 'reconnect'));
+  assert.equal(buttons.length, 1, '动作按钮要画在卡上');
+  assert.deepEqual(buttons[0].confirm, {
+    title: { tag: 'plain_text', content: '重连这台机器人？' },
+    text: { tag: 'plain_text', content: '会断开并重建长连接。' },
+  }, 'confirm 用卡片原生的二次确认弹窗');
+  assert.deepEqual(panelAction(buttons[0].behaviors[0].value), { action: 'reconnect', label: '🔌 重连' });
+  assert.equal(panelAction({ dsh_panel: 'status' }), null, '面板按钮不是渠道动作');
+  assert.match(JSON.stringify(panelCard({
+    bound: true, sessionId: null,
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] }, workspace: { current: null, options: [] },
+    actionsFailed: true,
+  })), /读不到渠道动作按钮/);
+
+  // 点击：调 panel.act（带上会话与属主身份），并把结果排在应答之后重画。
+  const panel = makePanelStub();
+  panel.read = async () => ({
+    bound: true, sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] }, workspace: { current: null, options: [] },
+    actions: [{ action: 'reconnect', label: '🔌 重连' }],
+  });
+  const app = await makeBridge({ panel });
+  try {
+    const answer = await app.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_card',
+      token: 'tk_1',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_action: 'reconnect', dsh_action_label: '🔌 重连' } },
+    });
+    assert.match(answer.toast.content, /已执行 reconnect/);
+    assert.deepEqual(panel.acted.map((item) => item.action), ['reconnect']);
+    assert.equal(panel.acted[0].isOwner, true, '属主身份要传给渠道（渠道据此判能不能点）');
+    assert.equal(app.gateway.calls.tokenUpdates.length, 0, '应答之前一次都不该更新卡片');
+    await app.flushPaints();
+    assert.equal(app.gateway.calls.tokenUpdates.length, 1, '重画排在应答之后');
+    assert.match(JSON.stringify(app.gateway.calls.tokenUpdates[0].card), /已执行 reconnect/);
+  } finally {
+    await app.cleanup();
+  }
+
+  // 失败：卡片上留 ❌ 一行并写 lastError。
+  const broken = makePanelStub({ fail: { action: 'reconnect', code: 'feishu/boom', message: '连接失败' } });
+  const failing = await makeBridge({ panel: broken });
+  try {
+    const answer = await failing.bridge.handleCardAction({
+      chatId: 'oc_chat',
+      messageId: 'om_card',
+      token: 'tk_2',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_action: 'reconnect', dsh_action_label: '🔌 重连' } },
+    });
+    assert.match(answer.toast.content, /连接失败/);
+    await failing.flushPaints();
+    assert.match(JSON.stringify(failing.gateway.calls.tokenUpdates.at(-1).card), /❌/);
+    assert.match(String(failing.bridge.status().lastError), /控制面板动作失败/);
+  } finally {
+    await failing.cleanup();
+  }
 });
 
 test('控制面板卡：本会话的上下文增强下拉——只决定用哪一份，内容指路设置页', async () => {

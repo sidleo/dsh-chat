@@ -340,6 +340,49 @@ export function createPanelService({
     }
   }
 
+  /**
+   * 渠道自带的**动作按钮**（如飞书的「重连」）。
+   *
+   * 与"面板字段"的区别：字段是"选一个值存起来"，动作是"点一下做一件事"（重连、清缓存…）。
+   * 同样只做形状校验与透传——hub 不认识这些动作的语义，`confirm` 文案也由渠道给
+   * （飞书用卡片原生的二次确认弹窗渲染它）。
+   */
+  async function channelPanelActions({ channelId, botId, key, conversationType, isOwner }) {
+    if (typeof channelRpc !== 'function') return { actions: [], failed: false };
+    try {
+      const result = await channelRpc(channelId, 'panel.actions', {
+        botId, key: key ?? null, conversationType: conversationType ?? null, isOwner: isOwner === true,
+      });
+      if (result?.ok !== true) throw new Error(result?.error?.message ?? '读取失败');
+      const actions = Array.isArray(result.value?.actions) ? result.value.actions : [];
+      return { actions: actions.map(normalizeAction).filter(Boolean), failed: false };
+    } catch (error) {
+      // 渠道没实现这个方法（老版本渠道、或本来就没有动作）不算失败，别刷日志。
+      if (error?.code === 'chat/unknown-method' || /不支持/.test(String(error?.message))) {
+        return { actions: [], failed: false };
+      }
+      logger.warn?.(`[dsh-chat] 读取渠道面板动作失败：${error?.message ?? error}`);
+      return { actions: [], failed: true };
+    }
+  }
+
+  /** 渠道动作的形状归一化：认不出来就丢掉（宁可不画，也不画一个点了没反应的按钮）。 */
+  function normalizeAction(input) {
+    const action = typeof input?.action === 'string' ? input.action.trim() : '';
+    const label = typeof input?.label === 'string' ? input.label.trim() : '';
+    if (!action || !label) return null;
+    const type = ['default', 'primary', 'danger'].includes(input?.type) ? input.type : 'default';
+    const title = typeof input?.confirm?.title === 'string' ? input.confirm.title.trim() : '';
+    const text = typeof input?.confirm?.text === 'string' ? input.confirm.text.trim() : '';
+    return {
+      action,
+      label: label.slice(0, 40),
+      type,
+      // `confirm` 有值 = 点之前先让用户确认一次（危险/影响连接的动作）。
+      confirm: title && text ? { title: title.slice(0, 40), text: text.slice(0, 200) } : null,
+    };
+  }
+
   /** 改渠道自带的面板字段：透传给渠道落盘，失败照旧抛可见错误。 */
   async function applyChannelField({ channelId, botId, key, conversationType, field, value }) {
     if (typeof channelRpc !== 'function') {
@@ -480,7 +523,9 @@ export function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState, sessionState, channelFieldState] = await Promise.all([
+      const [
+        catalog, presetState, selectionState, sessionState, channelFieldState, channelActionState,
+      ] = await Promise.all([
         modelCatalog().catch((error) => {
           logger.warn?.(`[dsh-chat] 读取模型列表失败：${error?.message ?? error}`);
           // 整目录读失败：给这条失败一个显示名，卡片上才不会印出「· ：<原因>」这种无名行。
@@ -497,6 +542,7 @@ export function createPanelService({
           channelId, botId, key, currentSessionId: sessionId, workspace: record.workspace,
         }),
         channelPanelFields({ channelId, botId, key, conversationType }),
+        channelPanelActions({ channelId, botId, key, conversationType, isOwner }),
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -538,6 +584,9 @@ export function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
+        actions: channelActionState.actions,
+        actionsFailed: channelActionState.failed === true,
         // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
         session: {
           current: sessionId,
@@ -564,6 +613,33 @@ export function createPanelService({
             : [],
         },
       };
+    },
+
+    /**
+     * 执行一个**渠道动作**（面板上的按钮，如飞书的「重连」）。
+     *
+     * 与 `apply` 分开：动作没有"值"，而且大多是机器人级操作（重连会断掉当前长连接）——
+     * 渠道自己按 `isOwner` 判定能不能点，hub 只负责透传与把错误抛成可见的 code。
+     *
+     * @param options - { channelId, botId, key, action, isOwner, conversationType }。
+     * @returns `{ action, message }`。
+     */
+    async act({ channelId, botId, key, action, isOwner = false, conversationType = null }) {
+      if (typeof action !== 'string' || !action.trim()) {
+        throw panelError('chat/bad-request', 'act 需要 action。');
+      }
+      if (typeof channelRpc !== 'function') {
+        throw panelError('chat/unknown-action', `这个部署不支持渠道动作：${action}`);
+      }
+      const result = await channelRpc(channelId, 'panel.act', {
+        botId, key: key ?? null, conversationType: conversationType ?? null,
+        action: action.trim(), isOwner: isOwner === true,
+      });
+      if (result?.ok !== true) {
+        throw panelError(result?.error?.code ?? 'chat/action-failed',
+          result?.error?.message ?? `动作「${action}」没执行成功。`);
+      }
+      return { action: action.trim(), message: result.value?.message ?? '已执行。' };
     },
 
     /**

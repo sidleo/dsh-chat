@@ -10,7 +10,7 @@
 import { stat } from 'node:fs/promises';
 
 import { createTurnPresenter } from './turn-presenter.mjs';
-import { panelButton, panelCard, panelPick } from './panel-card.mjs';
+import { panelAction, panelButton, panelCard, panelPick } from './panel-card.mjs';
 
 /** 交付文件的单文件上限（与主动投递一致：飞书上传超过这个量既慢又容易失败）。 */
 const MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
@@ -1180,6 +1180,28 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         const message = error?.message ?? String(error);
         // 这一步同样要排在应答之后，否则 ❌ 也会被还原。
         repaintAfterResponse({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
+        return { toast: { type: 'error', content: message.slice(0, 80) } };
+      }
+    }
+
+    /**
+     * 渠道自带的动作按钮（飞书：重连）：交给渠道自己的 `panel.act` 执行。
+     *
+     * 它是机器人级操作（重连会断开长连接），能不能点由**渠道**按 `isOwner` 判——
+     * hub 只透传，失败照旧把 code/message 原样交给用户看。
+     */
+    const channelAction = panelAction(value);
+    if (channelAction) {
+      logger.info?.(`[dsh-chat-feishu] 控制面板动作：${channelAction.action}（${bot.id}）`);
+      try {
+        const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
+        const message = done?.message ?? '已执行。';
+        repaintAfterResponse({ label: channelAction.label, message, ok: true }, `act:${channelAction.action}`);
+        return { toast: { type: 'success', content: message.slice(0, 80) } };
+      } catch (error) {
+        noteCardError(`控制面板动作失败（${channelAction.action}）`, error?.message ?? error);
+        const message = error?.message ?? String(error);
+        repaintAfterResponse({ label: channelAction.label, message, ok: false }, `act:${channelAction.action}(失败)`);
         return { toast: { type: 'error', content: message.slice(0, 80) } };
       }
     }

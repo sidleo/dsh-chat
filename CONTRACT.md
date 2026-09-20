@@ -172,6 +172,13 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      `session.options` 是**可以切过去的会话**（`[{id,label}]`，label 含标题与相对时间）：
    *      同一工作目录的会话 ∪ 这台机器人其它聊天绑定过的会话，排除空会话与子代理会话；
    *      `session.failed` 表示会话列表**读失败**（此时 options 只含当前绑定，不能显示成"没绑定"）。
+   *      `actions` 是**渠道自带的动作按钮**（如飞书的「🔌 重连」），来自渠道可选方法
+   *      `panel.actions({ botId, key, conversationType, isOwner })` → `{ actions: [{ action, label,
+   *      type?: default|primary|danger, confirm?: { title, text } }] }`。
+   *      与"面板字段"的区别：字段是"选一个值存起来"，动作是"点一下做一件事"。
+   *      形状认不出的条目会被丢掉（宁可不画，也不画一个点了没反应的按钮）；
+   *      `confirm` 由渠道给文案、渠道用平台原生确认弹窗渲染（飞书是 button.confirm）；
+   *      `actionsFailed` 为真表示**读失败**（与"这个渠道没有动作"不是一回事）。
    *      `fields` 是**渠道自带的面板字段**（渠道相关设置，如飞书的「任务过程展示」）：
    *      渠道实现可选方法 `panel.fields({ botId, key, conversationType, isOwner })` 就多一行下拉，
    *      hub 只做形状校验与透传——hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
@@ -186,6 +193,10 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      认不出的键就不提供这一项（宁可不给，也不能照错方向改设置）。
    *      `own` 有值时带 `{ label, fields, guidanceLength }`——卡片据此显示"已有专属设置"，
    *      **内容（来源字段与提示词）在设置页编辑**，卡片只决定"本会话用哪一份"。
+   * act({ channelId, botId, key, action, isOwner, conversationType })
+   *      执行一个**渠道动作**（卡上按 `actions` 画出来的按钮）：调渠道的
+   *      `panel.act({ botId, key, conversationType, action, isOwner }) -> { message }`，
+   *      失败把渠道的 code/message 原样抛出去（渠道自己按 isOwner 判能不能点）。
    * apply({ channelId, botId, key, field, value, isOwner })
    *      field ∈ model | reasoning | preset | workspace | session | context
    *      **不在内置字段表（model/reasoning/preset/workspace/session）里的 field 一律透传给渠道**：
@@ -602,6 +613,12 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 ```
 
 处理器抛错即由 hub 交还 `next()`，浏览器 UI 仍能接管；不属于本插件的会话从不拦截。
+
+**面板动作（`panel.actions` / `panel.act`）**：字段是"选一个值存起来"，动作是"点一下做一件事"
+（飞书的「🔌 重连」= 断开并重建长连接，用户刚去开了权限时用）。按钮由渠道在自己的
+`panel.actions` 里声明，`isOwner` 由 hub 透传、渠道据此决定给不给（重连是机器人级操作），
+点击时 hub 只做透传。危险动作的二次确认由渠道用**平台原生**的确认弹窗渲染
+（`confirm: { title, text }`）——它不是安全边界，真正的门禁在渠道的 `isOwner` 判定与 hub 的属主口径。
 
 **图片与"非视觉模型"**：`session/prompt` 会拿**会话当前模型**的模态直接拒掉图片内容块
 （`session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES`）。`ask()` 认这个拒绝，

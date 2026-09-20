@@ -618,6 +618,84 @@ test('渠道自带的面板字段：读得到就带出来，apply 透传给渠�
   );
 });
 
+test('渠道动作按钮：读出来透传，点击走 panel.act，失败原样抛 code', async () => {
+  const seen = [];
+  const channelRpc = async (channelId, method, payload) => {
+    seen.push({ channelId, method, payload });
+    if (method === 'panel.actions') {
+      return {
+        ok: true,
+        value: {
+          actions: [
+            {
+              action: 'reconnect', label: '🔌 重连', type: 'default',
+              confirm: { title: '重连？', text: '会断开几秒' },
+            },
+            // 形状不对的（没有 label / 动作名非法）要丢掉：不能画出一个点了没反应的按钮。
+            { action: 'ghost' },
+            { label: '没有动作名' },
+            { action: 'bad_type', label: '类型不认识', type: 'rainbow' },
+          ],
+        },
+      };
+    }
+    if (method === 'panel.act') {
+      if (payload.action === 'boom') {
+        return { ok: false, error: { code: 'feishu/boom', message: '连接失败' } };
+      }
+      return { ok: true, value: { action: payload.action, message: '已重连（长连接已重建）。' } };
+    }
+    return { ok: false, error: { code: 'chat/unknown-method', message: '渠道 feishu 不支持这个面板方法。' } };
+  };
+  const { panel } = makePanel({ channelRpc });
+
+  const state = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.deepEqual(state.actions.map((item) => item.action), ['reconnect', 'bad_type'],
+    '只丢掉认不出形状的（没有 label / 没有动作名），type 不认识回落 default');
+  assert.deepEqual(state.actions[0].confirm, { title: '重连？', text: '会断开几秒' });
+  assert.equal(state.actions[1].type, 'default');
+  assert.equal(state.actionsFailed, false);
+  const listed = seen.find((call) => call.method === 'panel.actions');
+  assert.equal(listed.payload.isOwner, true, '属主要透传给渠道（渠道据此决定给不给按钮）');
+  assert.equal(listed.payload.conversationType, null);
+
+  const done = await panel.act({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', action: 'reconnect', isOwner: true,
+  });
+  assert.equal(done.message, '已重连（长连接已重建）。');
+  const acted = seen.find((call) => call.method === 'panel.act');
+  assert.equal(acted.payload.action, 'reconnect');
+  assert.equal(acted.payload.isOwner, true);
+
+  await assert.rejects(
+    () => panel.act({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', action: 'boom', isOwner: true }),
+    (error) => error.code === 'feishu/boom' && /连接失败/.test(error.message),
+  );
+  await assert.rejects(
+    () => panel.act({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', action: '', isOwner: true }),
+    (error) => error.code === 'chat/bad-request',
+  );
+
+  // 渠道没实现这两个方法（老版本渠道）：不算失败、不刷日志。
+  const plain = makePanel({});
+  const none = await plain.panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.deepEqual(none.actions, []);
+  assert.equal(none.actionsFailed, false);
+  assert.deepEqual(plain.warns, []);
+  await assert.rejects(
+    () => plain.panel.act({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', action: 'reconnect' }),
+    (error) => error.code === 'chat/unknown-action',
+  );
+
+  // 真失败（渠道报错）：actionsFailed + warn，用户能看到"读不到"。
+  const failing = makePanel({
+    channelRpc: async () => ({ ok: false, error: { code: 'feishu/boom', message: '渠道炸了' } }),
+  });
+  const broken = await failing.panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.equal(broken.actionsFailed, true);
+  assert.ok(failing.warns.some((line) => line.includes('渠道面板动作')), '真失败要留痕');
+});
+
 test('本会话的上下文增强：跟全局 / 本会话专属 / 套用另一条（只限属主）', async () => {
   const globalDirect = {
     enabled: true, fields: ['senderId', 'senderName'], guidance: '私聊全局提示词',

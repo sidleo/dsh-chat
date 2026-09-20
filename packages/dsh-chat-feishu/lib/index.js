@@ -127079,6 +127079,21 @@ function button(label, action, type = "default") {
     behaviors: [{ type: "callback", value: { dsh_panel: action } }]
   };
 }
+function channelActionButton(item) {
+  return {
+    tag: "button",
+    type: item.type ?? "default",
+    width: "fill",
+    text: { tag: "plain_text", content: String(item.label ?? "").slice(0, 40) },
+    behaviors: [{ type: "callback", value: { dsh_action: item.action, dsh_action_label: item.label } }],
+    ...item.confirm ? {
+      confirm: {
+        title: { tag: "plain_text", content: item.confirm.title },
+        text: { tag: "plain_text", content: item.confirm.text }
+      }
+    } : {}
+  };
+}
 function row(elements) {
   return { tag: "column_set", flex_mode: "none", columns: elements.map((el) => ({ tag: "column", width: "weighted", weight: 1, elements: [el] })) };
 }
@@ -127295,6 +127310,13 @@ ${h(last.message)}`
     button("\u{1F5DC} \u538B\u7F29", "compact"),
     button("\u23F9 \u505C\u6B62", "stop", "danger")
   ]));
+  const actionButtons = (state?.actions ?? []).map(channelActionButton);
+  for (let index = 0; index < actionButtons.length; index += 4) {
+    elements.push(row(actionButtons.slice(index, index + 4)));
+  }
+  if (state?.actionsFailed === true) {
+    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });
+  }
   return {
     schema: "2.0",
     config: { update_multi: true, width_mode: "default" },
@@ -127323,6 +127345,11 @@ function panelPick(action, options) {
   const sentinel = picked === FOLLOW_DEFAULT || target.field === "context" && picked === CONTEXT_GLOBAL;
   const value = sentinel ? "" : String(picked);
   return { field: target.field, value, label: target.label };
+}
+function panelAction(value) {
+  if (typeof value?.dsh_action !== "string" || !value.dsh_action) return null;
+  const label = typeof value.dsh_action_label === "string" && value.dsh_action_label ? value.dsh_action_label : value.dsh_action;
+  return { action: value.dsh_action, label };
 }
 function panelButton(action) {
   const map = {
@@ -128163,6 +128190,21 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09`, error?.message ?? error);
         const message = error?.message ?? String(error);
         repaintAfterResponse({ label: pick2.label, message, ok: false }, `pick:${value.action}(\u5931\u8D25)`);
+        return { toast: { type: "error", content: message.slice(0, 80) } };
+      }
+    }
+    const channelAction = panelAction(value);
+    if (channelAction) {
+      logger.info?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u52A8\u4F5C\uFF1A${channelAction.action}\uFF08${bot.id}\uFF09`);
+      try {
+        const done = await deps.panel.act({ ...panelContext, action: channelAction.action });
+        const message = done?.message ?? "\u5DF2\u6267\u884C\u3002";
+        repaintAfterResponse({ label: channelAction.label, message, ok: true }, `act:${channelAction.action}`);
+        return { toast: { type: "success", content: message.slice(0, 80) } };
+      } catch (error) {
+        noteCardError(`\u63A7\u5236\u9762\u677F\u52A8\u4F5C\u5931\u8D25\uFF08${channelAction.action}\uFF09`, error?.message ?? error);
+        const message = error?.message ?? String(error);
+        repaintAfterResponse({ label: channelAction.label, message, ok: false }, `act:${channelAction.action}(\u5931\u8D25)`);
         return { toast: { type: "error", content: message.slice(0, 80) } };
       }
     }
@@ -130190,6 +130232,67 @@ function createFeishuController({ deps, logger = console, config = {}, internals
               value: values[item.scope],
               options: STEP_PUSH_FIELD_OPTIONS
             }))
+          }
+        };
+      },
+      /**
+       * 渠道自带的**动作按钮**（hub 的 `panel.read` 调这里）：卡片上多几个"点一下做事"的按钮。
+       *
+       * 只给属主：重连会断开并重建长连接（期间消息可能延迟），这是机器人级操作。
+       */
+      "panel.actions": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId) {
+          return { ok: false, error: { code: "chat/bad-request", message: "panel.actions \u9700\u8981 botId\u3002", details: {} } };
+        }
+        if (payload.isOwner !== true) return { ok: true, value: { actions: [] } };
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        return {
+          ok: true,
+          value: {
+            actions: [{
+              action: "reconnect",
+              label: "\u{1F50C} \u91CD\u8FDE",
+              type: "default",
+              // 原生二次确认：重连会短暂断开长连接，别让误触把机器人踢下线。
+              confirm: {
+                title: "\u91CD\u8FDE\u8FD9\u53F0\u673A\u5668\u4EBA\uFF1F",
+                text: "\u4F1A\u65AD\u5F00\u5E76\u91CD\u5EFA\u957F\u8FDE\u63A5\uFF0C\u51E0\u79D2\u5185\u6536\u4E0D\u5230\u6D88\u606F\uFF1B\u521A\u5F00\u901A\u7684\u6743\u9650/\u7FA4\u5217\u8868\u4F1A\u91CD\u65B0\u8BFB\u53D6\u3002"
+              }
+            }]
+          }
+        };
+      },
+      /** 执行渠道自带的面板动作（hub 的 `panel.act` 调这里）。 */
+      "panel.act": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId || typeof payload?.action !== "string") {
+          return { ok: false, error: { code: "chat/bad-request", message: "panel.act \u9700\u8981 botId \u4E0E action\u3002", details: {} } };
+        }
+        if (payload.isOwner !== true) {
+          return {
+            ok: false,
+            error: { code: "chat/owner-only", message: "\u91CD\u8FDE\u662F\u673A\u5668\u4EBA\u7EA7\u64CD\u4F5C\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u505A\u3002", details: {} }
+          };
+        }
+        if (payload.action !== "reconnect") {
+          return {
+            ok: false,
+            error: { code: "chat/unknown-action", message: `\u98DE\u4E66\u9762\u677F\u6CA1\u6709\u8FD9\u4E2A\u52A8\u4F5C\uFF1A${payload.action}`, details: {} }
+          };
+        }
+        await configStore.load();
+        const bot = configStore.get(payload.botId);
+        if (!bot) return { ok: false, error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} } };
+        await stopBot(bot.id);
+        resetNameCache(bot.id);
+        const record = await startBot(bot);
+        const status2 = botStatus(record);
+        return {
+          ok: true,
+          value: {
+            action: "reconnect",
+            message: status2?.connected === true ? "\u5DF2\u91CD\u8FDE\uFF08\u957F\u8FDE\u63A5\u5DF2\u91CD\u5EFA\uFF09\u3002" : `\u91CD\u8FDE\u5B8C\u6210\uFF0C\u4F46\u5F53\u524D\u672A\u8FDE\u4E0A${status2?.errorMessage ? `\uFF1A${status2.errorMessage}` : ""}\u3002`
           }
         };
       },

@@ -2734,6 +2734,41 @@ function createPanelService({
       return { fields: [], failed: true };
     }
   }
+  async function channelPanelActions({ channelId, botId, key, conversationType, isOwner }) {
+    if (typeof channelRpc !== "function") return { actions: [], failed: false };
+    try {
+      const result = await channelRpc(channelId, "panel.actions", {
+        botId,
+        key: key ?? null,
+        conversationType: conversationType ?? null,
+        isOwner: isOwner === true
+      });
+      if (result?.ok !== true) throw new Error(result?.error?.message ?? "\u8BFB\u53D6\u5931\u8D25");
+      const actions = Array.isArray(result.value?.actions) ? result.value.actions : [];
+      return { actions: actions.map(normalizeAction).filter(Boolean), failed: false };
+    } catch (error) {
+      if (error?.code === "chat/unknown-method" || /不支持/.test(String(error?.message))) {
+        return { actions: [], failed: false };
+      }
+      logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6E20\u9053\u9762\u677F\u52A8\u4F5C\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return { actions: [], failed: true };
+    }
+  }
+  function normalizeAction(input) {
+    const action = typeof input?.action === "string" ? input.action.trim() : "";
+    const label = typeof input?.label === "string" ? input.label.trim() : "";
+    if (!action || !label) return null;
+    const type = ["default", "primary", "danger"].includes(input?.type) ? input.type : "default";
+    const title = typeof input?.confirm?.title === "string" ? input.confirm.title.trim() : "";
+    const text = typeof input?.confirm?.text === "string" ? input.confirm.text.trim() : "";
+    return {
+      action,
+      label: label.slice(0, 40),
+      type,
+      // `confirm` 有值 = 点之前先让用户确认一次（危险/影响连接的动作）。
+      confirm: title && text ? { title: title.slice(0, 40), text: text.slice(0, 200) } : null
+    };
+  }
   async function applyChannelField({ channelId, botId, key, conversationType, field, value }) {
     if (typeof channelRpc !== "function") {
       throw panelError("chat/unknown-field", `\u9762\u677F\u4E0D\u652F\u6301\u8FD9\u4E2A\u64CD\u4F5C\uFF1A${field}`);
@@ -2837,7 +2872,14 @@ function createPanelService({
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
-      const [catalog, presetState, selectionState, sessionState, channelFieldState] = await Promise.all([
+      const [
+        catalog,
+        presetState,
+        selectionState,
+        sessionState,
+        channelFieldState,
+        channelActionState
+      ] = await Promise.all([
         modelCatalog2().catch((error) => {
           logger.warn?.(`[dsh-chat] \u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return { options: [], hostDefault: null, failures: [{ id: "", name: "\u6A21\u578B\u76EE\u5F55", message: String(error?.message ?? error) }] };
@@ -2854,7 +2896,8 @@ function createPanelService({
           currentSessionId: sessionId,
           workspace: record.workspace
         }),
-        channelPanelFields({ channelId, botId, key, conversationType })
+        channelPanelFields({ channelId, botId, key, conversationType }),
+        channelPanelActions({ channelId, botId, key, conversationType, isOwner })
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -2886,6 +2929,9 @@ function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
+        actions: channelActionState.actions,
+        actionsFailed: channelActionState.failed === true,
         // 「会话」下拉：当前聊天绑定到哪个会话、可以切到哪些。
         session: {
           current: sessionId,
@@ -2910,6 +2956,37 @@ function createPanelService({
           options: isOwner === true && !String(key ?? "").startsWith("group:") ? workspaceCandidates({ record, sessionStore, channelId, botId }) : []
         }
       };
+    },
+    /**
+     * 执行一个**渠道动作**（面板上的按钮，如飞书的「重连」）。
+     *
+     * 与 `apply` 分开：动作没有"值"，而且大多是机器人级操作（重连会断掉当前长连接）——
+     * 渠道自己按 `isOwner` 判定能不能点，hub 只负责透传与把错误抛成可见的 code。
+     *
+     * @param options - { channelId, botId, key, action, isOwner, conversationType }。
+     * @returns `{ action, message }`。
+     */
+    async act({ channelId, botId, key, action, isOwner = false, conversationType = null }) {
+      if (typeof action !== "string" || !action.trim()) {
+        throw panelError("chat/bad-request", "act \u9700\u8981 action\u3002");
+      }
+      if (typeof channelRpc !== "function") {
+        throw panelError("chat/unknown-action", `\u8FD9\u4E2A\u90E8\u7F72\u4E0D\u652F\u6301\u6E20\u9053\u52A8\u4F5C\uFF1A${action}`);
+      }
+      const result = await channelRpc(channelId, "panel.act", {
+        botId,
+        key: key ?? null,
+        conversationType: conversationType ?? null,
+        action: action.trim(),
+        isOwner: isOwner === true
+      });
+      if (result?.ok !== true) {
+        throw panelError(
+          result?.error?.code ?? "chat/action-failed",
+          result?.error?.message ?? `\u52A8\u4F5C\u300C${action}\u300D\u6CA1\u6267\u884C\u6210\u529F\u3002`
+        );
+      }
+      return { action: action.trim(), message: result.value?.message ?? "\u5DF2\u6267\u884C\u3002" };
     },
     /**
      * 应用一个选择。
