@@ -752,6 +752,10 @@ test('/diag：只有属主能看；把连接状态、最近错误与日志尾部
             lastHandledAt: '2026-09-19T15:40:02.000Z', errorMessage: null,
           }],
         }],
+        deferred: [{
+          channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', sessionId: 'session-1',
+          turn: 1, timedOutAt: Date.now(), attempts: 2, lastError: '平台 500',
+        }],
         logs: [
           { path: '/tmp/data/logs/hub.log', exists: true, lines: ['INFO 正常一行', 'WARN 读不到模型列表', 'ERROR 卡片更新失败'] },
           { path: '/tmp/data/logs/feishu.log', exists: false, lines: [] },
@@ -772,4 +776,6 @@ test('/diag：只有属主能看；把连接状态、最近错误与日志尾部
   assert.match(report.reply, /ERROR 卡片更新失败/);
   assert.doesNotMatch(report.reply, /INFO 正常一行/, '正常行不占篇幅');
   assert.match(report.reply, /feishu\.log：还没有日志文件/);
+  assert.match(report.reply, /待补发：1 条/, '超时后还没补发的记录要出现在诊断里');
+  assert.match(report.reply, /p2p:ou_a 会话=session-1 · ⚠️ 平台 500/);
 });

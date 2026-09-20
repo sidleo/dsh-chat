@@ -26,6 +26,8 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | 微信 iLink 协议客户端（扫码登录、长轮询、发消息、输入状态） | P3 ✅ | 协议无公开文档，只能按参考实现的协议行为重写客户端；已收窄到私聊文本链路，文件头注明出处（图片/文件的 AES 与 CDN 上传留到 P5） |
 | ~~`@larksuiteoapi/node-sdk@1.73.0` WSClient 生命周期构建期补丁~~ | — | **不移植**：改为让 SDK 永远不走那条有缺陷的路径——网关显式传 `handshakeTimeoutMs: 0`（该超时路径会先摘掉 socket 的全部 error 监听再 terminate，随后任何 error 都会变成未捕获异常），握手超时与重连由 `lark-gateway.mjs` 自己用 Promise.race + 丢弃旧 WSClient 实现。少一处需要跟着 SDK 版本维护的源码补丁 |
 
+| 超时后的延迟交付（deferred delivery） | P5⁺ ✅ | **收窄重写**（`packages/dsh-chat/host/deferred.mjs`，未逐行移植）：沿用"超时只登记、之后有界复查、拿到结果补发"的思路与"不承诺恰好一次"的语义，复查节奏与字段形状按本仓库定；probe 由 hub 提供（`probeTurn`），渠道只注册 `deliver` |
+
 移植进来的文件必须在文件头写明来源与 MIT 许可，并在 `THIRD_PARTY_NOTICES.md` 登记。
 
 ## 参考过的具体实现（逐条对照）
@@ -36,6 +38,7 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | 同上 | `src/channels/feishu/bridge.mjs` 的 `onCardAction`（`_pick` 归一化） | 单选值在 `action.option`、多选在 `action.options`（可能是逗号串）、有的版本在 `form_value[组件名]`；我们把三种都归一化进 `action.options` |
 | `bridge.mjs` 的 `commandAccessFor` | 同上 `evaluateInboundAccess(..., isCommand: true)` | **卡片动作与手打同一条命令门禁**；提问/审批按钮是交互回传、不走命令门禁 |
 | `packages/dsh-chat/host/panel.mjs` | `bridge.mjs` 的 `#handleModelSelect` / `#switchWorkspace` / `#bindSession` | 语义分层：模型/推理是会话级、工作区/预设是机器人级（只对新会话生效） |
+| `packages/dsh-chat/host/deferred.mjs` | `src/channels/shared/deferred-delivery.mjs`（思路） | 超时 ≠ 结束：把"待交付"落盘、有界复查、空闲且有正文才补发；会话没了/换绑/超时上限即作废。我们收窄成"probe 由 hub 给、渠道只注册 deliver"，并明确写出**不承诺恰好一次** |
 
 不移植的部分：dsh-im 用内存 `#cardKeys`（messageId → 会话）做路由，重启后旧卡提示"菜单已过期，
 请回复 /m 重开"；我们从回调里的 chatId + operator 反推会话键，**重启后卡片仍可用**。

@@ -238,6 +238,26 @@ export function createWeixinRuntime({
     }
   }
 
+  /**
+   * 延迟交付：`ask()` 超时之后那一轮要是自己跑完了，hub 会把结果交回这里补发。
+   *
+   * 微信复用**该用户最近一次记下的 context token**（收消息时存下来的）——iLink 的回复要带它；
+   * 没有 token 就发不出去，这时如实抛错，让 hub 记 `lastError`（不静默）。
+   */
+  deps.deferred?.register?.({
+    channelId: deps.channelId,
+    botId: account.botId,
+    deliver: async ({ key, text }) => {
+      const userId = key.startsWith('p2p:') ? key.slice('p2p:'.length) : key;
+      const contextToken = state.contextToken?.(userId) ?? null;
+      if (!contextToken) {
+        throw new Error(`微信没有 ${userId} 的 context token，补发不了（等他再发一条消息后重试）`);
+      }
+      await reply(userId, `（上一轮超时之后跑完了，补发结果）\n\n${text}`, contextToken, null, null);
+      logger.info?.(`[dsh-chat-weixin] 延迟交付已补发：${account.botId} ${key} ${text.length} 字`);
+    },
+  });
+
   async function handleMessage(message, signal) {
     // message_type 2 是自己发出去的（服务端回显），必须忽略。
     if (message?.message_type === 2) return;

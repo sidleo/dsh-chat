@@ -195,6 +195,8 @@ async function makeRuntime({
   askResult = { text: '答案', reason: { kind: 'completed' } },
   onAsk = () => {},
   fetchImpl = null,
+  /** 采集渠道注册的补发函数：`{ channelId, botId, deliver }`。 */
+  deferred = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-weixin-'));
   const account = {
@@ -241,6 +243,7 @@ async function makeRuntime({
     accessPolicy,
     interactions,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
+    ...(deferred ? { deferred: { register: (options) => deferred.push(options) } } : {}),
     sessions: {
       ask: async (options) => {
         onAsk(options);
@@ -1192,6 +1195,35 @@ test('交互回传：提问发给微信用户；用户回复被认领为答案�
 
     app.runtime.stop?.();
     void app;
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('延迟交付：微信按该用户最近一次的 context token 补发（没有 token 就如实报错）', async () => {
+  const registrations = [];
+  const app = await makeRuntime({ deferred: registrations });
+  try {
+    assert.equal(registrations.length, 1, '建桥时要注册补发函数');
+    assert.equal(registrations[0].channelId, 'weixin');
+    assert.equal(registrations[0].botId, 'wx_test');
+
+    // 没收到过这个人的消息 → 没有 context token → 补发不了，必须抛错（不能静默丢）。
+    await assert.rejects(
+      () => registrations[0].deliver({ key: 'p2p:u@im.wechat', text: '答案' }),
+      /context token/,
+    );
+
+    // 他先发过一条消息（收消息时记下了 context token），之后就能补发。
+    await app.runtime.accept(inbound(), new AbortController().signal);
+    const sent = app.client.calls.texts.length;
+    await registrations[0].deliver({ key: 'p2p:u@im.wechat', text: '超时之后才跑完的答案' });
+    const texts = app.client.calls.texts.slice(sent);
+    assert.equal(texts.length, 1);
+    assert.equal(texts[0].toUserId, 'u@im.wechat');
+    assert.equal(texts[0].contextToken, 'ctx-1', 'iLink 的回复必须带 context token');
+    assert.match(texts[0].text, /^（上一轮超时之后跑完了，补发结果）/);
+    assert.match(texts[0].text, /超时之后才跑完的答案/);
   } finally {
     await app.cleanup();
   }

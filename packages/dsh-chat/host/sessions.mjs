@@ -156,7 +156,7 @@ function historyMessagesOf(records, limit) {
  * @returns 会话桥。
  */
 export function createSessionBridge({
-  ctx, logger = console, store, settings = null, guidance, interactions,
+  ctx, logger = console, store, settings = null, guidance, interactions, deferred = null,
 }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== 'function') {
@@ -479,6 +479,9 @@ export function createSessionBridge({
   async function cancel({ channelId, botId, key, signal }) {
     const bound = store?.get(channelId, botId, key);
     activeTurns.get(`${channelId}:${botId}:${key}`)?.abort?.();
+    // 用户明确停了：这条会话的待交付记录一并作废，别过一会儿又冒出一条补充结果。
+    await deferred?.forgetKey?.({ channelId, botId, key, reason: '用户 /stop' })
+      ?.catch?.((error) => logger.warn?.(`[dsh-chat] 作废待交付记录失败：${error?.message ?? error}`));
     if (!bound) return { accepted: false };
     try {
       return await invoke('session', 'cancel', { request: { sessionId: bound.sessionId } }, signal);
@@ -566,6 +569,7 @@ export function createSessionBridge({
      * 两条失败形态都要认：① 提示词收据直接抛 `session/model-unavailable`；
      * ② 事件流以 error 收尾（`reason.kind === 'error'`）。
      */
+    const startedAt = Date.now();
     let recovered = null;
     try {
       const runOnce = async () => {
@@ -594,6 +598,26 @@ export function createSessionBridge({
         if (target) {
           recovered = { failed, target };
           result = await runOnce();
+        }
+      }
+      /**
+       * 超时 ≠ 结束：那一轮**可能之后才跑完**（"回合跑完但用户没收到"这条故障线栽过两次）。
+       * 这里只登记一条待交付记录，交给延迟交付服务有界复查；不重问、不重跑。
+       */
+      if (deferred && result?.reason?.kind === 'timeout' && typeof result.sessionId === 'string') {
+        try {
+          await deferred.schedule({
+            channelId,
+            botId,
+            key,
+            sessionId: result.sessionId,
+            turn: result.reason.turn ?? null,
+            startedAt,
+            reason: 'timeout',
+          });
+        } catch (error) {
+          // 登记失败不该把超时结果本身弄丢：记日志，用户仍会收到"回合未正常结束"。
+          logger.warn?.(`[dsh-chat] 登记延迟交付失败：${error?.message ?? error}`);
         }
       }
       if (!recovered) return result;
@@ -705,7 +729,8 @@ export function createSessionBridge({
             finishTurn({
               sessionId,
               text: '',
-              reason: { kind: 'timeout', idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+              // 带上 turn：超时后要靠它复查"这一轮"的终态（延迟交付）。
+              reason: { kind: 'timeout', turn: currentTurn, idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
               tools: [...tools],
               aborted: true,
             });
@@ -720,7 +745,10 @@ export function createSessionBridge({
       finishTurn({
         sessionId,
         text: '',
-        reason: { kind: 'timeout', timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
+        reason: {
+          kind: 'timeout', turn: currentTurn,
+          timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt,
+        },
         tools: [...tools],
         aborted: true,
       });
@@ -1118,6 +1146,29 @@ export function createSessionBridge({
     rename,
     markSessionChannel,
     boundSessions,
+    /**
+     * 逐轮终态探针（延迟交付用）：会话在不在、还在跑吗、最后一条助手正文是什么。
+     *
+     * 只读叶子字段，不碰活对象；会话没了返回 `exists:false`，还让调用方据此清记录。
+     */
+    probeTurn: async ({ channelId, botId, key, sessionId, maxMessages = 4 } = {}) => {
+      const listed = await invoke('session', 'list', { _request: {} });
+      const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+      if (!item) return { exists: false, running: false, text: '' };
+      if (item.running === true) return { exists: true, running: true, text: '' };
+      /**
+       * 这个聊天必须**仍然绑着原会话**才读历史并补发：换绑/解绑之后，
+       * 把旧会话的结果发到新会话里是错的（上游同一条规则）。
+       */
+      const bound = store?.get?.(channelId, botId, key);
+      if (!bound || bound.sessionId !== sessionId) {
+        return { exists: true, running: false, text: '', rebound: true };
+      }
+      const { messages } = await history({ channelId, botId, key, maxMessages });
+      const last = [...messages].reverse()
+        .find((row) => row.role === 'assistant' && String(row.text ?? '').trim());
+      return { exists: true, running: false, text: last?.text ?? '' };
+    },
     reset,
     history,
     runCommand,

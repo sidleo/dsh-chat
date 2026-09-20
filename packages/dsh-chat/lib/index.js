@@ -12,7 +12,7 @@ var __export = (target, all) => {
 
 // packages/dsh-chat/host/plugin.mjs
 import { stat as stat5 } from "node:fs/promises";
-import { join as join5, resolve as resolve3 } from "node:path";
+import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
@@ -1422,6 +1422,12 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
       }
       const lines = ["\u{1FA7A} \u8BCA\u65AD"];
       if (data?.dataDir) lines.push(`\u6570\u636E\u76EE\u5F55\uFF1A${data.dataDir}`);
+      if ((data?.deferred ?? []).length > 0) {
+        lines.push(`\u5F85\u8865\u53D1\uFF1A${data.deferred.length} \u6761`);
+        for (const row of data.deferred) {
+          lines.push(`  \xB7 ${clipText(row.key)} \u4F1A\u8BDD=${clipText(row.sessionId)}${row.lastError ? ` \xB7 \u26A0\uFE0F ${clipText(row.lastError)}` : ""}`);
+        }
+      }
       for (const channel of data?.channels ?? []) {
         lines.push("", `\u6E20\u9053 ${channel.label ?? channel.id}\uFF1A${channel.status ?? "\u672A\u77E5"}${channel.error ? `\uFF08\u6700\u8FD1\u9519\u8BEF\uFF1A${clipText(channel.error)}\uFF09` : ""}`);
         if (channel.statusError) lines.push(`  \u26A0\uFE0F \u72B6\u6001\u8BFB\u53D6\u5931\u8D25\uFF1A${clipText(channel.statusError)}`);
@@ -1859,6 +1865,216 @@ ${result.text}` : ""}`;
   });
 }
 
+// packages/dsh-chat/host/deferred.mjs
+import { join as join2 } from "node:path";
+var FIRST_CHECK_MS = 6e4;
+var INTERVAL_MS = 3e4;
+var MAX_AGE_MS = 30 * 6e4;
+var MAX_PER_KEY = 2;
+var MAX_TEXT = 8e3;
+function createDeferredDelivery({
+  dataDir,
+  logger = console,
+  probe,
+  firstCheckMs = FIRST_CHECK_MS,
+  intervalMs = INTERVAL_MS,
+  maxAgeMs = MAX_AGE_MS
+} = {}) {
+  if (typeof dataDir !== "string" || !dataDir.trim()) {
+    throw new TypeError("\u5EF6\u8FDF\u4EA4\u4ED8\u9700\u8981 dataDir\u3002");
+  }
+  if (typeof probe !== "function") throw new TypeError("\u5EF6\u8FDF\u4EA4\u4ED8\u9700\u8981 probe\u3002");
+  const store = createJsonStore({
+    path: join2(dataDir, "deferred.json"),
+    empty: () => ({ version: 1, records: [] }),
+    normalize: (value) => {
+      const source = value && typeof value === "object" && Array.isArray(value.records) ? value : { records: [] };
+      return {
+        version: 1,
+        records: source.records.filter((row) => row && typeof row === "object" && typeof row.id === "string" && typeof row.sessionId === "string" && typeof row.channelId === "string" && typeof row.botId === "string" && typeof row.key === "string").map((row) => ({
+          id: row.id,
+          channelId: row.channelId,
+          botId: row.botId,
+          key: row.key,
+          sessionId: row.sessionId,
+          turn: Number.isInteger(row.turn) ? row.turn : null,
+          startedAt: Number.isFinite(row.startedAt) ? row.startedAt : null,
+          timedOutAt: Number.isFinite(row.timedOutAt) ? row.timedOutAt : Date.now(),
+          reason: typeof row.reason === "string" ? row.reason : "timeout",
+          attempts: Number.isInteger(row.attempts) ? row.attempts : 0,
+          lastError: typeof row.lastError === "string" ? row.lastError : null
+        }))
+      };
+    },
+    logger,
+    label: "\u5EF6\u8FDF\u4EA4\u4ED8\u8BB0\u5F55"
+  });
+  const deliverers = /* @__PURE__ */ new Map();
+  const timers = /* @__PURE__ */ new Map();
+  let stopped = false;
+  let seq = 0;
+  const keyOf = (row) => `${row.channelId}:${row.botId}`;
+  const find = (id) => store.snapshot().records.find((row) => row.id === id) ?? null;
+  function clearTimer(id) {
+    const timer = timers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      timers.delete(id);
+    }
+  }
+  async function persist(records) {
+    await store.update(() => ({ version: 1, records }));
+  }
+  async function drop(id, why) {
+    clearTimer(id);
+    const row = find(id);
+    if (!row) return;
+    await persist(store.snapshot().records.filter((item) => item.id !== id));
+    logger.info?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u8BB0\u5F55\u5DF2\u6E05\u7406\uFF08${why}\uFF09\uFF1A${row.channelId}/${row.botId} ${row.key} \u4F1A\u8BDD=${row.sessionId}`);
+  }
+  async function check(id) {
+    if (stopped) return;
+    const row = find(id);
+    if (!row) {
+      clearTimer(id);
+      return;
+    }
+    const age = Date.now() - (row.timedOutAt ?? Date.now());
+    let state = null;
+    try {
+      state = await probe({ record: row });
+    } catch (error) {
+      logger.warn?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u590D\u67E5\u5931\u8D25\uFF08${row.key}\uFF09\uFF1A${error?.message ?? error}`);
+      await bump(id, { lastError: error?.message ?? String(error) });
+    }
+    if (state?.exists === false) {
+      await drop(id, "\u4F1A\u8BDD\u5DF2\u4E0D\u5B58\u5728");
+      return;
+    }
+    if (state?.rebound === true) {
+      await drop(id, "\u804A\u5929\u5DF2\u6362\u7ED1\u5230\u522B\u7684\u4F1A\u8BDD");
+      return;
+    }
+    if (state && state.running !== true) {
+      const text = typeof state.text === "string" ? state.text.trim() : "";
+      if (text) {
+        const deliver = deliverers.get(keyOf(row));
+        if (typeof deliver !== "function") {
+          logger.warn?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u8FD8\u6CA1\u6709\u53EF\u7528\u7684\u53D1\u9001\u5668\uFF08${keyOf(row)}\uFF09\uFF0C\u7EE7\u7EED\u7B49\u5F85`);
+          await bump(id, {});
+        } else {
+          try {
+            await deliver({ key: row.key, text: text.slice(0, MAX_TEXT), record: row });
+            logger.info?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u5DF2\u8865\u53D1\uFF1A${row.channelId}/${row.botId} ${row.key} ${text.length} \u5B57\uFF08\u8D85\u65F6\u540E ${Math.round(age / 1e3)} \u79D2\uFF09`);
+            await drop(id, "\u5DF2\u8865\u53D1");
+            return;
+          } catch (error) {
+            logger.warn?.(`[dsh-chat] \u5EF6\u8FDF\u4EA4\u4ED8\u8865\u53D1\u5931\u8D25\uFF08${row.key}\uFF09\uFF1A${error?.message ?? error}`);
+            await bump(id, { lastError: error?.message ?? String(error) });
+          }
+        }
+      } else {
+        await bump(id, {});
+      }
+    } else {
+      await bump(id, {});
+    }
+    if (Date.now() - (row.timedOutAt ?? Date.now()) >= maxAgeMs) {
+      await drop(id, "\u8D85\u8FC7\u76EF\u5B88\u65F6\u9650");
+      return;
+    }
+    arm(id, intervalMs);
+  }
+  async function bump(id, patch) {
+    const records = store.snapshot().records.map((row) => row.id === id ? { ...row, attempts: (row.attempts ?? 0) + 1, ...patch } : row);
+    await persist(records);
+  }
+  function arm(id, delay) {
+    clearTimer(id);
+    if (stopped) return;
+    const timer = setTimeout(() => {
+      void check(id);
+    }, delay);
+    timer.unref?.();
+    timers.set(id, timer);
+  }
+  return {
+    path: store.path,
+    /** 等磁盘文档就绪（与其它 store 一致）。 */
+    ready: () => store.ready(),
+    /**
+     * 渠道注册"怎么把补发内容发回这个会话"。同一 channel/bot 后注册的覆盖先前的。
+     * 注册时顺手把该 bot 的既有记录重新盯起来（重启后的续盯）。
+     */
+    register({ channelId, botId, deliver }) {
+      if (typeof channelId !== "string" || !channelId) throw new TypeError("register \u9700\u8981 channelId\u3002");
+      if (typeof botId !== "string" || !botId) throw new TypeError("register \u9700\u8981 botId\u3002");
+      if (typeof deliver !== "function") throw new TypeError("register \u9700\u8981 deliver \u51FD\u6570\u3002");
+      deliverers.set(`${channelId}:${botId}`, deliver);
+      for (const row of store.snapshot().records) {
+        if (row.channelId === channelId && row.botId === botId && !timers.has(row.id)) {
+          arm(row.id, firstCheckMs);
+        }
+      }
+    },
+    registerCount: () => deliverers.size,
+    /**
+     * 登记一条待交付记录（超时那一刻调用）。
+     *
+     * @param record - `{ channelId, botId, key, sessionId, turn?, startedAt?, reason? }`。
+     * @returns 记录 id。
+     */
+    async schedule({ channelId, botId, key, sessionId, turn = null, startedAt = null, reason = "timeout" }) {
+      await store.ready();
+      seq += 1;
+      const id = `df-${Date.now().toString(36)}-${seq}`;
+      const row = {
+        id,
+        channelId,
+        botId,
+        key,
+        sessionId,
+        turn,
+        startedAt,
+        timedOutAt: Date.now(),
+        reason,
+        attempts: 0,
+        lastError: null
+      };
+      const records = store.snapshot().records;
+      const sameKey = (item) => item.channelId === channelId && item.botId === botId && item.key === key;
+      const mine = records.filter(sameKey);
+      const kept = [...mine, row].slice(-MAX_PER_KEY);
+      for (const dropped of mine) {
+        if (!kept.includes(dropped)) clearTimer(dropped.id);
+      }
+      await persist([...records.filter((item) => !sameKey(item)), ...kept]);
+      logger.info?.(`[dsh-chat] \u8FD9\u4E00\u8F6E\u8D85\u65F6\u4E86\uFF0C\u767B\u8BB0\u5F85\u4EA4\u4ED8\uFF1A${channelId}/${botId} ${key} \u4F1A\u8BDD=${sessionId} turn=${turn ?? "?"}\uFF08${reason}\uFF09\uFF0C${Math.round(firstCheckMs / 1e3)} \u79D2\u540E\u5F00\u59CB\u590D\u67E5`);
+      arm(id, firstCheckMs);
+      return id;
+    },
+    /** 立刻复查一条（测试与排查用）。 */
+    checkNow: check,
+    /** 还没交付完的记录（设置页/诊断用）。 */
+    list: () => store.snapshot().records.map((row) => ({ ...row })),
+    /** 某个会话键的待交付记录作废（`/stop`、解绑、换绑时调用）。 */
+    async forgetKey({ channelId, botId, key, reason = "\u7528\u6237\u505C\u6B62" }) {
+      const records = store.snapshot().records;
+      const doomed = records.filter((row) => row.channelId === channelId && row.botId === botId && row.key === key);
+      if (doomed.length === 0) return 0;
+      for (const row of doomed) clearTimer(row.id);
+      await persist(records.filter((row) => !doomed.includes(row)));
+      logger.info?.(`[dsh-chat] \u4F5C\u5E9F ${doomed.length} \u6761\u5F85\u4EA4\u4ED8\u8BB0\u5F55\uFF08${reason}\uFF09\uFF1A${channelId}/${botId} ${key}`);
+      return doomed.length;
+    },
+    /** 停止所有定时器（进程收摊/测试用）；记录保留在磁盘上。 */
+    stop() {
+      stopped = true;
+      for (const id of [...timers.keys()]) clearTimer(id);
+    }
+  };
+}
+
 // packages/dsh-chat/host/delivery.mjs
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
@@ -2145,7 +2361,7 @@ function createDeliveryService({ settings, sessionStore = null, logger = console
 
 // packages/dsh-chat/host/file-log.mjs
 import { appendFile, mkdir as mkdir2, rename as rename2, stat as stat2 } from "node:fs/promises";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 var LEVELS = ["debug", "info", "warn", "error"];
 function stamp() {
@@ -2254,7 +2470,7 @@ function withFileSink({ logger, sink, scope = "" }) {
   return Object.assign(Object.create(Object.getPrototypeOf(logger ?? {}) ?? Object.prototype), logger ?? {}, wrapped);
 }
 function channelLogPath(logsDir, name2) {
-  return join2(logsDir, `${name2}.log`);
+  return join3(logsDir, `${name2}.log`);
 }
 
 // packages/dsh-chat/host/log-tail.mjs
@@ -3013,23 +3229,23 @@ function createInteractionService({ logger = console, timeoutMs = DEFAULT_TIMEOU
 
 // packages/dsh-chat/host/paths.mjs
 import { homedir } from "node:os";
-import { join as join3, resolve as resolve2 } from "node:path";
+import { join as join4, resolve as resolve2 } from "node:path";
 function dshHome() {
   const configured = process.env.DSH_HOME;
-  return configured && configured.trim() ? resolve2(configured.trim()) : join3(homedir(), ".dsh");
+  return configured && configured.trim() ? resolve2(configured.trim()) : join4(homedir(), ".dsh");
 }
 function hubDataDir(configured) {
-  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join3(dshHome(), "integrations", "dsh-chat");
+  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join4(dshHome(), "integrations", "dsh-chat");
 }
 function channelDataDir(name2, integrationRoot2) {
-  return join3(integrationRoot2 ?? join3(dshHome(), "integrations"), name2);
+  return join4(integrationRoot2 ?? join4(dshHome(), "integrations"), name2);
 }
 function integrationRoot(configured) {
-  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join3(dshHome(), "integrations");
+  return configured && String(configured).trim() ? resolve2(String(configured).trim()) : join4(dshHome(), "integrations");
 }
 
 // packages/dsh-chat/host/session-store.mjs
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var DOCUMENT_VERSION2 = 1;
 function isPlainObject6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -3065,7 +3281,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
     throw new TypeError("session store \u9700\u8981 dataDir\u3002");
   }
   const store = createJsonStore({
-    path: join4(dataDir, "sessions.json"),
+    path: join5(dataDir, "sessions.json"),
     normalize: normalizeDocument2,
     empty: () => ({ version: DOCUMENT_VERSION2, channels: {} }),
     logger,
@@ -3254,7 +3470,8 @@ function createSessionBridge({
   store,
   settings = null,
   guidance,
-  interactions
+  interactions,
+  deferred = null
 }) {
   const gateway = ctx?.typertGateway;
   if (typeof gateway?.invoke !== "function") {
@@ -3468,6 +3685,7 @@ function createSessionBridge({
   async function cancel({ channelId, botId, key, signal }) {
     const bound = store?.get(channelId, botId, key);
     activeTurns.get(`${channelId}:${botId}:${key}`)?.abort?.();
+    await deferred?.forgetKey?.({ channelId, botId, key, reason: "\u7528\u6237 /stop" })?.catch?.((error) => logger.warn?.(`[dsh-chat] \u4F5C\u5E9F\u5F85\u4EA4\u4ED8\u8BB0\u5F55\u5931\u8D25\uFF1A${error?.message ?? error}`));
     if (!bound) return { accepted: false };
     try {
       return await invoke("session", "cancel", { request: { sessionId: bound.sessionId } }, signal);
@@ -3523,6 +3741,7 @@ function createSessionBridge({
       await previous;
     } catch {
     }
+    const startedAt = Date.now();
     let recovered = null;
     try {
       const runOnce = async () => {
@@ -3549,6 +3768,21 @@ function createSessionBridge({
         if (target) {
           recovered = { failed, target };
           result = await runOnce();
+        }
+      }
+      if (deferred && result?.reason?.kind === "timeout" && typeof result.sessionId === "string") {
+        try {
+          await deferred.schedule({
+            channelId,
+            botId,
+            key,
+            sessionId: result.sessionId,
+            turn: result.reason.turn ?? null,
+            startedAt,
+            reason: "timeout"
+          });
+        } catch (error) {
+          logger.warn?.(`[dsh-chat] \u767B\u8BB0\u5EF6\u8FDF\u4EA4\u4ED8\u5931\u8D25\uFF1A${error?.message ?? error}`);
         }
       }
       if (!recovered) return result;
@@ -3629,7 +3863,8 @@ ${result.text ?? ""}`.trim(),
             finishTurn({
               sessionId,
               text: "",
-              reason: { kind: "timeout", idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
+              // 带上 turn：超时后要靠它复查"这一轮"的终态（延迟交付）。
+              reason: { kind: "timeout", turn: currentTurn, idleMs, idleTimeoutMs: effectiveIdleTimeoutMs },
               tools: [...tools],
               aborted: true
             });
@@ -3644,7 +3879,12 @@ ${result.text ?? ""}`.trim(),
         finishTurn({
           sessionId,
           text: "",
-          reason: { kind: "timeout", timeoutMs: effectiveTotalTimeoutMs, idleMs: Date.now() - lastProgressAt },
+          reason: {
+            kind: "timeout",
+            turn: currentTurn,
+            timeoutMs: effectiveTotalTimeoutMs,
+            idleMs: Date.now() - lastProgressAt
+          },
           tools: [...tools],
           aborted: true
         });
@@ -3977,6 +4217,24 @@ ${result.text ?? ""}`.trim(),
     rename: rename3,
     markSessionChannel,
     boundSessions,
+    /**
+     * 逐轮终态探针（延迟交付用）：会话在不在、还在跑吗、最后一条助手正文是什么。
+     *
+     * 只读叶子字段，不碰活对象；会话没了返回 `exists:false`，还让调用方据此清记录。
+     */
+    probeTurn: async ({ channelId, botId, key, sessionId, maxMessages = 4 } = {}) => {
+      const listed = await invoke("session", "list", { _request: {} });
+      const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+      if (!item) return { exists: false, running: false, text: "" };
+      if (item.running === true) return { exists: true, running: true, text: "" };
+      const bound = store?.get?.(channelId, botId, key);
+      if (!bound || bound.sessionId !== sessionId) {
+        return { exists: true, running: false, text: "", rebound: true };
+      }
+      const { messages } = await history({ channelId, botId, key, maxMessages });
+      const last = [...messages].reverse().find((row) => row.role === "assistant" && String(row.text ?? "").trim());
+      return { exists: true, running: false, text: last?.text ?? "" };
+    },
     reset,
     history,
     runCommand,
@@ -4260,7 +4518,7 @@ function validBotPayload(payload, options = {}) {
 function apply(ctx, config = {}) {
   const baseLogger = resolveLogger(ctx, "dsh-chat");
   const integrations = integrationRoot(config.integrationRoot);
-  const logsDir = join5(hubDataDir(config.dataDir), "logs");
+  const logsDir = join6(hubDataDir(config.dataDir), "logs");
   const hubLog = createLogFileSink({ path: channelLogPath(logsDir, "hub") });
   const logger = withFileSink({ logger: baseLogger, sink: hubLog, scope: "dsh-chat" });
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
@@ -4268,13 +4526,24 @@ function apply(ctx, config = {}) {
   const guidance = createGuidanceRegistry();
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   const interactions = createInteractionService({ logger });
+  const deferred = createDeferredDelivery({
+    dataDir: hubDataDir(config.dataDir),
+    logger,
+    probe: async ({ record }) => sessions.probeTurn({
+      channelId: record.channelId,
+      botId: record.botId,
+      key: record.key,
+      sessionId: record.sessionId
+    })
+  });
   const sessions = createSessionBridge({
     ctx,
     logger,
     store: sessionStore,
     settings,
     guidance,
-    interactions
+    interactions,
+    deferred
   });
   const rpc = createRpcCarrier(ctx, { logger });
   const delivery = createDeliveryService({ settings, sessionStore, logger });
@@ -4344,6 +4613,11 @@ function apply(ctx, config = {}) {
       ready: () => settings.ready(),
       contextEnhancement: context_enhancement_exports,
       /**
+       * 延迟交付：渠道建桥时注册"怎么把补发内容发回这个会话"。
+       * `register({ channelId, botId, deliver })`，`deliver({ key, text, record })`。
+       */
+      deferred: Object.freeze({ register: (options) => deferred.register(options) }),
+      /**
        * 引用回复：渠道只把平台字段映射成 `reply`（正文/类型/文件名/发送者/消息 id），
        * 拼装（标签、限长、安全转义、读不到时的标记）由 hub 实现一次、所有渠道复用。
        */
@@ -4402,10 +4676,21 @@ function apply(ctx, config = {}) {
       };
     }));
     const logs = await Promise.all(["hub", ...entries.map((entry) => entry.id)].map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+    const deferredRecords = deferred.list().map((row) => ({
+      channelId: row.channelId,
+      botId: row.botId,
+      key: row.key,
+      sessionId: row.sessionId,
+      turn: row.turn,
+      timedOutAt: row.timedOutAt,
+      attempts: row.attempts,
+      lastError: row.lastError
+    }));
     return {
       dataDir: hubDataDir(config.dataDir),
       logDir: logsDir,
       channels,
+      deferred: deferredRecords,
       logs
     };
   }
@@ -4748,6 +5033,11 @@ function apply(ctx, config = {}) {
       supportsFile: (channelId) => delivery.supportsFile(channelId)
     }),
     contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
+    /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
+    deferred: Object.freeze({
+      register: (options) => deferred.register(options),
+      list: () => deferred.list()
+    }),
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference }),
     guidance: Object.freeze({

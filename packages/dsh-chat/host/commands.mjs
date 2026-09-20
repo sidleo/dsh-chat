@@ -353,6 +353,14 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
       }
       const lines = ['🩺 诊断'];
       if (data?.dataDir) lines.push(`数据目录：${data.dataDir}`);
+      // 超时之后那一轮的补发还没完成时，这里能看到"还在盯什么"。
+      if ((data?.deferred ?? []).length > 0) {
+        lines.push(`待补发：${data.deferred.length} 条`);
+        for (const row of data.deferred) {
+          lines.push(`  · ${clipText(row.key)} 会话=${clipText(row.sessionId)}`
+            + `${row.lastError ? ` · ⚠️ ${clipText(row.lastError)}` : ''}`);
+        }
+      }
       for (const channel of data?.channels ?? []) {
         lines.push('', `渠道 ${channel.label ?? channel.id}：${channel.status ?? '未知'}`
           + `${channel.error ? `（最近错误：${clipText(channel.error)}）` : ''}`);

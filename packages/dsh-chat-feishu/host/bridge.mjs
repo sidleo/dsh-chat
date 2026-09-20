@@ -191,6 +191,24 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     return gateway.sendText({ openId: id, text });
   }
 
+  /**
+   * 延迟交付：`ask()` 超时之后那一轮要是自己跑完了，hub 会把结果交回这里补发。
+   *
+   * 补发**只发文字**（不重画面板卡）：它可能是几十分钟后的一轮，卡片早换了上下文。
+   * 前面加一句说明，免得用户以为机器人精神了。
+   */
+  deps.deferred?.register?.({
+    channelId: deps.channelId,
+    botId: bot.id,
+    deliver: async ({ key, text }) => {
+      await sendToConversation({
+        key,
+        text: `（上一轮超时之后跑完了，补发结果）\n\n${text}`,
+      });
+      logger.info?.(`[dsh-chat-feishu] 延迟交付已补发：${bot.id} ${key} ${text.length} 字`);
+    },
+  });
+
   /** 会话键 → 已经发出去的那张提问卡片（回答后就地更新，不再新发消息）。 */
   const questionCards = new Map();
   /** 会话键 → 最近一次渲染用的批次（勾选器要把序号反查成选项原文，得知道原样数据）。 */

@@ -1095,6 +1095,21 @@ function createWeixinRuntime({
       }
     }
   }
+  deps.deferred?.register?.({
+    channelId: deps.channelId,
+    botId: account.botId,
+    deliver: async ({ key, text }) => {
+      const userId = key.startsWith("p2p:") ? key.slice("p2p:".length) : key;
+      const contextToken = state.contextToken?.(userId) ?? null;
+      if (!contextToken) {
+        throw new Error(`\u5FAE\u4FE1\u6CA1\u6709 ${userId} \u7684 context token\uFF0C\u8865\u53D1\u4E0D\u4E86\uFF08\u7B49\u4ED6\u518D\u53D1\u4E00\u6761\u6D88\u606F\u540E\u91CD\u8BD5\uFF09`);
+      }
+      await reply(userId, `\uFF08\u4E0A\u4E00\u8F6E\u8D85\u65F6\u4E4B\u540E\u8DD1\u5B8C\u4E86\uFF0C\u8865\u53D1\u7ED3\u679C\uFF09
+
+${text}`, contextToken, null, null);
+      logger.info?.(`[dsh-chat-weixin] \u5EF6\u8FDF\u4EA4\u4ED8\u5DF2\u8865\u53D1\uFF1A${account.botId} ${key} ${text.length} \u5B57`);
+    }
+  });
   async function handleMessage(message, signal) {
     if (message?.message_type === 2) return;
     const id = messageId(message);

@@ -215,6 +215,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 | `guidance` | 每会话提示词登记 |
 | `sessions` | 会话桥 |
 | `interactions` | 人在环回传：`attach({ channelId, botId, send })` + 入站 `offer({ channelId, botId, key, text })` |
+| `deferred` | 延迟交付：`register({ channelId, botId, deliver })`。`ask()` 判定**超时**时会登记一条待交付记录，之后有界复查（probe 由 hub 提供），拿到结果就调 `deliver({ key, text, record })` 补发。渠道建桥时注册一次即可；补发只发文字（见 §5） |
 | `reportStatus(status, error?)` | 上报 `starting/running/failed/stopped` 与错误 |
 
 ---
@@ -562,6 +563,7 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |
 | `isRunning(sessionId, signal)` / `rename(sessionId, title, signal)` | 运行态 / 改标题 |
 | `history({ channelId, botId, key, maxMessages })` | 回看最近几轮：取 `session/follow` 首个 snapshot 的尾部记录，只挑真实对话（注入的上下文与思考不算） |
+| `probeTurn({ channelId, botId, key, sessionId, maxMessages })` | 复查某一轮的终态：`{ exists, running, text, rebound? }`。`exists:false` = 会话没了；`rebound:true` = 这个聊天已经绑到别的会话（补发是错的，作废）。延迟交付用它当 probe，渠道一般不用直接调 |
 | `runCommand({ channelId, botId, key, line })` | 执行一条 DSH 斜杠命令（如 `/compact`），**不经过模型**；`matched:false` = 当前部署没注册这条命令 |
 | `bindings` | 会话绑定表：`get` / `entries` / `bind` / `unbind` / `adopt` / `locate` |
 | `registerInteractionHandler(channelId, handle)` | 注册本渠道的审批/提问回传处理器（返回注销函数） |
@@ -585,6 +587,15 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 ```
 
 处理器抛错即由 hub 交还 `next()`，浏览器 UI 仍能接管；不属于本插件的会话从不拦截。
+
+**延迟交付（超时≠结束）**：`ask()` 的兜底按**静默时长**判超时，判超时只说明"流不再产出"，
+**不代表那一轮没跑完**。所以超时时 hub 只做两件事：回一句"回合未正常结束"+ 登记一条待交付记录
+（`deps.deferred` 由 hub 内部使用，渠道只需要 `register` 补发函数）。之后 hub 用 `probeTurn` 有界复查
+（先等 1 分钟、之后每 30 秒、最多盯 30 分钟）：会话空闲且拿到非空正文 → 调渠道的 `deliver`
+补发；会话没了 / 聊天已换绑 / 盯满时限 → 作废记录。三种结局都写日志，`/diag` 与设置页诊断里
+能看到还没交付的记录。
+渠道的 `deliver` 只发**文字**（几十分钟后卡片上下文早变了）：飞书按会话键发私聊/群聊，
+微信用该用户最近一次记下的 `context token`——没有 token 就如实抛错（不静默）。
 
 **旧绑定接管**：渠道读自己的旧 `state.json` 后调用
 `deps.sessions.bindings.adopt(channelId, botId, { 'p2p:ou_xxx': 'session-…' })`，

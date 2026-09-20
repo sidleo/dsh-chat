@@ -127414,6 +127414,19 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
     if (kind === "group") return gateway.sendText({ chatId: id, text });
     return gateway.sendText({ openId: id, text });
   }
+  deps.deferred?.register?.({
+    channelId: deps.channelId,
+    botId: bot.id,
+    deliver: async ({ key, text }) => {
+      await sendToConversation({
+        key,
+        text: `\uFF08\u4E0A\u4E00\u8F6E\u8D85\u65F6\u4E4B\u540E\u8DD1\u5B8C\u4E86\uFF0C\u8865\u53D1\u7ED3\u679C\uFF09
+
+${text}`
+      });
+      logger.info?.(`[dsh-chat-feishu] \u5EF6\u8FDF\u4EA4\u4ED8\u5DF2\u8865\u53D1\uFF1A${bot.id} ${key} ${text.length} \u5B57`);
+    }
+  });
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
   const activePresenters = /* @__PURE__ */ new Map();

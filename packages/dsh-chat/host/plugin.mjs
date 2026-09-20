@@ -22,6 +22,7 @@ import { enhanceReplyReference as enhanceReplyReferenceFn } from '../shared/repl
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
 import { createCommandRegistry, registerBuiltinCommands } from './commands.mjs';
+import { createDeferredDelivery } from './deferred.mjs';
 import { createDeliveryService } from './delivery.mjs';
 import { channelLogPath, createLogFileSink, withFileSink } from './file-log.mjs';
 import { readLogTail } from './log-tail.mjs';
@@ -127,8 +128,24 @@ export function apply(ctx, config = {}) {
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
   const interactions = createInteractionService({ logger });
+  /**
+   * 延迟交付：`ask()` 判定超时后登记一条记录，之后有界复查会话终态、拿到结果补发。
+   *
+   * `probe` 由会话桥提供（只读叶子字段），`deliver` 由渠道在建桥时按 channel/bot 注册。
+   * 这里先建服务、再建会话桥：闭包是懒执行的，不构成循环依赖。
+   */
+  const deferred = createDeferredDelivery({
+    dataDir: hubDataDir(config.dataDir),
+    logger,
+    probe: async ({ record }) => sessions.probeTurn({
+      channelId: record.channelId,
+      botId: record.botId,
+      key: record.key,
+      sessionId: record.sessionId,
+    }),
+  });
   const sessions = createSessionBridge({
-    ctx, logger, store: sessionStore, settings, guidance, interactions,
+    ctx, logger, store: sessionStore, settings, guidance, interactions, deferred,
   });
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
@@ -206,6 +223,11 @@ export function apply(ctx, config = {}) {
       ready: () => settings.ready(),
       contextEnhancement,
       /**
+       * 延迟交付：渠道建桥时注册"怎么把补发内容发回这个会话"。
+       * `register({ channelId, botId, deliver })`，`deliver({ key, text, record })`。
+       */
+      deferred: Object.freeze({ register: (options) => deferred.register(options) }),
+      /**
        * 引用回复：渠道只把平台字段映射成 `reply`（正文/类型/文件名/发送者/消息 id），
        * 拼装（标签、限长、安全转义、读不到时的标记）由 hub 实现一次、所有渠道复用。
        */
@@ -281,10 +303,25 @@ export function apply(ctx, config = {}) {
     }));
     const logs = await Promise.all(['hub', ...entries.map((entry) => entry.id)]
       .map((logName) => readLogTail(channelLogPath(logsDir, logName))));
+    /**
+     * 待补发的延迟交付记录：超时之后那一轮还没跑完时，这里会有记录。
+     * 只取叶子字段（渠道/会话键/会话/登记时刻），别把内部的活对象透出去。
+     */
+    const deferredRecords = deferred.list().map((row) => ({
+      channelId: row.channelId,
+      botId: row.botId,
+      key: row.key,
+      sessionId: row.sessionId,
+      turn: row.turn,
+      timedOutAt: row.timedOutAt,
+      attempts: row.attempts,
+      lastError: row.lastError,
+    }));
     return {
       dataDir: hubDataDir(config.dataDir),
       logDir: logsDir,
       channels,
+      deferred: deferredRecords,
       logs,
     };
   }
@@ -663,6 +700,11 @@ export function apply(ctx, config = {}) {
     }),
 
     contextEnhancement: Object.freeze({ ...contextEnhancement }),
+    /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
+    deferred: Object.freeze({
+      register: (options) => deferred.register(options),
+      list: () => deferred.list(),
+    }),
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference: enhanceReplyReferenceFn }),
     guidance: Object.freeze({

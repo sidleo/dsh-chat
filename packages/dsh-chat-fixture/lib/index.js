@@ -44,6 +44,7 @@ function apply(ctx) {
                 storage: typeof deps.storage?.read === "function",
                 contextEnhancement: typeof deps.contextEnhancement?.enhanceContent === "function",
                 replyReference: typeof deps.replyReference?.enhanceReplyReference === "function",
+                deferred: typeof deps.deferred?.register === "function",
                 accessPolicy: typeof deps.accessPolicy?.evaluateAccess === "function",
                 commands: typeof deps.commands?.handle === "function",
                 createJsonStore: typeof deps.createJsonStore === "function",

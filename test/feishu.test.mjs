@@ -242,6 +242,8 @@ async function makeBridge({
   commands = null,
   panel = null,
   statePath = null,
+  /** 采集渠道注册的补发函数：`{ channelId, botId, deliver }`。 */
+  deferred = null,
   /** true：模拟"设置还没读完盘"——ready() 之前 storage.read() 读到空文档。 */
   holdSettings = false,
 } = {}) {
@@ -304,6 +306,7 @@ async function makeBridge({
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     ...(commands ? { commands } : {}),
     ...(panel ? { panel } : {}),
+    ...(deferred ? { deferred: { register: (options) => deferred.push(options) } } : {}),
     sessions: {
       ensure: async ({ key }) => ({ sessionId: `session-${key}`, created: false }),
       uploadFile: async (options) => {
@@ -3226,6 +3229,31 @@ test('引用回复：用户引用一条消息后提问，被引用正文要一�
     const prompt2 = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
     assert.match(prompt2, /引用内容不可用/, '读不到要有结构化标记');
     assert.match(prompt2, /那这个呢/, '当前问题照样进模型');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('延迟交付：飞书按会话键把补发结果发回私聊/群聊（带一句说明）', async () => {
+  const registrations = [];
+  const app = await makeBridge({ deferred: registrations });
+  try {
+    assert.equal(registrations.length, 1, '建桥时要注册补发函数');
+    assert.equal(registrations[0].channelId, 'feishu');
+    assert.equal(registrations[0].botId, BOT.id);
+
+    const deliver = registrations[0].deliver;
+    await deliver({ key: 'p2p:ou_owner', text: '超时之后才跑完的答案' });
+    assert.deepEqual(app.gateway.calls.texts.at(-1), {
+      chatId: undefined,
+      openId: 'ou_owner',
+      text: '（上一轮超时之后跑完了，补发结果）\n\n超时之后才跑完的答案',
+    });
+
+    await deliver({ key: 'group:oc_group', text: '群里的答案' });
+    assert.equal(app.gateway.calls.texts.at(-1).chatId, 'oc_group');
+    assert.equal(app.gateway.calls.texts.at(-1).openId, undefined);
+    assert.match(app.gateway.calls.texts.at(-1).text, /群里的答案/);
   } finally {
     await app.cleanup();
   }

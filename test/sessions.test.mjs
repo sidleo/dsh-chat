@@ -198,7 +198,7 @@ function withDeliverables(frames, files) {
 }
 
 async function makeBridge(options = {}) {
-  const { settings = null, ...gatewayOptions } = options;
+  const { settings = null, deferred = null, ...gatewayOptions } = options;
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-sessions-'));
   const store = createSessionStore({ dataDir, logger: silentLogger });
   const gateway = createFakeGateway(gatewayOptions);
@@ -209,6 +209,7 @@ async function makeBridge(options = {}) {
     store,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
     ...(settings ? { settings } : {}),
+    ...(deferred ? { deferred } : {}),
   });
   return {
     bridge,
@@ -1060,6 +1061,141 @@ test('模型不可用但不是"模型被删"以外的错误：不救援、原样
       }),
       (error) => error.code === 'session/not-found',
     );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+/** 回合的兜底定时器都是 unref 的（不能拖住进程退出），所以靠它们推进的测试要自己按住事件循环。 */
+function holdEventLoop() {
+  const timer = setTimeout(() => {}, 30_000);
+  return () => clearTimeout(timer);
+}
+
+test('超时之后登记延迟交付；正常结束不登记；/stop 作废该会话的待交付', async () => {
+  const releaseLoop = holdEventLoop();
+  const scheduled = [];
+  const forgotten = [];
+  const deferred = {
+    schedule: async (record) => { scheduled.push(record); return 'df-1'; },
+    forgetKey: async (options) => { forgotten.push(options); return 1; },
+  };
+
+  // ① 卡死 → timeout：必须把"会话 + 回合 + 原因"交给延迟交付，且不能重跑这一轮。
+  const stuck = await makeBridge({
+    script: [[
+      { type: 'snapshot', cursor: 1, records: [], hasMore: false },
+      { type: 'event', event: { type: 'turn/start', seq: 2, data: { turn: 1 } } },
+    ]],
+    stuckStream: true,
+    deferred,
+  });
+  try {
+    const result = await stuck.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '跑个长任务' }], turnTimeoutMs: 200,
+    });
+    assert.equal(result.reason.kind, 'timeout');
+    assert.equal(scheduled.length, 1, '超时要登记一条待交付');
+    assert.deepEqual(
+      {
+        channelId: scheduled[0].channelId,
+        botId: scheduled[0].botId,
+        key: scheduled[0].key,
+        sessionId: scheduled[0].sessionId,
+        turn: scheduled[0].turn,
+        reason: scheduled[0].reason,
+      },
+      {
+        channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1',
+        sessionId: 'session-1', turn: 1, reason: 'timeout',
+      },
+    );
+    assert.equal(typeof scheduled[0].startedAt, 'number', '要带超时那一刻的起点（算补发延迟用）');
+
+    // /stop：这条会话的待交付一并作废（否则过一会儿又冒出一条补充结果）。
+    await stuck.bridge.cancel({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1' });
+    assert.deepEqual(forgotten, [{ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', reason: '用户 /stop' }]);
+  } finally {
+    await stuck.cleanup();
+  }
+
+  // ② 正常结束：不该登记（补发只服务"超时之后才跑完"这一种情况）。
+  const done = await makeBridge({ script: [turnFrames({ text: '正常答完' })], deferred });
+  try {
+    const result = await done.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '你好' }],
+    });
+    assert.equal(result.reason.kind, 'completed');
+    assert.equal(scheduled.length, 1, '正常结束不登记（还只有①那一条）');
+  } finally {
+    await done.cleanup();
+  }
+
+  // ③ 登记失败不能把超时结果本身弄丢：用户仍会收到"回合未正常结束"。
+  const broken = await makeBridge({
+    script: [[
+      { type: 'snapshot', cursor: 1, records: [], hasMore: false },
+      { type: 'event', event: { type: 'turn/start', seq: 2, data: { turn: 1 } } },
+    ]],
+    stuckStream: true,
+    deferred: {
+      schedule: async () => { throw new Error('磁盘满了'); },
+      forgetKey: async () => 0,
+    },
+  });
+  try {
+    const result = await broken.bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws',
+      content: [{ type: 'text', text: '跑个长任务' }], turnTimeoutMs: 200,
+    });
+    assert.equal(result.reason.kind, 'timeout');
+    assert.equal(result.aborted, true);
+  } finally {
+    await broken.cleanup();
+    releaseLoop();
+  }
+});
+
+test('probeTurn：还在跑 / 已换绑 / 空闲且有正文（延迟交付的复查口径）', async () => {
+  const records = [
+    { type: 'event', event: { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第一问' }] } } },
+    { type: 'event', event: { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: '超时之后才跑完的答案' }] } } } },
+  ];
+  const snapshot = [{ type: 'snapshot', cursor: 2, records, hasMore: false }];
+  const app = await makeBridge({ script: [snapshot, snapshot, snapshot] });
+  try {
+    // 让另一个会话排在前面：假 DSH 只把 `session/list` 的第一条当成 running。
+    app.gateway.sessions.add('session-0');
+    await app.bridge.ensure({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', workspacePath: '/ws' });
+
+    // ① 空闲且仍绑着这个会话 → 读历史拿最后一条助手正文。
+    const idle = await app.bridge.probeTurn({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', sessionId: 'session-1',
+    });
+    assert.deepEqual(idle, { exists: true, running: false, text: '超时之后才跑完的答案' });
+
+    // ② 还在跑 → 什么都不给（半截正文绝不能当最终答案补发）。
+    const running = await app.bridge.probeTurn({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', sessionId: 'session-0',
+    });
+    assert.deepEqual(running, { exists: true, running: true, text: '' });
+
+    // ③ 这个聊天已经不绑它了（换绑/解绑）→ 补发是错的，交回 rebound 让上层作废。
+    await app.bridge.ensure({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_2', workspacePath: '/ws' });
+    const rebound = await app.bridge.probeTurn({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_2', sessionId: 'session-1',
+    });
+    assert.equal(rebound.rebound, true);
+    assert.equal(rebound.text, '');
+
+    // ④ 会话已经没了。
+    app.gateway.forget('session-1');
+    const gone = await app.bridge.probeTurn({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_1', sessionId: 'session-1',
+    });
+    assert.deepEqual(gone, { exists: false, running: false, text: '' });
   } finally {
     await app.cleanup();
   }
