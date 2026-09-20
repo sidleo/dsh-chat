@@ -202,6 +202,28 @@ function createFakeGateway() {
   };
 }
 
+/**
+ * 这一轮**最终答案**的投递结果（与 `最终答案投递方式` 那行日志同一个口径）。
+ *
+ * 「不显示过程」现在把答案放在**卡片**里（保留 Markdown），其它模式是文本——
+ * 断言"答案到了"时不该假定是哪一种，否则每次改投递方式都要动一堆用例。
+ *
+ * @param app - makeBridge 的返回值。
+ * @returns { kind: 'card'|'text'|'none', text: string, card: object|null }。
+ */
+function lastAnswer(app) {
+  const card = app.gateway.calls.cards.at(-1);
+  const reply = app.gateway.calls.replies.at(-1);
+  // off 模式只发一张答案卡：正文就是答案，取它最后一个 markdown 元素。
+  if (card && (!reply || app.gateway.calls.replies.length === 0)) {
+    const elements = card.card?.body?.elements ?? [];
+    const markdown = [...elements].reverse().find((el) => el?.tag === 'markdown');
+    return { kind: 'card', text: markdown?.content ?? '', card: card.card };
+  }
+  if (reply) return { kind: 'text', text: reply.text ?? '', card: null };
+  return { kind: 'none', text: '', card: null };
+}
+
 function messageEvent({
   messageId = 'om_1',
   chatType = 'p2p',
@@ -537,7 +559,7 @@ test('放行规则：指定属主绕过策略；`*` 只表示"没有属主"，�
   const owner = await makeBridge({ bot: { ...BOT, ownerOpenIds: ['ou_owner'] } });
   try {
     await owner.bridge.accept(messageEvent({ messageId: 'om_o', senderId: 'ou_owner' }));
-    assert.equal(owner.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(owner).text, '最终答案');
   } finally {
     await owner.cleanup();
   }
@@ -566,7 +588,7 @@ test('放行规则：指定属主绕过策略；`*` 只表示"没有属主"，�
   });
   try {
     await listed.bridge.accept(messageEvent({ messageId: 'om_l', senderId: 'ou_listed' }));
-    assert.equal(listed.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(listed).text, '最终答案');
   } finally {
     await listed.cleanup();
   }
@@ -581,7 +603,7 @@ test('放行规则：指定属主绕过策略；`*` 只表示"没有属主"，�
   });
   try {
     await open.bridge.accept(messageEvent({ messageId: 'om_p', senderId: 'ou_anyone' }));
-    assert.equal(open.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(open).text, '最终答案');
   } finally {
     await open.cleanup();
   }
@@ -601,13 +623,50 @@ test('放行规则：allowlist 且不在名单里的人被静默忽略', async (
   }
 });
 
-test('过程展示 off：不产生任何过程消息，只回最终答案', async () => {
+test('过程展示 off：不产生任何过程消息，最终答案用**卡片**发（保留 Markdown 格式）', async () => {
   const app = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
   try {
     await app.bridge.accept(messageEvent());
-    assert.equal(app.gateway.calls.cards.length, 0);
+    // 不推过程：没有过程文本、也没有过程卡的 patch。
     assert.equal(app.gateway.calls.texts.length, 0);
-    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(app.gateway.calls.replies.length, 0);
+    assert.equal(app.gateway.calls.patches.length, 0);
+    // 答案走一张新卡（不是过程卡）：正文就是答案，头是「✅ 已完成」。
+    assert.equal(app.gateway.calls.cards.length, 1);
+    const card = app.gateway.calls.cards[0].card;
+    assert.equal(card.schema, '2.0');
+    assert.match(JSON.stringify(card), /最终答案/);
+    assert.match(JSON.stringify(card.header), /已完成/);
+    assert.equal(card.body.elements.length, 1, '答案卡只有正文一块，不带过程面板');
+    assert.equal(card.body.elements[0].tag, 'markdown');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('过程展示 off：答案太长（超单卡预算）时不截断，退回文本发送', async () => {
+  const long = '答'.repeat(13_000);
+  const app = await makeBridge({
+    bot: { ...BOT, stepPushDirect: 'off' },
+    askResult: { text: long, reason: { kind: 'completed' }, tools: [] },
+  });
+  try {
+    await app.bridge.accept(messageEvent());
+    assert.equal(app.gateway.calls.cards.length, 0, '超预算不该硬塞进卡片（会截断答案）');
+    assert.equal(app.gateway.calls.replies.at(-1).text, long, '答案必须完整送达');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('过程展示 off：并发卡片失败时退回文本，原因记进状态', async () => {
+  const app = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
+  try {
+    app.gateway.setFailure('replyCard', new Error('卡片接口 500'));
+    await app.bridge.accept(messageEvent());
+    assert.equal(app.gateway.calls.cards.length, 0);
+    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案', '卡片发不出去也要把答案给到');
+    assert.match(app.bridge.status().lastError, /发送答案卡片失败：卡片接口 500/);
   } finally {
     await app.cleanup();
   }
@@ -743,7 +802,8 @@ test('门禁：非属主不响应、群聊未 @ 不响应、重复消息只处�
 
     await app.bridge.accept(messageEvent({ messageId: 'om_dup' }));
     await app.bridge.accept(messageEvent({ messageId: 'om_dup' }));
-    assert.equal(app.gateway.calls.replies.length, 1, '同一条消息只处理一次');
+    assert.equal(app.gateway.calls.cards.length + app.gateway.calls.replies.length, 1,
+      '同一条消息只处理一次');
 
     // 暂时不支持的富媒体类型给出明确提示（带类型名）。
     await app.bridge.accept(messageEvent({
@@ -1219,7 +1279,7 @@ test('图片消息：下载后按 PromptContentPart 交给会话（bytes → bas
       data: TINY_PNG.toString('base64'),
       name: 'feishu-image',
     });
-    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(app).text, '最终答案');
   } finally {
     await app.cleanup();
   }
@@ -1341,6 +1401,7 @@ test('呈现层失败绝不静默：建卡失败/刷卡失败都退化成文本�
   // ③ 回复原消息失败 → 退到"发到这个会话"
   const replyFail = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
   try {
+    replyFail.gateway.setFailure('replyCard', new Error('卡片被拒'));
     replyFail.gateway.setFailure('replyText', new Error('回复被拒'));
     await replyFail.bridge.accept(messageEvent({ messageId: 'om_replyfail' }));
     assert.equal(replyFail.gateway.calls.texts.at(-1).text, '最终答案');
@@ -1352,6 +1413,7 @@ test('呈现层失败绝不静默：建卡失败/刷卡失败都退化成文本�
   // ④ 两条路都失败：状态里必须留下原因（用户没收到时才有得查）
   const allFail = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
   try {
+    allFail.gateway.setFailure('replyCard', new Error('卡片被拒'));
     allFail.gateway.setFailure('replyText', new Error('回复被拒'));
     allFail.gateway.setFailure('sendText', new Error('发送也被拒'));
     await allFail.bridge.accept(messageEvent({ messageId: 'om_allfail' }));
@@ -1392,7 +1454,8 @@ test('交互回传：agent 的提问发到飞书、飞书回复被认领为答�
     await app.bridge.accept(messageEvent({ messageId: 'om_answer', text: '2' }));
     assert.equal(asked, null, '回答不能再进模型');
     assert.equal(app.offers.at(-1).text, '2');
-    assert.equal(app.gateway.calls.replies.length, 1, '被认领的回答不产生任何回复');
+    assert.equal(app.gateway.calls.cards.length + app.gateway.calls.replies.length, 1,
+      '被认领的回答不产生额外回复（只投递上面那条提问）');
   } finally {
     await app.cleanup();
   }
@@ -1445,17 +1508,21 @@ test('收尾报告投递方式：卡片 / 文本 / 失败三种都要说清楚',
     await card.cleanup();
   }
 
-  const textMode = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off', stepPushGroup: 'off' } });
+  // 「不显示过程」= 答案走一张新卡片（保留 Markdown），过程一条不发
+  const offMode = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off', stepPushGroup: 'off' } });
   try {
-    await textMode.bridge.accept(messageEvent({ messageId: 'om_d2' }));
-    assert.equal(textMode.gateway.calls.replies.at(-1).text, '最终答案');
+    await offMode.bridge.accept(messageEvent({ messageId: 'om_d2' }));
+    assert.equal(lastAnswer(offMode).kind, 'card', 'off 模式的答案必须走卡片');
+    assert.equal(lastAnswer(offMode).text, '最终答案');
+    assert.equal(offMode.gateway.calls.replies.length, 0, '不显示过程：一条过程/文本消息都不发');
   } finally {
-    await textMode.cleanup();
+    await offMode.cleanup();
   }
 
   // 全失败：状态里必须留下原因（用户没收到时才有得查）
   const broken = await makeBridge({ bot: { ...BOT, stepPushDirect: 'off' } });
   try {
+    broken.gateway.setFailure('replyCard', new Error('卡片被拒'));
     broken.gateway.setFailure('replyText', new Error('回复被拒'));
     broken.gateway.setFailure('sendText', new Error('也发不出去'));
     await broken.bridge.accept(messageEvent({ messageId: 'om_d3' }));
@@ -1557,7 +1624,7 @@ test('入站文件：下载 → 上传到会话 → 以 file 内容块交给模�
     assert.deepEqual(app.uploads, [{ name: '月度报表.xlsx', bytes: TINY_PNG.length }]);
     assert.equal(asked.content.length, 1);
     assert.deepEqual(asked.content[0], { type: 'file', receiptId: 'receipt-test-1' });
-    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(app).text, '最终答案');
   } finally {
     await app.cleanup();
   }
@@ -1858,7 +1925,7 @@ test('收到即打「在做了」表情，处理完撤掉；表情失败不影�
       [{ messageId: 'om_react_1', emojiType: 'OnIt' }], '收到就打表情');
     assert.deepEqual(app.gateway.calls.removedReactions,
       [{ messageId: 'om_react_1', reactionId: 'reaction_1' }], '处理完要撤掉');
-    assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
+    assert.equal(lastAnswer(app).text, '最终答案');
   } finally {
     await app.cleanup();
   }
@@ -1883,7 +1950,7 @@ test('收到即打「在做了」表情，处理完撤掉；表情失败不影�
   try {
     noPermission.gateway.setFailure('addReaction', new Error('permission denied: im:message.reaction:write'));
     await noPermission.bridge.accept(messageEvent({ messageId: 'om_react_3' }));
-    assert.equal(noPermission.gateway.calls.replies.at(-1).text, '最终答案', '没权限也要正常回复');
+    assert.equal(lastAnswer(noPermission).text, '最终答案', '没权限也要正常回复');
     assert.equal(noPermission.gateway.calls.removedReactions.length, 0, '没加上就不用撤');
   } finally {
     await noPermission.cleanup();

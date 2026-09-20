@@ -109,8 +109,8 @@ const zh = {
   '任务过程展示': '任务过程展示',
   '设置执行过程的呈现方式；私聊与群聊分别生效': '设置执行过程的呈现方式；私聊与群聊分别生效',
   '不显示过程（只发送最终答案）': '不显示过程（只发送最终答案）',
-  '适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果':
-    '适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果',
+  '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式':
+    '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式',
   '实时过程卡（全程一张卡片动态更新）': '实时过程卡（全程一张卡片动态更新）',
   '推荐长任务使用：过程与最终答案都在同一张卡片里实时更新，不刷屏':
     '推荐长任务使用：过程与最终答案都在同一张卡片里实时更新，不刷屏',
@@ -250,8 +250,9 @@ const en = {
   '设置执行过程的呈现方式；私聊与群聊分别生效':
     'Choose how the execution is presented; direct and group chats are configured separately',
   '不显示过程（只发送最终答案）': 'Hide the process (final answer only)',
-  '适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果':
-    'For everyday Q&A: interim steps stay hidden and only the final result is sent',
+  '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式':
+    'For everyday Q&A: interim steps stay hidden; the final answer still arrives as a card, '
+    + 'keeping tables and code blocks formatted',
   '实时过程卡（全程一张卡片动态更新）': 'Live process card (one card updated throughout)',
   '推荐长任务使用：过程与最终答案都在同一张卡片里实时更新，不刷屏':
     'Recommended for long tasks: process and answer update in one card without flooding the chat',
@@ -314,7 +315,7 @@ const STEP_PUSH_OPTIONS = [
   {
     value: 'off',
     label: '不显示过程（只发送最终答案）',
-    help: '适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果',
+    help: '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式',
   },
   {
     value: 'streaming_card',

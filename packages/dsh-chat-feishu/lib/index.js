@@ -126714,6 +126714,20 @@ function renderStepCard({
     body: { direction: "vertical", elements }
   };
 }
+function renderAnswerCard({ title, answer, template = "green" } = {}) {
+  return {
+    schema: "2.0",
+    config: { update_multi: true, width_mode: "default" },
+    header: {
+      template,
+      title: { tag: "plain_text", content: String(title ?? "").slice(0, 100) }
+    },
+    body: {
+      direction: "vertical",
+      elements: [{ tag: "markdown", content: String(answer ?? "") }]
+    }
+  };
+}
 function createTurnPresenter({
   mode,
   gateway,
@@ -126893,6 +126907,28 @@ function createTurnPresenter({
     schedulePatch();
     return Promise.resolve();
   }
+  async function sendAnswerCard(body) {
+    if (typeof body !== "string" || !body.trim()) return false;
+    if (body.length > MAX_CARD_CONTENT) {
+      logger.info?.(`[dsh-chat-feishu] \u7B54\u6848 ${body.length} \u5B57\u8D85\u8FC7\u5355\u5361\u9884\u7B97\uFF08${MAX_CARD_CONTENT}\uFF09\uFF0C\u6539\u7528\u6587\u672C\u53D1\u9001\uFF08\u4E0D\u622A\u65AD\uFF09\u3002`);
+      return false;
+    }
+    try {
+      await gateway.replyCard({
+        messageId,
+        card: renderAnswerCard({
+          title: currentTitle(),
+          answer: body,
+          template: state === "failed" ? "orange" : "green"
+        }),
+        replyInThread
+      });
+      return true;
+    } catch (error) {
+      noteFailure("\u53D1\u9001\u7B54\u6848\u5361\u7247\u5931\u8D25", error);
+      return false;
+    }
+  }
   return {
     /**
      * 记录一次工具调用，渲染成 Web 那样的一行。
@@ -126991,6 +127027,10 @@ function createTurnPresenter({
             return lastDelivery;
           }
           lastDelivery = await sendText(body) ? "text" : "failed";
+          return lastDelivery;
+        }
+        if (mode === "off" && await sendAnswerCard(body)) {
+          lastDelivery = "card";
           return lastDelivery;
         }
         lastDelivery = await sendText(body) ? "text" : "failed";

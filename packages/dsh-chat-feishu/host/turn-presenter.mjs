@@ -337,6 +337,32 @@ export function renderStepCard({
 }
 
 /**
+ * 只装最终答案的卡片（「不显示过程」那条路用）。
+ *
+ * 为什么不用过程卡：过程卡的头是「工具与思考(N)」、正文按 `· ` 逐行排过程——
+ * 关掉过程时它是空的，只剩答案，用户看到的会是一张"什么都没有"的卡。
+ * 这里给一张干净的卡：同一套 header 文案（✅ 已完成 / ⚠️ 未正常完成）与配色，
+ * 正文只有答案的 markdown——**格式（表格、代码块、链接）因此得以保留**，这正是要卡片的原因。
+ *
+ * @param options - { title, answer, template }。
+ * @returns 飞书交互卡片对象。
+ */
+export function renderAnswerCard({ title, answer, template = 'green' } = {}) {
+  return {
+    schema: '2.0',
+    config: { update_multi: true, width_mode: 'default' },
+    header: {
+      template,
+      title: { tag: 'plain_text', content: String(title ?? '').slice(0, 100) },
+    },
+    body: {
+      direction: 'vertical',
+      elements: [{ tag: 'markdown', content: String(answer ?? '') }],
+    },
+  };
+}
+
+/**
  * 创建一轮任务的展示器。
  *
  * @param options - {
@@ -588,6 +614,40 @@ export function createTurnPresenter({
     return Promise.resolve();
   }
 
+  /**
+   * 把最终答案作为**一张卡片**发出（`off` 模式：不显示过程，但答案仍走卡片）。
+   *
+   * 两条硬约束：
+   * - 答案超过单卡内容预算时**不截断**，退回文本发送（截断答案比丢格式更糟），并留日志；
+   * - 卡片发不出去也退回文本——答案一定到得了，失败仍记在 `lastError` 里。
+   *
+   * @param body - 最终答案文本。
+   * @returns 是否作为卡片发出。
+   */
+  async function sendAnswerCard(body) {
+    if (typeof body !== 'string' || !body.trim()) return false;
+    if (body.length > MAX_CARD_CONTENT) {
+      logger.info?.(`[dsh-chat-feishu] 答案 ${body.length} 字超过单卡预算`
+        + `（${MAX_CARD_CONTENT}），改用文本发送（不截断）。`);
+      return false;
+    }
+    try {
+      await gateway.replyCard({
+        messageId,
+        card: renderAnswerCard({
+          title: currentTitle(),
+          answer: body,
+          template: state === 'failed' ? 'orange' : 'green',
+        }),
+        replyInThread,
+      });
+      return true;
+    } catch (error) {
+      noteFailure('发送答案卡片失败', error);
+      return false;
+    }
+  }
+
   return {
     /**
      * 记录一次工具调用，渲染成 Web 那样的一行。
@@ -700,6 +760,14 @@ export function createTurnPresenter({
             return lastDelivery;
           }
           lastDelivery = await sendText(body) ? 'text' : 'failed';
+          return lastDelivery;
+        }
+        /**
+         * 「不显示过程」也走卡片：正文里的表格/代码块/链接要保留格式，
+         * 纯文本发出去这些全没了。发不出去（或答案太长）自动退回文本。
+         */
+        if (mode === 'off' && await sendAnswerCard(body)) {
+          lastDelivery = 'card';
           return lastDelivery;
         }
         lastDelivery = await sendText(body) ? 'text' : 'failed';

@@ -301,12 +301,17 @@ function createFakeCtx(agent) {
  * 只有在真实桥上跑一遍才算数（hub 侧看不出来）。
  */
 function createFakeLarkGateway() {
-  const calls = { created: [], updated: [], patched: [], texts: [] };
+  const calls = { created: [], updated: [], patched: [], texts: [], cards: [] };
   return {
     calls,
     async sendCard({ chatId, card }) {
       calls.created.push({ chatId, card });
       return { messageId: `om_sent_${calls.created.length}` };
+    },
+    /** 「不显示过程」的答案走这里（新卡，不是 patch 过程卡）。 */
+    async replyCard({ messageId, card }) {
+      calls.cards.push({ messageId, card });
+      return { messageId: `om_card_${calls.cards.length}` };
     },
     async updateCard({ token, card }) {
       calls.updated.push({ token, card });
@@ -704,7 +709,30 @@ async function main() {
       for (const task of paints.splice(0)) await task();
       assert.equal(service.bots.read('feishu', bot.id).accessPolicy?.direct?.mode, 'open',
         '确认后才真的落盘');
-      return `应答后更新=${gateway.calls.updated.length} 次、确认前未落盘、确认后 direct=open`;
+
+      /**
+       * 「不显示过程」（这台机器人就是 off）：**答案仍要走卡片**——表格/代码块/链接
+       * 用纯文本发出去格式全没了。这里在真实桥上跑一遍，断言"新卡 + 正文是答案 + 没有文本回复"。
+       */
+      agent.state.scripts.push(agent.frames(['| 门店 | 销售额 |\n| --- | --- |\n| A | 12 |']));
+      const before = { cards: gateway.calls.cards.length, texts: gateway.calls.texts.length };
+      await bridge.accept({
+        sender: { sender_id: { open_id: OWNER } },
+        message: {
+          message_id: 'om_off_1',
+          chat_id: 'oc_rehearsal',
+          chat_type: 'p2p',
+          message_type: 'text',
+          content: JSON.stringify({ text: '给我一张表' }),
+        },
+      });
+      const answerCard = gateway.calls.cards.at(-1)?.card;
+      assert.ok(gateway.calls.cards.length === before.cards + 1, 'off 模式的答案要发一张新卡');
+      assert.equal(gateway.calls.texts.length, before.texts, 'off 模式不发文本回复');
+      assert.match(JSON.stringify(answerCard), /门店/);
+      assert.match(JSON.stringify(answerCard), /\| --- \|/, 'Markdown 表格原样进卡片');
+      return `应答后更新=${gateway.calls.updated.length} 次、确认前未落盘、确认后 direct=open、`
+        + 'off 答案=卡片';
     });
 
     // ⑪ 引用回复：被引用正文进提示词；读不到也不能丢当前问题
@@ -729,28 +757,30 @@ async function main() {
 
     // ⑫ /retitle：一次性给历史会话补「渠道 · 聊天 ·」前缀（幂等，且聊天身份可升级）
     await step('/retitle：历史会话补「渠道 · 聊天 ·」前缀，重复执行不重复加', async () => {
+      // 数**增量**：别的步骤（例如飞书桥那条）也会改标题，绝对值会被它们影响。
+      const renamedBefore = agent.state.renames.length;
       const first = await service.commands.handle({
         channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
         senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
       });
       assert.match(first.reply, /检查了 3 个绑定会话：补上 3 个/, first.reply);
-      assert.equal(agent.state.renames.length, 3, '三个绑定会话各改一次标题');
+      assert.equal(agent.state.renames.length - renamedBefore, 3, '三个绑定会话各改一次标题');
       assert.match(
-        agent.state.renames[0].title,
+        agent.state.renames[renamedBefore].title,
         /^试用渠道 · (私聊|群) [^·]+ · /,
-        `标题要带"渠道 + 哪个聊天"：${JSON.stringify(agent.state.renames[0])}`,
+        `标题要带"渠道 + 哪个聊天"：${JSON.stringify(agent.state.renames[renamedBefore])}`,
       );
       const second = await service.commands.handle({
         channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
         senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
       });
       assert.match(second.reply, /已有前缀 3 个/, `第二次应是幂等的：${second.reply}`);
-      assert.equal(agent.state.renames.length, 3, '幂等：第二次不再改名');
+      assert.equal(agent.state.renames.length - renamedBefore, 3, '幂等：第二次不再改名');
       const member = await service.commands.handle({
         channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle', senderId: 'ou_x', isOwner: false,
       });
       assert.match(member.reply, /只限属主/);
-      return `重命名 ${agent.state.renames.length} 次，第二次幂等（已有前缀 3 个）`;
+      return `重命名 ${agent.state.renames.length - renamedBefore} 次，第二次幂等（已有前缀 3 个）`;
     });
 
     // ⑬ 会话不能共用：别人正在用的会话不出现在候选里，硬切也被拒（并说清是谁占着）

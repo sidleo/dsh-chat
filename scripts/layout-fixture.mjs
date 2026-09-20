@@ -406,7 +406,7 @@ const FRAGMENTS = {
     description: '设置执行过程的呈现方式；私聊与群聊分别生效',
     scopes: [{ key: 'direct', label: '私聊' }, { key: 'group', label: '群聊' }],
     options: [
-      { value: 'off', label: '不显示过程（只发送最终答案）', help: '适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果' },
+      { value: 'off', label: '不显示过程（只发送最终答案）', help: '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式' },
       { value: 'card', label: '实时过程卡（全程一张卡片动态更新）', help: '推荐长任务使用：过程与最终答案都在同一张卡片里实时更新，不刷屏' },
     ],
     value: { direct: 'card', group: 'card' },
