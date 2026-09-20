@@ -2443,6 +2443,105 @@ test('控制面板卡：下拉的 initial_index 是 1 起，且不写 options.se
   assert.match(byName.model_pick.options[0].text.content, /^✓ /);
 });
 
+test('访问策略：下拉放宽要二次确认，确认/取消都在同一张卡上，确认之前绝不落盘', async () => {
+  const panel = makePanelStub();
+  panel.read = async () => ({
+    bound: true, sessionId: 'session-1',
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] }, workspace: { current: null, options: [] },
+    policy: {
+      current: 'allowlist', label: '名单内 1 人可用', conversationType: 'group', kindLabel: 'group',
+      options: [
+        { value: 'allowlist', label: '仅名单内可用（当前 1 人）' },
+        { value: 'open', label: '任何人可用（群聊里任何成员都能 @ 它）' },
+      ],
+    },
+  });
+  // 放宽时第一次 apply 只回 requiresConfirm；带 confirm:true 才"落盘"。
+  panel.apply = async ({ field, value, confirm }) => {
+    panel.applied.push({ field, value, confirm });
+    if (field === 'policy' && value === 'open' && confirm !== true) {
+      return {
+        field, value, requiresConfirm: true,
+        confirmPrompt: '把群聊改成「任何人可用」后，不在名单里的人也能跟机器人对话（群里任何成员 @ 它就行）。确定要放开吗？',
+        message: '需要确认：群聊将改为任何人可用。',
+      };
+    }
+    return { field, value, message: `${field}=${value} 已生效` };
+  };
+  const app = await makeBridge({ panel });
+  try {
+    const asked = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_card',
+      token: 'tk_policy',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'policy_pick', options: ['open'], value: { action: 'policy_pick' } },
+    });
+    assert.match(asked.toast.content, /需要确认/);
+    assert.equal(panel.applied.length, 1, '第一次不带 confirm（hub 侧不落盘）');
+    assert.equal(panel.applied[0].confirm, undefined);
+    await app.flushPaints();
+    const card = JSON.stringify(app.gateway.calls.tokenUpdates.at(-1).card);
+    assert.match(card, /待确认/);
+    assert.match(card, /确定要放开吗/);
+    assert.match(card, /✅ 确认/, '确认做在同一张卡上（toast 会消失，卡不会）');
+
+    // 取消：什么都不改。
+    const cancelled = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_card',
+      token: 'tk_policy2',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_cancel: true } },
+    });
+    assert.match(cancelled.toast.content, /已取消/);
+    assert.equal(panel.applied.length, 1, '取消不产生任何 apply');
+    await app.flushPaints();
+    assert.doesNotMatch(JSON.stringify(app.gateway.calls.tokenUpdates.at(-1).card), /待确认/);
+
+    // 确认：带上 confirm:true 再调一次，结果画回卡上。
+    await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_card',
+      token: 'tk_policy3',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'select_static', name: 'policy_pick', options: ['open'], value: { action: 'policy_pick' } },
+    });
+    await app.flushPaints();
+    const confirmed = await app.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_card',
+      token: 'tk_policy4',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_confirm: true } },
+    });
+    assert.match(confirmed.toast.content, /已生效/);
+    assert.deepEqual(panel.applied.at(-1), { field: 'policy', value: 'open', confirm: true });
+    await app.flushPaints();
+    assert.doesNotMatch(JSON.stringify(app.gateway.calls.tokenUpdates.at(-1).card), /待确认/);
+  } finally {
+    await app.cleanup();
+  }
+
+  // 待确认项没了（重启/换卡）时如实说失效，绝不猜一个值去改设置。
+  const stale = await makeBridge({ panel: makePanelStub() });
+  try {
+    const answer = await stale.bridge.handleCardAction({
+      chatId: 'oc_group',
+      messageId: 'om_ghost',
+      token: 'tk_ghost',
+      operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { dsh_confirm: true } },
+    });
+    assert.match(answer.toast.content, /已失效/);
+    await stale.flushPaints();
+    assert.match(JSON.stringify(stale.gateway.calls.tokenUpdates.at(-1).card), /已经失效/);
+  } finally {
+    await stale.cleanup();
+  }
+});
+
 test('控制面板卡：渠道动作按钮带原生二次确认；点击走 panel.act 并排在应答之后重画', async () => {
   const { panelCard, panelAction } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
   const card = panelCard({

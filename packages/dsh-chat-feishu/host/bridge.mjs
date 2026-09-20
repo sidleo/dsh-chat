@@ -851,6 +851,14 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   const panelCards = new Map(); // 会话键 → messageId
 
   /**
+   * 待确认的改动（卡片消息 id → `{ field, value, prompt }`）。
+   *
+   * 只有"放宽访问策略"这类动作需要它：下拉选完先不落盘，把确认做在**同一张卡**上。
+   * 存内存：确认是几秒钟内的交互，重启/换卡后过期——那时如实说"这次确认已失效"，不静默改设置。
+   */
+  const pendingConfirms = new Map();
+
+  /**
    * 画一次控制面板：优先更新"本会话已有的那张"，其次 patch 调用方给的消息 id，最后新发。
    *
    * @param options - { chatId, key, messageId?, panel, last?, source }。
@@ -858,11 +866,11 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
    */
   async function renderPanel({
     chatId, key = null, messageId = null, panel, last = null, source = 'unknown', token = null,
-    fresh = false,
+    fresh = false, pending = null,
   }) {
     // 标题带上本次渲染时间：聊天里可能有多张面板卡（旧卡、重启前的卡），
     // "哪张是刚更新的"必须一眼可辨，否则用户会以为卡片"变回去了"。
-    const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    const card = panelCard(panel, { last, at: last?.at ?? panelClock(), pending });
     /** 三条路都失败才算渲染失败：中间失败有兜底，不该把状态页写成"出错了"。 */
     const renderErrors = [];
     /**
@@ -1073,8 +1081,20 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       botLabel: bot.botName ?? bot.id,
       channelLabel: '飞书',
     };
+    /**
+     * 这张卡当前有没有待确认的改动（重启后内存里没有 → 显示"已失效"）。
+     *
+     * 只有"点的是我们自己发的卡"时才认：messageId 缺失（例如回调没带）时不敢乱认。
+     */
+    function pendingForCard(messageId, { expired = false } = {}) {
+      if (!messageId) return expired ? { prompt: '', expired: true } : null;
+      const found = pendingConfirms.get(messageId);
+      if (found) return found;
+      return expired ? { prompt: '', expired: true } : null;
+    }
+
     /** 重画控制面板：读最新状态，并把"上一次做了什么、结果如何"画上去。 */
-    async function repaintPanel(last = null, source = 'unknown') {
+    async function repaintPanel(last = null, source = 'unknown', pending = null) {
       const state = await readPanel(commandContext);
       if (!state) {
         logger.warn?.(`[dsh-chat-feishu] 控制面板状态读取失败，无法重画（source=${source}）`);
@@ -1086,6 +1106,7 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         source,
         // 用回调带来的延迟更新 token —— 交互后的卡片更新只能走这条路。
         token: event.token ?? null,
+        pending,
       });
     }
 
@@ -1106,8 +1127,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
     }
 
     /** 应答之后重画控制面板。失败照旧可见（日志 + `lastError`），只是不能进 toast 了。 */
-    function repaintAfterResponse(last, source) {
-      afterResponse(() => repaintPanel(last, source).then((ok) => {
+    function repaintAfterResponse(last, source, pending = null) {
+      afterResponse(() => repaintPanel(last, source, pending).then((ok) => {
         if (!ok) noteCardError(`控制面板应答后重画失败（${source}）`, '未画出，见上面的 warn');
       }).catch((error) => {
         noteCardError(`控制面板应答后重画失败（${source}）`, error?.message ?? error);
@@ -1171,6 +1192,18 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick.field, value: pick.value });
         const message = applied?.message ?? '已生效。';
+        /**
+         * 需要二次确认（放宽访问策略）：**先不落盘**，把确认画在同一张卡上。
+         * 用 toast 说"需要确认"是不够的——toast 会消失，用户过两秒就不知道在确认什么。
+         */
+        if (applied?.requiresConfirm === true) {
+          const pending = { field: pick.field, value: pick.value, prompt: applied.confirmPrompt ?? message };
+          if (event.messageId) pendingConfirms.set(event.messageId, pending);
+          else logger.warn?.('[dsh-chat-feishu] 这次回调没带 messageId，二次确认只能靠卡片上的提示');
+          repaintAfterResponse({ label: pick.label, message, ok: true }, `pick:${value.action}(待确认)`, pending);
+          return { toast: { type: 'info', content: '这次改动需要确认，请在卡片上点「✅ 确认」。' } };
+        }
+        if (event.messageId) pendingConfirms.delete(event.messageId);
         // 重画排在应答之后：先更新再应答会被客户端还原（"闪一下又变回去"）。
         repaintAfterResponse({ label: pick.label, message, ok: true }, `pick:${value.action}`);
         return { toast: { type: 'success', content: message.slice(0, 80) } };
@@ -1180,6 +1213,45 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         const message = error?.message ?? String(error);
         // 这一步同样要排在应答之后，否则 ❌ 也会被还原。
         repaintAfterResponse({ label: pick.label, message, ok: false }, `pick:${value.action}(失败)`);
+        return { toast: { type: 'error', content: message.slice(0, 80) } };
+      }
+    }
+
+    /**
+     * 卡片上的「✅ 确认 / ↩️ 取消」（面板下拉触发的二次确认）。
+     *
+     * 确认时才带着 `confirm: true` 再调一次 `panel.apply`——hub 侧只有在 `confirm: true` 时才落盘，
+     * 所以"误点一下"永远改不了设置。找不到待确认项（重启/换卡后）就如实说失效，绝不猜值。
+     */
+    if (value.dsh_cancel === true) {
+      if (event.messageId) pendingConfirms.delete(event.messageId);
+      repaintAfterResponse({ label: '取消改动', message: '已取消，什么都没改。', ok: true }, 'cancel');
+      return { toast: { type: 'info', content: '已取消。' } };
+    }
+    if (value.dsh_confirm === true) {
+      const pending = event.messageId ? pendingConfirms.get(event.messageId) : null;
+      if (!pending) {
+        logger.warn?.(`[dsh-chat-feishu] 收到确认但找不到待确认项（${event.messageId ?? '无 messageId'}）`);
+        repaintAfterResponse(
+          { label: '确认已失效', message: '这次确认已失效，请重新选一次。', ok: false },
+          'confirm(失效)',
+          { prompt: '', expired: true },
+        );
+        return { toast: { type: 'error', content: '这次确认已失效，请重新选一次。' } };
+      }
+      try {
+        const applied = await deps.panel.apply({
+          ...panelContext, field: pending.field, value: pending.value, confirm: true,
+        });
+        const message = applied?.message ?? '已生效。';
+        pendingConfirms.delete(event.messageId);
+        repaintAfterResponse({ label: '已确认', message, ok: true }, 'confirm');
+        return { toast: { type: 'success', content: message.slice(0, 80) } };
+      } catch (error) {
+        noteCardError(`控制面板确认失败（${pending.field}=${pending.value}）`, error?.message ?? error);
+        const message = error?.message ?? String(error);
+        pendingConfirms.delete(event.messageId);
+        repaintAfterResponse({ label: '确认失败', message, ok: false }, 'confirm(失败)');
         return { toast: { type: 'error', content: message.slice(0, 80) } };
       }
     }

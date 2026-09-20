@@ -17,6 +17,9 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 
+import {
+  defaultAccessPolicy, describeAccessScope, normalizeAccessPolicy, validateAccessPolicy,
+} from '../shared/access-policy.mjs';
 import { normalizeContextConfig, TARGET_LIMIT } from '../shared/context-enhancement.mjs';
 import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
 
@@ -159,6 +162,43 @@ function contextPanelState({ record, key, isOwner }) {
 }
 
 /**
+ * 本会话的访问策略模式（面板字段 `policy`）。
+ *
+ * 语义：**这个会话类型**（私聊/群聊）谁可以跟机器人说话——
+ * `allowlist` 只有名单内用户（名单为空时等价于"仅属主"）；`open` 任何人都可以。
+ * 写的是机器人级配置（与设置页同一份 `accessPolicy`），所以只给属主。
+ *
+ * `open` 是**放宽**权限的改动：`apply` 时没带 `confirm:true` 就先不回写，把确认交给渠道渲染。
+ */
+function policyPanelState({ record, conversationType, isOwner }) {
+  if (isOwner !== true) return null;
+  if (conversationType !== 'direct' && conversationType !== 'group') return null;
+  const stored = normalizeAccessPolicy(record.accessPolicy);
+  const scope = (stored ?? defaultAccessPolicy())[conversationType];
+  const kindLabel = conversationType === 'group' ? '群聊' : '私聊';
+  return {
+    // `stored === null` = 从没设过（口径是"仅属主可用"）：如实显示成未设置，不冒充某种模式。
+    current: stored ? scope.mode : null,
+    label: describeAccessScope(record.accessPolicy, conversationType),
+    conversationType,
+    kindLabel,
+    allowlistCount: scope.mode === 'allowlist' ? scope.allowlist.users.length : null,
+    options: [
+      {
+        value: 'allowlist',
+        label: scope.mode === 'allowlist' && scope.allowlist.users.length > 0
+          ? `仅名单内可用（当前 ${scope.allowlist.users.length} 人）`
+          : '仅名单内可用（名单为空时只有属主能用）',
+      },
+      {
+        value: 'open',
+        label: '任何人可用（群聊里任何成员都能 @ 它）',
+      },
+    ],
+  };
+}
+
+/**
  * 校验一个工作区路径：必须是已存在的目录，且存绝对路径。
  *
  * @param raw - 用户/卡片给的值。
@@ -233,7 +273,55 @@ export function createPanelService({
   }
 
   /** 面板内置字段：其它字段一律交给**渠道自己**处理（如飞书的「任务过程展示」）。 */
-  const BUILT_IN_FIELDS = new Set(['model', 'reasoning', 'preset', 'workspace', 'session', 'context']);
+  const BUILT_IN_FIELDS = new Set([
+    'model', 'reasoning', 'preset', 'workspace', 'session', 'context', 'policy',
+  ]);
+
+  /**
+   * 应用「访问策略模式」这个选择。
+   *
+   * 放宽到 `open`（任何人可用）时必须先确认一次：没带 `confirm: true` 就**不回写**，
+   * 而是回一个 `requiresConfirm` + 说明，由渠道渲染二次确认（飞书是卡片上的一行确认按钮）。
+   * 这不是"安全边界"（真正的门禁是 owner-only），而是防误触——一次误选就把机器人对所有人开放。
+   */
+  async function applyPolicyMode({ channelId, botId, conversationType, value, record, field, confirm }) {
+    if (conversationType !== 'direct' && conversationType !== 'group') {
+      throw panelError('chat/bad-request', '不知道这是私聊还是群聊，没法改访问策略。');
+    }
+    if (value !== 'open' && value !== 'allowlist') {
+      throw panelError('chat/bad-request', `访问策略只支持 allowlist 或 open（收到 ${String(value)}）。`);
+    }
+    const base = normalizeAccessPolicy(record.accessPolicy) ?? defaultAccessPolicy();
+    const kindLabel = conversationType === 'group' ? '群聊' : '私聊';
+    const before = base[conversationType].mode;
+    if (value === 'open' && confirm !== true) {
+      return {
+        field,
+        value,
+        // 渠道据此渲染二次确认（不要当成"已生效"）。
+        requiresConfirm: true,
+        confirmPrompt: `把${kindLabel}改成「任何人可用」后，不在名单里的人也能跟机器人对话`
+          + `${conversationType === 'group' ? '（群里任何成员 @ 它就行）' : ''}。确定要放开吗？`,
+        message: `需要确认：${kindLabel}将改为任何人可用。`,
+      };
+    }
+    if (before === value) {
+      return { field, value, message: `${kindLabel}的访问策略本来就是「${
+        value === 'open' ? '任何人可用' : '仅名单内可用'}」，没有改动。` };
+    }
+    // 只改这一个会话类型的 mode，名单与命令权限照旧（用严格校验产出合法策略）。
+    const next = validateAccessPolicy({
+      ...base,
+      [conversationType]: { ...base[conversationType], mode: value },
+    });
+    const saved = await settings.write(channelId, botId, { accessPolicy: next });
+    return {
+      field,
+      value,
+      message: `${kindLabel}的访问策略已改为「${value === 'open' ? '任何人可用' : '仅名单内可用'}」`
+        + `（现在：${describeAccessScope(saved?.accessPolicy ?? next, conversationType)}；下一条消息生效）。`,
+    };
+  }
 
   /**
    * 应用「本会话的上下文增强」这个选择（三种取值，语义见 `contextPanelState`）。
@@ -584,6 +672,8 @@ export function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
+        policy: policyPanelState({ record, conversationType, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
         actions: channelActionState.actions,
         actionsFailed: channelActionState.failed === true,
@@ -652,7 +742,9 @@ export function createPanelService({
      *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value, isOwner = false, conversationType = null }) {
+    async apply({
+      channelId, botId, key, field, value, isOwner = false, conversationType = null, confirm = false,
+    }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
@@ -673,6 +765,19 @@ export function createPanelService({
         }
         return applyContextScope({
           channelId, botId, key, value, record, field,
+        });
+      }
+
+      /**
+       * 访问策略：改的是**机器人级配置**（`record.accessPolicy`），与设置页同一份数据，
+       * 所以只限属主；放宽到 open 还要再确认一次（见 `applyPolicyMode`）。
+       */
+      if (field === 'policy') {
+        if (isOwner !== true) {
+          throw panelError('chat/owner-only', '访问策略是机器人级设置，只有属主能改。');
+        }
+        return applyPolicyMode({
+          channelId, botId, conversationType, value, record, field, confirm,
         });
       }
 

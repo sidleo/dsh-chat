@@ -169,6 +169,16 @@ function channelActionButton(item) {
   };
 }
 
+/** 只有外观的按钮壳（行为由调用方补，确认/取消这类按钮的 value 与面板动作不同）。 */
+function buttonLike(label, type = 'default') {
+  return {
+    tag: 'button',
+    type,
+    width: 'fill',
+    text: { tag: 'plain_text', content: label },
+  };
+}
+
 function row(elements) {
   return { tag: 'column_set', flex_mode: 'none', columns: elements.map((el) => ({ tag: 'column', width: 'weighted', weight: 1, elements: [el] })) };
 }
@@ -182,7 +192,7 @@ function row(elements) {
  *   （旧卡、重启前的卡），**标题上的时间就是"哪张是最新的"最直接的判据**。
  * @returns Card 2.0 对象。
  */
-export function panelCard(state, { last = null, at = null } = {}) {
+export function panelCard(state, { last = null, at = null, pending = null } = {}) {
   const elements = [];
   const bound = state?.bound === true;
   const model = state?.model ?? {};
@@ -432,6 +442,51 @@ export function panelCard(state, { last = null, at = null } = {}) {
     });
   }
 
+  /**
+   * 本会话类型的访问策略（只给属主，hub 侧已判）。
+   *
+   * `current` 为 null = 从没设过（口径是"仅属主可用"），如实说，不冒充某种模式。
+   */
+  if (state?.policy) {
+    const policy = state.policy;
+    const picker = dropdown({
+      name: 'policy_pick',
+      action: 'policy_pick',
+      placeholder: '选择谁能跟机器人说话',
+      items: (policy.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+      current: policy.current ?? null,
+    });
+    if (picker.element) {
+      elements.push(grid([field(`访问策略（本${policy.kindLabel === 'group' ? '群' : '私聊'}）`, picker.element)]));
+    }
+    elements.push({
+      tag: 'markdown',
+      content: policy.current
+        ? `现在：${policy.label}`
+        : `现在：${policy.label}（还没设过；改成「任何人可用」会先让你确认一次）`,
+    });
+  }
+
+  /**
+   * 待确认的一次改动（放宽访问策略这类）：把确认做在**同一张卡**上，
+   * 不做成 toast——toast 会消失，用户过两秒就不知道自己在确认什么了。
+   */
+  if (pending) {
+    elements.push({ tag: 'hr' });
+    elements.push({ tag: 'markdown', content: `⚠️ **待确认**\n${h(pending.prompt)}` });
+    if (pending.expired) {
+      elements.push({
+        tag: 'markdown',
+        content: '这次确认已经失效（机器人重启过或卡片刷新了），请重新在上面选一次。',
+      });
+    } else {
+      elements.push(row([
+        { ...buttonLike('✅ 确认', 'primary'), behaviors: [{ type: 'callback', value: { dsh_confirm: true } }] },
+        { ...buttonLike('↩️ 取消', 'default'), behaviors: [{ type: 'callback', value: { dsh_cancel: true } }] },
+      ]));
+    }
+  }
+
   const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
@@ -519,6 +574,7 @@ export function panelPick(action, options) {
     preset_pick: { field: 'preset', label: '设置 Agent 预设' },
     workspace_pick: { field: 'workspace', label: '切换工作区' },
     context_pick: { field: 'context', label: '设置本会话的上下文增强' },
+    policy_pick: { field: 'policy', label: '设置访问策略' },
   };
   /**
    * 渠道自带字段（如飞书的「任务过程展示」）：动作名是 `panel_field_<字段名>`。

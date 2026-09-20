@@ -618,6 +618,110 @@ test('渠道自带的面板字段：读得到就带出来，apply 透传给渠�
   );
 });
 
+test('访问策略下拉：放宽到"任何人可用"必须先确认一次；只改当前会话类型那一份', async () => {
+  const defaultScope = () => ({
+    mode: 'allowlist',
+    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+    allowlist: { users: [{ id: 'ou_a', canExecuteCommands: true }] },
+  });
+  const { panel, state, calls } = makePanel({
+    record: { accessPolicy: { direct: defaultScope(), group: { ...defaultScope(), mode: 'open' } } },
+  });
+
+  // ① 读：只给属主，且必须知道是私聊还是群聊；从没设过时 current 为 null（不冒充某种模式）。
+  const read = await panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true, conversationType: 'direct',
+  });
+  assert.equal(read.policy.current, 'allowlist');
+  assert.equal(read.policy.conversationType, 'direct');
+  assert.equal(read.policy.kindLabel, '私聊');
+  assert.match(read.policy.label, /名单内 1 人可用/);
+  assert.deepEqual(read.policy.options.map((item) => item.value), ['allowlist', 'open']);
+  assert.match(read.policy.options[0].label, /当前 1 人/);
+  assert.match(read.policy.options[1].label, /任何人可用/);
+
+  const asMember = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', conversationType: 'direct' });
+  assert.equal(asMember.policy, null, '非属主不给');
+  const unknownScope = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.equal(unknownScope.policy, null, '不知道私聊还是群聊时不给（免得改错一份）');
+
+  const never = await panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true, conversationType: 'direct',
+  });
+
+  // ② 放宽到 open：没带 confirm 就不落盘，回一个可渲染的确认说明。
+  const asked = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'open',
+    isOwner: true, conversationType: 'direct',
+  });
+  assert.equal(asked.requiresConfirm, true);
+  assert.match(asked.confirmPrompt, /不在名单里的人也能跟机器人对话/);
+  assert.equal(calls.some((call) => call.kind === 'write'), false, '确认之前绝不能落盘');
+  assert.equal(state.accessPolicy.direct.mode, 'allowlist', '设置原样');
+
+  // ③ 带 confirm 才真的改；只动私聊那一份，群聊那份原样。
+  const done = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'open',
+    isOwner: true, conversationType: 'direct', confirm: true,
+  });
+  assert.match(done.message, /私聊的访问策略已改为「任何人可用」/);
+  assert.match(done.message, /下一条消息生效/);
+  assert.equal(state.accessPolicy.direct.mode, 'open');
+  assert.deepEqual(state.accessPolicy.direct.allowlist.users, [{ id: 'ou_a', canExecuteCommands: true }],
+    '名单与命令权限照旧');
+  assert.equal(state.accessPolicy.group.mode, 'open', '群聊那份没被碰');
+
+  // ④ 收窄回 allowlist 不需要确认；本来就是那个值时如实说"没有改动"。
+  const narrowed = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'allowlist',
+    isOwner: true, conversationType: 'direct',
+  });
+  assert.match(narrowed.message, /已改为「仅名单内可用」/);
+  assert.equal(narrowed.requiresConfirm, undefined);
+  const same = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'allowlist',
+    isOwner: true, conversationType: 'direct',
+  });
+  assert.match(same.message, /本来就是/);
+
+  // ⑤ 从没设过策略的机器人：先得到默认策略再改（默认是 allowlist）。
+  const fresh = makePanel({});
+  const freshRead = await fresh.panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true, conversationType: 'group',
+  });
+  assert.equal(freshRead.policy.current, null);
+  assert.match(freshRead.policy.label, /未设置（仅属主可用）/);
+  // 未设置 ≡ allowlist 空名单 ≡ 仅属主：选它就是无操作（如实说"本来就是"，不凭空写盘）。
+  const noop = await fresh.panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', field: 'policy', value: 'allowlist',
+    isOwner: true, conversationType: 'group',
+  });
+  assert.match(noop.message, /本来就是/);
+  assert.equal(fresh.state.accessPolicy, undefined, '没有变化就不该写盘');
+  // 真要开放时才落盘：写出来的是**成对完整**的策略（另一份补默认值）。
+  await fresh.panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', field: 'policy', value: 'open',
+    isOwner: true, conversationType: 'group', confirm: true,
+  });
+  assert.equal(fresh.state.accessPolicy.group.mode, 'open');
+  assert.equal(fresh.state.accessPolicy.direct.mode, 'allowlist', '另一份补上默认值（策略必须成对完整）');
+
+  // ⑥ 门禁与非法值。
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'open', conversationType: 'direct',
+    }),
+    (error) => error.code === 'chat/owner-only',
+  );
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'policy', value: 'nope',
+      isOwner: true, conversationType: 'direct',
+    }),
+    (error) => error.code === 'chat/bad-request',
+  );
+});
+
 test('渠道动作按钮：读出来透传，点击走 panel.act，失败原样抛 code', async () => {
   const seen = [];
   const channelRpc = async (channelId, method, payload) => {

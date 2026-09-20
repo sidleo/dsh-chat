@@ -184,6 +184,10 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      hub 只做形状校验与透传——hub 不认识这些字段的语义，所以字段名/标签/选项全部由渠道给。
    *      渠道想列几项就列几项（飞书把「任务过程展示」私聊/群聊两份都列出来，
    *      卡片在哪不影响能改哪一份）；`isOwner` 也一并透传，渠道要按身份收窄候选就自己判。
+   *      `policy` 是**本会话类型的访问策略**（谁能跟机器人说话），只给属主、
+   *      且必须知道是私聊还是群聊（`conversationType` 认不出就不给）：
+   *      `{ current: 'open'|'allowlist'|null, label, conversationType, kindLabel, allowlistCount, options }`。
+   *      `current = null` 表示**从没设过**（口径是"仅属主可用"）——如实显示，不冒充某种模式。
    *      `context` 是**本会话的上下文增强**（用哪一份设置），只给属主（写的是机器人级配置）：
    *      `{ current, label, identity, kind, scopeEnabled, own, options }`。
    *      `current = ''` 跟随该会话类型的全局设置、`'own'` 本会话有专属设置；
@@ -198,7 +202,7 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      `panel.act({ botId, key, conversationType, action, isOwner }) -> { message }`，
    *      失败把渠道的 code/message 原样抛出去（渠道自己按 isOwner 判能不能点）。
    * apply({ channelId, botId, key, field, value, isOwner })
-   *      field ∈ model | reasoning | preset | workspace | session | context
+   *      field ∈ model | reasoning | preset | workspace | session | context | policy
    *      **不在内置字段表（model/reasoning/preset/workspace/session）里的 field 一律透传给渠道**：
    *      调渠道的 `panel.apply({botId,key,conversationType,field,value}) -> {value,message}`，
    *      渠道返回 `ok:false` 时原样抛它的 code/message（失败必须可见）。
@@ -214,7 +218,13 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *         chat/unknown-effort / chat/unknown-preset / chat/preset-unavailable / chat/workspace-invalid /
    *         chat/unknown-session / chat/session-check-failed / chat/model-selection-unavailable /
    *         chat/owner-only / chat/context-target-limit / chat/unknown-context-target /
+   *         chat/requires-confirm（见下） /
    *         chat/unknown-field），渠道把 message 原样给用户看。
+   *      **需要确认的改动**：`apply` 可以返回 `{ requiresConfirm: true, confirmPrompt, message }`——
+   *      这时**什么都没写**，渠道要把 `confirmPrompt` 渲染成二次确认；用户确认后再带
+   *      `confirm: true` 调一次同样的 `apply` 才真正落盘。当前只有 `policy` 放宽到 `open`
+   *      （任何人可用）走这条路：一次误选就把机器人对所有人开放。`confirm` 不是安全边界
+   *      （门禁是 owner-only），它防的是误触。
    * 语义：模型与推理等级是**会话级**（立即生效）；预设与工作区是**机器人级、只对新会话生效**；
    * `context` 是**机器人级**且**下一条消息生效**（上下文增强在收到消息时捕获），
    * 它只动本会话那一条指定设置（`own` 复制全局、`copy:<id>` 复制另一条、`''` 删掉本会话那条），

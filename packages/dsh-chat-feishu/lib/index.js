@@ -127094,10 +127094,18 @@ function channelActionButton(item) {
     } : {}
   };
 }
+function buttonLike(label, type = "default") {
+  return {
+    tag: "button",
+    type,
+    width: "fill",
+    text: { tag: "plain_text", content: label }
+  };
+}
 function row(elements) {
   return { tag: "column_set", flex_mode: "none", columns: elements.map((el) => ({ tag: "column", width: "weighted", weight: 1, elements: [el] })) };
 }
-function panelCard(state, { last = null, at = null } = {}) {
+function panelCard(state, { last = null, at = null, pending = null } = {}) {
   const elements = [];
   const bound = state?.bound === true;
   const model = state?.model ?? {};
@@ -127273,6 +127281,39 @@ function panelCard(state, { last = null, at = null } = {}) {
       content: context.own ? `\u5DF2\u6709\u4E13\u5C5E\u8BBE\u7F6E\uFF08\u6765\u6E90\u5B57\u6BB5 ${context.own.fields} \u4E2A\u3001\u63D0\u793A\u8BCD ${context.own.guidanceLength} \u5B57\uFF09\uFF0C\u5185\u5BB9\u5230\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\uFF08\`${h(context.identity)}\`\uFF09\u3002` : "\u5185\u5BB9\uFF08\u6765\u6E90\u5B57\u6BB5\u4E0E\u63D0\u793A\u8BCD\uFF09\u5728\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\u3002"
     });
   }
+  if (state?.policy) {
+    const policy = state.policy;
+    const picker = dropdown({
+      name: "policy_pick",
+      action: "policy_pick",
+      placeholder: "\u9009\u62E9\u8C01\u80FD\u8DDF\u673A\u5668\u4EBA\u8BF4\u8BDD",
+      items: (policy.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+      current: policy.current ?? null
+    });
+    if (picker.element) {
+      elements.push(grid([field(`\u8BBF\u95EE\u7B56\u7565\uFF08\u672C${policy.kindLabel === "group" ? "\u7FA4" : "\u79C1\u804A"}\uFF09`, picker.element)]));
+    }
+    elements.push({
+      tag: "markdown",
+      content: policy.current ? `\u73B0\u5728\uFF1A${policy.label}` : `\u73B0\u5728\uFF1A${policy.label}\uFF08\u8FD8\u6CA1\u8BBE\u8FC7\uFF1B\u6539\u6210\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\u4F1A\u5148\u8BA9\u4F60\u786E\u8BA4\u4E00\u6B21\uFF09`
+    });
+  }
+  if (pending) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: `\u26A0\uFE0F **\u5F85\u786E\u8BA4**
+${h(pending.prompt)}` });
+    if (pending.expired) {
+      elements.push({
+        tag: "markdown",
+        content: "\u8FD9\u6B21\u786E\u8BA4\u5DF2\u7ECF\u5931\u6548\uFF08\u673A\u5668\u4EBA\u91CD\u542F\u8FC7\u6216\u5361\u7247\u5237\u65B0\u4E86\uFF09\uFF0C\u8BF7\u91CD\u65B0\u5728\u4E0A\u9762\u9009\u4E00\u6B21\u3002"
+      });
+    } else {
+      elements.push(row([
+        { ...buttonLike("\u2705 \u786E\u8BA4", "primary"), behaviors: [{ type: "callback", value: { dsh_confirm: true } }] },
+        { ...buttonLike("\u21A9\uFE0F \u53D6\u6D88", "default"), behaviors: [{ type: "callback", value: { dsh_cancel: true } }] }
+      ]));
+    }
+  }
   const channelCells = [];
   for (const item of state?.fields ?? []) {
     const picker = dropdown({
@@ -127334,7 +127375,8 @@ function panelPick(action, options) {
     reasoning_pick: { field: "reasoning", label: "\u8BBE\u7F6E\u63A8\u7406\u7B49\u7EA7" },
     preset_pick: { field: "preset", label: "\u8BBE\u7F6E Agent \u9884\u8BBE" },
     workspace_pick: { field: "workspace", label: "\u5207\u6362\u5DE5\u4F5C\u533A" },
-    context_pick: { field: "context", label: "\u8BBE\u7F6E\u672C\u4F1A\u8BDD\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A" }
+    context_pick: { field: "context", label: "\u8BBE\u7F6E\u672C\u4F1A\u8BDD\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A" },
+    policy_pick: { field: "policy", label: "\u8BBE\u7F6E\u8BBF\u95EE\u7B56\u7565" }
   };
   const dynamic = typeof action === "string" && action.startsWith("panel_field_") ? { field: action.slice("panel_field_".length), label: "\u6E20\u9053\u8BBE\u7F6E" } : null;
   const target = map[action] ?? dynamic;
@@ -127975,6 +128017,7 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     });
   }
   const panelCards = /* @__PURE__ */ new Map();
+  const pendingConfirms = /* @__PURE__ */ new Map();
   async function renderPanel({
     chatId,
     key = null,
@@ -127983,9 +128026,10 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     last = null,
     source = "unknown",
     token = null,
-    fresh = false
+    fresh = false,
+    pending = null
   }) {
-    const card = panelCard(panel, { last, at: last?.at ?? panelClock() });
+    const card = panelCard(panel, { last, at: last?.at ?? panelClock(), pending });
     const renderErrors = [];
     const known = key ? panelCards.get(key) : null;
     const targets = fresh ? [] : [messageId, messageId ? null : known].filter(Boolean);
@@ -128109,7 +128153,13 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       botLabel: bot.botName ?? bot.id,
       channelLabel: "\u98DE\u4E66"
     };
-    async function repaintPanel(last = null, source = "unknown") {
+    function pendingForCard(messageId, { expired = false } = {}) {
+      if (!messageId) return expired ? { prompt: "", expired: true } : null;
+      const found = pendingConfirms.get(messageId);
+      if (found) return found;
+      return expired ? { prompt: "", expired: true } : null;
+    }
+    async function repaintPanel(last = null, source = "unknown", pending = null) {
       const state2 = await readPanel(commandContext);
       if (!state2) {
         logger.warn?.(`[dsh-chat-feishu] \u63A7\u5236\u9762\u677F\u72B6\u6001\u8BFB\u53D6\u5931\u8D25\uFF0C\u65E0\u6CD5\u91CD\u753B\uFF08source=${source}\uFF09`);
@@ -128123,7 +128173,8 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         last: last ? { at: panelClock(), ...last } : null,
         source,
         // 用回调带来的延迟更新 token —— 交互后的卡片更新只能走这条路。
-        token: event.token ?? null
+        token: event.token ?? null,
+        pending
       });
     }
     function afterResponse(task) {
@@ -128136,8 +128187,8 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       }, RESPONSE_SETTLE_MS);
       timer.unref?.();
     }
-    function repaintAfterResponse(last, source) {
-      afterResponse(() => repaintPanel(last, source).then((ok) => {
+    function repaintAfterResponse(last, source, pending = null) {
+      afterResponse(() => repaintPanel(last, source, pending).then((ok) => {
         if (!ok) noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7B54\u540E\u91CD\u753B\u5931\u8D25\uFF08${source}\uFF09`, "\u672A\u753B\u51FA\uFF0C\u89C1\u4E0A\u9762\u7684 warn");
       }).catch((error) => {
         noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7B54\u540E\u91CD\u753B\u5931\u8D25\uFF08${source}\uFF09`, error?.message ?? error);
@@ -128184,12 +128235,55 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
       try {
         const applied = await deps.panel.apply({ ...panelContext, field: pick2.field, value: pick2.value });
         const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
+        if (applied?.requiresConfirm === true) {
+          const pending = { field: pick2.field, value: pick2.value, prompt: applied.confirmPrompt ?? message };
+          if (event.messageId) pendingConfirms.set(event.messageId, pending);
+          else logger.warn?.("[dsh-chat-feishu] \u8FD9\u6B21\u56DE\u8C03\u6CA1\u5E26 messageId\uFF0C\u4E8C\u6B21\u786E\u8BA4\u53EA\u80FD\u9760\u5361\u7247\u4E0A\u7684\u63D0\u793A");
+          repaintAfterResponse({ label: pick2.label, message, ok: true }, `pick:${value.action}(\u5F85\u786E\u8BA4)`, pending);
+          return { toast: { type: "info", content: "\u8FD9\u6B21\u6539\u52A8\u9700\u8981\u786E\u8BA4\uFF0C\u8BF7\u5728\u5361\u7247\u4E0A\u70B9\u300C\u2705 \u786E\u8BA4\u300D\u3002" } };
+        }
+        if (event.messageId) pendingConfirms.delete(event.messageId);
         repaintAfterResponse({ label: pick2.label, message, ok: true }, `pick:${value.action}`);
         return { toast: { type: "success", content: message.slice(0, 80) } };
       } catch (error) {
         noteCardError(`\u63A7\u5236\u9762\u677F\u5E94\u7528\u5931\u8D25\uFF08${pick2.field}=${pick2.value}\uFF09`, error?.message ?? error);
         const message = error?.message ?? String(error);
         repaintAfterResponse({ label: pick2.label, message, ok: false }, `pick:${value.action}(\u5931\u8D25)`);
+        return { toast: { type: "error", content: message.slice(0, 80) } };
+      }
+    }
+    if (value.dsh_cancel === true) {
+      if (event.messageId) pendingConfirms.delete(event.messageId);
+      repaintAfterResponse({ label: "\u53D6\u6D88\u6539\u52A8", message: "\u5DF2\u53D6\u6D88\uFF0C\u4EC0\u4E48\u90FD\u6CA1\u6539\u3002", ok: true }, "cancel");
+      return { toast: { type: "info", content: "\u5DF2\u53D6\u6D88\u3002" } };
+    }
+    if (value.dsh_confirm === true) {
+      const pending = event.messageId ? pendingConfirms.get(event.messageId) : null;
+      if (!pending) {
+        logger.warn?.(`[dsh-chat-feishu] \u6536\u5230\u786E\u8BA4\u4F46\u627E\u4E0D\u5230\u5F85\u786E\u8BA4\u9879\uFF08${event.messageId ?? "\u65E0 messageId"}\uFF09`);
+        repaintAfterResponse(
+          { label: "\u786E\u8BA4\u5DF2\u5931\u6548", message: "\u8FD9\u6B21\u786E\u8BA4\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u9009\u4E00\u6B21\u3002", ok: false },
+          "confirm(\u5931\u6548)",
+          { prompt: "", expired: true }
+        );
+        return { toast: { type: "error", content: "\u8FD9\u6B21\u786E\u8BA4\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u9009\u4E00\u6B21\u3002" } };
+      }
+      try {
+        const applied = await deps.panel.apply({
+          ...panelContext,
+          field: pending.field,
+          value: pending.value,
+          confirm: true
+        });
+        const message = applied?.message ?? "\u5DF2\u751F\u6548\u3002";
+        pendingConfirms.delete(event.messageId);
+        repaintAfterResponse({ label: "\u5DF2\u786E\u8BA4", message, ok: true }, "confirm");
+        return { toast: { type: "success", content: message.slice(0, 80) } };
+      } catch (error) {
+        noteCardError(`\u63A7\u5236\u9762\u677F\u786E\u8BA4\u5931\u8D25\uFF08${pending.field}=${pending.value}\uFF09`, error?.message ?? error);
+        const message = error?.message ?? String(error);
+        pendingConfirms.delete(event.messageId);
+        repaintAfterResponse({ label: "\u786E\u8BA4\u5931\u8D25", message, ok: false }, "confirm(\u5931\u8D25)");
         return { toast: { type: "error", content: message.slice(0, 80) } };
       }
     }

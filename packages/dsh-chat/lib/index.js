@@ -2601,6 +2601,31 @@ function contextPanelState({ record, key, isOwner }) {
     options
   };
 }
+function policyPanelState({ record, conversationType, isOwner }) {
+  if (isOwner !== true) return null;
+  if (conversationType !== "direct" && conversationType !== "group") return null;
+  const stored = normalizeAccessPolicy(record.accessPolicy);
+  const scope = (stored ?? defaultAccessPolicy())[conversationType];
+  const kindLabel = conversationType === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  return {
+    // `stored === null` = 从没设过（口径是"仅属主可用"）：如实显示成未设置，不冒充某种模式。
+    current: stored ? scope.mode : null,
+    label: describeAccessScope(record.accessPolicy, conversationType),
+    conversationType,
+    kindLabel,
+    allowlistCount: scope.mode === "allowlist" ? scope.allowlist.users.length : null,
+    options: [
+      {
+        value: "allowlist",
+        label: scope.mode === "allowlist" && scope.allowlist.users.length > 0 ? `\u4EC5\u540D\u5355\u5185\u53EF\u7528\uFF08\u5F53\u524D ${scope.allowlist.users.length} \u4EBA\uFF09` : "\u4EC5\u540D\u5355\u5185\u53EF\u7528\uFF08\u540D\u5355\u4E3A\u7A7A\u65F6\u53EA\u6709\u5C5E\u4E3B\u80FD\u7528\uFF09"
+      },
+      {
+        value: "open",
+        label: "\u4EFB\u4F55\u4EBA\u53EF\u7528\uFF08\u7FA4\u804A\u91CC\u4EFB\u4F55\u6210\u5458\u90FD\u80FD @ \u5B83\uFF09"
+      }
+    ]
+  };
+}
 async function validateWorkspacePath(raw) {
   if (typeof raw !== "string" || !raw.trim()) {
     throw panelError("chat/workspace-invalid", "\u5DE5\u4F5C\u533A\u9700\u8981\u662F\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u3002");
@@ -2650,7 +2675,49 @@ function createPanelService({
       reasoningEffort: selection.reasoningEffort ?? null
     };
   }
-  const BUILT_IN_FIELDS = /* @__PURE__ */ new Set(["model", "reasoning", "preset", "workspace", "session", "context"]);
+  const BUILT_IN_FIELDS = /* @__PURE__ */ new Set([
+    "model",
+    "reasoning",
+    "preset",
+    "workspace",
+    "session",
+    "context",
+    "policy"
+  ]);
+  async function applyPolicyMode({ channelId, botId, conversationType, value, record, field, confirm }) {
+    if (conversationType !== "direct" && conversationType !== "group") {
+      throw panelError("chat/bad-request", "\u4E0D\u77E5\u9053\u8FD9\u662F\u79C1\u804A\u8FD8\u662F\u7FA4\u804A\uFF0C\u6CA1\u6CD5\u6539\u8BBF\u95EE\u7B56\u7565\u3002");
+    }
+    if (value !== "open" && value !== "allowlist") {
+      throw panelError("chat/bad-request", `\u8BBF\u95EE\u7B56\u7565\u53EA\u652F\u6301 allowlist \u6216 open\uFF08\u6536\u5230 ${String(value)}\uFF09\u3002`);
+    }
+    const base = normalizeAccessPolicy(record.accessPolicy) ?? defaultAccessPolicy();
+    const kindLabel = conversationType === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+    const before = base[conversationType].mode;
+    if (value === "open" && confirm !== true) {
+      return {
+        field,
+        value,
+        // 渠道据此渲染二次确认（不要当成"已生效"）。
+        requiresConfirm: true,
+        confirmPrompt: `\u628A${kindLabel}\u6539\u6210\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\u540E\uFF0C\u4E0D\u5728\u540D\u5355\u91CC\u7684\u4EBA\u4E5F\u80FD\u8DDF\u673A\u5668\u4EBA\u5BF9\u8BDD${conversationType === "group" ? "\uFF08\u7FA4\u91CC\u4EFB\u4F55\u6210\u5458 @ \u5B83\u5C31\u884C\uFF09" : ""}\u3002\u786E\u5B9A\u8981\u653E\u5F00\u5417\uFF1F`,
+        message: `\u9700\u8981\u786E\u8BA4\uFF1A${kindLabel}\u5C06\u6539\u4E3A\u4EFB\u4F55\u4EBA\u53EF\u7528\u3002`
+      };
+    }
+    if (before === value) {
+      return { field, value, message: `${kindLabel}\u7684\u8BBF\u95EE\u7B56\u7565\u672C\u6765\u5C31\u662F\u300C${value === "open" ? "\u4EFB\u4F55\u4EBA\u53EF\u7528" : "\u4EC5\u540D\u5355\u5185\u53EF\u7528"}\u300D\uFF0C\u6CA1\u6709\u6539\u52A8\u3002` };
+    }
+    const next = validateAccessPolicy({
+      ...base,
+      [conversationType]: { ...base[conversationType], mode: value }
+    });
+    const saved = await settings.write(channelId, botId, { accessPolicy: next });
+    return {
+      field,
+      value,
+      message: `${kindLabel}\u7684\u8BBF\u95EE\u7B56\u7565\u5DF2\u6539\u4E3A\u300C${value === "open" ? "\u4EFB\u4F55\u4EBA\u53EF\u7528" : "\u4EC5\u540D\u5355\u5185\u53EF\u7528"}\u300D\uFF08\u73B0\u5728\uFF1A${describeAccessScope(saved?.accessPolicy ?? next, conversationType)}\uFF1B\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002`
+    };
+  }
   async function applyContextScope({ channelId, botId, key, value, record, field }) {
     const target = conversationTarget(key);
     if (!target) {
@@ -2929,6 +2996,8 @@ function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
+        policy: policyPanelState({ record, conversationType, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
         actions: channelActionState.actions,
         actionsFailed: channelActionState.failed === true,
@@ -2998,7 +3067,16 @@ function createPanelService({
      *   （含属主其他会话的绝对路径）。命令门禁放行的普通成员不该能改。
      * @returns `{ field, value, message }`：`message` 是给用户看的结果说明。
      */
-    async apply({ channelId, botId, key, field, value, isOwner = false, conversationType = null }) {
+    async apply({
+      channelId,
+      botId,
+      key,
+      field,
+      value,
+      isOwner = false,
+      conversationType = null,
+      confirm = false
+    }) {
       await settings.ready?.();
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
@@ -3014,6 +3092,20 @@ function createPanelService({
           value,
           record,
           field
+        });
+      }
+      if (field === "policy") {
+        if (isOwner !== true) {
+          throw panelError("chat/owner-only", "\u8BBF\u95EE\u7B56\u7565\u662F\u673A\u5668\u4EBA\u7EA7\u8BBE\u7F6E\uFF0C\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\u3002");
+        }
+        return applyPolicyMode({
+          channelId,
+          botId,
+          conversationType,
+          value,
+          record,
+          field,
+          confirm
         });
       }
       if (!BUILT_IN_FIELDS.has(field)) {
