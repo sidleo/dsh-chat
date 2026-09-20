@@ -3101,6 +3101,7 @@ var zh = {
   "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09": "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09",
   "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09": "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09",
   "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F": "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F",
+  "\u5728\u6E20\u9053\u81EA\u5DF1\u7684\u914D\u7F6E\u91CC\u5B8C\u6210\u63A5\u5165\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u5728\u6E20\u9053\u81EA\u5DF1\u7684\u914D\u7F6E\u91CC\u5B8C\u6210\u63A5\u5165\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
   "\u79C1\u804A": "\u79C1\u804A",
   "\u7FA4\u804A": "\u7FA4\u804A",
   "\u5019\u9009": "\u5019\u9009",
@@ -3261,6 +3262,7 @@ var en = {
   "\u4E3B\u52A8\u6295\u9012": "Proactive delivery",
   "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\u3002": "Let a scheduled job or an agent push results straight into a conversation.",
   "\u62D6\u52A8\u53EF\u8C03\u6574\u987A\u5E8F": "Drag to reorder",
+  "\u5728\u6E20\u9053\u81EA\u5DF1\u7684\u914D\u7F6E\u91CC\u5B8C\u6210\u63A5\u5165\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "Once the channel is configured, its bots show up here.",
   "\u79C1\u804A": "Direct",
   "\u7FA4\u804A": "Group",
   "\u5019\u9009": "Candidate",
@@ -3700,8 +3702,20 @@ function formatTime(value) {
   return `${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}:${pad(time.getMinutes())}`;
 }
 function BotList(props) {
-  const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
+  const {
+    channelId,
+    label,
+    note,
+    connection,
+    chatUi,
+    translate,
+    t: frameworkT,
+    onOpenSettings,
+    setup = null
+  } = props;
   const t = typeof translate === "function" ? translate : typeof frameworkT === "function" ? frameworkT : (key) => key;
+  const setupLabel = typeof setup?.label === "string" && setup.label.trim() ? setup.label.trim() : null;
+  const setupHint = typeof setup?.hint === "string" && setup.hint.trim() ? setup.hint.trim() : t("\u5728\u6E20\u9053\u81EA\u5DF1\u7684\u914D\u7F6E\u91CC\u5B8C\u6210\u63A5\u5165\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002");
   const [state, setState] = React8.useState({ phase: "loading", bots: [], error: null });
   const load = React8.useCallback(() => {
     setState((current) => ({ ...current, phase: "loading", error: null }));
@@ -3735,13 +3749,18 @@ function BotList(props) {
       actions: h6(
         "div",
         { className: "dchat-actions" },
-        // 渠道级设置（飞书 dataDir/读取状态、微信扫码接入）与"某台机器人的设置"分开：
-        // 进了单台机器人的设置页就不再掺渠道级面板，这里是指向渠道页的唯一常驻入口。
-        h6("button", {
+        /**
+         * 渠道设置入口**只在渠道声明了名称时**显示。
+         *
+         * 真机反馈：飞书那个入口点进去跟"机器人设置"几乎一样（渠道级只有一行 dataDir，
+         * 而 dataDir 在诊断/版本面板里、读取状态就是右边的「重新读取」）——那就不该有它。
+         * 微信的入口就是「扫码接入」，名称与说明都由渠道给（hub 不认识这些语义）。
+         */
+        setupLabel ? h6("button", {
           type: "button",
           className: "dchat-button dchat-buttonLink",
           onClick: () => onOpenSettings(null)
-        }, t("\u6E20\u9053\u8BBE\u7F6E")),
+        }, t(setupLabel)) : null,
         h6("button", {
           type: "button",
           className: "dchat-button",
@@ -3753,12 +3772,12 @@ function BotList(props) {
     state.error ? h6("p", { className: "dchat-error" }, `${t("\u8BFB\u53D6\u5931\u8D25")}\uFF1A${state.error}`) : null,
     state.phase !== "loading" && state.bots.length === 0 ? h6(EmptyState2, {
       title: t("\u8FD9\u4E2A\u6E20\u9053\u8FD8\u6CA1\u6709\u673A\u5668\u4EBA"),
-      description: t("\u5728\u6E20\u9053\u8BBE\u7F6E\u9875\u5B8C\u6210\u63A5\u5165\uFF08\u98DE\u4E66\u586B\u5E94\u7528\u51ED\u636E\u3001\u5FAE\u4FE1\u626B\u7801\uFF09\u540E\uFF0C\u673A\u5668\u4EBA\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")
-    }, h6("button", {
+      description: t(setupHint)
+    }, setupLabel ? h6("button", {
       type: "button",
       className: "dchat-button",
       onClick: () => onOpenSettings(null)
-    }, t("\u6253\u5F00\u6E20\u9053\u8BBE\u7F6E\u9875"))) : null,
+    }, t(setupLabel)) : null) : null,
     state.bots.length > 0 ? h6("ul", { className: "dchat-botList" }, rows.map((row) => {
       const { bot } = row;
       const identity = botKeyOf(bot);
@@ -4144,6 +4163,8 @@ function ChatSettingsSection(props) {
       label: activeEntry.label,
       // 渠道能力说明（如「仅私聊」）放右栏标题下：左栏只留"图标 + 渠道名"，形态才整齐。
       note: activeEntry.capabilities?.note ?? null,
+      // 渠道级设置入口：`setup.label` 有才显示（飞书没有渠道级表单，微信是「扫码接入」）。
+      setup: activeEntry.capabilities?.setup ?? null,
       connection,
       chatUi,
       translate: t,

@@ -692,6 +692,18 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 | `chatChannels` | hub | `register({ id, order, label, logo, icon, sessionBadge, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()`。`icon` = `{ svg }` 或 `{ uri }`：渠道图标（设置页卡片与会话行徽标共用，取值走 `channelIconUri`）；`sessionBadge` = `{ text, color }`：没有图标时的字徽标回退 |
 | `chatUi` | hub | `components` / `hooks` / `installStyles()` / `callChannelRpc` / `callControlRpc` / `unwrapRpc` / `translate` / `react` |
 
+`chatChannels.register` 的 `capabilities` 两项**只影响画不画，不影响功能**：
+
+- `note` —— 机器人列表标题下的一句说明（如「仅私聊」）；
+- `setup.label` —— **有**才在机器人列表头部显示通往渠道设置页的入口，名称用它给的
+  （如「扫码接入」）。渠道设置页与机器人设置页没区别时**不要给**：那会多出一个点进去
+  什么都改不了的空壳入口；
+- `setup.hint` —— 该渠道还没有机器人时用来说明怎么接入（"填凭据"还是"扫码"只有渠道
+  自己说得清）；没给就退回 hub 的一句中性说明。
+
+两项各自独立：只给 `hint`（飞书：凭据写在渠道自己的配置里，没有渠道级表单）、只给
+`label`（微信：有入口、说明用中性句）都是合法形态。
+
 `chatUi.components`：
 - `Panel`、`EmptyState`、`StatusPill` —— 基础块；
 - `ContextEnhancementEditor({ config, disabled, translate, onSave })` —— **上下文增强**

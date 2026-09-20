@@ -76,13 +76,30 @@ function formatTime(value) {
 /**
  * 机器人列表。
  *
- * @param props - { channelId, label, note, connection, chatUi, translate, t, onOpenSettings }。
+ * @param props - {
+ *   channelId, label, note, connection, chatUi, translate, t, onOpenSettings, setup,
+ * }。
+ *   `setup` 来自渠道注册的 `capabilities.setup`：
+ *   - 有 `label` → 头部显示一个通往渠道设置页的入口（用渠道给的名称，如「扫码接入」）；
+ *   - 有 `hint` → 空列表时用它说明怎么接入（渠道自己才说得清，如"填凭据"/"扫码"）；
+ *   - 两样都没有（或整个 `setup` 缺席）→ 既不放入口也不编接入说明——避免出现一个点进去
+ *     跟机器人设置长得一样的空壳入口。
+ *
  * @returns React 元素。
  */
 export function BotList(props) {
-  const { channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings } = props;
+  const {
+    channelId, label, note, connection, chatUi, translate, t: frameworkT, onOpenSettings,
+    setup = null,
+  } = props;
   const t = typeof translate === 'function' ? translate
     : (typeof frameworkT === 'function' ? frameworkT : (key) => key);
+  /** 渠道设置入口的名称（没有就不显示这个入口）。 */
+  const setupLabel = typeof setup?.label === 'string' && setup.label.trim() ? setup.label.trim() : null;
+  /** 空列表时的接入说明：优先用渠道给的，没给就退回一句中性的。 */
+  const setupHint = typeof setup?.hint === 'string' && setup.hint.trim()
+    ? setup.hint.trim()
+    : t('在渠道自己的配置里完成接入后，机器人会出现在这里。');
   const [state, setState] = React.useState({ phase: 'loading', bots: [], error: null });
 
   const load = React.useCallback(() => {
@@ -126,13 +143,18 @@ export function BotList(props) {
     title: `${label()} · ${t('机器人')}`,
     description: note || null,
     actions: h('div', { className: 'dchat-actions' },
-      // 渠道级设置（飞书 dataDir/读取状态、微信扫码接入）与"某台机器人的设置"分开：
-      // 进了单台机器人的设置页就不再掺渠道级面板，这里是指向渠道页的唯一常驻入口。
-      h('button', {
+      /**
+       * 渠道设置入口**只在渠道声明了名称时**显示。
+       *
+       * 真机反馈：飞书那个入口点进去跟"机器人设置"几乎一样（渠道级只有一行 dataDir，
+       * 而 dataDir 在诊断/版本面板里、读取状态就是右边的「重新读取」）——那就不该有它。
+       * 微信的入口就是「扫码接入」，名称与说明都由渠道给（hub 不认识这些语义）。
+       */
+      setupLabel ? h('button', {
         type: 'button',
         className: 'dchat-button dchat-buttonLink',
         onClick: () => onOpenSettings(null),
-      }, t('渠道设置')),
+      }, t(setupLabel)) : null,
       h('button', {
         type: 'button',
         className: 'dchat-button',
@@ -146,12 +168,12 @@ export function BotList(props) {
   state.phase !== 'loading' && state.bots.length === 0
     ? h(EmptyState, {
       title: t('这个渠道还没有机器人'),
-      description: t('在渠道设置页完成接入（飞书填应用凭据、微信扫码）后，机器人会出现在这里。'),
-    }, h('button', {
+      description: t(setupHint),
+    }, setupLabel ? h('button', {
       type: 'button',
       className: 'dchat-button',
       onClick: () => onOpenSettings(null),
-    }, t('打开渠道设置页')))
+    }, t(setupLabel)) : null)
     : null,
   state.bots.length > 0
     ? h('ul', { className: 'dchat-botList' }, rows.map((row) => {

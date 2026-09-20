@@ -51,6 +51,7 @@ export const zh = {
   '渠道动作按钮（重连等）': '渠道动作按钮（重连等）',
   '命令按钮（新会话/状态/诊断…）': '命令按钮（新会话/状态/诊断…）',
   '拖动可调整顺序': '拖动可调整顺序',
+  '在渠道自己的配置里完成接入后，机器人会出现在这里。': '在渠道自己的配置里完成接入后，机器人会出现在这里。',
   '私聊': '私聊',
   '群聊': '群聊',
   '候选': '候选',
@@ -221,6 +222,7 @@ export const en = {
   '让定时任务或 agent 把结果直接发到指定会话。':
     'Let a scheduled job or an agent push results straight into a conversation.',
   '拖动可调整顺序': 'Drag to reorder',
+  '在渠道自己的配置里完成接入后，机器人会出现在这里。': 'Once the channel is configured, its bots show up here.',
   '私聊': 'Direct',
   '群聊': 'Group',
   '候选': 'Candidate',

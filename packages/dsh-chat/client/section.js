@@ -115,6 +115,8 @@ export function ChatSettingsSection(props) {
       label: activeEntry.label,
       // 渠道能力说明（如「仅私聊」）放右栏标题下：左栏只留"图标 + 渠道名"，形态才整齐。
       note: activeEntry.capabilities?.note ?? null,
+      // 渠道级设置入口：`setup.label` 有才显示（飞书没有渠道级表单，微信是「扫码接入」）。
+      setup: activeEntry.capabilities?.setup ?? null,
       connection,
       chatUi,
       translate: t,

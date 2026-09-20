@@ -175,9 +175,10 @@ const RPC_FIXTURES = {
     ],
   }),
   // 渠道自己的端点（整张渠道卡会读它）。
+  // 微信给空列表：hub 页的机器人列表要能渲染"这个渠道还没接入"的空状态。
   'connection.status': (payload) => ({
     channel: payload?.__channelId ?? 'feishu',
-    bots: [FEISHU_STATUS],
+    bots: payload?.__channelId === 'weixin' ? [] : [FEISHU_STATUS],
   }),
   // 诊断面板：真实形态的数据（含失败行、权限提示、超长日志行）。
   'diagnostics.read': () => ({
@@ -237,8 +238,21 @@ const chatUi = createChatUi({ translate: t });
 const channels = createChannelRail();
 // 顺序照**产品真实值**来（微信 10、飞书 20）：这样"注册顺序里的第一个"与"用户排的第一个"
 // 正好相反，守门才分得清"默认跟注册顺序"还是"默认跟用户顺序"。
-channels.register({ id: 'feishu', order: 20, label: '飞书', capabilities: { note: '支持私聊与群聊' } });
-channels.register({ id: 'weixin', order: 10, label: '微信', capabilities: { note: '仅私聊' } });
+channels.register({
+  id: 'feishu',
+  order: 20,
+  label: '飞书',
+  // 飞书没有渠道级表单（凭据写在 config.json）：只给接入提示，不给「渠道设置」入口。
+  capabilities: { note: '支持私聊与群聊', setup: { hint: '把凭据加进 config.json 后重启 dsh。' } },
+});
+channels.register({
+  id: 'weixin',
+  order: 10,
+  label: '微信',
+  // 两个渠道各覆盖 `capabilities.setup` 的一种"只给一半"的形态：飞书只有 `hint`（无入口）、
+  // 微信只有 `label`（有入口、空列表时用 hub 那句中性说明）——两半都得能渲染。
+  capabilities: { note: '仅私聊', setup: { label: '扫码接入' } },
+});
 
 const feishuCard = () => h(FeishuBotCard, {
   bot: FEISHU_BOT, status: FEISHU_STATUS, chatUi, connection, translate: t, onChanged: async () => {},
@@ -407,6 +421,11 @@ function measure() {
     /** 左栏渠道顺序与"当前默认打开的是哪个"：默认必须是排在最前面的那个。 */
     const railItems = [...frame.querySelectorAll('.dchat-rail .dchat-channel')];
     const railOrder = railItems.map((el) => (el.querySelector('strong')?.textContent ?? '').trim());
+    // 右栏机器人列表头部的按钮文案（用来断言"渠道设置入口按渠道显示"）。
+    const panelButtons = [...frame.querySelectorAll('.dchat-panel button, .dchat-cardHeader button')]
+      .map((el) => (el.textContent ?? '').trim());
+    // 空状态里的接入说明（列表为空时才有）。
+    const emptyHint = (frame.querySelector('.dchat-empty, .dchat-emptyState')?.textContent ?? '').trim();
     const activeChannel = (railItems.find((el) => el.getAttribute('aria-selected') === 'true')
       ?.querySelector('strong')?.textContent ?? '').trim() || null;
     // 每个弹窗各算一份（每个渠道卡各点开过一次；弹窗是 portal，挂在 body 上）。
@@ -432,6 +451,8 @@ function measure() {
       dragResult,
       railOrder,
       activeChannel,
+      panelButtons,
+      emptyHint,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();

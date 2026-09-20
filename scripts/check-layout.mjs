@@ -159,6 +159,31 @@ try {
     }
   }
 
+  // 渠道设置入口按渠道显示：飞书不该有「渠道设置」（它跟机器人设置几乎一样），
+  // 微信必须有「扫码接入」（那是唯一的接入入口，名称由渠道给）。
+  for (const frame of results.filter((item) => (item.panelButtons ?? []).length > 0)) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const buttons = frame.panelButtons;
+    if (frame.activeChannel === '飞书' && buttons.includes('渠道设置')) {
+      failures.push(`${where}: 飞书不该有「渠道设置」入口（点进去与机器人设置重复）`);
+    }
+    if (frame.activeChannel === '微信' && !buttons.includes('扫码接入')) {
+      failures.push(`${where}: 微信缺「扫码接入」入口（渠道声明了 setup.label）`);
+    }
+  }
+
+  // 机器人列表的空态：渠道没给 `setup.hint` 时要用 hub 那句中性的接入说明。
+  // `setup` 只给一半的形态真实存在（有入口没说明 / 有说明没入口），两半都得能渲染——
+  // 兜底那句里用到的 `t` 曾经声明在使用之后，一旦走到这条分支就是 TDZ 崩溃。
+  const emptyFrames = results.filter((frame) => frame.activeChannel === '微信');
+  if (emptyFrames.length === 0) failures.push('没测到微信的机器人列表（守门本身失效了）');
+  for (const frame of emptyFrames) {
+    if (!String(frame.emptyHint ?? '').includes('在渠道自己的配置里完成接入后，机器人会出现在这里。')) {
+      failures.push(`${frame.scenario} @${frame.width}px: 渠道没给 setup.hint，空态说明不是那句中性兜底`
+        + `（实际：${frame.emptyHint || '空'}）`);
+    }
+  }
+
   // 默认打开的渠道 = 排在最前面的那个（不是注册顺序里的第一个）。
   for (const frame of results.filter((item) => (item.railOrder ?? []).length > 0)) {
     const where = `${frame.scenario} @${frame.width}px`;
