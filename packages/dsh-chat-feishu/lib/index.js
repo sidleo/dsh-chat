@@ -127010,6 +127010,7 @@ var MAX_OPTIONS = 30;
 var FOLLOW_DEFAULT = "__default__";
 var CONTEXT_GLOBAL = "__global__";
 var h = (value) => String(value ?? "");
+var PANEL_ROW_SIZE = 3;
 function mark(current, value, label) {
   return `${current === value ? "\u2713 " : ""}${label}`;
 }
@@ -127348,20 +127349,19 @@ ${h(last.message)}`
     });
   }
   elements.push({ tag: "hr" });
-  elements.push(row([
+  const panelButtons = [
     button("\u{1F195} \u65B0\u4F1A\u8BDD", "new"),
     button("\u{1F4CA} \u72B6\u6001", "status"),
-    button("\u{1F4D6} \u547D\u4EE4\u6E05\u5355", "commands"),
-    button("\u{1FA7A} \u8BCA\u65AD", "diag")
-  ]));
-  elements.push(row([
+    button("\u{1F4D6} \u547D\u4EE4", "commands"),
+    button("\u{1FA7A} \u8BCA\u65AD", "diag"),
     button("\u{1F4DC} \u5386\u53F2", "history"),
     button("\u{1F5DC} \u538B\u7F29", "compact"),
-    button("\u23F9 \u505C\u6B62", "stop", "danger")
-  ]));
-  const actionButtons = (state?.actions ?? []).map(channelActionButton);
-  for (let index = 0; index < actionButtons.length; index += 4) {
-    elements.push(row(actionButtons.slice(index, index + 4)));
+    button("\u23F9 \u505C\u6B62", "stop", "danger"),
+    // 渠道动作（飞书：重连）排在命令按钮之后，同一条分页规则。
+    ...(state?.actions ?? []).map(channelActionButton)
+  ];
+  for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
+    elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
   }
   if (state?.actionsFailed === true) {
     elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });

@@ -36,6 +36,14 @@ const CONTEXT_GLOBAL = '__global__';
 
 const h = (value) => String(value ?? '');
 
+/**
+ * 控制面板按钮一行放几个。
+ *
+ * 3 而不是 4：手机端卡片宽度有限，一行 4 个会把「新会话」「状态」这类短标签都截成
+ * `📊 ...`（真机截图如此）。标签也跟着收短，宁可行数多一点，也不要一排认不出的图标。
+ */
+const PANEL_ROW_SIZE = 3;
+
 function mark(current, value, label) {
   return `${current === value ? '✓ ' : ''}${label}`;
 }
@@ -529,23 +537,27 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
     });
   }
 
-  // ④ 操作按钮（放在最后，手指不用往上找；6 个分两行，一行 4 个会挤）
+  /**
+   * ④ 操作按钮（放在最后，手指不用往上找）。
+   *
+   * **一行最多 3 个**：手机上的卡片比桌面窄得多，一行 4 个时按钮里的字会被截成
+   * `📊 ...`（真机截图就是这么显示的，等于一排认不出的图标）。3 个 + 短标签才读得全；
+   * 命令与渠道动作排在同一条流里，一起按 3 个一行切——不截断任何按钮。
+   */
   elements.push({ tag: 'hr' });
-  elements.push(row([
+  const panelButtons = [
     button('🆕 新会话', 'new'),
     button('📊 状态', 'status'),
-    button('📖 命令清单', 'commands'),
+    button('📖 命令', 'commands'),
     button('🩺 诊断', 'diag'),
-  ]));
-  elements.push(row([
     button('📜 历史', 'history'),
     button('🗜 压缩', 'compact'),
     button('⏹ 停止', 'stop', 'danger'),
-  ]));
-  // 渠道动作（飞书：重连）：一行最多 4 个，超了另起一行——与命令按钮同一条规则，不截断。
-  const actionButtons = (state?.actions ?? []).map(channelActionButton);
-  for (let index = 0; index < actionButtons.length; index += 4) {
-    elements.push(row(actionButtons.slice(index, index + 4)));
+    // 渠道动作（飞书：重连）排在命令按钮之后，同一条分页规则。
+    ...(state?.actions ?? []).map(channelActionButton),
+  ];
+  for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
+    elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
   }
   if (state?.actionsFailed === true) {
     elements.push({ tag: 'markdown', content: '读不到渠道动作按钮，稍后再试。' });

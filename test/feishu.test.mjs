@@ -3516,18 +3516,25 @@ test('控制面板卡：只放能改的东西——不重复状态行、不留�
   assert.doesNotMatch(body, /\*\*当前会话\*\*/);
   assert.doesNotMatch(body, /不便点下拉时/, '页脚那行手打提示是废话，已删');
 
-  // 顶层只剩：会话行、模型/推理行、hr、生效范围说明、预设/工作区行、hr、两行按钮。
+  // 顶层只剩：会话行、模型/推理行、hr、生效范围说明、预设/工作区行、hr、三行按钮。
   assert.deepEqual(
     card.body.elements.map((el) => el.tag),
-    ['column_set', 'column_set', 'hr', 'markdown', 'column_set', 'hr', 'column_set', 'column_set'],
+    ['column_set', 'column_set', 'hr', 'markdown', 'column_set', 'hr',
+      'column_set', 'column_set', 'column_set'],
   );
-  const buttonLabels = card.body.elements
-    .filter((el) => el.tag === 'column_set' && el.columns[0].elements[0].tag === 'button')
-    .map((el) => el.columns.map((column) => column.elements[0].text.content));
+  const buttonRows = card.body.elements
+    .filter((el) => el.tag === 'column_set' && el.columns[0].elements[0].tag === 'button');
+  const buttonLabels = buttonRows.map((el) => el.columns.map((column) => column.elements[0].text.content));
   assert.deepEqual(buttonLabels, [
-    ['🆕 新会话', '📊 状态', '📖 命令清单', '🩺 诊断'],
-    ['📜 历史', '🗜 压缩', '⏹ 停止'],
-  ], '7 个按钮分两行（4 + 3）');
+    ['🆕 新会话', '📊 状态', '📖 命令'],
+    ['🩺 诊断', '📜 历史', '🗜 压缩'],
+    ['⏹ 停止'],
+  ], '7 个按钮分三行（一行 3 个：手机端一行 4 个会把标签截成图标）');
+  // 一行的按钮数有硬上限：手机端比桌面窄得多，4 个就会截字（真机截图如此）。
+  assert.ok(buttonRows.every((el) => el.columns.length <= 3), '一行最多 3 个按钮');
+  // 标签本身也要短：卡片上的按钮宽度有限，超过 5 个字符就有被截的风险。
+  assert.ok(buttonLabels.flat().every((label) => label.length <= 6),
+    `按钮标签要短：${JSON.stringify(buttonLabels)}`);
 
   // 每个下拉都有自己的名称：名称是同一列里的 markdown，控件在下（select_static 没有 label 字段）。
   const labelled = (name) => {
