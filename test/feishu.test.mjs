@@ -3812,3 +3812,18 @@ test('延迟交付：飞书按会话键把补发结果发回私聊/群聊（带�
     await app.cleanup();
   }
 });
+
+test('过程卡不再显示「已注入会话上下文」那行（真机反馈：纯占地方）', () => {
+  const card = renderStepCard({
+    title: '正在处理',
+    panelItems: [{ kind: 'tool', rows: ['· Bash · 看时间'] }],
+    answer: '今天几号',
+  });
+  const body = JSON.stringify(card);
+  assert.doesNotMatch(body, /已注入会话上下文/, '这行已经删掉了');
+  // 面板与答案都还在（只删提示，不删内容）。
+  assert.match(body, /Bash · 看时间/);
+  assert.match(body, /今天几号/);
+  // 第一个元素就是面板，不再插一行说明占空间。
+  assert.equal(card.body.elements[0].tag, 'collapsible_panel');
+});

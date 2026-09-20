@@ -126618,7 +126618,6 @@ function renderStepCard({
   title,
   panelItems = [],
   answer = "",
-  note = "",
   panelTitle = "",
   currentQuestion = [],
   todos = null,
@@ -126633,9 +126632,6 @@ function renderStepCard({
     return allowed < value.length ? `${value.slice(0, allowed)}\u2026` : value;
   };
   const elements = [];
-  if (note) {
-    elements.push({ tag: "div", text: { tag: "plain_text", content: clampBudget(note) } });
-  }
   if (panelItems.length > 0) {
     const inner = [];
     for (const item of panelItems) {
@@ -126723,8 +126719,7 @@ function createTurnPresenter({
   message,
   chatType,
   bot,
-  logger = console,
-  note = ""
+  logger = console
 }) {
   const messageId = message?.message_id;
   const chatId = message?.chat_id;
@@ -126803,7 +126798,6 @@ function createTurnPresenter({
       title: currentTitle(),
       panelItems: panelItems(),
       answer,
-      note,
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === "running" } : null,
@@ -127836,7 +127830,6 @@ ${text}`
       );
       const withReply = (content) => typeof deps.replyReference?.enhanceReplyReference === "function" ? deps.replyReference.enhanceReplyReference(content, replyTo) : content;
       let finalParts;
-      let enhanced;
       if (attachmentParts) {
         const enhancedContent = deps.contextEnhancement.enhanceContent(
           attachmentParts,
@@ -127844,7 +127837,6 @@ ${text}`
           captured?.source
         );
         finalParts = Array.isArray(enhancedContent) ? enhancedContent : attachmentParts;
-        enhanced = finalParts.length !== attachmentParts.length;
       } else {
         const enhancedText = deps.contextEnhancement.enhanceContent(
           text,
@@ -127852,7 +127844,6 @@ ${text}`
           captured?.source
         );
         finalParts = [{ type: "text", text: enhancedText }];
-        enhanced = enhancedText !== text;
       }
       if (replyTo) finalParts = withReply(finalParts);
       const mode = conversationType === "direct" ? bot.stepPushDirect : bot.stepPushGroup;
@@ -127862,8 +127853,7 @@ ${text}`
         message,
         chatType: conversationType,
         bot,
-        logger,
-        note: enhanced ? "\u{1F4CE} \u5DF2\u6CE8\u5165\u4F1A\u8BDD\u4E0A\u4E0B\u6587" : ""
+        logger
       });
       activePresenters.set(conversationKey, presenter);
       const result = await deps.sessions.ask({

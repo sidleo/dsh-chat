@@ -577,7 +577,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         ? deps.replyReference.enhanceReplyReference(content, replyTo)
         : content);
       let finalParts;
-      let enhanced;
       if (attachmentParts) {
         const enhancedContent = deps.contextEnhancement.enhanceContent(
           attachmentParts,
@@ -585,7 +584,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           captured?.source,
         );
         finalParts = Array.isArray(enhancedContent) ? enhancedContent : attachmentParts;
-        enhanced = finalParts.length !== attachmentParts.length;
       } else {
         const enhancedText = deps.contextEnhancement.enhanceContent(
           text,
@@ -593,7 +591,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
           captured?.source,
         );
         finalParts = [{ type: 'text', text: enhancedText }];
-        enhanced = enhancedText !== text;
       }
       if (replyTo) finalParts = withReply(finalParts);
 
@@ -605,7 +602,6 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         chatType: conversationType,
         bot,
         logger,
-        note: enhanced ? '📎 已注入会话上下文' : '',
       });
 
       activePresenters.set(conversationKey, presenter);

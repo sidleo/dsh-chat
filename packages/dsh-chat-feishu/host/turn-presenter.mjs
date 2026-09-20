@@ -226,7 +226,7 @@ export function askRow({ header, question, answer } = {}) {
  * 正文按"每条元素各自截断 + 总量预算"控制，绝不做字符串级截断——
  * 那会产出非法 JSON 让卡片整条发不出去。
  *
- * @param options - { title, rows, questionRows, answer, note, panelTitle, currentQuestion, template }。
+ * @param options - { title, rows, questionRows, answer, panelTitle, currentQuestion, template }。
  *   `rows` 是工具/思考行，`questionRows` 是已答提问行，两者同处一个折叠面板；
  *   `currentQuestion` 是**还没回答**的提问元素（控件必须留在面板外）。
  * @returns 飞书交互卡片对象。
@@ -235,7 +235,6 @@ export function renderStepCard({
   title,
   panelItems = [],
   answer = '',
-  note = '',
   panelTitle = '',
   currentQuestion = [],
   todos = null,
@@ -251,9 +250,6 @@ export function renderStepCard({
   };
 
   const elements = [];
-  if (note) {
-    elements.push({ tag: 'div', text: { tag: 'plain_text', content: clampBudget(note) } });
-  }
   // 面板里的内容**按发生顺序**排：工具/思考若干行 → 该批提问的内层折叠控件 → 后面的行…
   // （真机反馈：提问必须留在它本来出现的位置，不能被推到面板底部）。
   if (panelItems.length > 0) {
@@ -344,7 +340,7 @@ export function renderStepCard({
  * 创建一轮任务的展示器。
  *
  * @param options - {
- *   mode, gateway, message, chatType, bot, logger, note,
+ *   mode, gateway, message, chatType, bot, logger,
  * }。
  * @returns { tool, think, setQuestion, finish }。
  */
@@ -355,7 +351,6 @@ export function createTurnPresenter({
   chatType,
   bot,
   logger = console,
-  note = '',
 }) {
   const messageId = message?.message_id;
   const chatId = message?.chat_id;
@@ -478,7 +473,6 @@ export function createTurnPresenter({
       title: currentTitle(),
       panelItems: panelItems(),
       answer,
-      note,
       panelTitle: panelTitle(),
       currentQuestion,
       todos: todos ? { ...todos, expanded: state === 'running' } : null,

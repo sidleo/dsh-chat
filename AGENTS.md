@@ -57,6 +57,9 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
+- **过程卡上不要放"📎 已注入会话上下文"这类提示行**：真机反馈它纯占地方（每次带上下文都多一行）。
+  卡片**只放"能改的东西 + 当前值"**、以及工具/思考面板与答案本身；注入上下文这件事没有用户动作，
+  不必在卡上宣告。测试钉了"卡里不再出现这行、且第一个元素就是面板"。
 - **设置页改了「任务过程展示」，群里还是显示过程**：运行期的 bot 配置**必须就地改**。
   桥在创建时把 `bot` 闭包进去了，而 `patchRuntime()` 早先是 `record.bot = { ...record.bot, ...patch }`
   ——**换了引用**，桥读到的仍是建桥那一刻的值，于是"改了设置、群里的卡照旧"
