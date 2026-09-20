@@ -35,6 +35,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var index_exports = {};
 __export(index_exports, {
   BotCard: () => BotCard,
+  FeishuOnboard: () => FeishuOnboard,
   apply: () => apply,
   inject: () => inject,
   name: () => name
@@ -148,6 +149,19 @@ var zh = {
   // hub 的共享组件（上下文增强编辑器）用本渠道的 t 取文案，因此这些键必须在渠道字典里。
   "\u4FDD\u5B58": "\u4FDD\u5B58",
   "\u4FDD\u5B58\u4E2D\u2026": "\u4FDD\u5B58\u4E2D\u2026",
+  "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165": "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165",
+  "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002": "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002",
+  "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret": "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret",
+  "\u57DF\u540D": "\u57DF\u540D",
+  "\u98DE\u4E66\uFF08open.feishu.cn\uFF09": "\u98DE\u4E66\uFF08open.feishu.cn\uFF09",
+  "Lark\uFF08open.larksuite.com\uFF09": "Lark\uFF08open.larksuite.com\uFF09",
+  "\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09": "\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09",
+  "\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002": "\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002",
+  "\u63A5\u5165": "\u63A5\u5165",
+  "\u63A5\u5165\u4E2D\u2026": "\u63A5\u5165\u4E2D\u2026",
+  "\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD": "\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD",
+  "\u5DF2\u63A5\u5165": "\u5DF2\u63A5\u5165",
+  "\u70B9\u5DE6\u4E0A\u89D2\u300C\u8FD4\u56DE\u300D\u5C31\u80FD\u5728\u5217\u8868\u91CC\u770B\u5230\u5B83\u3002": "\u70B9\u5DE6\u4E0A\u89D2\u300C\u8FD4\u56DE\u300D\u5C31\u80FD\u5728\u5217\u8868\u91CC\u770B\u5230\u5B83\u3002",
   "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002",
   "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF"
 };
@@ -251,6 +265,19 @@ var en = {
   "\u6B63\u5728\u8FD0\u884C": "Running",
   "\u4FDD\u5B58": "Save",
   "\u4FDD\u5B58\u4E2D\u2026": "Saving\u2026",
+  "\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165": "Add a bot",
+  "\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002": "Paste the App ID and App Secret of your own app (Feishu Open Platform \u2192 Credentials & Basic Info). The app must have the bot capability enabled.",
+  "\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret": "The App Secret from the app credentials",
+  "\u57DF\u540D": "Domain",
+  "\u98DE\u4E66\uFF08open.feishu.cn\uFF09": "Feishu (open.feishu.cn)",
+  "Lark\uFF08open.larksuite.com\uFF09": "Lark (open.larksuite.com)",
+  "\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09": "Owner open_id (optional)",
+  "\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002": 'Leave the owner empty and this bot starts with no owner. Direct chats are then set to "anyone" so the owner can say hello first, and pick themselves as owner afterwards in this bot\u2019s settings.',
+  "\u63A5\u5165": "Add",
+  "\u63A5\u5165\u4E2D\u2026": "Adding\u2026",
+  "\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD": "Could not relax the direct-chat access policy",
+  "\u5DF2\u63A5\u5165": "Added",
+  "\u70B9\u5DE6\u4E0A\u89D2\u300C\u8FD4\u56DE\u300D\u5C31\u80FD\u5728\u5217\u8868\u91CC\u770B\u5230\u5B83\u3002": "Click Back at the top left to see it in the list.",
   "\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002": "Could not save. Try again.",
   "\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF": "Last error"
 };
@@ -533,6 +560,132 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     })
   );
 }
+function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
+  const t = typeof translate === "function" ? translate : (key) => key;
+  const { Panel } = chatUi.components;
+  const [form, setForm] = React.useState({ appId: "", appSecret: "", domain: "feishu", owner: "" });
+  const [phase, setPhase] = React.useState("idle");
+  const [error, setError] = React.useState(null);
+  const [added, setAdded] = React.useState(null);
+  const [warning, setWarning] = React.useState(null);
+  const busy = phase === "busy";
+  const ready = form.appId.trim().length > 0 && form.appSecret.trim().length > 0;
+  const patch = (next) => setForm((current) => ({ ...current, ...next }));
+  const submit = async () => {
+    if (!ready || busy) return;
+    setPhase("busy");
+    setError(null);
+    setWarning(null);
+    setAdded(null);
+    let bot = null;
+    try {
+      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.add", {
+        appId: form.appId.trim(),
+        appSecret: form.appSecret.trim(),
+        domain: form.domain,
+        // 属主可以留空（也可以写多个，用空格/逗号分开）：留空 = 这台机器人暂时没有属主。
+        ...form.owner.trim() ? { ownerOpenIds: form.owner.trim().split(/[\s,，]+/).filter(Boolean) } : {}
+      });
+      bot = chatUi.unwrapRpc(result)?.bot ?? null;
+    } catch (cause) {
+      setError(cause?.message ?? String(cause));
+      setPhase("error");
+      return;
+    }
+    const botId = bot?.botId ?? bot?.id ?? null;
+    if (botId) {
+      try {
+        await chatUi.callControlRpc(connection, "bot.access-policy.open-scope", {
+          channelId: CHANNEL_ID,
+          botId,
+          conversationType: "direct"
+        });
+      } catch (cause) {
+        setWarning(`${t("\u79C1\u804A\u8BBF\u95EE\u7B56\u7565\u6CA1\u80FD\u81EA\u52A8\u653E\u5BBD")}\uFF1A${cause?.message ?? String(cause)}`);
+      }
+    }
+    setAdded({ id: botId, name: bot?.name ?? null });
+    patch({ appId: "", appSecret: "", owner: "" });
+    setPhase("done");
+    onAdded?.();
+  };
+  const field = (key, options) => h(
+    "div",
+    { className: "dchat-scopeRow" },
+    // `label` 由调用方给：界面文案传 t(…) 的结果，飞书自己的术语（App ID / App Secret）原样传。
+    h("label", { className: "dchat-scopeLabel", htmlFor: options.id }, options.label),
+    options.select ? h("select", {
+      id: options.id,
+      className: "dchat-select",
+      value: form[key],
+      disabled: busy,
+      onChange: (event) => patch({ [key]: event.target.value })
+    }, options.select.map((item) => h("option", { key: item.value, value: item.value }, t(item.label)))) : h("input", {
+      id: options.id,
+      className: "dchat-input",
+      type: options.type ?? "text",
+      value: form[key],
+      disabled: busy,
+      placeholder: options.placeholder ?? "",
+      autoComplete: "off",
+      spellCheck: false,
+      onChange: (event) => patch({ [key]: event.target.value }),
+      onKeyDown: (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        void submit();
+      }
+    })
+  );
+  return h(
+    Panel,
+    {
+      title: t("\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165"),
+      description: t("\u586B\u81EA\u5EFA\u5E94\u7528\u7684 App ID \u4E0E App Secret\uFF08\u98DE\u4E66\u5F00\u653E\u5E73\u53F0 \u2192 \u51ED\u8BC1\u4E0E\u57FA\u7840\u4FE1\u606F\uFF09\u3002\u5E94\u7528\u9700\u8981\u5F00\u542F\u673A\u5668\u4EBA\u80FD\u529B\u3002"),
+      actions: h("button", {
+        type: "button",
+        className: "dchat-button dchat-buttonPrimary",
+        disabled: busy || !ready,
+        onClick: () => {
+          void submit();
+        }
+      }, busy ? t("\u63A5\u5165\u4E2D\u2026") : t("\u63A5\u5165"))
+    },
+    h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      field("appId", { id: "dchat-onboard-appId", label: "App ID", placeholder: "cli_xxxxxxxxxxxx" }),
+      field("appSecret", {
+        id: "dchat-onboard-appSecret",
+        label: "App Secret",
+        type: "password",
+        placeholder: t("\u5E94\u7528\u51ED\u8BC1\u91CC\u7684 App Secret")
+      }),
+      field("domain", {
+        id: "dchat-onboard-domain",
+        label: t("\u57DF\u540D"),
+        select: [{ value: "feishu", label: "\u98DE\u4E66\uFF08open.feishu.cn\uFF09" }, { value: "lark", label: "Lark\uFF08open.larksuite.com\uFF09" }]
+      }),
+      field("owner", {
+        id: "dchat-onboard-owner",
+        label: t("\u5C5E\u4E3B open_id\uFF08\u53EF\u7559\u7A7A\uFF09"),
+        placeholder: "ou_xxxxxxxxxxxx"
+      }),
+      h(
+        "p",
+        { className: "dchat-cardDescription" },
+        t("\u5C5E\u4E3B\u7559\u7A7A = \u8FD9\u53F0\u673A\u5668\u4EBA\u6682\u65F6\u6CA1\u6709\u5C5E\u4E3B\uFF1A\u63A5\u5165\u540E\u79C1\u804A\u4F1A\u88AB\u8BBE\u4E3A\u300C\u4EFB\u4F55\u4EBA\u53EF\u7528\u300D\uFF0C\u5C5E\u4E3B\u5148\u8DDF\u5B83\u8BF4\u4E00\u53E5\u8BDD\uFF0C\u518D\u56DE\u5B83\u7684\u8BBE\u7F6E\u91CC\u628A\u81EA\u5DF1\u9009\u6210\u5C5E\u4E3B\u3002")
+      )
+    ),
+    error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
+    warning ? h("p", { className: "dchat-warning", role: "alert" }, warning) : null,
+    added ? h(
+      "p",
+      { className: "dchat-cardDescription", role: "status" },
+      `${t("\u5DF2\u63A5\u5165")}${added.name ? ` \u300C${added.name}\u300D` : ""}\u3002` + t("\u70B9\u5DE6\u4E0A\u89D2\u300C\u8FD4\u56DE\u300D\u5C31\u80FD\u5728\u5217\u8868\u91CC\u770B\u5230\u5B83\u3002")
+    ) : null
+  );
+}
 function FeishuPage(props) {
   const { chatUi, connection, translate, botId = null } = props;
   const t = typeof translate === "function" ? translate : (key) => key;
@@ -558,10 +711,10 @@ function FeishuPage(props) {
     React.Fragment,
     null,
     /**
-     * 渠道级面板已去掉（`dataDir` 在「诊断」「版本与更新」里都有，「读取状态」就是机器人列表
-     * 右上角的「重新读取」）——这个页面现在只剩这些机器人的设置卡。
+     * 渠道级页面 = **新建机器人接入**（机器人设置页是另一个视图，`scoped` 时才进来）。
      * 错误照旧要显示：读状态失败时不能只留一行日志。
      */
+    !scoped ? h(FeishuOnboard, { chatUi, connection, translate: t, onAdded: load }) : null,
     state.error ? h("p", { className: "dchat-error", role: "alert" }, state.error.message) : null,
     !scoped && state.phase === "ready" && bots.length === 0 ? h(EmptyState, {
       title: t("\u6CA1\u6709\u5DF2\u63A5\u5165\u7684\u98DE\u4E66\u673A\u5668\u4EBA"),
@@ -599,13 +752,14 @@ function apply(ctx) {
     icon: { svg: '<svg viewBox="0.977 0.673 14.655 14.655" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M8.5611 8.26287L8.59322 8.23075C8.6141 8.20988 8.63658 8.18739 8.65906 8.16652L8.70402 8.12316L8.8373 7.99148L9.02037 7.81324L9.17613 7.65908L9.32226 7.51456L9.47481 7.36361L9.61452 7.22551L9.81043 7.03281C9.84737 6.99588 9.8859 6.96055 9.92444 6.92522C9.9951 6.86099 10.069 6.79836 10.1428 6.73734C10.2119 6.68274 10.2825 6.62975 10.3548 6.57836C10.456 6.5061 10.5603 6.44026 10.6663 6.37603C10.7707 6.31501 10.8783 6.2572 10.9875 6.2026C11.0903 6.15282 11.1963 6.10625 11.3038 6.0645C11.3633 6.04041 11.4243 6.01954 11.4853 5.99866C11.5158 5.98903 11.5463 5.97779 11.5784 5.96815C11.3071 4.90028 10.8109 3.90468 10.122 3.04556C9.98868 2.88016 9.78634 2.78381 9.57438 2.78381H3.94598C3.88817 2.78381 3.84 2.83038 3.84 2.8898C3.84 2.92352 3.85605 2.95403 3.88335 2.97491C5.80391 4.38321 7.39689 6.19297 8.54826 8.27732L8.5611 8.26287Z" fill="#00D6B9"/> <path d="M6.32424 13.2168C9.23077 13.2168 11.7631 11.6126 13.0831 9.24238C13.1297 9.15887 13.1747 9.07537 13.218 8.99026C13.1522 9.11712 13.0783 9.23917 12.9964 9.35478C12.9675 9.39493 12.9386 9.43508 12.9081 9.47522C12.8696 9.525 12.831 9.57157 12.7909 9.61814C12.7588 9.65507 12.7266 9.6904 12.6929 9.72573C12.6255 9.79638 12.5548 9.86383 12.4809 9.92646C12.4392 9.96178 12.3991 9.99551 12.3557 10.0276C12.3059 10.0662 12.2545 10.1031 12.2031 10.1368C12.171 10.1593 12.1373 10.1802 12.1036 10.2011C12.0699 10.2219 12.0345 10.2428 11.9976 10.2637C11.9253 10.3038 11.8499 10.3424 11.7744 10.3761C11.7085 10.405 11.6411 10.4323 11.5737 10.458C11.4998 10.4853 11.4259 10.5094 11.3488 10.5302C11.2348 10.5624 11.1208 10.5864 11.0036 10.6041C10.9201 10.617 10.8334 10.6266 10.7483 10.633C10.6583 10.6394 10.5668 10.641 10.4753 10.641C10.3741 10.6394 10.2729 10.633 10.1702 10.6218C10.0947 10.6137 10.0192 10.6025 9.94375 10.5897C9.87791 10.5784 9.81208 10.564 9.74624 10.5479C9.71091 10.5399 9.67719 10.5302 9.64186 10.5206C9.54551 10.4949 9.44916 10.4676 9.35281 10.4403C9.30464 10.4259 9.25646 10.413 9.20989 10.3986C9.13763 10.3777 9.06698 10.3552 8.99632 10.3327C8.93851 10.3151 8.8807 10.2958 8.82289 10.2765C8.76829 10.2589 8.71209 10.2412 8.65749 10.2219L8.54508 10.1834C8.50012 10.1673 8.45355 10.1513 8.40859 10.1352L8.31224 10.0999C8.24801 10.0774 8.18378 10.0533 8.12115 10.0292C8.08421 10.0148 8.04728 10.0019 8.01035 9.98748C7.96057 9.96821 7.91239 9.94894 7.86261 9.92967C7.81123 9.90879 7.75823 9.88792 7.70685 9.86704L7.60568 9.82529L7.48043 9.7739L7.38408 9.73376L7.28452 9.6904L7.1978 9.65186L7.11912 9.61653L7.03883 9.5796L6.95693 9.54106L6.85255 9.49288L6.74336 9.4415C6.70482 9.42223 6.66628 9.40456 6.62774 9.38529L6.52978 9.33712C4.80192 8.4748 3.24267 7.31218 1.92269 5.90227C1.88254 5.86052 1.8167 5.85731 1.77335 5.89746C1.75247 5.91673 1.73962 5.94563 1.73962 5.97454L1.74284 10.9413V11.3444C1.74284 11.5788 1.85845 11.7972 2.05276 11.9273C3.31654 12.772 4.80353 13.22 6.32424 13.2168Z" fill="#3370FF"/> <path d="M14.8656 6.21539C13.8844 5.73525 12.7619 5.63248 11.7101 5.92795C11.6652 5.94079 11.6218 5.95364 11.5784 5.96649C11.5479 5.97612 11.5174 5.98576 11.4853 5.997C11.4243 6.01787 11.3633 6.04036 11.3039 6.06284C11.1963 6.10459 11.0919 6.15116 10.9875 6.20094C10.8783 6.25393 10.7707 6.31174 10.6663 6.37276C10.5588 6.43539 10.456 6.50283 10.3548 6.57509C10.2825 6.62648 10.2119 6.67947 10.1428 6.73407C10.0674 6.79509 9.99511 6.85611 9.92445 6.92195C9.88591 6.95728 9.84898 6.99261 9.81044 7.02954L9.61453 7.22224L9.47482 7.36034L9.32227 7.51129L9.17614 7.65581L9.02038 7.80997L8.83892 7.98982L8.70564 8.1215L8.66067 8.16485C8.6398 8.18573 8.61732 8.20821 8.59483 8.22909L8.56272 8.2612L8.51294 8.30777C8.49367 8.32544 8.476 8.34149 8.45673 8.35916C7.97338 8.80397 7.43383 9.18455 6.85413 9.49447L6.9585 9.54265L7.0404 9.58119L7.12069 9.61812L7.19938 9.65345L7.28609 9.69199L7.38565 9.73534L7.482 9.77549L7.60725 9.82688L7.70842 9.86863C7.75981 9.8895 7.8128 9.91038 7.86419 9.93125C7.91236 9.95052 7.96214 9.9698 8.01192 9.98907C8.04886 10.0035 8.08579 10.0164 8.12272 10.0308C8.18696 10.0549 8.25119 10.0774 8.31382 10.1015L8.41016 10.1368C8.45513 10.1529 8.50009 10.1689 8.54666 10.185L8.65907 10.2235C8.71366 10.2412 8.76826 10.2604 8.82447 10.2781C8.88228 10.2974 8.94008 10.315 8.99789 10.3343C9.06855 10.3568 9.14081 10.3777 9.21147 10.4002C9.25964 10.4146 9.30782 10.4291 9.35439 10.4419C9.45073 10.4692 9.54708 10.4965 9.64343 10.5222C9.67876 10.5318 9.71248 10.5399 9.74781 10.5495C9.81365 10.5656 9.87949 10.5784 9.94533 10.5912C10.0208 10.6041 10.0963 10.6153 10.1717 10.6234C10.2745 10.6346 10.3757 10.641 10.4769 10.6426C10.5684 10.6442 10.6599 10.641 10.7498 10.6346C10.8366 10.6282 10.9217 10.6185 11.0052 10.6057C11.1208 10.588 11.2364 10.5623 11.3504 10.5318C11.4259 10.511 11.5014 10.4869 11.5752 10.4596C11.6427 10.4355 11.7101 10.4082 11.776 10.3777C11.8514 10.344 11.9269 10.3054 11.9992 10.2653C12.0345 10.246 12.0698 10.2251 12.1052 10.2026C12.1405 10.1818 12.1726 10.1593 12.2047 10.1384C12.2561 10.1031 12.3075 10.0677 12.3573 10.0292C12.4006 9.99709 12.4424 9.96337 12.4825 9.92804C12.5548 9.86542 12.6254 9.79797 12.6929 9.72732C12.7266 9.69199 12.7587 9.65666 12.7908 9.61973C12.831 9.57316 12.8711 9.52498 12.9081 9.47681C12.9386 9.43827 12.9675 9.39812 12.9964 9.35637C13.0767 9.24075 13.1505 9.12032 13.2164 8.99506L13.2919 8.84572L13.9631 7.50807L13.9711 7.49202C14.1927 7.01348 14.4946 6.58312 14.8656 6.21539Z" fill="#133C9A"/> </svg>' },
     sessionBadge: { text: "\u98DE", color: "#3370ff" },
     /**
-     * `capabilities.setup.label` 决定左栏显不显示「渠道设置」入口：飞书没有渠道级表单
-     * （凭据写在渠道自己的 config.json，旧版 dsh-im 的配置启动时自动导入），所以只给
-     * 空状态提示（`hint`），不显示入口。
+     * `capabilities.setup.label` 决定机器人列表头部显不显示这个入口：飞书现在有了——
+     * 打开的是「新建机器人接入」（填自建应用的 App ID + App Secret 就能加机器人），
+     * 不再是当初那个点进去什么都改不了的「渠道设置」空壳。
      */
     capabilities: {
       groups: true,
       setup: {
+        label: t("\u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165"),
         hint: t(FEISHU_SETUP_HINT)
       }
     }

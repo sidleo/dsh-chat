@@ -394,6 +394,7 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 | `bot.agent-preset.set` | `{ channelId, botId, agentPreset }` | 设 Agent Preset（先与当前 Host 的列表对账）；**只对新会话生效** |
 | `bot.model.set` | `{ channelId, botId, model }` | 设**机器人默认模型** `{provider,model,reasoningEffort?}` 或 null；模型目录读得到时先对账（`chat/unknown-model` / `chat/unknown-effort`），**只对新会话生效**——无会话时聊天里改的也是它 |
 | `bot.access-policy.set` | `{ channelId, botId, policy }` | 设访问策略（与 host 拦消息同一份校验）；**立即生效** |
+| `bot.access-policy.open-scope` | `{ channelId, botId, conversationType }` | 把某一个会话类型**放宽到「任何人可用」**，另一份与名单原样保留；策略形状与默认值都在 hub，所以这一步也由 hub 做。「新建机器人接入」用它把新机器人的私聊放开（新机器人还没有属主，默认 `allowlist` + 空名单 = 谁都进不来） |
 | `bot.conversations` | `{ channelId, botId }` | 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
 | `bot.panel-sections.set` | `{ channelId, botId, sections }` | 设**控制面板卡片的显示项** `{ direct: { model, session, preset, context, policy, fields, actions, commands }, group: {…} }`——只影响卡片的显示，不影响功能；缺项/写错按"显示"补齐（见 §6） |
@@ -406,6 +407,17 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 | `delivery.sendFile` | `{ channelId, botId, targetId, path, name? }` | 主动发文件/图片（≤30MB）；渠道没实现 `sendFile` 时明确报 `chat/delivery-unsupported` |
 
 新的渠道无关设置请加在控制端点（hub 一份实现，所有渠道共用），不要在渠道里各写一份。
+
+### 渠道自己的端点（`/api/dsh-chat/<channelId>`）
+
+契约只规定形状，方法名由渠道定；下面这些是**约定俗成的名字**，hub 与共享组件会按名字调用：
+
+| method | 载荷 | 谁调用 | 说明 |
+|---|---|---|---|
+| `connection.status` | `{}` | hub 机器人列表 | 见下一节（**必须**实现） |
+| `panel.fields` / `panel.apply` / `panel.actions` / `panel.act` | 见 §4 上方 | hub 的 `/menu` 卡片 | 渠道自带的面板字段与动作；**可选** |
+| `names.resolve` | `{ botId, ids }` | 渠道自己的设置页 | 白名单里的 id → 名字；**可选**（见下） |
+| `bot.add` | `{ appId, appSecret, domain?, ownerOpenIds? }` | 渠道自己的设置页 | 「新建机器人接入」：**先验凭据再写任何东西**，成功后返回新机器人的状态；**可选**，名字自定 |
 
 渠道的投递实现（`instance.delivery`）有三块，后两块可选、缺席要能被查出来（`supportsFile`）：
 

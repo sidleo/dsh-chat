@@ -928,6 +928,62 @@ test('机器人设置：工作区校验、Agent 预设对账、访问策略用�
   }
 });
 
+test('bot.access-policy.open-scope：只放宽指定那一份，另一份与名单一个字节不动', async () => {
+  const app = await bootstrap();
+  try {
+    // 新机器人：本来没有任何策略记录 —— 放宽要能自己补齐默认形状（默认两份都是 allowlist）。
+    const opened = await callRoute(app.routes, HUB_PATH, 'bot.access-policy.open-scope', {
+      channelId: 'fixture', botId: 'bot_new', conversationType: 'direct',
+    });
+    assert.equal(opened.result.ok, true);
+    assert.equal(opened.result.value.accessPolicy.direct.mode, 'open');
+    assert.equal(opened.result.value.accessPolicy.group.mode, 'allowlist',
+      '只放宽私聊，群聊必须保持保守默认');
+
+    // 已有策略：放宽私聊不许把群聊的名单/开关冲掉。
+    await callRoute(app.routes, HUB_PATH, 'bot.access-policy.set', {
+      channelId: 'fixture',
+      botId: 'bot_new',
+      policy: {
+        direct: {
+          mode: 'allowlist',
+          open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] },
+          allowlist: { users: [{ id: 'ou_alice', canExecuteCommands: true }] },
+        },
+        group: {
+          mode: 'allowlist',
+          open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+          allowlist: { users: [{ id: 'ou_bob', canExecuteCommands: true }] },
+        },
+      },
+    });
+    const again = await callRoute(app.routes, HUB_PATH, 'bot.access-policy.open-scope', {
+      channelId: 'fixture', botId: 'bot_new', conversationType: 'group',
+    });
+    assert.equal(again.result.ok, true);
+    assert.equal(again.result.value.accessPolicy.group.mode, 'open');
+    assert.deepEqual(again.result.value.accessPolicy.group.allowlist.users,
+      [{ id: 'ou_bob', canExecuteCommands: true }], '放宽模式不该动名单');
+    assert.deepEqual(again.result.value.accessPolicy.direct.allowlist.users,
+      [{ id: 'ou_alice', canExecuteCommands: true }], '另一个作用域原样保留');
+
+    // 非法输入：缺 conversationType、写了不认识的作用域、缺 botId。
+    const badScope = await callRoute(app.routes, HUB_PATH, 'bot.access-policy.open-scope', {
+      channelId: 'fixture', botId: 'bot_new', conversationType: 'private',
+    });
+    assert.equal(badScope.result.ok, false);
+    assert.match(badScope.result.error.message, /conversationType/);
+    assert.equal((await callRoute(app.routes, HUB_PATH, 'bot.access-policy.open-scope', {
+      channelId: 'fixture', botId: 'bot_new',
+    })).result.ok, false);
+    assert.equal((await callRoute(app.routes, HUB_PATH, 'bot.access-policy.open-scope', {
+      channelId: 'fixture', conversationType: 'direct',
+    })).result.ok, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('bot.conversations：把该机器人聊过的会话（带名字）给选择器用', async () => {
   const app = await bootstrap();
   try {

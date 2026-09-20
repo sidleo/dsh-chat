@@ -28,7 +28,7 @@ import { ChatSettingsSection } from '../packages/dsh-chat/client/section.js';
 import { createChannelRail } from '../packages/dsh-chat/shared/channel-rail.mjs';
 import { installChatStyles } from '../packages/dsh-chat/client/styles.js';
 // 整张渠道卡：真机上"卡片头逐字竖排"就是它们炸的，而单测与构建都发现不了。
-import { BotCard as FeishuBotCard } from '../packages/dsh-chat-feishu/client/index.js';
+import { BotCard as FeishuBotCard, FeishuOnboard } from '../packages/dsh-chat-feishu/client/index.js';
 import { AccountCard as WeixinAccountCard } from '../packages/dsh-chat-weixin/client/index.js';
 
 const h = React.createElement;
@@ -242,15 +242,18 @@ channels.register({
   id: 'feishu',
   order: 20,
   label: '飞书',
-  // 飞书没有渠道级表单（凭据写在 config.json）：只给接入提示，不给「渠道设置」入口。
-  capabilities: { note: '支持私聊与群聊', setup: { hint: '把凭据加进 config.json 后重启 dsh。' } },
+  // 飞书的入口 = 「新建机器人接入」（填自建应用的 App ID + App Secret），空列表时用渠道给的提示。
+  capabilities: {
+    note: '支持私聊与群聊',
+    setup: { label: '新建机器人接入', hint: '把凭据加进 config.json 后重启 dsh。' },
+  },
 });
 channels.register({
   id: 'weixin',
   order: 10,
   label: '微信',
-  // 两个渠道各覆盖 `capabilities.setup` 的一种"只给一半"的形态：飞书只有 `hint`（无入口）、
-  // 微信只有 `label`（有入口、空列表时用 hub 那句中性说明）——两半都得能渲染。
+  // 两个渠道各覆盖 `capabilities.setup` 的一种"只给一半"的形态：飞书只给 `hint`
+  // （无入口、空列表用 hub 那句中性说明）、微信只给 `label`（有入口、空列表同样退回中性句）。
   capabilities: { note: '仅私聊', setup: { label: '扫码接入' } },
 });
 
@@ -290,6 +293,10 @@ const FRAGMENTS = {
   // 整张渠道卡：数据全部由上面的假传输层供给，组件与 hook 都是产品代码。
   feishuCard,
   weixinCard,
+  // 新建机器人接入的表单：四个控件（三个输入框 + 一个下拉）在 320px 下也要排得下。
+  feishuOnboard: () => h(FeishuOnboard, {
+    chatUi, connection, translate: t, onAdded: async () => {},
+  }),
   // hub 页头 + 左栏 + 机器人列表：右上角两个入口（诊断 / 版本与更新）在窄栏下也得排得下。
   hubPage: () => h(HubPage),
   hubPageOpen: () => h(HubPage),

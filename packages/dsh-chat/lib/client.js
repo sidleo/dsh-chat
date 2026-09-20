@@ -2650,6 +2650,11 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-state-error-primary);
 }
+/* \u90E8\u5206\u6210\u529F\u7684\u544A\u8B66\uFF08\u4F8B\uFF1A\u673A\u5668\u4EBA\u52A0\u4E0A\u4E86\u3001\u4F46\u987A\u5E26\u90A3\u6B65\u6CA1\u505A\u6210\uFF09\uFF1A\u4E0D\u662F\u5931\u8D25\uFF0C\u4F46\u7EDD\u4E0D\u80FD\u4E0D\u8BF4\u3002 */
+.dchat-warning {
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-primary);
+}
 .dchat-buttonPrimary {
   background: var(--dsw-alias-brand-primary);
   border-color: transparent;

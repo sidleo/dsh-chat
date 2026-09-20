@@ -16,7 +16,7 @@ import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh
 import { enhanceReplyReference } from '../packages/dsh-chat/shared/reply-reference.mjs';
 import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
 import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feishu/host/config-store.mjs';
-import { createFeishuController } from '../packages/dsh-chat-feishu/host/controller.mjs';
+import { createFeishuController, deriveFeishuIdentity } from '../packages/dsh-chat-feishu/host/controller.mjs';
 import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
 import {
   createTurnPresenter, renderStepCard, thinkRow, todoRows, toolRow,
@@ -2223,6 +2223,182 @@ test('names.resolve：白名单里的 id 换成名字（人 / 群各按各的查
     assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_ctl' })).ok, false);
     assert.equal((await controller.endpoints['names.resolve']({ ids: [] })).ok, false);
     assert.equal((await controller.endpoints['names.resolve']({ botId: 'bot_nope', ids: [] })).ok, false);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('bot.add：验凭据 → 写凭据 → 落盘 → 起连接；重复接入与坏凭据都如实拒绝', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-add-'));
+  try {
+    await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_ctl',
+        appId: 'cli_existing_0001',
+        secretRef: 'DSH_FEISHU_APP_SECRET',
+        ownerOpenIds: ['ou_owner'],
+        botName: '已经在的机器人',
+      }],
+    }), 'utf8');
+
+    const secrets = new Map();
+    const gateway = createFakeGateway();
+    /** 探针替身：不改代码就能模拟"凭据不对"与"读不到机器人名字"。 */
+    const probes = [];
+    let probeResult = { botName: '新机器人', botOpenId: 'ou_new_bot' };
+    let probeFails = null;
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: {
+          resolve: async (ref) => ({ value: secrets.get(ref), configured: secrets.has(ref) }),
+          set: async (ref, value) => { secrets.set(ref, value); },
+          unset: async (ref) => { secrets.delete(ref); },
+        },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createProbe: (options) => {
+          probes.push(options);
+          return {
+            async verify() {
+              if (probeFails) throw probeFails;
+              return probeResult;
+            },
+          };
+        },
+      },
+    });
+    await controller.start();
+
+    // ① 正常接入：凭据写进服务、配置落盘、机器人被拉起来。
+    const added = await controller.endpoints['bot.add']({
+      appId: 'cli_brand_new_2026', appSecret: 'secret-value-1234', ownerOpenIds: ['ou_zhangzhiwei'],
+    });
+    assert.equal(added.ok, true, added.error?.message);
+    assert.equal(added.value.bot.name, '新机器人');
+    assert.equal(added.value.bot.state, 'running');
+    const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
+    const saved = onDisk.bots.find((bot) => bot.appId === 'cli_brand_new_2026');
+    assert.ok(saved, '新机器人要写进 config.json');
+    assert.equal(saved.secretRef, deriveFeishuIdentity('cli_brand_new_2026').secretRef);
+    assert.deepEqual(saved.ownerOpenIds, ['ou_zhangzhiwei']);
+    assert.equal(secrets.get(saved.secretRef), 'secret-value-1234', 'App Secret 存进凭据服务');
+    assert.equal(probes[0].appSecret, 'secret-value-1234');
+    // 探针只看得到 id/secret/domain：状态里不该回显 Secret。
+    assert.equal(JSON.stringify(added.value).includes('secret-value-1234'), false);
+
+    // ② 同一个应用（同一个 appId）重复接入：拒绝，并指出已经有了。
+    const duplicate = await controller.endpoints['bot.add']({
+      appId: 'cli_brand_new_2026', appSecret: 'secret-value-1234',
+    });
+    assert.equal(duplicate.ok, false);
+    assert.equal(duplicate.error.code, 'feishu/bot-exists');
+    assert.match(duplicate.error.message, /新机器人/, '要说清是哪一个已经在列表里');
+
+    // ③ 属主留空 = 没有属主（`['*']`），不是"人人都是属主"。
+    const noOwner = await controller.endpoints['bot.add']({
+      appId: 'cli_no_owner_2026', appSecret: 'secret-value-5678',
+    });
+    assert.equal(noOwner.ok, true, noOwner.error?.message);
+    assert.equal(noOwner.value.bot.ownersWildcard, true);
+    assert.equal(noOwner.value.bot.ownerCount, 0);
+
+    // ④ 凭据不对：一个字节都不写（磁盘与凭据服务都不许动）。
+    const before = await readFile(join(dataDir, 'config.json'), 'utf8');
+    probeFails = Object.assign(new Error('App ID 或 App Secret 不对：app_id or app_secret invalid'),
+      { code: 'feishu/credential-invalid' });
+    const rejected = await controller.endpoints['bot.add']({
+      appId: 'cli_wrong_secret', appSecret: 'nope-nope-nope',
+    });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.error.code, 'feishu/credential-invalid');
+    probeFails = null;
+    assert.equal(await readFile(join(dataDir, 'config.json'), 'utf8'), before, '拒绝时配置不许改');
+    assert.equal([...secrets.values()].includes('nope-nope-nope'), false, '拒绝时凭据不许写');
+
+    // ⑤ 名字读不到（没开机器人能力）：照样接入，只是名字为空。
+    probeResult = { botName: null, botOpenId: null };
+    const unnamed = await controller.endpoints['bot.add']({
+      appId: 'cli_no_bot_cap', appSecret: 'secret-value-9012',
+    });
+    assert.equal(unnamed.ok, true, unnamed.error?.message);
+    assert.equal(unnamed.value.bot.name, null);
+
+    // ⑥ 形状不对：非 cli_ 前缀、Secret 太短、属主写成投递目标 id。
+    for (const payload of [
+      { appId: 'not-a-cli-id', appSecret: 'secret-value-1234' },
+      { appId: 'cli_ok_2026', appSecret: 'short' },
+      { appId: 'cli_ok_2026', appSecret: 'secret-value-1234', ownerOpenIds: ['p2p_ou_x'] },
+      { appId: 'cli_ok_2026', appSecret: 'secret-value-1234', ownerOpenIds: [] },
+      {},
+    ]) {
+      const result = await controller.endpoints['bot.add'](payload);
+      assert.equal(result.ok, false, `应当拒绝：${JSON.stringify(payload)}`);
+      assert.equal(result.error.code, 'chat/bad-request');
+    }
+
+    await controller.stop();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('bot.add：配置写不进去时，刚写的凭据要回滚掉（不留孤儿引用）', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-add-rollback-'));
+  try {
+    const secrets = new Map();
+    const gateway = createFakeGateway();
+    const controller = createFeishuController({
+      deps: {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        credentials: {
+          resolve: async (ref) => ({ value: secrets.get(ref), configured: secrets.has(ref) }),
+          set: async (ref, value) => { secrets.set(ref, value); },
+          unset: async (ref) => { secrets.delete(ref); },
+        },
+        contextEnhancement: { captureContextEnhancementSource, enhanceContent },
+    replyReference: { enhanceReplyReference },
+        accessPolicy,
+        sessions: {
+          ask: async () => ({ text: '', reason: { kind: 'completed' } }),
+          bindings: { adopt: async () => 0 },
+        },
+      },
+      logger: silentLogger,
+      internals: {
+        sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
+        createGateway: () => gateway,
+        createProbe: () => ({ async verify() { return { botName: null, botOpenId: null }; } }),
+      },
+    });
+    await controller.start();
+    // 把 config.json 换成一个**目录**：读取退回空文档，但落盘时的 rename 必然失败
+    // （真实故障里也可能是磁盘/权限——这里只要能稳定复现"落盘失败"）。
+    await rm(join(dataDir, 'config.json'), { force: true });
+    await mkdir(join(dataDir, 'config.json'), { recursive: true });
+
+    const failed = await controller.endpoints['bot.add']({
+      appId: 'cli_rollback_2026', appSecret: 'secret-value-0001',
+    });
+    assert.equal(failed.ok, false);
+    const ref = deriveFeishuIdentity('cli_rollback_2026').secretRef;
+    assert.equal(secrets.has(ref), false, '落盘失败要把刚写的凭据删掉');
+    await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }

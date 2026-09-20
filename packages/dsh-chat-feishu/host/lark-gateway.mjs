@@ -181,6 +181,85 @@ function assertSuccess(operation, response) {
 }
 
 /**
+ * 一次性探针：**只验证一组 App 凭据、顺手读一下机器人名字**。
+ *
+ * 设置页的「新建机器人接入」要在落盘/建长连接**之前**知道这组凭据对不对——否则用户拿到的是
+ * "加进去了但一直 failed"，原因还埋在长连接的报错里。与 `createLarkGateway` 的区别：
+ * 这里不连长连接、不发消息，用完即弃，所以不塞进网关（网关的每条路径都假设自己连着）。
+ *
+ * @param options - { appId, appSecret, domain, sdk, logger, loggerLevel }。
+ * @returns `{ verify() }`；`verify()` → `{ botName, botOpenId }`（名字读不到就是 null）。
+ */
+export function createLarkProbe({
+  appId,
+  appSecret,
+  domain = 'feishu',
+  sdk,
+  logger = console,
+  loggerLevel = process.env.DSH_CHAT_FEISHU_SDK_LOG || 'info',
+} = {}) {
+  if (!sdk?.Client) throw new TypeError('飞书探针需要 @larksuiteoapi/node-sdk。');
+  if (!appId || !appSecret) throw new TypeError('飞书探针需要 appId 与 appSecret。');
+
+  const client = new sdk.Client({
+    appId,
+    appSecret,
+    ...(domain === 'lark' ? { domain: sdk.Domain?.Lark } : {}),
+    logger,
+    loggerLevel: loggerLevelFor(sdk, loggerLevel),
+  });
+
+  return Object.freeze({
+    async verify() {
+      let auth;
+      try {
+        auth = await client.request({
+          method: 'POST',
+          url: `${client.domain}/open-apis/auth/v3/tenant_access_token/internal`,
+          data: { app_id: appId, app_secret: appSecret },
+        });
+      } catch (error) {
+        // SDK 抛的 axios 错误里 code/msg 埋在 response.data：压成一句能给人看的话。
+        const invalid = new Error(`App ID 或 App Secret 校验失败：${readableApiError(error)}`);
+        invalid.code = 'feishu/credential-invalid';
+        throw invalid;
+      }
+      const body = auth?.data ?? auth;
+      if (body?.code) {
+        const invalid = new Error(`App ID 或 App Secret 不对：${body.msg ?? `code ${body.code}`}`);
+        invalid.code = 'feishu/credential-invalid';
+        invalid.providerCode = body.code;
+        throw invalid;
+      }
+      if (!body?.tenant_access_token) {
+        const missing = new Error('飞书没有返回 tenant_access_token，无法确认这组凭据可用。');
+        missing.code = 'feishu/credential-invalid';
+        throw missing;
+      }
+      /**
+       * 名字是**尽力而为**：应用没开机器人能力等情况下读不到，但不该因此拒绝接入——
+       * 列表里先显示 id，用户在后台补齐能力后点「重新连接」即可。
+       */
+      try {
+        const info = await client.request({
+          method: 'GET',
+          url: `${client.domain}/open-apis/bot/v3/info`,
+        });
+        const bot = info?.bot ?? info?.data?.bot ?? null;
+        return {
+          botName: typeof bot?.app_name === 'string' && bot.app_name ? bot.app_name : null,
+          botOpenId: typeof bot?.open_id === 'string' && bot.open_id ? bot.open_id : null,
+        };
+      } catch (error) {
+        logger.warn?.('[dsh-chat-feishu] 读机器人信息失败（不影响接入，列表里先显示 id）：'
+          + `${readableApiError(error)}`);
+        return { botName: null, botOpenId: null };
+      }
+    },
+  });
+}
+
+/**
  * 把 SDK 抛出的错误压成一句可读的话。
  *
  * SDK 在业务失败时抛的是 axios 错误，真正的 code/msg 埋在 `response.data` 里（或塞在

@@ -6,12 +6,34 @@
  * @module dsh-chat-feishu/controller
  */
 
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
-import { createLarkGateway } from './lark-gateway.mjs';
+import { createLarkGateway, createLarkProbe } from './lark-gateway.mjs';
 import { createFeishuStateStore } from './state-store.mjs';
+
+/**
+ * 由 appId 推导 botId 与凭据引用名（与微信渠道同一条做法：sha256 前 24 位十六进制）。
+ *
+ * 取的是 appId 而不是"接入时间"：**同一个应用重复接入不会造出第二只机器人**，
+ * 凭据引用名也稳定（页面把 Secret 写进 DSH 凭据服务时用的就是它）。
+ *
+ * @param appId - 飞书应用的 App ID（`cli_…`）。
+ * @returns { botId, secretRef }。
+ */
+export function deriveFeishuIdentity(appId) {
+  const raw = typeof appId === 'string' ? appId.trim() : '';
+  if (!raw) throw new TypeError('deriveFeishuIdentity 需要 appId。');
+  const digest = createHash('sha256').update(raw).digest('hex').slice(0, 24);
+  return { botId: `fs_${digest}`, secretRef: `DSH_FEISHU_APP_SECRET_${digest.toUpperCase()}` };
+}
+
+/** App ID 的合法形状（飞书自建应用都是 `cli_` 开头；后面的字符宽松一点，真正的门是探针）。 */
+const APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
+/** 域名取值：飞书（国内）与 Lark（海外）。 */
+const APP_DOMAINS = Object.freeze(['feishu', 'lark']);
 
 /** App Secret 只经 DSH 凭据服务读取；展示时永不回传。 */
 async function resolveSecret(credentials, ref) {
@@ -62,6 +84,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
   const sdkLoader = internals.sdk ?? (() => import('@larksuiteoapi/node-sdk'));
   /** 建桥：测试可注入一份替身，用来断言"桥拿到的是哪份 bot 对象"。 */
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
+  /** 凭据探针：测试注入替身，避免真去打飞书接口。 */
+  const probeFactory = internals.createProbe ?? createLarkProbe;
 
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
@@ -625,6 +649,123 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         await stopBot(saved.id);
         const record = await startBot(saved);
         return { ok: true, value: botStatus(record) };
+      },
+
+      /**
+       * 新建机器人接入：填 App ID + App Secret（自定义自建应用）就能加一只机器人。
+       *
+       * 顺序是有讲究的——**先验凭据，再写任何东西**：
+       * ① 校验形状 → ② 探针换一次 tenant_access_token（凭据不对就到此为止，磁盘与凭据服务一个字节没动）
+       * → ③ 写 DSH 凭据服务 → ④ 写渠道自己的 config.json → ⑤ 起长连接。
+       * ④ 失败时把 ③ 写的凭据删掉（不留孤儿引用）；⑤ 失败不算"没加上"
+       * （配置已在，状态里会如实显示 failed + 原因，用户改完权限点重连即可）。
+       *
+       * 属主可以留空：此时按 `['*']`（**没有属主**，不是"人人都是属主"）落盘，
+       * 由调用方把私聊访问策略放宽到「任何人可用」，让属主先能跟机器人说上话。
+       */
+      'bot.add': async (payload) => {
+        const appId = typeof payload?.appId === 'string' ? payload.appId.trim() : '';
+        const appSecret = typeof payload?.appSecret === 'string' ? payload.appSecret.trim() : '';
+        const domain = APP_DOMAINS.includes(payload?.domain) ? payload.domain : 'feishu';
+        const rawOwners = payload?.ownerOpenIds === undefined ? ['*'] : payload.ownerOpenIds;
+        const ownersValid = Array.isArray(rawOwners) && rawOwners.length > 0
+          && rawOwners.length <= MAX_OWNERS
+          && rawOwners.every((id) => typeof id === 'string' && OWNER_ID_PATTERN.test(id.trim()));
+        if (!APP_ID_PATTERN.test(appId) || appSecret.length < 8 || appSecret.length > 256 || !ownersValid) {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: 'bot.add 需要 { appId: "cli_…", appSecret, domain?, ownerOpenIds? }；'
+                + `appSecret 是 8–256 个字符，ownerOpenIds 可省略（省略即"没有属主"，1–${MAX_OWNERS} 个 ou_…）。`,
+              details: { appIdOk: APP_ID_PATTERN.test(appId), ownersValid },
+            },
+          };
+        }
+        if (typeof deps.credentials?.set !== 'function') {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/credential-unwritable',
+              message: '当前 Host 的凭据服务不支持写入，无法保存 App Secret（请在 Host 里配置凭据服务）。',
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        const existing = configStore.list().find((bot) => bot.appId === appId);
+        if (existing) {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/bot-exists',
+              message: `这个应用已经在列表里了（${existing.botName ?? existing.id}），不必重复接入。`,
+              details: { botId: existing.id },
+            },
+          };
+        }
+        const { botId, secretRef } = deriveFeishuIdentity(appId);
+        // ① 探针：凭据不对就到此为止。
+        let info;
+        try {
+          const sdk = await sdkLoader();
+          info = await probeFactory({ appId, appSecret, domain, sdk, logger }).verify();
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof error?.code === 'string' ? error.code : 'feishu/credential-check-failed',
+              message: error?.message ?? String(error),
+              details: {},
+            },
+          };
+        }
+        // ② 记凭据（放最前面：落盘时要有它，否则配置指向一个读不到的引用）。
+        try {
+          await deps.credentials.set(secretRef, appSecret);
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/credential-write-failed',
+              message: `保存 App Secret 失败：${error?.message ?? error}`,
+              details: {},
+            },
+          };
+        }
+        // ③ 落盘；失败要把刚写的凭据删掉，免得留下一个谁也读不到的引用。
+        let saved;
+        try {
+          saved = await configStore.saveBot({
+            id: botId,
+            appId,
+            secretRef,
+            domain,
+            ownerOpenIds: rawOwners.map((id) => id.trim()),
+            botName: info?.botName ?? null,
+            botOpenId: info?.botOpenId ?? null,
+            createdAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          try {
+            await deps.credentials.unset?.(secretRef);
+          } catch (cleanupError) {
+            logger.warn?.(`[dsh-chat-feishu] 回滚凭据 ${secretRef} 失败：${cleanupError?.message ?? cleanupError}`);
+          }
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/bot-save-failed',
+              message: `写入机器人配置失败：${error?.message ?? error}`,
+              details: {},
+            },
+          };
+        }
+        logger.info?.(`[dsh-chat-feishu] 新建机器人接入：${saved.botName ?? saved.id}`
+          + `（appId=${maskAppId(saved.appId)} 属主=${saved.ownerOpenIds.join('、')}）`);
+        // ④ 起连接。起不来也算"加上了"：状态里会显示 failed + 原因。
+        const record = await startBot(saved);
+        return { ok: true, value: { bot: botStatus(record) } };
       },
 
       'bot.delete': async (payload) => {

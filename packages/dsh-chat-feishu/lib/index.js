@@ -23708,7 +23708,7 @@ var require_websocket = __commonJS({
     var http4 = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes3, createHash } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash2 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -24376,7 +24376,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -24745,7 +24745,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter2 = __require("events");
     var http4 = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash } = __require("crypto");
+    var { createHash: createHash2 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -25052,7 +25052,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -126477,6 +126477,7 @@ ${lines.join("\n")}
 });
 
 // packages/dsh-chat-feishu/host/controller.mjs
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 // packages/dsh-chat-feishu/host/bridge.mjs
@@ -128810,6 +128811,66 @@ function assertSuccess(operation, response) {
   if (response?.code && response.code !== 0) throw apiError(operation, response);
   return response;
 }
+function createLarkProbe({
+  appId,
+  appSecret,
+  domain = "feishu",
+  sdk,
+  logger = console,
+  loggerLevel = process.env.DSH_CHAT_FEISHU_SDK_LOG || "info"
+} = {}) {
+  if (!sdk?.Client) throw new TypeError("\u98DE\u4E66\u63A2\u9488\u9700\u8981 @larksuiteoapi/node-sdk\u3002");
+  if (!appId || !appSecret) throw new TypeError("\u98DE\u4E66\u63A2\u9488\u9700\u8981 appId \u4E0E appSecret\u3002");
+  const client = new sdk.Client({
+    appId,
+    appSecret,
+    ...domain === "lark" ? { domain: sdk.Domain?.Lark } : {},
+    logger,
+    loggerLevel: loggerLevelFor(sdk, loggerLevel)
+  });
+  return Object.freeze({
+    async verify() {
+      let auth;
+      try {
+        auth = await client.request({
+          method: "POST",
+          url: `${client.domain}/open-apis/auth/v3/tenant_access_token/internal`,
+          data: { app_id: appId, app_secret: appSecret }
+        });
+      } catch (error) {
+        const invalid = new Error(`App ID \u6216 App Secret \u6821\u9A8C\u5931\u8D25\uFF1A${readableApiError(error)}`);
+        invalid.code = "feishu/credential-invalid";
+        throw invalid;
+      }
+      const body = auth?.data ?? auth;
+      if (body?.code) {
+        const invalid = new Error(`App ID \u6216 App Secret \u4E0D\u5BF9\uFF1A${body.msg ?? `code ${body.code}`}`);
+        invalid.code = "feishu/credential-invalid";
+        invalid.providerCode = body.code;
+        throw invalid;
+      }
+      if (!body?.tenant_access_token) {
+        const missing = new Error("\u98DE\u4E66\u6CA1\u6709\u8FD4\u56DE tenant_access_token\uFF0C\u65E0\u6CD5\u786E\u8BA4\u8FD9\u7EC4\u51ED\u636E\u53EF\u7528\u3002");
+        missing.code = "feishu/credential-invalid";
+        throw missing;
+      }
+      try {
+        const info = await client.request({
+          method: "GET",
+          url: `${client.domain}/open-apis/bot/v3/info`
+        });
+        const bot = info?.bot ?? info?.data?.bot ?? null;
+        return {
+          botName: typeof bot?.app_name === "string" && bot.app_name ? bot.app_name : null,
+          botOpenId: typeof bot?.open_id === "string" && bot.open_id ? bot.open_id : null
+        };
+      } catch (error) {
+        logger.warn?.(`[dsh-chat-feishu] \u8BFB\u673A\u5668\u4EBA\u4FE1\u606F\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u63A5\u5165\uFF0C\u5217\u8868\u91CC\u5148\u663E\u793A id\uFF09\uFF1A${readableApiError(error)}`);
+        return { botName: null, botOpenId: null };
+      }
+    }
+  });
+}
 function readableApiError(error) {
   const detail = error?.response?.data;
   if (detail?.msg) return `${detail.msg}${detail.code ? `\uFF08code ${detail.code}\uFF09` : ""}`;
@@ -129864,6 +129925,14 @@ function createFeishuStateStore({ path: path2, logger = console } = {}) {
 }
 
 // packages/dsh-chat-feishu/host/controller.mjs
+function deriveFeishuIdentity(appId) {
+  const raw = typeof appId === "string" ? appId.trim() : "";
+  if (!raw) throw new TypeError("deriveFeishuIdentity \u9700\u8981 appId\u3002");
+  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
+  return { botId: `fs_${digest}`, secretRef: `DSH_FEISHU_APP_SECRET_${digest.toUpperCase()}` };
+}
+var APP_ID_PATTERN = /^cli_[A-Za-z0-9_-]{4,64}$/;
+var APP_DOMAINS = Object.freeze(["feishu", "lark"]);
 async function resolveSecret(credentials, ref) {
   if (typeof credentials?.resolve !== "function") {
     throw new Error("\u5F53\u524D Host \u672A\u63D0\u4F9B\u51ED\u636E\u670D\u52A1\uFF0C\u65E0\u6CD5\u8BFB\u53D6\u98DE\u4E66 App Secret\u3002");
@@ -129898,6 +129967,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
   const runtimes = /* @__PURE__ */ new Map();
   const sdkLoader = internals.sdk ?? (() => Promise.resolve().then(() => (init_es(), es_exports)));
   const bridgeFactory = internals.createBridge ?? createFeishuBridge;
+  const probeFactory = internals.createProbe ?? createLarkProbe;
   async function startBot(bot) {
     const existing = runtimes.get(bot.id);
     if (existing?.phase === "running" || existing?.phase === "starting") return existing;
@@ -130331,6 +130401,114 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         await stopBot(saved.id);
         const record = await startBot(saved);
         return { ok: true, value: botStatus(record) };
+      },
+      /**
+       * 新建机器人接入：填 App ID + App Secret（自定义自建应用）就能加一只机器人。
+       *
+       * 顺序是有讲究的——**先验凭据，再写任何东西**：
+       * ① 校验形状 → ② 探针换一次 tenant_access_token（凭据不对就到此为止，磁盘与凭据服务一个字节没动）
+       * → ③ 写 DSH 凭据服务 → ④ 写渠道自己的 config.json → ⑤ 起长连接。
+       * ④ 失败时把 ③ 写的凭据删掉（不留孤儿引用）；⑤ 失败不算"没加上"
+       * （配置已在，状态里会如实显示 failed + 原因，用户改完权限点重连即可）。
+       *
+       * 属主可以留空：此时按 `['*']`（**没有属主**，不是"人人都是属主"）落盘，
+       * 由调用方把私聊访问策略放宽到「任何人可用」，让属主先能跟机器人说上话。
+       */
+      "bot.add": async (payload) => {
+        const appId = typeof payload?.appId === "string" ? payload.appId.trim() : "";
+        const appSecret = typeof payload?.appSecret === "string" ? payload.appSecret.trim() : "";
+        const domain = APP_DOMAINS.includes(payload?.domain) ? payload.domain : "feishu";
+        const rawOwners = payload?.ownerOpenIds === void 0 ? ["*"] : payload.ownerOpenIds;
+        const ownersValid = Array.isArray(rawOwners) && rawOwners.length > 0 && rawOwners.length <= MAX_OWNERS && rawOwners.every((id) => typeof id === "string" && OWNER_ID_PATTERN.test(id.trim()));
+        if (!APP_ID_PATTERN.test(appId) || appSecret.length < 8 || appSecret.length > 256 || !ownersValid) {
+          return {
+            ok: false,
+            error: {
+              code: "chat/bad-request",
+              message: `bot.add \u9700\u8981 { appId: "cli_\u2026", appSecret, domain?, ownerOpenIds? }\uFF1BappSecret \u662F 8\u2013256 \u4E2A\u5B57\u7B26\uFF0CownerOpenIds \u53EF\u7701\u7565\uFF08\u7701\u7565\u5373"\u6CA1\u6709\u5C5E\u4E3B"\uFF0C1\u2013${MAX_OWNERS} \u4E2A ou_\u2026\uFF09\u3002`,
+              details: { appIdOk: APP_ID_PATTERN.test(appId), ownersValid }
+            }
+          };
+        }
+        if (typeof deps.credentials?.set !== "function") {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/credential-unwritable",
+              message: "\u5F53\u524D Host \u7684\u51ED\u636E\u670D\u52A1\u4E0D\u652F\u6301\u5199\u5165\uFF0C\u65E0\u6CD5\u4FDD\u5B58 App Secret\uFF08\u8BF7\u5728 Host \u91CC\u914D\u7F6E\u51ED\u636E\u670D\u52A1\uFF09\u3002",
+              details: {}
+            }
+          };
+        }
+        await configStore.load();
+        const existing = configStore.list().find((bot) => bot.appId === appId);
+        if (existing) {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/bot-exists",
+              message: `\u8FD9\u4E2A\u5E94\u7528\u5DF2\u7ECF\u5728\u5217\u8868\u91CC\u4E86\uFF08${existing.botName ?? existing.id}\uFF09\uFF0C\u4E0D\u5FC5\u91CD\u590D\u63A5\u5165\u3002`,
+              details: { botId: existing.id }
+            }
+          };
+        }
+        const { botId, secretRef } = deriveFeishuIdentity(appId);
+        let info;
+        try {
+          const sdk = await sdkLoader();
+          info = await probeFactory({ appId, appSecret, domain, sdk, logger }).verify();
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof error?.code === "string" ? error.code : "feishu/credential-check-failed",
+              message: error?.message ?? String(error),
+              details: {}
+            }
+          };
+        }
+        try {
+          await deps.credentials.set(secretRef, appSecret);
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/credential-write-failed",
+              message: `\u4FDD\u5B58 App Secret \u5931\u8D25\uFF1A${error?.message ?? error}`,
+              details: {}
+            }
+          };
+        }
+        let saved;
+        try {
+          saved = await configStore.saveBot({
+            id: botId,
+            appId,
+            secretRef,
+            domain,
+            ownerOpenIds: rawOwners.map((id) => id.trim()),
+            botName: info?.botName ?? null,
+            botOpenId: info?.botOpenId ?? null,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        } catch (error) {
+          try {
+            await deps.credentials.unset?.(secretRef);
+          } catch (cleanupError) {
+            logger.warn?.(`[dsh-chat-feishu] \u56DE\u6EDA\u51ED\u636E ${secretRef} \u5931\u8D25\uFF1A${cleanupError?.message ?? cleanupError}`);
+          }
+          return {
+            ok: false,
+            error: {
+              code: "feishu/bot-save-failed",
+              message: `\u5199\u5165\u673A\u5668\u4EBA\u914D\u7F6E\u5931\u8D25\uFF1A${error?.message ?? error}`,
+              details: {}
+            }
+          };
+        }
+        logger.info?.(`[dsh-chat-feishu] \u65B0\u5EFA\u673A\u5668\u4EBA\u63A5\u5165\uFF1A${saved.botName ?? saved.id}\uFF08appId=${maskAppId(saved.appId)} \u5C5E\u4E3B=${saved.ownerOpenIds.join("\u3001")}\uFF09`);
+        const record = await startBot(saved);
+        return { ok: true, value: { bot: botStatus(record) } };
       },
       "bot.delete": async (payload) => {
         if (typeof payload?.botId !== "string" || payload.confirm !== true) {

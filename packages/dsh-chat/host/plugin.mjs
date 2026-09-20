@@ -542,6 +542,41 @@ export function apply(ctx, config = {}) {
       }
     }
     /**
+     * 把某个会话类型放宽到「任何人可用」（只改那一份，另一份与名单照旧）。
+     *
+     * 用途只有一个：「新建机器人接入」刚加进来的机器人**还没有属主**（属主要从"聊过的会话"
+     * 里选，而新机器人一个人都没聊过），默认的 allowlist + 空名单 = 谁都进不来，属主自己
+     * 也没法跟它说上第一句话。于是接入流程把私聊放宽，让属主先聊一句、再把自己设为属主。
+     *
+     * 策略的形状与默认值都在 hub（`defaultAccessPolicy`），所以这一步也必须由 hub 做：
+     * 渠道包不许 import hub 的模块，让渠道去拼一个完整 policy 等于把形状知识复制出去。
+     */
+    if (method === 'bot.access-policy.open-scope') {
+      if (!validBotPayload(payload, { extra: ['conversationType'] })) {
+        return fail('chat/bad-request',
+          'bot.access-policy.open-scope 需要 channelId、botId 与 conversationType。');
+      }
+      if (!accessPolicy.ACCESS_CONVERSATION_TYPES.includes(payload.conversationType)) {
+        return fail('chat/bad-request',
+          `conversationType 只能是 ${accessPolicy.ACCESS_CONVERSATION_TYPES.join(' / ')}。`);
+      }
+      try {
+        await settings.ready();
+        const current = settings.read(payload.channelId, payload.botId)?.accessPolicy ?? null;
+        const base = current ?? accessPolicy.defaultAccessPolicy();
+        const next = {
+          ...base,
+          [payload.conversationType]: { ...base[payload.conversationType], mode: 'open' },
+        };
+        const saved = await settings.write(payload.channelId, payload.botId, {
+          accessPolicy: accessPolicy.validateAccessPolicy(next),
+        });
+        return ok({ accessPolicy: saved.accessPolicy ?? null });
+      } catch (error) {
+        return failFrom(error, 'chat/access-policy-failed');
+      }
+    }
+    /**
      * 该机器人聊过的会话（带人能认出的名字），给"指定用户/指定群"这类选择器用。
      *
      * 复用投递那套：hub 的持久会话绑定表 + 渠道的发现与 `decorateTargets`，

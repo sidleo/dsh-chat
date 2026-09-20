@@ -5319,6 +5319,35 @@ function apply(ctx, config = {}) {
         return failFrom(error, "chat/access-policy-failed");
       }
     }
+    if (method === "bot.access-policy.open-scope") {
+      if (!validBotPayload(payload, { extra: ["conversationType"] })) {
+        return fail(
+          "chat/bad-request",
+          "bot.access-policy.open-scope \u9700\u8981 channelId\u3001botId \u4E0E conversationType\u3002"
+        );
+      }
+      if (!ACCESS_CONVERSATION_TYPES.includes(payload.conversationType)) {
+        return fail(
+          "chat/bad-request",
+          `conversationType \u53EA\u80FD\u662F ${ACCESS_CONVERSATION_TYPES.join(" / ")}\u3002`
+        );
+      }
+      try {
+        await settings.ready();
+        const current = settings.read(payload.channelId, payload.botId)?.accessPolicy ?? null;
+        const base = current ?? defaultAccessPolicy();
+        const next = {
+          ...base,
+          [payload.conversationType]: { ...base[payload.conversationType], mode: "open" }
+        };
+        const saved = await settings.write(payload.channelId, payload.botId, {
+          accessPolicy: validateAccessPolicy(next)
+        });
+        return ok({ accessPolicy: saved.accessPolicy ?? null });
+      } catch (error) {
+        return failFrom(error, "chat/access-policy-failed");
+      }
+    }
     if (method === "bot.conversations") {
       if (!validBotPayload(payload)) {
         return fail("chat/bad-request", "bot.conversations \u9700\u8981 channelId \u4E0E botId\u3002");

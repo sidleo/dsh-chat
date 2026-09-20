@@ -159,13 +159,17 @@ try {
     }
   }
 
-  // 渠道设置入口按渠道显示：飞书不该有「渠道设置」（它跟机器人设置几乎一样），
-  // 微信必须有「扫码接入」（那是唯一的接入入口，名称由渠道给）。
+  // 渠道设置入口按渠道显示：飞书那个入口是「新建机器人接入」（填自建应用凭据），
+  // 微信是「扫码接入」（唯一的接入入口，名称由渠道给）。两者都是"打开渠道自己的页面"，
+  // 不再有当初那个点进去什么都改不了的「渠道设置」空壳。
   for (const frame of results.filter((item) => (item.panelButtons ?? []).length > 0)) {
     const where = `${frame.scenario} @${frame.width}px`;
     const buttons = frame.panelButtons;
     if (frame.activeChannel === '飞书' && buttons.includes('渠道设置')) {
       failures.push(`${where}: 飞书不该有「渠道设置」入口（点进去与机器人设置重复）`);
+    }
+    if (frame.activeChannel === '飞书' && !buttons.includes('新建机器人接入')) {
+      failures.push(`${where}: 飞书缺「新建机器人接入」入口（那是唯一的接入入口）`);
     }
     if (frame.activeChannel === '微信' && !buttons.includes('扫码接入')) {
       failures.push(`${where}: 微信缺「扫码接入」入口（渠道声明了 setup.label）`);

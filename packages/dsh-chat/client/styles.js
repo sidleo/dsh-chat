@@ -572,6 +572,11 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-state-error-primary);
 }
+/* 部分成功的告警（例：机器人加上了、但顺带那步没做成）：不是失败，但绝不能不说。 */
+.dchat-warning {
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-primary);
+}
 .dchat-buttonPrimary {
   background: var(--dsw-alias-brand-primary);
   border-color: transparent;
