@@ -5061,6 +5061,15 @@ function apply(ctx, config = {}) {
     get: (sessionId) => guidance.get(sessionId),
     forget: (sessionId) => guidance.forget(sessionId)
   });
+  const contextEnhancementService = Object.freeze({
+    ...context_enhancement_exports,
+    enhanceContent: (content, snapshot, sourceFactory) => enhanceContent(
+      content,
+      snapshot,
+      sourceFactory,
+      { includeGuidance: !ensureGuidanceSection() }
+    )
+  });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   const interactions = createInteractionService({ logger });
   const deferred = createDeferredDelivery({
@@ -5150,7 +5159,7 @@ function apply(ctx, config = {}) {
       createJsonStore,
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
-      contextEnhancement: context_enhancement_exports,
+      contextEnhancement: contextEnhancementService,
       /**
        * 延迟交付：渠道建桥时注册"怎么把补发内容发回这个会话"。
        * `register({ channelId, botId, deliver })`，`deliver({ key, text, record })`。
@@ -5613,23 +5622,7 @@ function apply(ctx, config = {}) {
       supports: (channelId) => delivery.supports(channelId),
       supportsFile: (channelId) => delivery.supportsFile(channelId)
     }),
-    contextEnhancement: Object.freeze({
-      ...context_enhancement_exports,
-      /** 提示词已经在系统提示词段里时，这里只拼来源块（拼之前再确认一次装没装上）。 */
-      /**
-       * 渠道拼消息正文用这一份。
-       *
-       * 提示词已经在系统提示词段里时，这里**只拼来源块**——否则同一段提示词会两处都出现
-       * （系统提示词一段 + 用户消息一段）。`includeGuidance` 由 hub 自己决定，
-       * 渠道无需知道这件事，契约也不变。
-       */
-      enhanceContent: (content, snapshot, sourceFactory) => enhanceContent(
-        content,
-        snapshot,
-        sourceFactory,
-        { includeGuidance: !ensureGuidanceSection() }
-      )
-    }),
+    contextEnhancement: contextEnhancementService,
     /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
     deferred: Object.freeze({
       register: (options) => deferred.register(options),

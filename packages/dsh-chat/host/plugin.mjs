@@ -169,6 +169,25 @@ export function apply(ctx, config = {}) {
     get: (sessionId) => guidance.get(sessionId),
     forget: (sessionId) => guidance.forget(sessionId),
   });
+
+  /**
+   * 给渠道用的上下文增强引擎 = 引擎 + 一个**包装过的 `enhanceContent`**。
+   *
+   * 包装只做一件事：提示词已经在系统提示词段里时**不把它再拼进消息正文**
+   * （同一段提示词两处都出现 → 用户看到的还是"走的消息"）。
+   * **渠道 deps 与 `dshChat.contextEnhancement` 必须是同一个对象**：真机上翻过一次车——
+   * 服务面给了包装版、渠道 deps 给的是原始模块，于是"渠道照旧拼提示词"，
+   * 而测试与演练都在调服务面那份，谁都发现不了。
+   */
+  const contextEnhancementService = Object.freeze({
+    ...contextEnhancement,
+    enhanceContent: (content, snapshot, sourceFactory) => contextEnhancement.enhanceContent(
+      content,
+      snapshot,
+      sourceFactory,
+      { includeGuidance: !ensureGuidanceSection() },
+    ),
+  });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
   const interactions = createInteractionService({ logger });
@@ -267,7 +286,7 @@ export function apply(ctx, config = {}) {
       createJsonStore,
       /** 读取设置前先 await 它，避免启动竞态读到空文档。 */
       ready: () => settings.ready(),
-      contextEnhancement,
+      contextEnhancement: contextEnhancementService,
       /**
        * 延迟交付：渠道建桥时注册"怎么把补发内容发回这个会话"。
        * `register({ channelId, botId, deliver })`，`deliver({ key, text, record })`。
@@ -794,23 +813,7 @@ export function apply(ctx, config = {}) {
       supportsFile: (channelId) => delivery.supportsFile(channelId),
     }),
 
-    contextEnhancement: Object.freeze({
-      ...contextEnhancement,
-      /** 提示词已经在系统提示词段里时，这里只拼来源块（拼之前再确认一次装没装上）。 */
-      /**
-       * 渠道拼消息正文用这一份。
-       *
-       * 提示词已经在系统提示词段里时，这里**只拼来源块**——否则同一段提示词会两处都出现
-       * （系统提示词一段 + 用户消息一段）。`includeGuidance` 由 hub 自己决定，
-       * 渠道无需知道这件事，契约也不变。
-       */
-      enhanceContent: (content, snapshot, sourceFactory) => contextEnhancement.enhanceContent(
-        content,
-        snapshot,
-        sourceFactory,
-        { includeGuidance: !ensureGuidanceSection() },
-      ),
-    }),
+    contextEnhancement: contextEnhancementService,
     /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
     deferred: Object.freeze({
       register: (options) => deferred.register(options),

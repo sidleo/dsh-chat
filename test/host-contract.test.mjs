@@ -28,11 +28,29 @@ function makeLogger(sink, scope) {
   return logger;
 }
 
-function createFakeCtx() {
+function createFakeCtx({ withSystemPrompt = false } = {}) {
   const services = new Map();
   const routes = new Map();
   const effects = [];
   const logs = [];
+  /** 假 systemPrompt：收段 + 按 agent 组装（验"提示词进系统提示词"这条要它）。 */
+  const promptSections = new Map();
+  const systemPrompt = {
+    section(definition) {
+      if (promptSections.has(definition.name)) throw new Error(`duplicate section ${definition.name}`);
+      promptSections.set(definition.name, definition);
+      return () => promptSections.delete(definition.name);
+    },
+    assembleFor(agent) {
+      return [...promptSections.values()]
+        .sort((a, b) => a.order - b.order)
+        .map((definition) => (typeof definition.text === 'function'
+          ? definition.text({ agent })
+          : definition.text))
+        .filter((text) => typeof text === 'string' && text.trim())
+        .join('\n\n');
+    },
+  };
   const ctx = {
     logger: makeLogger(logs, 'root'),
     provide(serviceName, value) {
@@ -78,6 +96,7 @@ function createFakeCtx() {
       set: async () => {},
       unset: async () => {},
     },
+    ...(withSystemPrompt ? { get: (name) => (name === 'systemPrompt' ? systemPrompt : undefined) } : {}),
     // 与真实 Host 一致：hub 声明 inject: ['...','typertGateway']，这里提供最小实现。
     typertGateway: {
       calls: [],
@@ -93,6 +112,8 @@ function createFakeCtx() {
     routes,
     logs,
     tools: ctx.tools,
+    systemPrompt,
+    promptSections,
     /** 逆序释放所有 effect，模拟插件卸载。 */
     disposeAll() {
       for (const dispose of effects.reverse()) {
@@ -134,9 +155,9 @@ async function waitForStatus(service, id, expected, timeoutMs = 2_000) {
 }
 
 /** 挂起 hub + 假渠道，并把清理函数交回测试。 */
-async function bootstrap() {
+async function bootstrap({ withSystemPrompt = false } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-test-'));
-  const harness = createFakeCtx();
+  const harness = createFakeCtx({ withSystemPrompt });
   applyHub(harness.ctx, { dataDir });
   const service = harness.services.get('dshChat');
   assert.ok(service, 'hub 未发布 dshChat 服务');
@@ -154,6 +175,8 @@ async function bootstrap() {
     routes: harness.routes,
     logs: harness.logs,
     tools: harness.tools,
+    systemPrompt: harness.systemPrompt,
+    promptSections: harness.promptSections,
     /** 只释放插件，保留数据目录（用于验证持久化）。 */
     dispose() {
       harness.disposeAll();
@@ -393,6 +416,47 @@ test('服务暴露进程内渠道分派（诊断用）', async () => {
     assert.equal(missing.error.code, 'chat/unknown-channel');
   } finally {
     await app.cleanup();
+  }
+});
+
+test('提示词进系统提示词段后，渠道拿到的 enhanceContent 只拼来源块（不是原始模块）', async () => {
+  const config = {
+    group: { enabled: true, fields: ['senderId'], guidance: '群聊全局' },
+    direct: { enabled: true, fields: ['senderId'], guidance: '私聊全局' },
+    targets: [],
+  };
+  const payload = {
+    config, conversationType: 'direct', identity: { senderId: 'ou_alice' },
+  };
+
+  // ① 有 systemPrompt：渠道 deps 那条路的正文里**不该**再有提示词，段里才有。
+  const withPrompt = await bootstrap({ withSystemPrompt: true });
+  try {
+    const resolved = await callRoute(withPrompt.routes, FIXTURE_PATH, 'context.resolve', payload);
+    assert.equal(resolved.result.ok, true);
+    assert.ok(resolved.result.value.text.includes('<dsh_im_source>'), '来源块照旧跟着消息');
+    assert.ok(!resolved.result.value.text.includes('私聊全局'),
+      '提示词已经在系统提示词里，正文不该再拼一份（渠道 deps 必须拿到包装版 enhanceContent）');
+
+    const section = withPrompt.promptSections.get('dsh-chat:source-guidance');
+    assert.ok(section, '段要注册到 systemPrompt');
+    assert.equal(section.order, 400);
+
+    // 段按 agent 求值：先 publish 再组装（与真实链路一致：ask() 先 publish 再发 prompt）。
+    withPrompt.service.guidance.publish('session-x', '私聊全局');
+    assert.equal(withPrompt.systemPrompt.assembleFor({ id: 'session-x' }), '私聊全局');
+    assert.equal(withPrompt.systemPrompt.assembleFor({ id: '别的会话' }), '');
+  } finally {
+    await withPrompt.cleanup();
+  }
+
+  // ② 没有 systemPrompt：退回老路——正文里仍然带提示词（功能不丢）。
+  const noPrompt = await bootstrap();
+  try {
+    const resolved = await callRoute(noPrompt.routes, FIXTURE_PATH, 'context.resolve', payload);
+    assert.ok(resolved.result.value.text.includes('私聊全局'), '没有 systemPrompt 时要退回"拼在正文里"');
+  } finally {
+    await noPrompt.cleanup();
   }
 });
 

@@ -525,22 +525,20 @@ async function main() {
       // ① 段已注册；② 按 agent 组装得到本会话的提示词；③ 别的会话组装不到东西；
       // ④ 消息正文里只剩来源块，没有 <dsh_im_source_guidance>。
       agent.state.scripts.push(agent.frames(['收到。']));
-      // 走渠道那条路拼正文：capture + enhanceContent（hub 决定拼不拼提示词块）。
-      const captured = service.contextEnhancement.captureContextEnhancementSource(
-        {
-          botId: BOT,
-          channel: 'fixture',
-          readConfig: () => service.bots.read('fixture', BOT).contextEnhancement,
-        },
-        'direct',
-        { senderId: OWNER },
-        () => ({ channel: 'fixture', senderId: OWNER }),
-      );
-      const content = service.contextEnhancement.enhanceContent(
-        [{ type: 'text', text: '你好' }],
-        captured?.snapshot ?? null,
-        captured?.source,
-      );
+      /**
+       * 走**渠道 deps**那条路拼正文（不是服务面那份）：真机上翻过一次车——
+       * 服务面给了包装版 enhanceContent、渠道 deps 拿的是原始模块，于是正文里还是带着提示词，
+       * 而这里若直接调服务面就永远发现不了。假渠道的 `context.resolve` 用的就是它自己的 deps。
+       */
+      const resolved = await service.channels.call('fixture', 'context.resolve', {
+        config: service.bots.read('fixture', BOT).contextEnhancement,
+        conversationType: 'direct',
+        identity: { senderId: OWNER },
+      });
+      assert.equal(resolved.ok, true);
+      const content = [{ type: 'text', text: resolved.value.text }];
+      assert.ok(!resolved.value.text.includes('只对这个人说的'),
+        '提示词已在系统提示词段里，渠道拼正文时不该再拼一份');
       await service.sessions.ask({
         channelId: 'fixture', botId: BOT, key: KEY, workspacePath: '/tmp/rehearsal-ws',
         content, sourceGuidance: scope.guidance,
