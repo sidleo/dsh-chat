@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { normalizeContextConfig } from '../shared/context-enhancement.mjs';
+import { normalizePanelSections } from '../shared/panel-sections.mjs';
 import { createJsonStore } from './json-store.mjs';
 
 const DOCUMENT_VERSION = 1;
@@ -26,6 +27,11 @@ const EMPTY_RECORD = Object.freeze({
   contextEnhancement: null,
   accessPolicy: null,
   deliveryTargets: null,
+  /**
+   * 控制面板卡片的显示项（私聊/群聊各一份）：`{ direct: { model: true, … }, group: {…} }`。
+   * `null` = 全显示（见 `shared/panel-sections.mjs`）。
+   */
+  panelSections: null,
 });
 
 const RECORD_KEYS = Object.freeze(Object.keys(EMPTY_RECORD));
@@ -95,6 +101,10 @@ export function createBotSettingsStore({ dataDir, logger = console } = {}) {
       || stored?.contextEnhancement === null
       ? null
       : normalizeContextConfig(stored.contextEnhancement);
+    // 显示项：残缺/写错的配置按"显示"补齐（把卡片变空是最难查的那类静默失效）。
+    record.panelSections = stored?.panelSections === undefined || stored?.panelSections === null
+      ? null
+      : normalizePanelSections(stored.panelSections);
     return Object.freeze(record);
   }
 
@@ -114,9 +124,12 @@ export function createBotSettingsStore({ dataDir, logger = console } = {}) {
       if (!isPlainObject(patch)) throw new TypeError('patch 必须是对象。');
       const unknown = Object.keys(patch).filter((key) => !RECORD_KEYS.includes(key));
       if (unknown.length > 0) throw new TypeError(`未知的设置字段：${unknown.join('、')}`);
-      const normalized = Object.hasOwn(patch, 'contextEnhancement') && patch.contextEnhancement !== null
+      const withContext = Object.hasOwn(patch, 'contextEnhancement') && patch.contextEnhancement !== null
         ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) }
         : patch;
+      const normalized = Object.hasOwn(withContext, 'panelSections') && withContext.panelSections !== null
+        ? { ...withContext, panelSections: normalizePanelSections(withContext.panelSections) }
+        : withContext;
       await store.update((current) => {
         const channels = { ...current.channels };
         const bots = { ...(channels[channelId] ?? {}) };

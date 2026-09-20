@@ -210,6 +210,13 @@ function row(elements) {
  */
 export function panelCard(state, { last = null, at = null, pending = null } = {}) {
   const elements = [];
+  /**
+   * 显示项（设置页里配的，私聊/群聊分开）：`state.sections` 为假值 = 全显示。
+   *
+   * 这是**显示**配置：关掉只是不画，功能照旧（策略、上下文增强、渠道设置都还在生效）。
+   */
+  const sections = state?.sections ?? null;
+  const shows = (id) => sections === null || sections[id] !== false;
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
@@ -232,19 +239,19 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
    */
 
   // ① 模型与推理：有会话时改会话（立即生效）；没有会话时改机器人默认模型（只对新会话生效）
-  if (!bound) {
+  if (shows('model') && !bound) {
     elements.push({
       tag: 'markdown',
       content: '还没有会话：模型与推理改的是**机器人默认模型**（只对新会话生效、只有属主能改）',
     });
-  } else if (model.selectionFailed === true) {
+  } else if (shows('model') && model.selectionFailed === true) {
     // 读失败 ≠ 没选过：说成"跟随 Host 默认"会让用户以为自己的选择丢了（日志里有 warn）。
     elements.push({
       tag: 'markdown',
       content: '读不到当前会话的模型选择（Host 暂时不可用），稍后再试。',
     });
   }
-  const modelPicker = dropdown({
+  const modelPicker = shows('model') ? dropdown({
     name: 'model_pick',
     action: 'model_pick',
     // 没显式选模型时把"实际会用哪个"写进占位，省掉一整行"跟随 Host 默认（…）"。
@@ -253,7 +260,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
       : '选择模型',
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: effective ? `${effective.provider}/${effective.model}` : null,
-  });
+  }) : { element: null, hidden: 0 };
   /**
    * 一行两个设置格；没有控件的格子不放（说明行单独跟在下面）。
    * 并发两个下拉时高度比"四个全宽下拉"还矮，且每个都有名称——窄屏会自己堆叠。
@@ -262,7 +269,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   if (modelPicker.element) modelCells.push(field('模型', modelPicker.element));
   if (modelPicker.element) {
     // 推理等级与模型并排：两格都放得下（窄屏会自己堆叠）。
-  } else {
+  } else if (shows('model')) {
     // 空目录要说清"为什么空"：`session/modelCatalog` 会把每个失败 provider 的原因带出来。
     // 不带出来，用户和排查者就只剩一句"没有可用模型"——唯一的线索被丢在 RPC 边界上。
     const failures = Array.isArray(model.failures) ? model.failures : [];
@@ -283,7 +290,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
           : '当前 Host 没有可用模型。'),
     });
   }
-  if (modelPicker.hidden > 0) {
+  if (shows('model') && modelPicker.hidden > 0) {
     elements.push({
       tag: 'markdown',
       content: `还有 ${modelPicker.hidden} 个模型未列出：手打 \`/model <provider/model>\``,
@@ -291,7 +298,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   }
 
   const efforts = model.efforts ?? [];
-  if (effective && efforts.length > 0) {
+  if (shows('model') && effective && efforts.length > 0) {
     const effortPicker = dropdown({
       name: 'reasoning_pick',
       action: 'reasoning_pick',
@@ -307,7 +314,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
       current: model.currentEffort ?? FOLLOW_DEFAULT,
     });
     if (effortPicker.element) modelCells.push(field('推理等级', effortPicker.element));
-  } else if (effective) {
+  } else if (shows('model') && effective) {
     /**
      * 空 `efforts` 有两种成因，措辞不能混：① 这个模型确实没有推理等级；
      * ② 读不到模型目录（或当前模型不在目录里）。说成①是与事实相反的断言——
@@ -326,7 +333,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
         ? '读不到模型目录，暂时列不出可选推理等级（可以手打 `/reasoning <等级>`）。'
         : '当前模型不支持调节推理等级。',
     });
-  } else if ((model.options ?? []).length > 0) {
+  } else if (shows('model') && (model.options ?? []).length > 0) {
     // 还有模型可选时才说"先选一个模型"；一个可选项都没有时上面那句已经解释过了，
     // 再补一句只是噪音（真机上就是连着三行都在说"没有模型"）。
     if (bound) {
@@ -343,30 +350,33 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   }
 
   // 「会话」单独一行全宽：标题 + 相对时间比较长，塞进半栏会被截。
-  const sessionPicker = dropdown({
+  const sessionPicker = shows('session') ? dropdown({
     name: 'session_pick',
     action: 'session_pick',
     placeholder: '选择要绑定的会话',
     // 会话标题来自 Host，可能很长：截到 34 个字符（全宽行比半栏宽，够用）。
     items: (state?.session?.options ?? []).map((item) => ({ value: item.id, label: shortLabel(item.label, 34) })),
     current: state?.session?.current ?? null,
-  });
-  if (sessionPicker.element) elements.push(grid([field('会话', sessionPicker.element)]));
-  if (state?.session?.failed === true) {
-    elements.push({ tag: 'markdown', content: '读不到会话列表，稍后再试（当前绑定的会话仍显示在上面）。' });
+  }) : { element: null, hidden: 0 };
+  if (sections === null || sections.session !== false) {
+    if (sessionPicker.element) elements.push(grid([field('会话', sessionPicker.element)]));
+    if (state?.session?.failed === true) {
+      elements.push({ tag: 'markdown', content: '读不到会话列表，稍后再试（当前绑定的会话仍显示在上面）。' });
+    }
   }
 
   // 模型与推理并排（放在各自的说明行之前：说明行是全宽的，不该夹在两格中间）。
-  if (modelCells.length > 0) elements.push(grid(modelCells));
+  if (shows('model') && modelCells.length > 0) elements.push(grid(modelCells));
 
   // ② Agent 预设与工作区（机器人级：只对新会话生效）
+  if (shows('preset')) {
   elements.push({ tag: 'hr' });
   // 名称已经写在两个格子上（Agent 预设 / 工作区），这里只说生效范围。
   elements.push({
     tag: 'markdown',
     content: '只对新会话生效（改完点「🆕 新会话」）',
   });
-  const presetPicker = dropdown({
+  const presetPicker = shows('preset') ? dropdown({
     name: 'preset_pick',
     action: 'preset_pick',
     placeholder: '选择 Agent 预设',
@@ -380,7 +390,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
       })),
     ],
     current: state?.preset?.current ?? FOLLOW_DEFAULT,
-  });
+  }) : { element: null, hidden: 0 };
   const presetCells = [];
   if (presetPicker.element) presetCells.push(field('Agent 预设', presetPicker.element));
   if (state?.preset?.failed === true) {
@@ -392,14 +402,14 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
       content: `还有 ${presetPicker.hidden} 个预设未列出：手打 \`/preset <id>\``,
     });
   }
-  const workspacePicker = dropdown({
+  const workspacePicker = shows('preset') ? dropdown({
     name: 'workspace_pick',
     action: 'workspace_pick',
     placeholder: '选择工作区',
     // 长路径会被飞书从尾巴截掉（正好截掉目录名）：自己折中截断，保留开头与目录名。
     items: (state?.workspace?.options ?? []).map((path) => ({ value: path, label: shortPath(path) })),
     current: state?.workspace?.current ?? null,
-  });
+  }) : { element: null, hidden: 0 };
   if (workspacePicker.element) {
     presetCells.push(field('工作区', workspacePicker.element));
     if (workspacePicker.hidden > 0) {
@@ -423,6 +433,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   }
 
   if (presetCells.length > 0) elements.push(grid(presetCells));
+  }
 
   /**
    * 渠道自带字段（飞书：任务过程展示）：一行一个。
@@ -434,7 +445,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
    * 内容（来源字段与提示词）仍在设置页编辑——卡片上传不了那么长的文本。
    * 非属主时 hub 不给这一项（`state.context` 为 null）。
    */
-  if (state?.context) {
+  if (shows('context') && state?.context) {
     const context = state.context;
     const picker = dropdown({
       name: 'context_pick',
@@ -463,7 +474,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
    *
    * `current` 为 null = 从没设过（口径是"仅属主可用"），如实说，不冒充某种模式。
    */
-  if (state?.policy) {
+  if (shows('policy') && state?.policy) {
     const policy = state.policy;
     const picker = dropdown({
       name: 'policy_pick',
@@ -504,7 +515,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   }
 
   const channelCells = [];
-  for (const item of state?.fields ?? []) {
+  for (const item of (shows('fields') ? (state?.fields ?? []) : [])) {
     const picker = dropdown({
       name: `panel_field_${item.field}`,
       action: `panel_field_${item.field}`,
@@ -518,7 +529,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
   for (let index = 0; index < channelCells.length; index += 2) {
     elements.push(grid(channelCells.slice(index, index + 2)));
   }
-  if (state?.fieldsFailed === true) {
+  if (shows('fields') && state?.fieldsFailed === true) {
     elements.push({ tag: 'markdown', content: '读不到渠道设置，稍后再试。' });
   }
 
@@ -544,8 +555,7 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
    * `📊 ...`（真机截图就是这么显示的，等于一排认不出的图标）。3 个 + 短标签才读得全；
    * 命令与渠道动作排在同一条流里，一起按 3 个一行切——不截断任何按钮。
    */
-  elements.push({ tag: 'hr' });
-  const panelButtons = [
+  const commandButtons = shows('commands') ? [
     button('🆕 新会话', 'new'),
     button('📊 状态', 'status'),
     button('📖 命令', 'commands'),
@@ -553,14 +563,26 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
     button('📜 历史', 'history'),
     button('🗜 压缩', 'compact'),
     button('⏹ 停止', 'stop', 'danger'),
-    // 渠道动作（飞书：重连）排在命令按钮之后，同一条分页规则。
-    ...(state?.actions ?? []).map(channelActionButton),
-  ];
-  for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
-    elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
+  ] : [];
+  // 渠道动作（飞书：重连）排在命令按钮之后，同一条分页规则。
+  const actionButtons = shows('actions') ? (state?.actions ?? []).map(channelActionButton) : [];
+  const panelButtons = [...commandButtons, ...actionButtons];
+  if (panelButtons.length > 0) {
+    elements.push({ tag: 'hr' });
+    for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
+      elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
+    }
   }
-  if (state?.actionsFailed === true) {
+  if (shows('actions') && state?.actionsFailed === true) {
     elements.push({ tag: 'markdown', content: '读不到渠道动作按钮，稍后再试。' });
+  }
+
+  // 全关掉了也得画点东西：空 body 是平台会拒的形态，而且用户需要知道去哪里打开。
+  if (elements.length === 0) {
+    elements.push({
+      tag: 'markdown',
+      content: '控制面板的显示项都被关掉了：到设置页的「控制面板显示项」里打开需要的项。',
+    });
   }
 
   return {

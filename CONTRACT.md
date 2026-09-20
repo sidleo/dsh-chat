@@ -172,6 +172,10 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    *      `session.options` 是**可以切过去的会话**（`[{id,label}]`，label 含标题与相对时间）：
    *      同一工作目录的会话 ∪ 这台机器人其它聊天绑定过的会话，排除空会话与子代理会话；
    *      `session.failed` 表示会话列表**读失败**（此时 options 只含当前绑定，不能显示成"没绑定"）。
+   *      `sections` 是**本会话类型该显示哪些项**（设置页里配的，私聊/群聊分开）：
+   *      `{ model, session, preset, context, policy, fields, actions, commands }`，值都是布尔。
+   *      渠道按它决定画不画某一块；**hub 仍然把数据都读出来**（少一次"字段被谁吞了"的排查）。
+   *      全关掉时卡片不能是空 body（平台会拒）——渠道至少要画一行"去设置页打开"。
    *      `actions` 是**渠道自带的动作按钮**（如飞书的「🔌 重连」），来自渠道可选方法
    *      `panel.actions({ botId, key, conversationType, isOwner })` → `{ actions: [{ action, label,
    *      type?: default|primary|danger, confirm?: { title, text } }] }`。
@@ -392,6 +396,7 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 | `bot.access-policy.set` | `{ channelId, botId, policy }` | 设访问策略（与 host 拦消息同一份校验）；**立即生效** |
 | `bot.conversations` | `{ channelId, botId }` | 该机器人聊过的会话（带名字），给"指定用户/指定群"这类选择器用 |
 | `bot.context-enhancement.set` | `{ channelId, botId, config }` | 原子保存上下文增强（含指定设置） |
+| `bot.panel-sections.set` | `{ channelId, botId, sections }` | 设**控制面板卡片的显示项** `{ direct: { model, session, preset, context, policy, fields, actions, commands }, group: {…} }`——只影响卡片的显示，不影响功能；缺项/写错按"显示"补齐（见 §6） |
 | `maintenance.import-legacy` | `{ channelId, force }` | 重跑旧 `workspaces.json` 导入（`force:true` 时以旧文件为准刷新） |
 | `delivery.list` | `{ channelId, botId }` | 已保存目标 + 渠道发现的候选 |
 | `diagnostics.read` | `{}` | 自助排查现场：数据/日志目录 + 各渠道各机器人的状态与最近错误（含缺权限提示）+ 每个渠道日志文件的尾部若干行（读不到日志返回 `exists:false`，不算失败） |
@@ -663,9 +668,14 @@ const off = deps.sessions.registerInteractionHandler(deps.channelId, async (payl
 { "version": 1, "channels": { "feishu": { "bot_xxx": {
   "workspace": "/Users/me", "model": null, "agentPreset": null,
   "contextEnhancement": { "group": {...}, "direct": {...}, "targets": [...] },
-  "accessPolicy": null
+  "accessPolicy": null,
+  // 控制面板卡片的显示项：私聊/群聊各一份；null = 全显示
+  "panelSections": { "direct": { "model": true, "commands": false }, "group": { ... } }
 } } } }
 ```
+
+`panelSections` 的**归一化方向是"缺项 = 显示"**：显示项配置残缺时把卡片变得更空，是"设置页
+静默失效"那一类最难查的问题（用户只会觉得"我明明开着"）；多显示一项只是啰嗦。
 
 - 写入是**合并**语义：`write(channelId, botId, { workspace })` 只改这一个键；
 - 未知键会被拒绝（防止把渠道私有配置混进来）；

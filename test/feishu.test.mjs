@@ -3492,6 +3492,62 @@ test('控制面板卡：读不到模型选择 / 工作区候选被扣下时，�
   assert.doesNotMatch(unreadable, /还没有工作区/);
 });
 
+test('控制面板卡：按设置页的显示项过滤（关掉的项不画，功能不受影响）', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const base = {
+    bound: true,
+    sessionId: 'session-1',
+    model: {
+      current: { provider: 'yh', model: 'gpt-5.5-luna' },
+      options: [{ value: 'yh/gpt-5.5-luna', provider: 'yh', model: 'gpt-5.5-luna', efforts: [] }],
+      efforts: [], currentEffort: null, failures: [],
+    },
+    preset: { current: null, options: [] },
+    workspace: { current: '/ws', options: ['/ws'] },
+    session: { current: 'session-1', options: [{ id: 'session-1', label: '会话一 · 刚刚' }] },
+    context: { current: '', label: '本私聊', identity: 'ou_a', own: null, options: [{ value: '', label: '跟随私聊全局（已启用）' }] },
+    policy: {
+      current: 'allowlist', label: '仅属主可用', conversationType: 'direct', kindLabel: 'direct',
+      options: [{ value: 'allowlist', label: '仅名单内可用' }],
+    },
+    fields: [{ field: 'stepPushDirect', label: '任务过程展示（私聊）', value: 'off', options: [{ value: 'off', label: '不显示' }] }],
+    actions: [{ action: 'reconnect', label: '🔌 重连' }],
+  };
+
+  // 全显示：该有的都在。
+  const all = JSON.stringify(panelCard(base));
+  for (const text of ['模型', '会话', 'Agent 预设', '上下文增强', '访问策略', '任务过程展示', '🔌 重连', '🆕 新会话']) {
+    assert.ok(all.includes(text), `全显示时应有 ${text}`);
+  }
+
+  // 只留命令按钮（群里常见的最小面板）：别的项一律不画，但仍能操作命令。
+  const minimal = panelCard({
+    ...base,
+    sections: {
+      model: false, session: false, preset: false, context: false,
+      policy: false, fields: false, actions: false, commands: true,
+    },
+  });
+  const body = JSON.stringify(minimal);
+  for (const text of ['访问策略', '上下文增强', '任务过程展示', '🔌 重连', 'Agent 预设']) {
+    assert.ok(!body.includes(text), `关掉的项不该画出来：${text}`);
+  }
+  assert.match(body, /🆕 新会话/, '命令按钮留着');
+  assert.ok(minimal.body.elements.length <= 4, `只剩按钮区：${minimal.body.elements.length} 个元素`);
+
+  // 全关掉：不能产出空 body（平台会拒），要指路设置页。
+  const empty = panelCard({
+    ...base,
+    sections: {
+      model: false, session: false, preset: false, context: false,
+      policy: false, fields: false, actions: false, commands: false,
+    },
+  });
+  assert.equal(empty.body.elements.length, 1);
+  assert.match(JSON.stringify(empty), /控制面板的显示项都被关掉了/);
+  assert.match(JSON.stringify(empty), /设置页/);
+});
+
 test('控制面板卡：只放能改的东西——不重复状态行、不留页脚、路径短到不会被截', async () => {
   const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
   const card = panelCard({

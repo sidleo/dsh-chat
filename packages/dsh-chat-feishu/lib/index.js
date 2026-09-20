@@ -127116,35 +127116,37 @@ function row(elements) {
 }
 function panelCard(state, { last = null, at = null, pending = null } = {}) {
   const elements = [];
+  const sections = state?.sections ?? null;
+  const shows = (id) => sections === null || sections[id] !== false;
   const bound = state?.bound === true;
   const model = state?.model ?? {};
   const current = model.current ?? null;
   const botDefault = model.botDefault ?? null;
   const hostDefault = model.hostDefault ?? null;
   const effective = model.selectionFailed === true ? null : current ?? (bound ? null : botDefault);
-  if (!bound) {
+  if (shows("model") && !bound) {
     elements.push({
       tag: "markdown",
       content: "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\uFF1A\u6A21\u578B\u4E0E\u63A8\u7406\u6539\u7684\u662F**\u673A\u5668\u4EBA\u9ED8\u8BA4\u6A21\u578B**\uFF08\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\u3001\u53EA\u6709\u5C5E\u4E3B\u80FD\u6539\uFF09"
     });
-  } else if (model.selectionFailed === true) {
+  } else if (shows("model") && model.selectionFailed === true) {
     elements.push({
       tag: "markdown",
       content: "\u8BFB\u4E0D\u5230\u5F53\u524D\u4F1A\u8BDD\u7684\u6A21\u578B\u9009\u62E9\uFF08Host \u6682\u65F6\u4E0D\u53EF\u7528\uFF09\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002"
     });
   }
-  const modelPicker = dropdown({
+  const modelPicker = shows("model") ? dropdown({
     name: "model_pick",
     action: "model_pick",
     // 没显式选模型时把"实际会用哪个"写进占位，省掉一整行"跟随 Host 默认（…）"。
     placeholder: hostDefault ? `\u8DDF\u968F Host \u9ED8\u8BA4\uFF08${hostDefault.provider}/${hostDefault.model}\uFF09` : "\u9009\u62E9\u6A21\u578B",
     items: (model.options ?? []).map((item) => ({ value: item.value, label: item.value })),
     current: effective ? `${effective.provider}/${effective.model}` : null
-  });
+  }) : { element: null, hidden: 0 };
   const modelCells = [];
   if (modelPicker.element) modelCells.push(field("\u6A21\u578B", modelPicker.element));
   if (modelPicker.element) {
-  } else {
+  } else if (shows("model")) {
     const failures = Array.isArray(model.failures) ? model.failures : [];
     const catalogUnreadable = failures.length > 0 && failures.every((item) => !item.id);
     elements.push({
@@ -127153,14 +127155,14 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
 \xB7 ${h(item.id || item.name)}\uFF1A${h(String(item.message).slice(0, 120))}`).join("")}` : "\u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002"
     });
   }
-  if (modelPicker.hidden > 0) {
+  if (shows("model") && modelPicker.hidden > 0) {
     elements.push({
       tag: "markdown",
       content: `\u8FD8\u6709 ${modelPicker.hidden} \u4E2A\u6A21\u578B\u672A\u5217\u51FA\uFF1A\u624B\u6253 \`/model <provider/model>\``
     });
   }
   const efforts = model.efforts ?? [];
-  if (effective && efforts.length > 0) {
+  if (shows("model") && effective && efforts.length > 0) {
     const effortPicker = dropdown({
       name: "reasoning_pick",
       action: "reasoning_pick",
@@ -127176,7 +127178,7 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
       current: model.currentEffort ?? FOLLOW_DEFAULT
     });
     if (effortPicker.element) modelCells.push(field("\u63A8\u7406\u7B49\u7EA7", effortPicker.element));
-  } else if (effective) {
+  } else if (shows("model") && effective) {
     const catalogFailures = Array.isArray(model.failures) ? model.failures : [];
     const listed = (model.options ?? []).some(
       (item) => item.provider === effective.provider && item.model === effective.model
@@ -127186,7 +127188,7 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
       tag: "markdown",
       content: providerFailed || !listed ? "\u8BFB\u4E0D\u5230\u6A21\u578B\u76EE\u5F55\uFF0C\u6682\u65F6\u5217\u4E0D\u51FA\u53EF\u9009\u63A8\u7406\u7B49\u7EA7\uFF08\u53EF\u4EE5\u624B\u6253 `/reasoning <\u7B49\u7EA7>`\uFF09\u3002" : "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u8C03\u8282\u63A8\u7406\u7B49\u7EA7\u3002"
     });
-  } else if ((model.options ?? []).length > 0) {
+  } else if (shows("model") && (model.options ?? []).length > 0) {
     if (bound) {
       if (model.selectionFailed !== true) {
         elements.push({ tag: "markdown", content: "\u5148\u9009\u4E00\u4E2A\u6A21\u578B\uFF0C\u624D\u80FD\u8C03\u63A8\u7406\u7B49\u7EA7\u3002" });
@@ -127198,79 +127200,83 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
       });
     }
   }
-  const sessionPicker = dropdown({
+  const sessionPicker = shows("session") ? dropdown({
     name: "session_pick",
     action: "session_pick",
     placeholder: "\u9009\u62E9\u8981\u7ED1\u5B9A\u7684\u4F1A\u8BDD",
     // 会话标题来自 Host，可能很长：截到 34 个字符（全宽行比半栏宽，够用）。
     items: (state?.session?.options ?? []).map((item) => ({ value: item.id, label: shortLabel(item.label, 34) })),
     current: state?.session?.current ?? null
-  });
-  if (sessionPicker.element) elements.push(grid([field("\u4F1A\u8BDD", sessionPicker.element)]));
-  if (state?.session?.failed === true) {
-    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u4F1A\u8BDD\u5217\u8868\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF08\u5F53\u524D\u7ED1\u5B9A\u7684\u4F1A\u8BDD\u4ECD\u663E\u793A\u5728\u4E0A\u9762\uFF09\u3002" });
+  }) : { element: null, hidden: 0 };
+  if (sections === null || sections.session !== false) {
+    if (sessionPicker.element) elements.push(grid([field("\u4F1A\u8BDD", sessionPicker.element)]));
+    if (state?.session?.failed === true) {
+      elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u4F1A\u8BDD\u5217\u8868\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF08\u5F53\u524D\u7ED1\u5B9A\u7684\u4F1A\u8BDD\u4ECD\u663E\u793A\u5728\u4E0A\u9762\uFF09\u3002" });
+    }
   }
-  if (modelCells.length > 0) elements.push(grid(modelCells));
-  elements.push({ tag: "hr" });
-  elements.push({
-    tag: "markdown",
-    content: "\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF08\u6539\u5B8C\u70B9\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF09"
-  });
-  const presetPicker = dropdown({
-    name: "preset_pick",
-    action: "preset_pick",
-    placeholder: "\u9009\u62E9 Agent \u9884\u8BBE",
-    items: [
-      { value: FOLLOW_DEFAULT, label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
-      // 用 hub 算好的展示名（`id · name`），并标出哪个是 Host 默认——只有 id 的话
-      // 一排相近的 id（yh-olap / yh-olap-2）认不出，也看不出当前跟着谁。
-      ...(state?.preset?.options ?? []).map((item) => ({
-        value: item.id,
-        label: `${item.label ?? item.id}${item.isDefault ? "\uFF08Host \u9ED8\u8BA4\uFF09" : ""}`
-      }))
-    ],
-    current: state?.preset?.current ?? FOLLOW_DEFAULT
-  });
-  const presetCells = [];
-  if (presetPicker.element) presetCells.push(field("Agent \u9884\u8BBE", presetPicker.element));
-  if (state?.preset?.failed === true) {
-    elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF0C\u6682\u65F6\u53EA\u80FD\u8DDF\u968F Host \u9ED8\u8BA4\u3002" });
-  }
-  if (presetPicker.hidden > 0) {
+  if (shows("model") && modelCells.length > 0) elements.push(grid(modelCells));
+  if (shows("preset")) {
+    elements.push({ tag: "hr" });
     elements.push({
       tag: "markdown",
-      content: `\u8FD8\u6709 ${presetPicker.hidden} \u4E2A\u9884\u8BBE\u672A\u5217\u51FA\uFF1A\u624B\u6253 \`/preset <id>\``
+      content: "\u53EA\u5BF9\u65B0\u4F1A\u8BDD\u751F\u6548\uFF08\u6539\u5B8C\u70B9\u300C\u{1F195} \u65B0\u4F1A\u8BDD\u300D\uFF09"
     });
-  }
-  const workspacePicker = dropdown({
-    name: "workspace_pick",
-    action: "workspace_pick",
-    placeholder: "\u9009\u62E9\u5DE5\u4F5C\u533A",
-    // 长路径会被飞书从尾巴截掉（正好截掉目录名）：自己折中截断，保留开头与目录名。
-    items: (state?.workspace?.options ?? []).map((path2) => ({ value: path2, label: shortPath(path2) })),
-    current: state?.workspace?.current ?? null
-  });
-  if (workspacePicker.element) {
-    presetCells.push(field("\u5DE5\u4F5C\u533A", workspacePicker.element));
-    if (workspacePicker.hidden > 0) {
+    const presetPicker = shows("preset") ? dropdown({
+      name: "preset_pick",
+      action: "preset_pick",
+      placeholder: "\u9009\u62E9 Agent \u9884\u8BBE",
+      items: [
+        { value: FOLLOW_DEFAULT, label: "\u8DDF\u968F Host \u9ED8\u8BA4" },
+        // 用 hub 算好的展示名（`id · name`），并标出哪个是 Host 默认——只有 id 的话
+        // 一排相近的 id（yh-olap / yh-olap-2）认不出，也看不出当前跟着谁。
+        ...(state?.preset?.options ?? []).map((item) => ({
+          value: item.id,
+          label: `${item.label ?? item.id}${item.isDefault ? "\uFF08Host \u9ED8\u8BA4\uFF09" : ""}`
+        }))
+      ],
+      current: state?.preset?.current ?? FOLLOW_DEFAULT
+    }) : { element: null, hidden: 0 };
+    const presetCells = [];
+    if (presetPicker.element) presetCells.push(field("Agent \u9884\u8BBE", presetPicker.element));
+    if (state?.preset?.failed === true) {
+      elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230 Agent Preset \u5217\u8868\uFF0C\u6682\u65F6\u53EA\u80FD\u8DDF\u968F Host \u9ED8\u8BA4\u3002" });
+    }
+    if (presetPicker.hidden > 0) {
       elements.push({
         tag: "markdown",
-        content: `\u8FD8\u6709 ${workspacePicker.hidden} \u4E2A\u5DE5\u4F5C\u533A\u672A\u5217\u51FA\uFF08\u5176\u4F59\u5728\u8BBE\u7F6E\u9875\u91CC\u9009\uFF09`
+        content: `\u8FD8\u6709 ${presetPicker.hidden} \u4E2A\u9884\u8BBE\u672A\u5217\u51FA\uFF1A\u624B\u6253 \`/preset <id>\``
       });
     }
-  } else if (state?.workspace?.current) {
-    elements.push({
-      tag: "markdown",
-      content: `\u5DE5\u4F5C\u533A \`${h(shortPath(state.workspace.current, 40))}\`\uFF1A\u5019\u9009\u53EA\u5728\u79C1\u804A\u91CC\u7ED9\u5C5E\u4E3B\uFF0C\u8981\u6539\u8BF7\u5230\u8BBE\u7F6E\u9875\u3002`
-    });
-  } else {
-    elements.push({
-      tag: "markdown",
-      content: "\u8FD8\u6CA1\u6709\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u586B\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u5426\u5219\u65B0\u4F1A\u8BDD\u5EFA\u4E0D\u51FA\u6765\u3002"
-    });
+    const workspacePicker = shows("preset") ? dropdown({
+      name: "workspace_pick",
+      action: "workspace_pick",
+      placeholder: "\u9009\u62E9\u5DE5\u4F5C\u533A",
+      // 长路径会被飞书从尾巴截掉（正好截掉目录名）：自己折中截断，保留开头与目录名。
+      items: (state?.workspace?.options ?? []).map((path2) => ({ value: path2, label: shortPath(path2) })),
+      current: state?.workspace?.current ?? null
+    }) : { element: null, hidden: 0 };
+    if (workspacePicker.element) {
+      presetCells.push(field("\u5DE5\u4F5C\u533A", workspacePicker.element));
+      if (workspacePicker.hidden > 0) {
+        elements.push({
+          tag: "markdown",
+          content: `\u8FD8\u6709 ${workspacePicker.hidden} \u4E2A\u5DE5\u4F5C\u533A\u672A\u5217\u51FA\uFF08\u5176\u4F59\u5728\u8BBE\u7F6E\u9875\u91CC\u9009\uFF09`
+        });
+      }
+    } else if (state?.workspace?.current) {
+      elements.push({
+        tag: "markdown",
+        content: `\u5DE5\u4F5C\u533A \`${h(shortPath(state.workspace.current, 40))}\`\uFF1A\u5019\u9009\u53EA\u5728\u79C1\u804A\u91CC\u7ED9\u5C5E\u4E3B\uFF0C\u8981\u6539\u8BF7\u5230\u8BBE\u7F6E\u9875\u3002`
+      });
+    } else {
+      elements.push({
+        tag: "markdown",
+        content: "\u8FD8\u6CA1\u6709\u5DE5\u4F5C\u533A\uFF1A\u5148\u5728\u8BBE\u7F6E\u9875\u586B\u4E00\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u5426\u5219\u65B0\u4F1A\u8BDD\u5EFA\u4E0D\u51FA\u6765\u3002"
+      });
+    }
+    if (presetCells.length > 0) elements.push(grid(presetCells));
   }
-  if (presetCells.length > 0) elements.push(grid(presetCells));
-  if (state?.context) {
+  if (shows("context") && state?.context) {
     const context = state.context;
     const picker = dropdown({
       name: "context_pick",
@@ -127290,7 +127296,7 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
       content: context.own ? `\u5DF2\u6709\u4E13\u5C5E\u8BBE\u7F6E\uFF08\u6765\u6E90\u5B57\u6BB5 ${context.own.fields} \u4E2A\u3001\u63D0\u793A\u8BCD ${context.own.guidanceLength} \u5B57\uFF09\uFF0C\u5185\u5BB9\u5230\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\uFF08\`${h(context.identity)}\`\uFF09\u3002` : "\u5185\u5BB9\uFF08\u6765\u6E90\u5B57\u6BB5\u4E0E\u63D0\u793A\u8BCD\uFF09\u5728\u8BBE\u7F6E\u9875\u7F16\u8F91\uFF1B\u672C\u9879\u53EA\u51B3\u5B9A\u672C\u4F1A\u8BDD\u7528\u54EA\u4E00\u4EFD\u3002"
     });
   }
-  if (state?.policy) {
+  if (shows("policy") && state?.policy) {
     const policy = state.policy;
     const picker = dropdown({
       name: "policy_pick",
@@ -127324,7 +127330,7 @@ ${h(pending.prompt)}` });
     }
   }
   const channelCells = [];
-  for (const item of state?.fields ?? []) {
+  for (const item of shows("fields") ? state?.fields ?? [] : []) {
     const picker = dropdown({
       name: `panel_field_${item.field}`,
       action: `panel_field_${item.field}`,
@@ -127337,7 +127343,7 @@ ${h(pending.prompt)}` });
   for (let index = 0; index < channelCells.length; index += 2) {
     elements.push(grid(channelCells.slice(index, index + 2)));
   }
-  if (state?.fieldsFailed === true) {
+  if (shows("fields") && state?.fieldsFailed === true) {
     elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u8BBE\u7F6E\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });
   }
   if (last?.message) {
@@ -127348,23 +127354,31 @@ ${h(pending.prompt)}` });
 ${h(last.message)}`
     });
   }
-  elements.push({ tag: "hr" });
-  const panelButtons = [
+  const commandButtons = shows("commands") ? [
     button("\u{1F195} \u65B0\u4F1A\u8BDD", "new"),
     button("\u{1F4CA} \u72B6\u6001", "status"),
     button("\u{1F4D6} \u547D\u4EE4", "commands"),
     button("\u{1FA7A} \u8BCA\u65AD", "diag"),
     button("\u{1F4DC} \u5386\u53F2", "history"),
     button("\u{1F5DC} \u538B\u7F29", "compact"),
-    button("\u23F9 \u505C\u6B62", "stop", "danger"),
-    // 渠道动作（飞书：重连）排在命令按钮之后，同一条分页规则。
-    ...(state?.actions ?? []).map(channelActionButton)
-  ];
-  for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
-    elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
+    button("\u23F9 \u505C\u6B62", "stop", "danger")
+  ] : [];
+  const actionButtons = shows("actions") ? (state?.actions ?? []).map(channelActionButton) : [];
+  const panelButtons = [...commandButtons, ...actionButtons];
+  if (panelButtons.length > 0) {
+    elements.push({ tag: "hr" });
+    for (let index = 0; index < panelButtons.length; index += PANEL_ROW_SIZE) {
+      elements.push(row(panelButtons.slice(index, index + PANEL_ROW_SIZE)));
+    }
   }
-  if (state?.actionsFailed === true) {
+  if (shows("actions") && state?.actionsFailed === true) {
     elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF0C\u7A0D\u540E\u518D\u8BD5\u3002" });
+  }
+  if (elements.length === 0) {
+    elements.push({
+      tag: "markdown",
+      content: "\u63A7\u5236\u9762\u677F\u7684\u663E\u793A\u9879\u90FD\u88AB\u5173\u6389\u4E86\uFF1A\u5230\u8BBE\u7F6E\u9875\u7684\u300C\u63A7\u5236\u9762\u677F\u663E\u793A\u9879\u300D\u91CC\u6253\u5F00\u9700\u8981\u7684\u9879\u3002"
+    });
   }
   return {
     schema: "2.0",

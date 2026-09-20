@@ -768,6 +768,41 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+.dchat-panelSections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dchat-panelSectionsHead,
+.dchat-panelSectionsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* 名称占满剩余宽度，两个勾选框固定靠右：窄栏下也不会把名称压成竖排。 */
+.dchat-panelSectionsName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dchat-panelSectionsHead > .dchat-scopeLabel:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dchat-panelSectionsHead > .dchat-scopeLabel:not(:first-child),
+.dchat-panelSectionsCheck {
+  flex: none;
+  width: 48px;
+  text-align: center;
+}
+.dchat-panelSectionsCheck {
+  display: flex;
+  justify-content: center;
+}
+.dchat-panelSectionsCheck input {
+  margin: 0;
+}
 .dchat-notice {
   margin: 0;
   font-size: 12px;

@@ -65,6 +65,31 @@ test('导入旧 workspaces.json：六个来源全部落到每机器人设置', a
   }
 });
 
+test('显示项（panelSections）：读写都过归一化，缺项按显示补齐', async () => {
+  const base = await makeBase();
+  try {
+    const store = createBotSettingsStore({ dataDir: join(base, 'hub'), logger: silentLogger });
+    // 从没配过 = null（全显示），不是"全关"。
+    assert.equal(store.read('feishu', 'bot_a').panelSections, null);
+
+    const saved = await store.write('feishu', 'bot_a', {
+      panelSections: { group: { commands: false, ghost: true } },
+    });
+    assert.equal(saved.panelSections.group.commands, false);
+    assert.equal(saved.panelSections.group.model, true, '缺项补齐成"显示"');
+    assert.equal(saved.panelSections.group.ghost, undefined, '不认识的键丢掉');
+    assert.ok(Object.values(saved.panelSections.direct).every((value) => value === true));
+    // 落盘后重新读也是归一化后的形状（历史脏数据同理）。
+    assert.deepEqual(store.read('feishu', 'bot_a').panelSections, saved.panelSections);
+
+    // 显式 null = 回到"全显示"。
+    const cleared = await store.write('feishu', 'bot_a', { panelSections: null });
+    assert.equal(cleared.panelSections, null);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test('导入只补空缺，不覆盖已有设置；重复导入被跳过', async () => {
   const base = await makeBase();
   try {

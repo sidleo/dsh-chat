@@ -359,6 +359,20 @@ export function apply(ctx, config = {}) {
       await settings.ready();
       return ok({ settings: settings.read(payload.channelId, payload.botId) });
     }
+    if (method === 'bot.panel-sections.set') {
+      if (!validBotPayload(payload, { extra: ['sections'] })) {
+        return fail('chat/bad-request', 'bot.panel-sections.set 需要 channelId、botId 与 sections。');
+      }
+      try {
+        const saved = await settings.write(payload.channelId, payload.botId, {
+          panelSections: payload.sections,
+        });
+        return ok({ panelSections: saved.panelSections });
+      } catch (error) {
+        return failFrom(error, 'chat/panel-sections-failed');
+      }
+    }
+
     if (method === 'bot.context-enhancement.set') {
       if (!validBotPayload(payload, { withConfig: true })) {
         return fail('chat/bad-request', 'bot.context-enhancement.set 需要 channelId、botId 与 config。');

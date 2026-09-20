@@ -14,6 +14,7 @@
 import * as React from 'react';
 
 import { defaultAccessPolicy } from '../shared/access-policy.mjs';
+import { PANEL_SECTIONS, normalizePanelSections } from '../shared/panel-sections.mjs';
 
 const h = React.createElement;
 
@@ -449,4 +450,101 @@ export function OwnerEditor({ owners = [], wildcard = false, candidates = [], tr
         },
       }, t('清空（无属主）')))),
   failed ? h('p', { className: 'dchat-error', role: 'alert' }, failed) : null);
+}
+
+/** 显示项的中文标签（键交给渠道字典翻译）。 */
+const PANEL_SECTION_LABELS = Object.freeze({
+  model: '模型与推理等级',
+  session: '会话',
+  preset: 'Agent 预设与工作区',
+  context: '上下文增强（本会话）',
+  policy: '访问策略（本会话）',
+  fields: '渠道设置（任务过程展示等）',
+  actions: '渠道动作按钮（重连等）',
+  commands: '命令按钮（新会话/状态/诊断…）',
+});
+
+/**
+ * 控制面板卡片的显示项：**私聊与群聊分开**，逐项开关。
+ *
+ * 为什么值得做：面板越长越难用——手机上要滑好几屏，而"只想换个模型"的人在群里
+ * 并不需要看到访问策略与任务过程展示。这里是纯粹的**显示**配置，关掉不影响任何功能
+ * （命令、策略、上下文增强都照旧生效，只是不画在那张卡上）。
+ *
+ * 选完即存（没有保存按钮，与 `ScopedModeEditor` 同一条理由），失败回滚并就地说明。
+ *
+ * @param props - {
+ *   value: { direct: {…}, group: {…} } | null, disabled, saving, error,
+ *   translate, onSave(next),
+ * }。
+ * @returns React 元素。
+ */
+export function PanelSectionsEditor({
+  value = null, disabled = false, saving = false, error = null, translate, onSave,
+}) {
+  const t = translatorOf(translate);
+  const sections = PANEL_SECTIONS;
+  const scopes = [{ key: 'direct', label: '私聊' }, { key: 'group', label: '群聊' }];
+  const [draft, setDraft] = React.useState(() => normalizePanelSections(value));
+  const [pending, setPending] = React.useState(null);
+  const [failed, setFailed] = React.useState(null);
+  const locked = disabled || saving || pending !== null;
+
+  React.useEffect(() => {
+    if (pending !== null) return;
+    setDraft((current) => (JSON.stringify(current) === JSON.stringify(normalizePanelSections(value))
+      ? current
+      : normalizePanelSections(value)));
+  }, [value, pending]);
+
+  const toggle = async (scopeKey, sectionId, nextChecked) => {
+    if (locked) return;
+    const next = {
+      ...draft,
+      [scopeKey]: { ...draft[scopeKey], [sectionId]: nextChecked },
+    };
+    setDraft(next);
+    setFailed(null);
+    setPending(`${scopeKey}:${sectionId}`);
+    try {
+      await onSave(next);
+    } catch (cause) {
+      setDraft(normalizePanelSections(value));
+      setFailed(cause?.message ?? String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const header = h('div', { className: 'dchat-panelSectionsHead' },
+    h('span', { className: 'dchat-scopeLabel' }, t('显示项')),
+    scopes.map((scope) => h('span', {
+      key: scope.key, className: 'dchat-scopeLabel',
+    }, t(scope.label))));
+
+  const rows = sections.map((sectionId) => h('div', {
+    key: sectionId, className: 'dchat-panelSectionsRow',
+  },
+  h('span', { className: 'dchat-panelSectionsName' }, t(PANEL_SECTION_LABELS[sectionId])),
+  scopes.map((scope) => h('label', {
+    key: scope.key,
+    className: 'dchat-panelSectionsCheck',
+    title: `${t(PANEL_SECTION_LABELS[sectionId])} · ${t(scope.label)}`,
+  }, h('input', {
+    type: 'checkbox',
+    checked: draft[scope.key]?.[sectionId] !== false,
+    disabled: locked,
+    'aria-label': `${t(PANEL_SECTION_LABELS[sectionId])} · ${t(scope.label)}`,
+    onChange: (event) => {
+      void toggle(scope.key, sectionId, event.target.checked);
+    },
+  })))));
+
+  return h(Card, {
+    title: t('控制面板显示项'),
+    description: t('只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。'),
+    actions: pending !== null ? h('span', { className: 'dchat-status' }, t('保存中…')) : null,
+  },
+  h('div', { className: 'dchat-panelSections' }, header, rows),
+  failed || error ? h('p', { className: 'dchat-error', role: 'alert' }, failed ?? error) : null);
 }

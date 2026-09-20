@@ -185,6 +185,42 @@ test('hub 发布契约版本与控制端点', async () => {
   }
 });
 
+test('控制面板显示项：控制端点往返 + 归一化（缺项按显示补齐）', async () => {
+  const app = await bootstrap();
+  try {
+    const saved = await callRoute(app.routes, HUB_PATH, 'bot.panel-sections.set', {
+      channelId: 'fixture',
+      botId: 'bot_panel',
+      sections: { group: { policy: false, ghost: true } },
+    });
+    assert.equal(saved.result.ok, true, JSON.stringify(saved.result));
+    const stored = saved.result.value.panelSections;
+    assert.equal(stored.group.policy, false, '明确关掉的项要留着');
+    assert.equal(stored.group.model, true, '缺项按显示补齐');
+    assert.equal(stored.group.ghost, undefined, '不认识的键丢掉');
+    assert.equal(stored.direct.model, true);
+
+    // 读回来是同一份（归一化后的）。
+    const got = await callRoute(app.routes, HUB_PATH, 'bot.settings.get', {
+      channelId: 'fixture', botId: 'bot_panel',
+    });
+    assert.deepEqual(got.result.value.settings.panelSections, stored);
+
+    // 只接受这一份形状：多传/少传都要立刻 bad-request，而不是被默默忽略。
+    const bad = await callRoute(app.routes, HUB_PATH, 'bot.panel-sections.set', {
+      channelId: 'fixture', botId: 'bot_panel', sections: { direct: {} }, extra: 1,
+    });
+    assert.equal(bad.result.ok, false);
+    assert.equal(bad.result.error.code, 'chat/bad-request');
+    const missing = await callRoute(app.routes, HUB_PATH, 'bot.panel-sections.set', {
+      channelId: 'fixture', botId: 'bot_panel',
+    });
+    assert.equal(missing.result.error.code, 'chat/bad-request');
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('诊断端点：一屏给出各渠道机器人状态与日志尾部（读不到日志也不算失败）', async () => {
   const app = await bootstrap();
   try {

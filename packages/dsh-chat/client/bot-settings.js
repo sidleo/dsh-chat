@@ -111,6 +111,10 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     (model) => saveField('bot.model.set', { model }, 'model'),
     [saveField],
   );
+  const savePanelSections = React.useCallback(
+    (sections) => saveField('bot.panel-sections.set', { sections }, 'panelSections'),
+    [saveField],
+  );
 
   return {
     record: state.record,
@@ -124,6 +128,7 @@ export function useBotSettings({ connection, channelId, botId, enabled = true })
     saveAgentPreset,
     saveAccessPolicy,
     saveModel,
+    savePanelSections,
   };
 }
 

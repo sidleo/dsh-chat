@@ -11,7 +11,9 @@ import * as React from 'react';
 
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 import { useBotSettings, useConversations } from './bot-settings.js';
-import { AccessPolicyEditor, ModelEditor, OwnerEditor, PresetEditor, WorkspaceEditor } from './bot-shared-settings.js';
+import {
+  AccessPolicyEditor, ModelEditor, OwnerEditor, PanelSectionsEditor, PresetEditor, WorkspaceEditor,
+} from './bot-shared-settings.js';
 import { ContextEnhancementEditor } from './context-enhancement.js';
 import { DeliveryTargetsEditor } from './delivery-targets.js';
 import { callChatRpc, callControlRpc, unwrapRpc } from './rpc.js';
@@ -98,6 +100,8 @@ export function createChatUi({ ctx, translate } = {}) {
       ModelEditor,
       /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
       AccessPolicyEditor,
+      /** 控制面板卡片显示哪些项（私聊/群聊分开）。 */
+      PanelSectionsEditor,
       /** 属主：绕过所有策略的人（改完渠道会重连一次）。 */
       OwnerEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */

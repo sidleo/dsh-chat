@@ -65,6 +65,17 @@ const zh = {
   '清空后没有人绕过访问策略': '清空后没有人绕过访问策略',
   '清空（无属主）': '清空（无属主）',
   '目录': '目录',
+  '显示项': '显示项',
+  '控制面板显示项': '控制面板显示项',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。',
+  '模型与推理等级': '模型与推理等级',
+  '会话': '会话',
+  'Agent 预设与工作区': 'Agent 预设与工作区',
+  '上下文增强（本会话）': '上下文增强（本会话）',
+  '访问策略（本会话）': '访问策略（本会话）',
+  '渠道设置（任务过程展示等）': '渠道设置（任务过程展示等）',
+  '渠道动作按钮（重连等）': '渠道动作按钮（重连等）',
+  '命令按钮（新会话/状态/诊断…）': '命令按钮（新会话/状态/诊断…）',
   '私聊': '私聊',
   '移除': '移除',
   '群聊': '群聊',
@@ -116,6 +127,17 @@ const zh = {
 };
 
 const en = {
+  '显示项': 'Section',
+  '控制面板显示项': 'Control panel sections',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': 'Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).',
+  '模型与推理等级': 'Model & reasoning',
+  '会话': 'Session',
+  'Agent 预设与工作区': 'Agent preset & workspace',
+  '上下文增强（本会话）': 'Context enhancement (this chat)',
+  '访问策略（本会话）': 'Access policy (this chat)',
+  '渠道设置（任务过程展示等）': 'Channel settings (step display etc.)',
+  '渠道动作按钮（重连等）': 'Channel actions (reconnect etc.)',
+  '命令按钮（新会话/状态/诊断…）': 'Command buttons (new session/status/diagnostics…)',
   '关闭': 'Close',
   '删除': 'Delete',
   '启用': 'Enabled',
@@ -344,7 +366,8 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
 export function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor,
-    WorkspaceEditor, PresetEditor, ModelEditor, AccessPolicyEditor } = chatUi.components;
+    WorkspaceEditor, PresetEditor, ModelEditor, AccessPolicyEditor,
+    PanelSectionsEditor } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: account.botId,
   });
@@ -457,6 +480,13 @@ export function AccountCard({ account, chatUi, connection, translate, onChanged 
     value: shared.accessPolicy,
     translate: t,
     onSave: settings.saveAccessPolicy,
+  }),
+
+  h(PanelSectionsEditor, {
+    value: shared.panelSections ?? null,
+    disabled: settings.phase !== 'ready',
+    translate: t,
+    onSave: settings.savePanelSections,
   }),
 
   h(ContextEnhancementEditor, {

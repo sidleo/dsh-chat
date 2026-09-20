@@ -21,6 +21,7 @@ import {
   defaultAccessPolicy, describeAccessScope, normalizeAccessPolicy, validateAccessPolicy,
 } from '../shared/access-policy.mjs';
 import { normalizeContextConfig, TARGET_LIMIT } from '../shared/context-enhancement.mjs';
+import { sectionsFor } from '../shared/panel-sections.mjs';
 import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
 
 function panelError(code, message) {
@@ -697,6 +698,12 @@ export function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        /**
+         * 本会话类型该显示哪些项（设置页里配的，私聊/群聊分开）。
+         *
+         * 渠道按它决定画不画某一块；hub 仍然把数据都读出来（少一次"字段被谁吞了"的排查）。
+         */
+        sections: sectionsFor(record, scope),
         /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
         policy: policyPanelState({ record, conversationType: scope, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。

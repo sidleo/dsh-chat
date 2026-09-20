@@ -618,6 +618,25 @@ test('渠道自带的面板字段：读得到就带出来，apply 透传给渠�
   );
 });
 
+test('读面板：带上本会话类型该显示哪些项（设置页里配的，私聊/群聊分开）', async () => {
+  const { panel } = makePanel({
+    record: { panelSections: { direct: { policy: false }, group: { actions: false, commands: false } } },
+  });
+  const direct = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.equal(direct.sections.policy, false);
+  assert.equal(direct.sections.model, true);
+  assert.equal(direct.sections.commands, true, '私聊那份没动');
+  const group = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true });
+  assert.equal(group.sections.actions, false);
+  assert.equal(group.sections.commands, false);
+  assert.equal(group.sections.policy, true, '群里那份没关 policy');
+  // 数据本身照旧都给（少一次"字段被谁吞了"的排查）——显示与否由渠道按 sections 决定。
+  assert.ok(group.policy, '关掉显示不等于不读数据');
+  // 从没配过：全显示。
+  const fresh = await makePanel({}).panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
+  assert.ok(Object.values(fresh.sections).every((value) => value === true));
+});
+
 test('会话类型漏传时从会话键兜底：不能把「本会话的访问策略」静默丢掉', async () => {
   const { panel } = makePanel({});
   // 群里发 /menu：命令内核与渠道都可能漏传 conversationType。

@@ -616,6 +616,36 @@ ${content}` : block;
 import { readFile as readFile2 } from "node:fs/promises";
 import { join } from "node:path";
 
+// packages/dsh-chat/shared/panel-sections.mjs
+var PANEL_SECTIONS = Object.freeze([
+  "model",
+  "session",
+  "preset",
+  "context",
+  "policy",
+  "fields",
+  "actions",
+  "commands"
+]);
+var PANEL_SCOPES = Object.freeze(["direct", "group"]);
+function allOn() {
+  return Object.fromEntries(PANEL_SECTIONS.map((id) => [id, true]));
+}
+function normalizePanelSections(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const scopeOf = (value) => {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return Object.fromEntries(
+      PANEL_SECTIONS.map((id) => [id, raw[id] !== false])
+    );
+  };
+  return { direct: scopeOf(source.direct), group: scopeOf(source.group) };
+}
+function sectionsFor(record, conversationType) {
+  if (conversationType !== "direct" && conversationType !== "group") return allOn();
+  return normalizePanelSections(record?.panelSections)[conversationType];
+}
+
 // packages/dsh-chat/host/json-store.mjs
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -735,7 +765,12 @@ var EMPTY_RECORD = Object.freeze({
   agentPreset: null,
   contextEnhancement: null,
   accessPolicy: null,
-  deliveryTargets: null
+  deliveryTargets: null,
+  /**
+   * 控制面板卡片的显示项（私聊/群聊各一份）：`{ direct: { model: true, … }, group: {…} }`。
+   * `null` = 全显示（见 `shared/panel-sections.mjs`）。
+   */
+  panelSections: null
 });
 var RECORD_KEYS = Object.freeze(Object.keys(EMPTY_RECORD));
 var LEGACY_SOURCES = Object.freeze({
@@ -787,6 +822,7 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
     const stored = store.snapshot().channels?.[channelId]?.[botId];
     const record = cloneRecord(stored);
     record.contextEnhancement = stored?.contextEnhancement === void 0 || stored?.contextEnhancement === null ? null : normalizeContextConfig(stored.contextEnhancement);
+    record.panelSections = stored?.panelSections === void 0 || stored?.panelSections === null ? null : normalizePanelSections(stored.panelSections);
     return Object.freeze(record);
   }
   return {
@@ -802,7 +838,8 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
       if (!isPlainObject4(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       const unknown = Object.keys(patch).filter((key) => !RECORD_KEYS.includes(key));
       if (unknown.length > 0) throw new TypeError(`\u672A\u77E5\u7684\u8BBE\u7F6E\u5B57\u6BB5\uFF1A${unknown.join("\u3001")}`);
-      const normalized = Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) } : patch;
+      const withContext = Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) } : patch;
+      const normalized = Object.hasOwn(withContext, "panelSections") && withContext.panelSections !== null ? { ...withContext, panelSections: normalizePanelSections(withContext.panelSections) } : withContext;
       await store.update((current) => {
         const channels = { ...current.channels };
         const bots = { ...channels[channelId] ?? {} };
@@ -3007,6 +3044,12 @@ function createPanelService({
         // 渠道自带的面板字段（飞书：任务过程展示）。渠道没实现就是空数组。
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
+        /**
+         * 本会话类型该显示哪些项（设置页里配的，私聊/群聊分开）。
+         *
+         * 渠道按它决定画不画某一块；hub 仍然把数据都读出来（少一次"字段被谁吞了"的排查）。
+         */
+        sections: sectionsFor(record, scope),
         /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
         policy: policyPanelState({ record, conversationType: scope, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
@@ -5110,6 +5153,19 @@ function apply(ctx, config = {}) {
       if (!validBotPayload(payload)) return fail("chat/bad-request", "bot.settings.get \u9700\u8981 channelId \u4E0E botId\u3002");
       await settings.ready();
       return ok({ settings: settings.read(payload.channelId, payload.botId) });
+    }
+    if (method === "bot.panel-sections.set") {
+      if (!validBotPayload(payload, { extra: ["sections"] })) {
+        return fail("chat/bad-request", "bot.panel-sections.set \u9700\u8981 channelId\u3001botId \u4E0E sections\u3002");
+      }
+      try {
+        const saved = await settings.write(payload.channelId, payload.botId, {
+          panelSections: payload.sections
+        });
+        return ok({ panelSections: saved.panelSections });
+      } catch (error) {
+        return failFrom(error, "chat/panel-sections-failed");
+      }
     }
     if (method === "bot.context-enhancement.set") {
       if (!validBotPayload(payload, { withConfig: true })) {

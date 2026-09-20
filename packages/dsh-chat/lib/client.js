@@ -279,6 +279,10 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     (model) => saveField("bot.model.set", { model }, "model"),
     [saveField]
   );
+  const savePanelSections = React.useCallback(
+    (sections) => saveField("bot.panel-sections.set", { sections }, "panelSections"),
+    [saveField]
+  );
   return {
     record: state.record,
     phase: state.phase,
@@ -290,7 +294,8 @@ function useBotSettings({ connection, channelId, botId, enabled = true }) {
     saveWorkspace,
     saveAgentPreset,
     saveAccessPolicy,
-    saveModel
+    saveModel,
+    savePanelSections
   };
 }
 function useConversations({ connection, channelId, botId, enabled = true }) {
@@ -401,6 +406,29 @@ function defaultAccessPolicy() {
     allowlist: { users: [] }
   });
   return validateAccessPolicy({ direct: scope(), group: scope() });
+}
+
+// packages/dsh-chat/shared/panel-sections.mjs
+var PANEL_SECTIONS = Object.freeze([
+  "model",
+  "session",
+  "preset",
+  "context",
+  "policy",
+  "fields",
+  "actions",
+  "commands"
+]);
+var PANEL_SCOPES = Object.freeze(["direct", "group"]);
+function normalizePanelSections(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const scopeOf = (value) => {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return Object.fromEntries(
+      PANEL_SECTIONS.map((id) => [id, raw[id] !== false])
+    );
+  };
+  return { direct: scopeOf(source.direct), group: scopeOf(source.group) };
 }
 
 // packages/dsh-chat/client/bot-shared-settings.js
@@ -876,6 +904,94 @@ function OwnerEditor({ owners = [], wildcard = false, candidates = [], translate
       )
     ),
     failed ? h("p", { className: "dchat-error", role: "alert" }, failed) : null
+  );
+}
+var PANEL_SECTION_LABELS = Object.freeze({
+  model: "\u6A21\u578B\u4E0E\u63A8\u7406\u7B49\u7EA7",
+  session: "\u4F1A\u8BDD",
+  preset: "Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A",
+  context: "\u4E0A\u4E0B\u6587\u589E\u5F3A\uFF08\u672C\u4F1A\u8BDD\uFF09",
+  policy: "\u8BBF\u95EE\u7B56\u7565\uFF08\u672C\u4F1A\u8BDD\uFF09",
+  fields: "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09",
+  actions: "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09",
+  commands: "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09"
+});
+function PanelSectionsEditor({
+  value = null,
+  disabled = false,
+  saving = false,
+  error = null,
+  translate,
+  onSave
+}) {
+  const t = translatorOf(translate);
+  const sections = PANEL_SECTIONS;
+  const scopes = [{ key: "direct", label: "\u79C1\u804A" }, { key: "group", label: "\u7FA4\u804A" }];
+  const [draft, setDraft] = React2.useState(() => normalizePanelSections(value));
+  const [pending, setPending] = React2.useState(null);
+  const [failed, setFailed] = React2.useState(null);
+  const locked = disabled || saving || pending !== null;
+  React2.useEffect(() => {
+    if (pending !== null) return;
+    setDraft((current) => JSON.stringify(current) === JSON.stringify(normalizePanelSections(value)) ? current : normalizePanelSections(value));
+  }, [value, pending]);
+  const toggle = async (scopeKey, sectionId, nextChecked) => {
+    if (locked) return;
+    const next = {
+      ...draft,
+      [scopeKey]: { ...draft[scopeKey], [sectionId]: nextChecked }
+    };
+    setDraft(next);
+    setFailed(null);
+    setPending(`${scopeKey}:${sectionId}`);
+    try {
+      await onSave(next);
+    } catch (cause) {
+      setDraft(normalizePanelSections(value));
+      setFailed(cause?.message ?? String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+  const header = h(
+    "div",
+    { className: "dchat-panelSectionsHead" },
+    h("span", { className: "dchat-scopeLabel" }, t("\u663E\u793A\u9879")),
+    scopes.map((scope) => h("span", {
+      key: scope.key,
+      className: "dchat-scopeLabel"
+    }, t(scope.label)))
+  );
+  const rows = sections.map((sectionId) => h(
+    "div",
+    {
+      key: sectionId,
+      className: "dchat-panelSectionsRow"
+    },
+    h("span", { className: "dchat-panelSectionsName" }, t(PANEL_SECTION_LABELS[sectionId])),
+    scopes.map((scope) => h("label", {
+      key: scope.key,
+      className: "dchat-panelSectionsCheck",
+      title: `${t(PANEL_SECTION_LABELS[sectionId])} \xB7 ${t(scope.label)}`
+    }, h("input", {
+      type: "checkbox",
+      checked: draft[scope.key]?.[sectionId] !== false,
+      disabled: locked,
+      "aria-label": `${t(PANEL_SECTION_LABELS[sectionId])} \xB7 ${t(scope.label)}`,
+      onChange: (event) => {
+        void toggle(scope.key, sectionId, event.target.checked);
+      }
+    })))
+  ));
+  return h(
+    Card,
+    {
+      title: t("\u63A7\u5236\u9762\u677F\u663E\u793A\u9879"),
+      description: t("\u53EA\u5F71\u54CD /menu \u53D1\u51FA\u6765\u7684\u90A3\u5F20\u5361\u7247\uFF1A\u5173\u6389\u7684\u9879\u4E0D\u663E\u793A\uFF0C\u529F\u80FD\u7167\u65E7\uFF08\u79C1\u804A\u4E0E\u7FA4\u804A\u5206\u522B\u8BBE\u7F6E\uFF09\u3002"),
+      actions: pending !== null ? h("span", { className: "dchat-status" }, t("\u4FDD\u5B58\u4E2D\u2026")) : null
+    },
+    h("div", { className: "dchat-panelSections" }, header, rows),
+    failed || error ? h("p", { className: "dchat-error", role: "alert" }, failed ?? error) : null
   );
 }
 
@@ -2719,6 +2835,41 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
+.dchat-panelSections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dchat-panelSectionsHead,
+.dchat-panelSectionsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* \u540D\u79F0\u5360\u6EE1\u5269\u4F59\u5BBD\u5EA6\uFF0C\u4E24\u4E2A\u52FE\u9009\u6846\u56FA\u5B9A\u9760\u53F3\uFF1A\u7A84\u680F\u4E0B\u4E5F\u4E0D\u4F1A\u628A\u540D\u79F0\u538B\u6210\u7AD6\u6392\u3002 */
+.dchat-panelSectionsName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dchat-panelSectionsHead > .dchat-scopeLabel:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dchat-panelSectionsHead > .dchat-scopeLabel:not(:first-child),
+.dchat-panelSectionsCheck {
+  flex: none;
+  width: 48px;
+  text-align: center;
+}
+.dchat-panelSectionsCheck {
+  display: flex;
+  justify-content: center;
+}
+.dchat-panelSectionsCheck input {
+  margin: 0;
+}
 .dchat-notice {
   margin: 0;
   font-size: 12px;
@@ -2836,6 +2987,8 @@ function createChatUi({ ctx, translate } = {}) {
       ModelEditor,
       /** 谁能跟机器人说话、谁能执行命令（立即生效）。 */
       AccessPolicyEditor,
+      /** 控制面板卡片显示哪些项（私聊/群聊分开）。 */
+      PanelSectionsEditor,
       /** 属主：绕过所有策略的人（改完渠道会重连一次）。 */
       OwnerEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
@@ -2896,6 +3049,17 @@ var zh = {
   // 主动投递（共享组件 delivery-targets.js）
   "\u4E3B\u52A8\u6295\u9012": "\u4E3B\u52A8\u6295\u9012",
   "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\u3002": "\u8BA9\u5B9A\u65F6\u4EFB\u52A1\u6216 agent \u628A\u7ED3\u679C\u76F4\u63A5\u53D1\u5230\u6307\u5B9A\u4F1A\u8BDD\u3002",
+  "\u663E\u793A\u9879": "\u663E\u793A\u9879",
+  "\u63A7\u5236\u9762\u677F\u663E\u793A\u9879": "\u63A7\u5236\u9762\u677F\u663E\u793A\u9879",
+  "\u53EA\u5F71\u54CD /menu \u53D1\u51FA\u6765\u7684\u90A3\u5F20\u5361\u7247\uFF1A\u5173\u6389\u7684\u9879\u4E0D\u663E\u793A\uFF0C\u529F\u80FD\u7167\u65E7\uFF08\u79C1\u804A\u4E0E\u7FA4\u804A\u5206\u522B\u8BBE\u7F6E\uFF09\u3002": "\u53EA\u5F71\u54CD /menu \u53D1\u51FA\u6765\u7684\u90A3\u5F20\u5361\u7247\uFF1A\u5173\u6389\u7684\u9879\u4E0D\u663E\u793A\uFF0C\u529F\u80FD\u7167\u65E7\uFF08\u79C1\u804A\u4E0E\u7FA4\u804A\u5206\u522B\u8BBE\u7F6E\uFF09\u3002",
+  "\u6A21\u578B\u4E0E\u63A8\u7406\u7B49\u7EA7": "\u6A21\u578B\u4E0E\u63A8\u7406\u7B49\u7EA7",
+  "\u4F1A\u8BDD": "\u4F1A\u8BDD",
+  "Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A": "Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A\uFF08\u672C\u4F1A\u8BDD\uFF09": "\u4E0A\u4E0B\u6587\u589E\u5F3A\uFF08\u672C\u4F1A\u8BDD\uFF09",
+  "\u8BBF\u95EE\u7B56\u7565\uFF08\u672C\u4F1A\u8BDD\uFF09": "\u8BBF\u95EE\u7B56\u7565\uFF08\u672C\u4F1A\u8BDD\uFF09",
+  "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09": "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09",
+  "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09": "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09",
+  "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09": "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09",
   "\u79C1\u804A": "\u79C1\u804A",
   "\u7FA4\u804A": "\u7FA4\u804A",
   "\u5019\u9009": "\u5019\u9009",
@@ -3014,6 +3178,17 @@ var zh = {
   "\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9": "\u6D4B\u8BD5\u6D88\u606F\u5185\u5BB9"
 };
 var en = {
+  "\u663E\u793A\u9879": "Section",
+  "\u63A7\u5236\u9762\u677F\u663E\u793A\u9879": "Control panel sections",
+  "\u53EA\u5F71\u54CD /menu \u53D1\u51FA\u6765\u7684\u90A3\u5F20\u5361\u7247\uFF1A\u5173\u6389\u7684\u9879\u4E0D\u663E\u793A\uFF0C\u529F\u80FD\u7167\u65E7\uFF08\u79C1\u804A\u4E0E\u7FA4\u804A\u5206\u522B\u8BBE\u7F6E\uFF09\u3002": "Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).",
+  "\u6A21\u578B\u4E0E\u63A8\u7406\u7B49\u7EA7": "Model & reasoning",
+  "\u4F1A\u8BDD": "Session",
+  "Agent \u9884\u8BBE\u4E0E\u5DE5\u4F5C\u533A": "Agent preset & workspace",
+  "\u4E0A\u4E0B\u6587\u589E\u5F3A\uFF08\u672C\u4F1A\u8BDD\uFF09": "Context enhancement (this chat)",
+  "\u8BBF\u95EE\u7B56\u7565\uFF08\u672C\u4F1A\u8BDD\uFF09": "Access policy (this chat)",
+  "\u6E20\u9053\u8BBE\u7F6E\uFF08\u4EFB\u52A1\u8FC7\u7A0B\u5C55\u793A\u7B49\uFF09": "Channel settings (step display etc.)",
+  "\u6E20\u9053\u52A8\u4F5C\u6309\u94AE\uFF08\u91CD\u8FDE\u7B49\uFF09": "Channel actions (reconnect etc.)",
+  "\u547D\u4EE4\u6309\u94AE\uFF08\u65B0\u4F1A\u8BDD/\u72B6\u6001/\u8BCA\u65AD\u2026\uFF09": "Command buttons (new session/status/diagnostics\u2026)",
   "Chat\u673A\u5668\u4EBA": "Chat bot",
   "\u6A21\u578B": "Model",
   "\u9ED8\u8BA4\u6A21\u578B": "Default model",
