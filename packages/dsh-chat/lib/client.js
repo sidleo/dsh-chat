@@ -4131,7 +4131,7 @@ function ChatSettingsSection(props) {
   const [dragChannel, setDragChannel] = React11.useState(null);
   const [dropChannel, setDropChannel] = React11.useState(null);
   const [selected, setSelected] = React11.useState(null);
-  const activeId = entries.some((entry) => entry.id === selected) ? selected : entries[0]?.id ?? null;
+  const activeId = entries.some((entry) => entry.id === selected) ? selected : orderedEntries[0]?.id ?? null;
   const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;
   const openSettings = (botId) => setView({ kind: "channel", botId });
   const backToBots = () => setView({ kind: "bots", botId: null });

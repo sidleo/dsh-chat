@@ -235,8 +235,10 @@ const chatUi = createChatUi({ translate: t });
 
 /** 渠道 rail：真实现 + 两条注册（顺序与能力说明照产品形态来）。 */
 const channels = createChannelRail();
-channels.register({ id: 'feishu', order: 1, label: '飞书', capabilities: { note: '支持私聊与群聊' } });
-channels.register({ id: 'weixin', order: 2, label: '微信', capabilities: { note: '仅私聊' } });
+// 顺序照**产品真实值**来（微信 10、飞书 20）：这样"注册顺序里的第一个"与"用户排的第一个"
+// 正好相反，守门才分得清"默认跟注册顺序"还是"默认跟用户顺序"。
+channels.register({ id: 'feishu', order: 20, label: '飞书', capabilities: { note: '支持私聊与群聊' } });
+channels.register({ id: 'weixin', order: 10, label: '微信', capabilities: { note: '仅私聊' } });
 
 const feishuCard = () => h(FeishuBotCard, {
   bot: FEISHU_BOT, status: FEISHU_STATUS, chatUi, connection, translate: t, onChanged: async () => {},
@@ -402,6 +404,11 @@ function measure() {
      * 这是全局的（弹窗通过 portal 挂在 body 上，不属于任何 frame），所以每个 frame 记一份同样的值，
      * 由守门那边断言一次。
      */
+    /** 左栏渠道顺序与"当前默认打开的是哪个"：默认必须是排在最前面的那个。 */
+    const railItems = [...frame.querySelectorAll('.dchat-rail .dchat-channel')];
+    const railOrder = railItems.map((el) => (el.querySelector('strong')?.textContent ?? '').trim());
+    const activeChannel = (railItems.find((el) => el.getAttribute('aria-selected') === 'true')
+      ?.querySelector('strong')?.textContent ?? '').trim() || null;
     // 每个弹窗各算一份（每个渠道卡各点开过一次；弹窗是 portal，挂在 body 上）。
     const dialogs = [...document.querySelectorAll('.dchat-dialog')].map((dialog) => ({
       activeScope: dialog.querySelector('.dchat-tab[aria-selected="true"]')?.dataset?.scope ?? null,
@@ -423,6 +430,8 @@ function measure() {
       sectionChecks,
       dialogs,
       dragResult,
+      railOrder,
+      activeChannel,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();

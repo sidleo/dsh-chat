@@ -80,6 +80,17 @@ try {
 body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw-alias-label-primary)}
 .frame{padding:14px 18px}
 </style></head><body><div id="root"></div>
+<script>
+/**
+ * 预置一份"用户排过的渠道顺序"：飞书在前、微信在后（与注册顺序相反）。
+ *
+ * 守门据此断言**默认打开的渠道 = 排在最前面的那个**——真机上栽过：顺序调完，
+ * 一进设置页仍然默认打开注册顺序里的第一个（微信）。
+ */
+try {
+  localStorage.setItem('dsh-chat:order:channels', JSON.stringify(['feishu', 'weixin']));
+} catch (error) { /* file:// 下可能不可用：那就不预置，守门只验默认顺序自洽 */ }
+</script>
 <script src="./layout.js"></script></body></html>`;
   const htmlPath = join(workDir, 'layout.html');
   writeFileSync(htmlPath, html);
@@ -145,6 +156,16 @@ body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw
         + `${dialog.visible.join('、')}`);
     } else if (dialog.activeScope && dialog.visible[0] !== dialog.activeScope) {
       failures.push(`弹窗 ${index + 1} 可见的是 ${dialog.visible[0]}，但选中的是 ${dialog.activeScope}`);
+    }
+  }
+
+  // 默认打开的渠道 = 排在最前面的那个（不是注册顺序里的第一个）。
+  for (const frame of results.filter((item) => (item.railOrder ?? []).length > 0)) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    if (!frame.activeChannel) failures.push(`${where}: 左栏没有任何渠道处于选中态`);
+    else if (frame.activeChannel !== frame.railOrder[0]) {
+      failures.push(`${where}: 默认打开的是「${frame.activeChannel}」，而排在最前面的是`
+        + `「${frame.railOrder[0]}」（顺序：${frame.railOrder.join('、')}）`);
     }
   }
 

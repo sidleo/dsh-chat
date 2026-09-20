@@ -88,9 +88,16 @@ export function ChatSettingsSection(props) {
   const [dropChannel, setDropChannel] = React.useState(null);
 
   const [selected, setSelected] = React.useState(null);
+  /**
+   * 当前选中的渠道：用户点过就用他点的那个，否则用**排在最前面的那个**。
+   *
+   * 这里必须用 `orderedEntries`：用注册顺序的 `entries[0]` 时，用户把顺序调成
+   * 「飞书在前、微信在后」，一进设置页却仍然默认打开微信（真机反馈）——
+   * 默认项当然应该跟他自己排的第一项一致。
+   */
   const activeId = entries.some((entry) => entry.id === selected)
     ? selected
-    : (entries[0]?.id ?? null);
+    : (orderedEntries[0]?.id ?? null);
 
   // 切换渠道时回到"机器人列表"，否则会带着上一个渠道的 botId 进错页。
   const activeEntry = entries.find((entry) => entry.id === activeId) ?? null;

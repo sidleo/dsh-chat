@@ -74,6 +74,10 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   顺序存**浏览器 localStorage**（`dsh-chat:order:channels`、`dsh-chat:order:bots:<渠道>`）：
   只影响这台浏览器看到的顺序，不影响机器人行为——所以不必也不该动 hub 的磁盘数据；
   换设备/清站点数据就回到默认顺序（渠道注册的 `order` 与机器人的自然顺序）。
+  **默认打开的渠道 = 用户顺序里的第一项**（不是注册顺序里的第一个）：`entry.order` 是产品默认
+  （微信 10、飞书 20），用户拖动后要按他的顺序算——用 `entries[0]` 会出现"顺序调完了，
+  一进设置页还是默认打开微信"（真机反馈）。布局守门预置一份与注册顺序**相反**的用户顺序，
+  断言每帧默认打开的渠道就是排在最前面的那个。
   **"拖的是谁"必须用 ref 记**：同一任务里连着派发 dragstart/drop 时 React 会把 setState 批起来，
   drop 的闭包里读到的还是 null，顺序不会变（真机分属两个任务所以看不出来，是布局守门的模拟
   把它暴露的）。布局守门会模拟一次真实拖放并断言顺序真的变了。
