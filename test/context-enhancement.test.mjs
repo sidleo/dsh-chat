@@ -199,6 +199,35 @@ test('enhanceContent：来源块 + 提示词块', () => {
   assert.ok(text.endsWith('你好'));
 });
 
+test('enhanceContent：提示词走系统提示词时，正文只拼来源块（不重复注入）', () => {
+  const provider = {
+    botId: 'bot_1',
+    channel: 'feishu',
+    readConfig: () => config({
+      direct: scope({ enabled: true, fields: ['senderId'], guidance: '礼貌一点' }),
+    }),
+  };
+  const snapshot = captureContextEnhancement(provider, 'direct', { senderId: 'ou_alice' });
+  const text = enhanceContent('你好', snapshot, () => ({ senderId: 'ou_alice' }), {
+    includeGuidance: false,
+  });
+  assert.ok(text.includes(CONTEXT_TAGS.sourceOpen), '来源块仍然跟着这条消息');
+  assert.ok(!text.includes(CONTEXT_TAGS.guidanceOpen), '提示词不该再拼一份进用户消息');
+  assert.ok(!text.includes('礼貌一点'));
+  assert.ok(text.endsWith('你好'));
+
+  // 数组正文同理：前缀块里只有来源。
+  const asArray = enhanceContent(
+    [{ type: 'text', text: '你好' }],
+    snapshot,
+    () => ({ senderId: 'ou_alice' }),
+    { includeGuidance: false },
+  );
+  assert.equal(asArray.length, 2);
+  assert.ok(asArray[0].text.includes(CONTEXT_TAGS.sourceOpen));
+  assert.ok(!asArray[0].text.includes(CONTEXT_TAGS.guidanceOpen));
+});
+
 test('enhanceContent：关闭时原样返回，未知渠道名被丢弃', () => {
   assert.equal(enhanceContent('你好', null, () => ({})), '你好');
 

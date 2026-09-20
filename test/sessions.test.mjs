@@ -879,6 +879,8 @@ test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮
 
   const renamed = [];
   let titleReady = false;
+  /** 桩里跟着 rename 走：升级那条路要"标题已经带旧前缀"才测得出来。 */
+  let currentTitle = '看看昨天的销售';
   const ctx = {
     typertGateway: {
       // 网关是 `invoke({ namespace, method, args, signal })` 的对象形式。
@@ -888,12 +890,13 @@ test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮
           return {
             items: [{
               sessionId: 'session-1',
-              projections: { values: titleReady ? { title: '看看昨天的销售' } : {} },
+              projections: { values: titleReady ? { title: currentTitle } : {} },
             }],
           };
         }
         if (method === 'rename') {
           renamed.push(args?.request?.title);
+          currentTitle = args?.request?.title;
           return {};
         }
         return {};
@@ -907,15 +910,27 @@ test('会话标题标渠道：标题还没生成时不记"已标记"，下一轮
   });
 
   // 第一次：标题还没生成 —— 不能记成"已标记"（返回值给 /retitle 那条路用）。
-  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'no-title');
+  assert.equal(await bridge.markSessionChannel?.('session-1', { channelLabel: '飞书' }), 'no-title');
   assert.deepEqual(renamed, [], '标题没生成时不该重命名');
-  // 第二次（标题已生成）——要补上前缀。
+  // 第二次（标题已生成）——要补上「渠道 · 聊天 · 」前缀。
   titleReady = true;
-  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'renamed');
-  assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
-  // 第三次：已经有前缀 → skipped（幂等，不重复改）。
-  assert.equal(await bridge.markSessionChannel?.('session-1', '飞书'), 'skipped');
-  assert.deepEqual(renamed, ['飞书 · 看看昨天的销售']);
+  assert.equal(
+    await bridge.markSessionChannel?.('session-1', { channelLabel: '飞书', chatLabel: '群 张三' }),
+    'renamed',
+  );
+  assert.deepEqual(renamed, ['飞书 · 群 张三 · 看看昨天的销售']);
+  // 第三次：前缀已经是这个 → skipped（幂等，不重复改）。
+  assert.equal(
+    await bridge.markSessionChannel?.('session-1', { channelLabel: '飞书', chatLabel: '群 张三' }),
+    'skipped',
+  );
+  assert.deepEqual(renamed, ['飞书 · 群 张三 · 看看昨天的销售']);
+  // 第四次：后来才查到真名（第一轮只拿到掩码 id）→ 替换旧前缀升级，绝不叠加成两层。
+  assert.equal(
+    await bridge.markSessionChannel?.('session-1', { channelLabel: '飞书', chatLabel: '群 真名' }),
+    'renamed',
+  );
+  assert.deepEqual(renamed.at(-1), '飞书 · 群 真名 · 看看昨天的销售');
 
   // 一次性回填要用到的绑定清单：只列这台机器人自己的会话。
   const bound = bridge.boundSessions?.('feishu', 'bot_1');

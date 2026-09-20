@@ -148,7 +148,26 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       if (deps.sessions?.bindings?.adopt) {
         await deps.sessions.bindings.adopt(deps.channelId, bot.id, state.sessions());
       }
-      const bridge = bridgeFactory({ bot: liveBot, deps, gateway, state, logger });
+      const bridge = bridgeFactory({
+        bot: liveBot,
+        deps,
+        gateway,
+        state,
+        logger,
+        /**
+         * 会话标题里的"哪个群/哪个人"：**复用这边的名字缓存**（含 10 分钟 TTL 与
+         * "缺权限"退避），桥自己不另开一套查询——否则设置页与标题会把同一批接口打两遍。
+         */
+        resolveChatLabel: async ({ conversationType, senderId, chatId }) => {
+          if (conversationType === 'group') {
+            const cached = cacheFor(bot.id).chats.get(chatId);
+            if (cached) return cached;
+            await allChats(bot.id, { minIntervalMs: 60_000 });
+            return cacheFor(bot.id).chats.get(chatId) ?? null;
+          }
+          return (await userName(bot.id, senderId)) || null;
+        },
+      });
       record.gateway = gateway;
       record.bridge = bridge;
       await gateway.connect({

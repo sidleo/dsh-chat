@@ -11,6 +11,7 @@
 import * as accessPolicy from '../shared/access-policy.mjs';
 
 import { botModelForSelection, describeBotModel, normalizeBotModel } from './bot-model.mjs';
+import { chatKeyLabel } from './session-keys.mjs';
 import { CONTRACT_VERSION } from '../shared/contract.mjs';
 
 /** 命令名前缀。 */
@@ -624,9 +625,14 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
 
       const counts = { renamed: 0, skipped: 0, 'no-title': 0, failed: 0 };
       for (const row of rows) {
+        // 聊天名只能按**绑定键**给（`p2p:ou_x` → 「私聊 ou_x」），hub 拿不到昵称——那是渠道的事。
+        // 下一次这个聊天发消息时，渠道会带着真名再标一次（前缀可升级，见 markSessionChannel）。
         // 串行：一次 rename 就够轻，串行能避免把 DSH 的会话列表打满。
         // eslint-disable-next-line no-await-in-loop
-        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, channelLabel);
+        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, {
+          channelLabel,
+          chatLabel: chatKeyLabel(row.key),
+        });
         if (Object.hasOwn(counts, outcome ?? '')) counts[outcome] += 1;
       }
       context.log?.info?.(`[dsh-chat] 会话标题回填：${JSON.stringify(counts)}`);

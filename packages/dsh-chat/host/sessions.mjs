@@ -225,27 +225,53 @@ export function createSessionBridge({
   const queueDepth = new Map();
   /** 已经标过渠道的工作区 / 会话（进程内只标一次，避免每轮都发 rename）。 */
   const namedWorkspaces = new Set();
-  const namedSessions = new Set();
+  /** 会话 id → **已经应用的标题前缀**：前缀变了（比如后来才查到群名）才允许再 rename 一次。 */
+  const namedSessions = new Map();
+
+  /** 拼标题/工作区名的一段段（空段丢掉）。 */
+  function titleParts(...parts) {
+    return parts.map((part) => String(part ?? '').trim()).filter(Boolean).join(' · ');
+  }
+
+  function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
 
   /**
-   * 给会话标题加渠道前缀（`飞书 · <原标题>`）。
+   * 去掉标题里已经存在的「渠道 · 聊天 · 」前缀（旧形态「渠道 · 」也去）。
    *
-   * 会话列表里一堆同名会话时，能一眼看出哪条来自哪个渠道——这是"会话渠道标识"的
-   * 主要用途。前缀是**幂等**的：已经有前缀就不再 rename；拿不到渠道标签就什么都不做。
+   * 为什么必须能去：会话名里的**聊天名可能是后补的**（第一轮还没查到群名，先按掩码 id 标；
+   * 下一轮拿到真名要能换成真名）。不能去就会一层层叠加：`飞书 · 群 甲 · 飞书 · 群 乙 · 标题`。
+   */
+  function stripTitlePrefix(title, channelLabel) {
+    const channel = String(channelLabel ?? '').trim();
+    if (!channel) return title;
+    const withChat = new RegExp(`^${escapeRegExp(channel)} · (?:群|私聊) .+? · `);
+    if (withChat.test(title)) return title.replace(withChat, '');
+    const channelOnly = new RegExp(`^${escapeRegExp(channel)} · `);
+    return title.replace(channelOnly, '');
+  }
+
+  /**
+   * 给会话标题补上「渠道 · 聊天 · 」前缀（幂等，且能**升级**）。
+   *
+   * 会话列表里一堆同名会话时，光有渠道名分不出"是哪个群/哪个人"——真机上用户要的是
+   * 「飞书 · 群 张三 · 日报整理」这种能区分对象的标题，所以前缀里带上聊天身份
+   * （渠道算出来的 `chatLabel`，如 `群 张三` / `私聊 张三`；查不到名字时是 `群 oc_…` 掩码）。
+   *
+   * 幂等口径：**按前缀**记，不是按会话记——前缀没变就跳过；前缀变了（后来才查到群名、
+   * 或用户改了聊天）就替换掉旧前缀再加一次，绝不允许一层层叠加。
    *
    * @param sessionId - 会话 id。
-   * @param channelLabel - 渠道中文名（如 `飞书`）。
+   * @param labels - `{ channelLabel, chatLabel }`（`chatLabel` 可为空：那就只标渠道）。
+   * @returns 'renamed'（补上/升级了）/ 'skipped'（前缀已经是这个）/ 'no-title'（还没有标题，
+   *   等下一轮）/ 'failed'（失败，只留日志，下轮会再试）。返回值给 `/retitle` 用。
    */
-  /**
-   * 给会话标题补上「渠道 ·」前缀（幂等）。
-   *
-   * @returns 'renamed'（补上了）/ 'skipped'（已经有前缀或这次已经处理过）/
-   *   'no-title'（会话还没有标题，等下一轮）/ 'failed'（失败，只留日志，下轮会再试）。
-   *   返回值给 `/retitle` 那条一次性回填用；正常消息链路不看它。
-   */
-  async function markSessionChannel(sessionId, channelLabel, signal) {
-    const label = typeof channelLabel === 'string' ? channelLabel.trim() : '';
-    if (!label || namedSessions.has(sessionId)) return 'skipped';
+  async function markSessionChannel(sessionId, labels, signal) {
+    const channelLabel = String(labels?.channelLabel ?? '').trim();
+    const chatLabel = String(labels?.chatLabel ?? '').trim();
+    const prefix = titleParts(channelLabel, chatLabel);
+    if (!prefix || namedSessions.get(sessionId) === prefix) return 'skipped';
     try {
       // 标题只有 `session/list` 的投影里有（`session/page` 不带投影）。
       const listed = await invoke('session', 'list', { _request: {} }, signal);
@@ -254,17 +280,19 @@ export function createSessionBridge({
       // 标题要等第一轮跑完才生成：这时**不能**记成"已标记"，否则同一个会话
       // 在这个进程里再也不会重试，前缀就永远补不上了。
       if (typeof title !== 'string' || !title.trim()) return 'no-title';
-      if (title.startsWith(`${label} · `)) {
-        namedSessions.add(sessionId);
+      const body = stripTitlePrefix(title, channelLabel);
+      const next = `${prefix} · ${body}`;
+      if (next === title) {
+        namedSessions.set(sessionId, prefix);
         return 'skipped';
       }
-      await invoke('session', 'rename', { request: { sessionId, title: `${label} · ${title}` } }, signal);
-      namedSessions.add(sessionId);
-      logger.info?.(`[dsh-chat] 会话标题已标渠道：${sessionId} → ${label} · ${title}`);
+      await invoke('session', 'rename', { request: { sessionId, title: next } }, signal);
+      namedSessions.set(sessionId, prefix);
+      logger.info?.(`[dsh-chat] 会话标题已标聊天：${sessionId} → ${next}`);
       return 'renamed';
     } catch (error) {
       // 命名是锦上添花：失败只留日志、且不记"已标记"，下一轮还会再试，绝不影响消息处理。
-      logger.warn?.(`[dsh-chat] 标记会话渠道失败：${sessionId} ${error?.message ?? error}`);
+      logger.warn?.(`[dsh-chat] 标记会话标题失败：${sessionId} ${error?.message ?? error}`);
       return 'failed';
     }
   }
@@ -566,7 +594,7 @@ export function createSessionBridge({
    *
    * @param options - {
    *   channelId, botId, key, workspacePath, content, sourceGuidance,
-   *   mode, signal, channelLabel?, botLabel?, handlers: {
+   *   mode, signal, channelLabel?, botLabel?, chatLabel?, handlers: {
    *     onTurnStart?, onAssistantMessage?, onToolCall?, onToolResult?,
    *     onDelta?, onEvent?, onTurnEnd?,
    *   },
@@ -586,6 +614,7 @@ export function createSessionBridge({
     handlers = {},
     turnTimeoutMs,
     channelLabel = '',
+    chatLabel = '',
     botLabel = '',
     onQueued,
   }) {
@@ -998,7 +1027,7 @@ export function createSessionBridge({
       clearTimeout(totalTimer);
       if (idleTimer) clearTimeout(idleTimer);
       // 回合结束后标题已经生成，这时标渠道前缀最稳（幂等：每个会话只做一次）。
-      void markSessionChannel(sessionId, channelLabel);
+      void markSessionChannel(sessionId, { channelLabel, chatLabel });
       signal?.removeEventListener?.('abort', abort);
       activeTurns.delete(turnKey);
       closing = true;

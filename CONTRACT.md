@@ -158,12 +158,15 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
    * 控制面板（可交互卡片用）：读"当前值 + 可选项"，把用户的选择应用下去。
    * read({ channelId, botId, key, isOwner }) -> { sessionId, bound, model{current,botDefault,hostDefault,
    *                                        failures,options,efforts,currentEffort,selectionFailed},
-   *                                        session{current,options,failed}, preset{current,options,failed},
+   *                                        session{current,options,withheld,failed}, preset{current,options,failed},
    *                                        workspace{current,options},
    *                                        fields[{field,label,value,options}], fieldsFailed }
    *      `workspace.options` 是这台机器人各会话的工作区候选（含绝对路径）：**只给属主，
    *      且只在私聊**（`key` 不带 `group:` 前缀）；群聊卡片是一条群里所有人都能展开的消息，
    *      属主也要在私聊或设置页改工作区。
+   *      `session.withheld` 是**被扣下的会话数**——正被这台机器人其它聊天绑定的会话不能切过去
+   *      （会话级增强提示词一个会话只有一个槽位，共用会互相覆盖）：渠道要在卡上说清这一点，
+   *      不能只把它们从列表里去掉。
    *      `model.failures` 是读不到模型的 provider 及原因，`model.selectionFailed` 表示当前会话的
    *      模型选择**读失败**（不是"没选过"），`preset.failed` 表示预设列表**读失败**（与"列表为空"
    *      是两回事）——渠道要如实呈现，不能显示成"没有可用模型/没有预设/跟随 Host 默认"。
@@ -562,8 +565,11 @@ if (text && deps.interactions.offer({ channelId, botId, key, text })) return; //
 ### 会话渠道标识（两个层次）
 
 - **host 侧**：hub 把工作区命名成「渠道 · 机器人」（`飞书 · 张三-DSH`），并给会话标题加
-  「渠道 · 」前缀——两者都幂等、失败只打日志。渠道通过 `ensure()`/`ask()` 的
-  `channelLabel` / `botLabel` 提供中文名（hub 不认平台）。
+  「渠道 · 聊天 · 」前缀（`飞书 · 群 张三 · 日报整理`）——两者都幂等、失败只打日志。
+  渠道通过 `ensure()`/`ask()` 的 `channelLabel` / `botLabel` / `chatLabel` 提供中文名（hub 不认平台）；
+  `chatLabel` 是"哪个群/哪个人"（如 `群 张三` / `私聊 张三`），同样的聊天**名字可能晚一轮才有**，
+  所以 hub 允许前缀**升级**：前缀变了就替换旧的，绝不叠加；`/retitle` 只能按绑定键给
+  （`私聊 ou_…`），真名等下一次消息由渠道补上。
 - **client 侧**：DSH 的会话列表**没有可注册的插槽**（`sidebar.workspaces` 是整块替换，
   换掉会盖掉搜索/分组/对话框），所以徽标是**纯装饰的 DOM 增强**（`client/session-badges.js`）：
   保留文字前缀作为匹配依据与降级形态，只给叶子标题元素加两个自有 data 属性（
@@ -587,7 +593,10 @@ hub 的 `sessions.ask({ content })` 直接吃 DSH 的 `PromptContentPart[]`，�
   因此入站文件要 `sessions.ensure(...)` 拿到 `sessionId` → `sessions.uploadFile({ sessionId, name, bytes })`
   → 用返回的 `receiptId` 拼内容块。上传失败要回可读原因并记 `lastError`（没入库就不能进模型）。
 - `contextEnhancement.enhanceContent(parts, snapshot, source)` 对内容数组会在前面插一个上下文文本块，
-  因此图片消息同样带得上来来源与提示词。
+  因此图片消息同样带得上来来源块。**拼不拼增强提示词由 hub 决定**：Host 有 `systemPrompt` 服务时
+  提示词走会话级系统提示词段，正文里只留来源块（同一段提示词不该两处都出现）；拿不到该服务时
+  自动退回"提示词也拼在正文里"。渠道不需要知道这件事，契约不变（可用 `config.guidanceTarget`
+  强制 `prefix` 走老路）。
 - 下载失败、类型不支持、超过大小上限都要"日志 + 用户可见回复"，并让失败能出现在 `connection.status` 里。
 - **带媒体的消息不参与交互回答与命令**：正在等用户回答提问时，用户顺手发来的图片/文件不该被当成选项答案；
   文字以 `/` 开头但同一条消息带媒体时也按普通消息进模型（两个官方渠道都是这么判的）。
@@ -614,7 +623,7 @@ hub 已经把 DSH 会话的复杂部分实现好了：渠道只需要把消息�
 | `invoke(namespace, method, args, signal)` | 一元调用（返回原始业务值，失败抛带 `code` 的 Error） |
 | `stream(namespace, method, args, signal)` | 流式调用；`session/follow`、`session/control`、`workspace/follow` **必须**用它 |
 | `ensure({ channelId, botId, key, workspacePath, signal })` | 找到或创建该会话键对应的 DSH 会话（`{ sessionId, created }`）；绑定的会话被删会自动重建 |
-| `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools, files }`（`files` = 本轮 `present` 的交付文件，渠道要当附件发出去） |
+| `ask({ channelId, botId, key, workspacePath, content, sourceGuidance, chatLabel, mode, signal, handlers })` | 跑完一轮：先开 follow 基线再发 prompt，`turn/end` 时返回 `{ sessionId, text, reason, tools, files }`（`files` = 本轮 `present` 的交付文件，渠道要当附件发出去）。`sourceGuidance` = 本会话生效的增强提示词（走系统提示词段）；`chatLabel` = "哪个群/哪个人"（只用于会话标题，可缺席） |
 | `imagesAsFiles`（内部） | 图片回退：会话当前模型不收图片时，`ask` 会把图片块换成 `{ type:'file', receiptId }`（同一个会话上传）并**重试一次**，答案前加一句说明；一张都没存下就原样抛错。渠道不用管，`ask` 的结果里会带 `imageFallback: { saved, failed }` |
 | `uploadFile({ sessionId, name, bytes })` | 把一段字节入库成**该会话可引用**的文件，返回 `{ receiptId, file }`（入站文件必须走它） |
 | `cancel({ channelId, botId, key })` / `reset({ channelId, botId, key })` | 停止当前回合 / 解除绑定（`/new`） |

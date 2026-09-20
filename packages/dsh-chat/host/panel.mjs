@@ -23,6 +23,7 @@ import {
 import { normalizeContextConfig, TARGET_LIMIT } from '../shared/context-enhancement.mjs';
 import { sectionsFor } from '../shared/panel-sections.mjs';
 import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
+import { chatKeyLabel } from './session-keys.mjs';
 
 function panelError(code, message) {
   const error = new Error(message);
@@ -517,6 +518,14 @@ export function createPanelService({
   }
 
   /** 相对时间：会话列表里"多久没动过"比绝对时间戳更好用。 */
+  /** 会话标题（只用于错误提示；读不到就返回 null，不编）。 */
+  async function sessionLabel(sessionId) {
+    const listed = await sessions.invoke('session', 'list', { _request: {} });
+    const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+    const title = item?.projections?.values?.title;
+    return typeof title === 'string' && title.trim() ? title.trim() : null;
+  }
+
   function sinceLabel(updatedAt) {
     if (!Number.isFinite(updatedAt)) return null;
     const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60_000));
@@ -530,10 +539,13 @@ export function createPanelService({
   /**
    * 这个聊天可以切过去的会话（面板上的「会话」下拉）。
    *
-   * 两类候选取并集：
-   * ① **同一个工作目录**的会话（跨项目的会话切过来上下文对不上）；
-   * ② 这台机器人**其它聊天**绑定过的会话（用户就是想把这个聊天接回上次那个会话）。
-   * 排除子代理会话与从没用过的空会话。当前会话一定在列表里——否则下拉会显示成"没选"。
+   * 候选 = **同一个工作目录**的会话（跨项目的会话切过来上下文对不上）∪ 当前会话。
+   * 排除：子代理会话、从没用过的空会话、以及**已经被这台机器人其它聊天绑定的会话**。
+   *
+   * 为什么排除"其它聊天用过的会话"：会话级增强提示词是**按会话**注入系统提示词的（`systemPrompt`
+   * 一个会话只有一个槽位），两个聊天共用一个会话时提示词会互相覆盖——谁最后发消息谁说了算，
+   * 用户在 A 群看到的提示词可能已经被 B 群顶掉。所以不提供这种切换（`apply` 里同样拒绝）。
+   * 当前会话一定在列表里——否则下拉会显示成"没选"。
    */
   async function sessionOptions({ channelId, botId, key, currentSessionId, workspace, limit = 25 }) {
     let items = [];
@@ -550,17 +562,17 @@ export function createPanelService({
         failed: true,
       };
     }
-    /** 这台机器人**其它聊天**绑定过的会话（entries 是"会话键 → 绑定"的对象）。 */
-    const bound = new Set();
+    /** 这台机器人**其它聊天**绑定过的会话：不列为候选（会话不能被两个聊天共用）。 */
+    const usedByOther = new Set();
     for (const [boundKey, entry] of Object.entries(sessionStore?.entries?.(channelId, botId) ?? {})) {
-      if (entry?.sessionId && boundKey !== key) bound.add(entry.sessionId);
+      if (entry?.sessionId && boundKey !== key) usedByOther.add(entry.sessionId);
     }
     const wanted = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : null;
     const usable = items.filter((item) => item?.sessionId
       && item.origin !== 'subagent'
       && item.blank !== true
+      && !usedByOther.has(item.sessionId)
       && (item.sessionId === currentSessionId
-        || bound.has(item.sessionId)
         || (wanted && item.cwd === wanted)));
     const ordered = usable.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     const picked = ordered.slice(0, Math.max(1, limit));
@@ -570,6 +582,10 @@ export function createPanelService({
       picked.unshift(current ?? { sessionId: currentSessionId });
     }
     return {
+      /** 被扣下的会话数：正被这台机器人**其它聊天**占着，不能切（限制要说出来，不能只是不显示）。 */
+      withheld: items.filter((item) => item?.sessionId
+        && item.sessionId !== currentSessionId
+        && usedByOther.has(item.sessionId)).length,
       options: picked.map((item) => {
         const title = typeof item.projections?.values?.title === 'string' && item.projections.values.title.trim()
           ? item.projections.values.title.trim()
@@ -713,6 +729,7 @@ export function createPanelService({
         session: {
           current: sessionId,
           options: sessionState.options,
+          withheld: sessionState.withheld ?? 0,
           failed: sessionState.failed === true,
         },
         preset: {
@@ -969,6 +986,22 @@ export function createPanelService({
           throw panelError('chat/session-check-failed', `校验会话失败：${error?.message ?? error}`);
         });
         if (!exists) throw panelError('chat/unknown-session', `找不到会话 ${target}。`);
+        /**
+         * 会话不能被两个聊天共用：会话级增强提示词只有一个槽位（`systemPrompt` 段按会话求值），
+         * 共用会让两边的提示词互相覆盖。这里**再判一次**——下拉里已经不列别人的会话，
+         * 但别的地方（手打命令、旧按钮）也可能带着一个会话 id 过来。
+         */
+        const owner = Object.entries(sessionStore?.entries?.(channelId, botId) ?? {})
+          .find(([boundKey, entry]) => boundKey !== key && entry?.sessionId === target);
+        if (owner) {
+          const label = await sessionLabel(target).catch(() => null);
+          throw panelError(
+            'chat/session-in-use',
+            `会话${label ? `「${label}」` : ` ${String(target).slice(0, 12)}`}已经被另一个聊天`
+            + `（${chatKeyLabel(owner[0])}）绑定：会话不能共用（每个会话只装一份会话级提示词）。`
+            + '在那个聊天里点「新会话」解绑，或换一个会话。',
+          );
+        }
         await sessions.bindings.bind(channelId, botId, key, { sessionId: target });
         return { field, value: target, message: `已切换到会话 ${target}。` };
       }

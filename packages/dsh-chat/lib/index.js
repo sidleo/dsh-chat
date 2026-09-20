@@ -516,12 +516,12 @@ function guidanceBlock(guidance) {
 ${body}
 ${CONTEXT_TAGS.guidanceClose}`;
 }
-function enhanceContent(content, snapshot, sourceFactory) {
+function enhanceContent(content, snapshot, sourceFactory, { includeGuidance = true } = {}) {
   if (!snapshot) return content;
   try {
     const blocks = [
       sourceBlock(snapshot, sourceFactory),
-      guidanceBlock(snapshot.scope.guidance)
+      includeGuidance ? guidanceBlock(snapshot.scope.guidance) : ""
     ].filter(Boolean);
     if (blocks.length === 0) return content;
     const prefix = blocks.join(CONTEXT_BLOCK_SEPARATOR);
@@ -1222,6 +1222,16 @@ function describeBotModel(value) {
   return `${normalized.provider}/${normalized.model}${normalized.reasoningEffort ? ` \xB7 \u63A8\u7406 ${normalized.reasoningEffort}` : ""}`;
 }
 
+// packages/dsh-chat/host/session-keys.mjs
+function chatKeyLabel(key) {
+  const raw = typeof key === "string" ? key : "";
+  const [kind, id = ""] = raw.split(":", 2);
+  const masked = id.length > 12 ? `${id.slice(0, 12)}\u2026` : id;
+  if (kind === "p2p") return `\u79C1\u804A ${masked}`;
+  if (kind === "group") return `\u7FA4 ${masked}`;
+  return raw || "\u672A\u77E5\u804A\u5929";
+}
+
 // packages/dsh-chat/host/commands.mjs
 var PREFIX = "/";
 var MAX_LINE = 120;
@@ -1706,7 +1716,10 @@ ${result.text}` : ""}`;
       if (rows.length === 0) return "\u8FD9\u53F0\u673A\u5668\u4EBA\u8FD8\u6CA1\u6709\u7ED1\u5B9A\u8FC7\u4EFB\u4F55\u4F1A\u8BDD\u3002";
       const counts = { renamed: 0, skipped: 0, "no-title": 0, failed: 0 };
       for (const row of rows) {
-        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, channelLabel2);
+        const outcome = await context.services.sessions.markSessionChannel(row.sessionId, {
+          channelLabel: channelLabel2,
+          chatLabel: chatKeyLabel(row.key)
+        });
         if (Object.hasOwn(counts, outcome ?? "")) counts[outcome] += 1;
       }
       context.log?.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u56DE\u586B\uFF1A${JSON.stringify(counts)}`);
@@ -2906,6 +2919,12 @@ function createPanelService({
       message: result.value?.message ?? "\u5DF2\u751F\u6548\u3002"
     };
   }
+  async function sessionLabel(sessionId) {
+    const listed = await sessions.invoke("session", "list", { _request: {} });
+    const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
+    const title = item?.projections?.values?.title;
+    return typeof title === "string" && title.trim() ? title.trim() : null;
+  }
   function sinceLabel(updatedAt) {
     if (!Number.isFinite(updatedAt)) return null;
     const minutes = Math.max(0, Math.round((Date.now() - updatedAt) / 6e4));
@@ -2927,12 +2946,12 @@ function createPanelService({
         failed: true
       };
     }
-    const bound = /* @__PURE__ */ new Set();
+    const usedByOther = /* @__PURE__ */ new Set();
     for (const [boundKey, entry] of Object.entries(sessionStore?.entries?.(channelId, botId) ?? {})) {
-      if (entry?.sessionId && boundKey !== key) bound.add(entry.sessionId);
+      if (entry?.sessionId && boundKey !== key) usedByOther.add(entry.sessionId);
     }
     const wanted = typeof workspace === "string" && workspace.trim() ? workspace.trim() : null;
-    const usable = items.filter((item) => item?.sessionId && item.origin !== "subagent" && item.blank !== true && (item.sessionId === currentSessionId || bound.has(item.sessionId) || wanted && item.cwd === wanted));
+    const usable = items.filter((item) => item?.sessionId && item.origin !== "subagent" && item.blank !== true && !usedByOther.has(item.sessionId) && (item.sessionId === currentSessionId || wanted && item.cwd === wanted));
     const ordered = usable.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     const picked = ordered.slice(0, Math.max(1, limit));
     if (currentSessionId && !picked.some((item) => item.sessionId === currentSessionId)) {
@@ -2940,6 +2959,8 @@ function createPanelService({
       picked.unshift(current ?? { sessionId: currentSessionId });
     }
     return {
+      /** 被扣下的会话数：正被这台机器人**其它聊天**占着，不能切（限制要说出来，不能只是不显示）。 */
+      withheld: items.filter((item) => item?.sessionId && item.sessionId !== currentSessionId && usedByOther.has(item.sessionId)).length,
       options: picked.map((item) => {
         const title = typeof item.projections?.values?.title === "string" && item.projections.values.title.trim() ? item.projections.values.title.trim() : null;
         const since = sinceLabel(item.updatedAt);
@@ -3059,6 +3080,7 @@ function createPanelService({
         session: {
           current: sessionId,
           options: sessionState.options,
+          withheld: sessionState.withheld ?? 0,
           failed: sessionState.failed === true
         },
         preset: {
@@ -3302,6 +3324,14 @@ function createPanelService({
           throw panelError("chat/session-check-failed", `\u6821\u9A8C\u4F1A\u8BDD\u5931\u8D25\uFF1A${error?.message ?? error}`);
         });
         if (!exists) throw panelError("chat/unknown-session", `\u627E\u4E0D\u5230\u4F1A\u8BDD ${target}\u3002`);
+        const owner = Object.entries(sessionStore?.entries?.(channelId, botId) ?? {}).find(([boundKey, entry]) => boundKey !== key && entry?.sessionId === target);
+        if (owner) {
+          const label = await sessionLabel(target).catch(() => null);
+          throw panelError(
+            "chat/session-in-use",
+            `\u4F1A\u8BDD${label ? `\u300C${label}\u300D` : ` ${String(target).slice(0, 12)}`}\u5DF2\u7ECF\u88AB\u53E6\u4E00\u4E2A\u804A\u5929\uFF08${chatKeyLabel(owner[0])}\uFF09\u7ED1\u5B9A\uFF1A\u4F1A\u8BDD\u4E0D\u80FD\u5171\u7528\uFF08\u6BCF\u4E2A\u4F1A\u8BDD\u53EA\u88C5\u4E00\u4EFD\u4F1A\u8BDD\u7EA7\u63D0\u793A\u8BCD\uFF09\u3002\u5728\u90A3\u4E2A\u804A\u5929\u91CC\u70B9\u300C\u65B0\u4F1A\u8BDD\u300D\u89E3\u7ED1\uFF0C\u6216\u6362\u4E00\u4E2A\u4F1A\u8BDD\u3002`
+          );
+        }
         await sessions.bindings.bind(channelId, botId, key, { sessionId: target });
         return { field, value: target, message: `\u5DF2\u5207\u6362\u5230\u4F1A\u8BDD ${target}\u3002` };
       }
@@ -3352,6 +3382,37 @@ function createGuidanceRegistry() {
       return bySession.size;
     }
   };
+}
+
+// packages/dsh-chat/host/prompt-context.mjs
+var SOURCE_GUIDANCE_SECTION = "dsh-chat:source-guidance";
+var SOURCE_GUIDANCE_ORDER = 400;
+function sessionIdOf(context) {
+  const agent = context?.agent;
+  const id = agent?.id ?? agent?.session?.id;
+  return typeof id === "string" && id ? id : null;
+}
+function installSourceGuidanceSection(ctx, guidance, { logger = console } = {}) {
+  const systemPrompt = typeof ctx?.get === "function" ? ctx.get("systemPrompt") : ctx?.systemPrompt;
+  if (!systemPrompt || typeof systemPrompt.section !== "function") return false;
+  const register = () => systemPrompt.section({
+    name: SOURCE_GUIDANCE_SECTION,
+    order: SOURCE_GUIDANCE_ORDER,
+    // 文本按 agent 现算：登记表里没有这个会话就返回空，空段在渲染时会被丢掉。
+    text: (context) => {
+      const sessionId = sessionIdOf(context);
+      return sessionId && guidance.get(sessionId) || "";
+    }
+  });
+  try {
+    if (typeof ctx?.effect === "function") ctx.effect(register, "dsh-chat: \u589E\u5F3A\u63D0\u793A\u8BCD\u6BB5");
+    else register();
+  } catch (error) {
+    logger.warn?.(`[dsh-chat] \u6CE8\u518C\u589E\u5F3A\u63D0\u793A\u8BCD\u6BB5\u5931\u8D25\uFF1A${error?.message ?? error}`);
+    return false;
+  }
+  logger.info?.("[dsh-chat] \u589E\u5F3A\u63D0\u793A\u8BCD\u8D70\u7CFB\u7EDF\u63D0\u793A\u8BCD\u6BB5\uFF08\u6309\u4F1A\u8BDD\u751F\u6548\uFF0C\u4E0D\u518D\u62FC\u8FDB\u7528\u6237\u6D88\u606F\uFF09\u3002");
+  return true;
 }
 
 // packages/dsh-chat/host/interactions.mjs
@@ -3848,25 +3909,43 @@ function createSessionBridge({
   const turnQueues = /* @__PURE__ */ new Map();
   const queueDepth = /* @__PURE__ */ new Map();
   const namedWorkspaces = /* @__PURE__ */ new Set();
-  const namedSessions = /* @__PURE__ */ new Set();
-  async function markSessionChannel(sessionId, channelLabel2, signal) {
-    const label = typeof channelLabel2 === "string" ? channelLabel2.trim() : "";
-    if (!label || namedSessions.has(sessionId)) return "skipped";
+  const namedSessions = /* @__PURE__ */ new Map();
+  function titleParts(...parts) {
+    return parts.map((part) => String(part ?? "").trim()).filter(Boolean).join(" \xB7 ");
+  }
+  function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function stripTitlePrefix(title, channelLabel2) {
+    const channel = String(channelLabel2 ?? "").trim();
+    if (!channel) return title;
+    const withChat = new RegExp(`^${escapeRegExp(channel)} \xB7 (?:\u7FA4|\u79C1\u804A) .+? \xB7 `);
+    if (withChat.test(title)) return title.replace(withChat, "");
+    const channelOnly = new RegExp(`^${escapeRegExp(channel)} \xB7 `);
+    return title.replace(channelOnly, "");
+  }
+  async function markSessionChannel(sessionId, labels, signal) {
+    const channelLabel2 = String(labels?.channelLabel ?? "").trim();
+    const chatLabel = String(labels?.chatLabel ?? "").trim();
+    const prefix = titleParts(channelLabel2, chatLabel);
+    if (!prefix || namedSessions.get(sessionId) === prefix) return "skipped";
     try {
       const listed = await invoke("session", "list", { _request: {} }, signal);
       const item = (listed?.items ?? []).find((entry) => entry?.sessionId === sessionId);
       const title = item?.projections?.values?.title;
       if (typeof title !== "string" || !title.trim()) return "no-title";
-      if (title.startsWith(`${label} \xB7 `)) {
-        namedSessions.add(sessionId);
+      const body = stripTitlePrefix(title, channelLabel2);
+      const next = `${prefix} \xB7 ${body}`;
+      if (next === title) {
+        namedSessions.set(sessionId, prefix);
         return "skipped";
       }
-      await invoke("session", "rename", { request: { sessionId, title: `${label} \xB7 ${title}` } }, signal);
-      namedSessions.add(sessionId);
-      logger.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u5DF2\u6807\u6E20\u9053\uFF1A${sessionId} \u2192 ${label} \xB7 ${title}`);
+      await invoke("session", "rename", { request: { sessionId, title: next } }, signal);
+      namedSessions.set(sessionId, prefix);
+      logger.info?.(`[dsh-chat] \u4F1A\u8BDD\u6807\u9898\u5DF2\u6807\u804A\u5929\uFF1A${sessionId} \u2192 ${next}`);
       return "renamed";
     } catch (error) {
-      logger.warn?.(`[dsh-chat] \u6807\u8BB0\u4F1A\u8BDD\u6E20\u9053\u5931\u8D25\uFF1A${sessionId} ${error?.message ?? error}`);
+      logger.warn?.(`[dsh-chat] \u6807\u8BB0\u4F1A\u8BDD\u6807\u9898\u5931\u8D25\uFF1A${sessionId} ${error?.message ?? error}`);
       return "failed";
     }
   }
@@ -4084,6 +4163,7 @@ function createSessionBridge({
     handlers = {},
     turnTimeoutMs,
     channelLabel: channelLabel2 = "",
+    chatLabel = "",
     botLabel = "",
     onQueued
   }) {
@@ -4421,7 +4501,7 @@ ${result.text ?? ""}`.trim(),
       } finally {
         clearTimeout(totalTimer);
         if (idleTimer) clearTimeout(idleTimer);
-        void markSessionChannel(sessionId, channelLabel2);
+        void markSessionChannel(sessionId, { channelLabel: channelLabel2, chatLabel });
         signal?.removeEventListener?.("abort", abort);
         activeTurns.delete(turnKey);
         closing = true;
@@ -4956,6 +5036,31 @@ function apply(ctx, config = {}) {
   const settings = createBotSettingsStore({ dataDir: hubDataDir(config.dataDir), logger });
   const legacyDirs = /* @__PURE__ */ new Map();
   const guidance = createGuidanceRegistry();
+  const guidanceTarget = config.guidanceTarget === "prefix" ? "prefix" : "system";
+  let guidanceInSystemPrompt = false;
+  let guidanceFallbackWarned = false;
+  function ensureGuidanceSection() {
+    if (guidanceInSystemPrompt) return true;
+    if (guidanceTarget !== "system") return false;
+    if (installSourceGuidanceSection(ctx, guidance, { logger })) {
+      guidanceInSystemPrompt = true;
+      return true;
+    }
+    if (!guidanceFallbackWarned) {
+      guidanceFallbackWarned = true;
+      logger.warn?.('[dsh-chat] \u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u7684 systemPrompt \u670D\u52A1\uFF1A\u589E\u5F3A\u63D0\u793A\u8BCD\u9000\u56DE"\u62FC\u5728\u6D88\u606F\u524D\u7F00"\u7684\u8001\u8DEF\uFF08\u529F\u80FD\u4E0D\u4E22\uFF0C\u4F46\u4F1A\u8DDF\u7740\u6BCF\u6761\u6D88\u606F\u8FDB\u4F1A\u8BDD\uFF09\u3002');
+    }
+    return false;
+  }
+  ensureGuidanceSection();
+  const guidanceForBridge = Object.freeze({
+    publish(sessionId, text) {
+      ensureGuidanceSection();
+      guidance.publish(sessionId, text);
+    },
+    get: (sessionId) => guidance.get(sessionId),
+    forget: (sessionId) => guidance.forget(sessionId)
+  });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   const interactions = createInteractionService({ logger });
   const deferred = createDeferredDelivery({
@@ -4975,7 +5080,7 @@ function apply(ctx, config = {}) {
     logger,
     store: sessionStore,
     settings,
-    guidance,
+    guidance: guidanceForBridge,
     interactions,
     deferred
   });
@@ -5508,7 +5613,23 @@ function apply(ctx, config = {}) {
       supports: (channelId) => delivery.supports(channelId),
       supportsFile: (channelId) => delivery.supportsFile(channelId)
     }),
-    contextEnhancement: Object.freeze({ ...context_enhancement_exports }),
+    contextEnhancement: Object.freeze({
+      ...context_enhancement_exports,
+      /** 提示词已经在系统提示词段里时，这里只拼来源块（拼之前再确认一次装没装上）。 */
+      /**
+       * 渠道拼消息正文用这一份。
+       *
+       * 提示词已经在系统提示词段里时，这里**只拼来源块**——否则同一段提示词会两处都出现
+       * （系统提示词一段 + 用户消息一段）。`includeGuidance` 由 hub 自己决定，
+       * 渠道无需知道这件事，契约也不变。
+       */
+      enhanceContent: (content, snapshot, sourceFactory) => enhanceContent(
+        content,
+        snapshot,
+        sourceFactory,
+        { includeGuidance: !ensureGuidanceSection() }
+      )
+    }),
     /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
     deferred: Object.freeze({
       register: (options) => deferred.register(options),
@@ -5517,8 +5638,8 @@ function apply(ctx, config = {}) {
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference }),
     guidance: Object.freeze({
-      publish: (sessionId, text) => guidance.publish(sessionId, text),
-      forget: (sessionId) => guidance.forget(sessionId)
+      publish: (sessionId, text) => guidanceForBridge.publish(sessionId, text),
+      forget: (sessionId) => guidanceForBridge.forget(sessionId)
     }),
     sessions,
     /**

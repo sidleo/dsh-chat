@@ -374,14 +374,17 @@ function guidanceBlock(guidance) {
  * @param content - 字符串或内容块数组。
  * @param snapshot - captureContextEnhancement 的结果。
  * @param sourceFactory - 来源字段工厂。
+ * @param options - { includeGuidance }：是否把增强提示词也拼进来。
+ *   **默认 true**，但 hub 在"提示词已经走系统提示词段"时会显式传 false：
+ *   来源块（这条消息从哪来）属于消息本身，提示词（对模型的长期指令）不该混在用户轮次里。
  * @returns 加前缀后的正文。
  */
-export function enhanceContent(content, snapshot, sourceFactory) {
+export function enhanceContent(content, snapshot, sourceFactory, { includeGuidance = true } = {}) {
   if (!snapshot) return content;
   try {
     const blocks = [
       sourceBlock(snapshot, sourceFactory),
-      guidanceBlock(snapshot.scope.guidance),
+      includeGuidance ? guidanceBlock(snapshot.scope.guidance) : '',
     ].filter(Boolean);
     if (blocks.length === 0) return content;
     const prefix = blocks.join(CONTEXT_BLOCK_SEPARATOR);

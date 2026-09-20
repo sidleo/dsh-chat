@@ -29,6 +29,7 @@ import { readLogTail } from './log-tail.mjs';
 import { normalizeBotModel } from './bot-model.mjs';
 import { createPanelService, readModelCatalog, workspaceCandidates } from './panel.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
+import { installSourceGuidanceSection } from './prompt-context.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
@@ -127,6 +128,47 @@ export function apply(ctx, config = {}) {
   /** 已注册渠道的旧数据目录，供 `maintenance.import-legacy` 重跑导入。 */
   const legacyDirs = new Map();
   const guidance = createGuidanceRegistry();
+  /**
+   * 增强提示词注入到哪里：`system`（默认，DSH 的系统提示词段）或 `prefix`（拼在消息前面）。
+   *
+   * 默认走系统提示词——提示词是"对模型的长期指令"，不该混进用户轮次（每轮重复、还可能被
+   * 当成用户说的话）。Host 没有 `systemPrompt` 服务时自动退回 `prefix`，功能不丢。
+   */
+  const guidanceTarget = config.guidanceTarget === 'prefix' ? 'prefix' : 'system';
+  /** 提示词段是否已经装上（只在装上之后才从消息前缀里去掉提示词块）。 */
+  let guidanceInSystemPrompt = false;
+  let guidanceFallbackWarned = false;
+  /**
+   * 尽力把"增强提示词"装成系统提示词段。
+   *
+   * 服务是**可选依赖**：Cordis 的 `inject` 只能声明必选，声明了会让"没装
+   * dsh-system-prompt 的部署"整块加载不了；所以这里运行期探测 + 每次用之前重试一次
+   * （服务晚到也能装上）。装不上就退回前缀注入，**只告警一次**，功能不丢。
+   */
+  function ensureGuidanceSection() {
+    if (guidanceInSystemPrompt) return true;
+    if (guidanceTarget !== 'system') return false;
+    if (installSourceGuidanceSection(ctx, guidance, { logger })) {
+      guidanceInSystemPrompt = true;
+      return true;
+    }
+    if (!guidanceFallbackWarned) {
+      guidanceFallbackWarned = true;
+      logger.warn?.('[dsh-chat] 当前 Host 没有可用的 systemPrompt 服务：增强提示词退回'
+        + '"拼在消息前缀"的老路（功能不丢，但会跟着每条消息进会话）。');
+    }
+    return false;
+  }
+  ensureGuidanceSection();
+  /** 会话桥用的登记表：publish 之前再试一次装段（服务可能晚于本插件就绪）。 */
+  const guidanceForBridge = Object.freeze({
+    publish(sessionId, text) {
+      ensureGuidanceSection();
+      guidance.publish(sessionId, text);
+    },
+    get: (sessionId) => guidance.get(sessionId),
+    forget: (sessionId) => guidance.forget(sessionId),
+  });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
   /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
   const interactions = createInteractionService({ logger });
@@ -149,7 +191,7 @@ export function apply(ctx, config = {}) {
     }),
   });
   const sessions = createSessionBridge({
-    ctx, logger, store: sessionStore, settings, guidance, interactions, deferred,
+    ctx, logger, store: sessionStore, settings, guidance: guidanceForBridge, interactions, deferred,
   });
   const rpc = createRpcCarrier(ctx, { logger });
   /** 主动投递：hub 持有目标清单与调度，渠道提供"怎么发"与"能发给谁"。 */
@@ -752,7 +794,23 @@ export function apply(ctx, config = {}) {
       supportsFile: (channelId) => delivery.supportsFile(channelId),
     }),
 
-    contextEnhancement: Object.freeze({ ...contextEnhancement }),
+    contextEnhancement: Object.freeze({
+      ...contextEnhancement,
+      /** 提示词已经在系统提示词段里时，这里只拼来源块（拼之前再确认一次装没装上）。 */
+      /**
+       * 渠道拼消息正文用这一份。
+       *
+       * 提示词已经在系统提示词段里时，这里**只拼来源块**——否则同一段提示词会两处都出现
+       * （系统提示词一段 + 用户消息一段）。`includeGuidance` 由 hub 自己决定，
+       * 渠道无需知道这件事，契约也不变。
+       */
+      enhanceContent: (content, snapshot, sourceFactory) => contextEnhancement.enhanceContent(
+        content,
+        snapshot,
+        sourceFactory,
+        { includeGuidance: !ensureGuidanceSection() },
+      ),
+    }),
     /** 延迟交付：渠道注册发送器；`list()` 供诊断查看待交付记录。 */
     deferred: Object.freeze({
       register: (options) => deferred.register(options),
@@ -761,8 +819,8 @@ export function apply(ctx, config = {}) {
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference: enhanceReplyReferenceFn }),
     guidance: Object.freeze({
-      publish: (sessionId, text) => guidance.publish(sessionId, text),
-      forget: (sessionId) => guidance.forget(sessionId),
+      publish: (sessionId, text) => guidanceForBridge.publish(sessionId, text),
+      forget: (sessionId) => guidanceForBridge.forget(sessionId),
     }),
     sessions,
     /**

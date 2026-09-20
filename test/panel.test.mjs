@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { createPanelService, workspaceCandidates } from '../packages/dsh-chat/host/panel.mjs';
+import { chatKeyLabel } from '../packages/dsh-chat/host/session-keys.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -49,6 +50,8 @@ function makePanel({
   sessionCheckFailing = false,
   /** 覆盖 `session/list` 的返回（会话下拉用）。 */
   sessionItems = null,
+  /** 哪些会话"存在"（`sessionExists` 的桩）；给数组时按它判。 */
+  existingSessions = null,
   entries = { 'p2p:ou_a': { sessionId: 'session-1', workspacePath: '/ws/from-binding' } },
 } = {}) {
   const state = { ...record };
@@ -104,6 +107,7 @@ function makePanel({
     reset: async (options) => calls.push({ kind: 'reset', options }),
     sessionExists: async (sessionId) => {
       if (sessionCheckFailing) throw new Error('gateway timeout');
+      if (Array.isArray(existingSessions)) return existingSessions.includes(sessionId);
       return sessionId === 'session-known';
     },
   };
@@ -513,7 +517,7 @@ test('读面板：兼容旧 dsh-im 的 { providerId, modelId } 形状', async ()
   });
 });
 
-test('读面板：会话下拉只列同工作区 + 本机器人其它聊天的会话，排除空会话与子代理', async () => {
+test('读面板：会话下拉只列同工作区的会话（别人正在用的不列），排除空会话与子代理', async () => {
   const now = Date.now();
   const { panel } = makePanel({
     record: { workspace: '/ws/current' },
@@ -530,8 +534,9 @@ test('读面板：会话下拉只列同工作区 + 本机器人其它聊天的�
   const view = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a' });
 
   assert.equal(view.session.current, 'session-1');
-  assert.deepEqual(view.session.options.map((item) => item.id), ['session-8', 'session-1', 'session-9'],
-    '同工作区 + 本机器人其它聊天绑定过的会话，按最近更新排序；空会话/子代理/无关项目排除');
+  assert.deepEqual(view.session.options.map((item) => item.id), ['session-8', 'session-1'],
+    '只列同工作区的会话（按最近更新排序）；空会话/子代理/无关项目/**别人正在用的会话**都排除');
+  assert.equal(view.session.withheld, 1, '被别的聊天占着的会话要计数（卡片上要说清为什么不在列表里）');
   assert.equal(view.session.options[1].label, '当前聊天 · 1 分钟前');
   assert.match(view.session.options[0].label, /^session-8 · /, '没有标题时用会话 id 短写');
 });
@@ -542,6 +547,48 @@ test('读面板：会话列表读不到时也要带出当前绑定，并标 fail
   assert.equal(view.session.failed, true);
   assert.deepEqual(view.session.options, [{ id: 'session-1', label: 'session-1' }],
     '读失败不能显示成"没绑定会话"');
+});
+
+test('应用：切换会话时拒绝"别的聊天正在用"的会话（会话级提示词不能被两个聊天共用）', async () => {
+  const now = Date.now();
+  const { panel } = makePanel({
+    record: { workspace: '/ws/current' },
+    existingSessions: ['session-1', 'session-known'],
+    entries: {
+      'p2p:ou_a': { sessionId: 'session-1' },
+      'group:oc_g': { sessionId: 'session-known' },
+    },
+    sessionItems: [
+      { sessionId: 'session-1', updatedAt: now, cwd: '/ws/current', projections: { values: { title: '当前聊天' } } },
+      { sessionId: 'session-known', updatedAt: now, cwd: '/ws/current', projections: { values: { title: '别的聊天' } } },
+    ],
+  });
+
+  await assert.rejects(
+    () => panel.apply({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: 'session-known',
+    }),
+    (error) => {
+      assert.equal(error.code, 'chat/session-in-use');
+      // 说清是哪个会话、被哪个聊天占着——用户要能照着去解绑。
+      assert.match(error.message, /别的聊天/);
+      assert.match(error.message, /群 oc_g/);
+      assert.match(error.message, /新会话/);
+      return true;
+    },
+  );
+
+  // 同一个聊天切回自己的会话照旧可以。
+  const ok = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', field: 'session', value: 'session-1',
+  });
+  assert.match(ok.message, /已切换到会话 session-1/);
+});
+
+test('会话键的人话名字：私聊/群/未知三种形态', () => {
+  assert.equal(chatKeyLabel('p2p:ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5'), '私聊 ou_2b7e4d1a9…');
+  assert.equal(chatKeyLabel('group:oc_3e5f7b9d1a2c4068b2d4f6a8c0e1b3d5'), '群 oc_3e5f7b9d1…');
+  assert.equal(chatKeyLabel(''), '未知聊天');
 });
 
 test('应用：会话下拉的空值（哨兵翻译回来）等于"新会话"，不是"找不到会话"', async () => {

@@ -717,8 +717,8 @@ test('/retitle：只限属主；把历史绑定会话逐个补上渠道前缀并
         assert.equal(botId, 'bot_1');
         return outcomes.map((_outcome, index) => ({ key: `p2p:ou_${index}`, sessionId: `session-${index}` }));
       },
-      markSessionChannel: async (sessionId, label) => {
-        seen.push({ sessionId, label });
+      markSessionChannel: async (sessionId, labels) => {
+        seen.push({ sessionId, labels });
         return outcomes[Number(sessionId.split('-')[1])];
       },
     },
@@ -735,7 +735,13 @@ test('/retitle：只限属主；把历史绑定会话逐个补上渠道前缀并
   assert.match(report.reply, /已有前缀 1 个/);
   assert.match(report.reply, /还没有标题 1 个/);
   assert.match(report.reply, /失败 1 个/);
-  assert.deepEqual(seen.map((row) => row.label), ['飞书', '飞书', '飞书', '飞书'], '用渠道名做前缀');
+  // hub 拿不到昵称，聊天名按绑定键给（`p2p:ou_0` → 「私聊 ou_0」）；真名等下一次消息由渠道补上。
+  assert.deepEqual(seen.map((row) => row.labels), [
+    { channelLabel: '飞书', chatLabel: '私聊 ou_0' },
+    { channelLabel: '飞书', chatLabel: '私聊 ou_1' },
+    { channelLabel: '飞书', chatLabel: '私聊 ou_2' },
+    { channelLabel: '飞书', chatLabel: '私聊 ou_3' },
+  ], '渠道名 + 聊天名');
 });
 
 test('/diag：只有属主能看；把连接状态、最近错误与日志尾部拼成可读文本', async () => {

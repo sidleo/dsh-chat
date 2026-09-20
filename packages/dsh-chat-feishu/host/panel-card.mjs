@@ -362,6 +362,13 @@ export function panelCard(state, { last = null, at = null, pending = null } = {}
     if (sessionPicker.element) elements.push(grid([field('会话', sessionPicker.element)]));
     if (state?.session?.failed === true) {
       elements.push({ tag: 'markdown', content: '读不到会话列表，稍后再试（当前绑定的会话仍显示在上面）。' });
+    } else if ((state?.session?.withheld ?? 0) > 0) {
+      // 会话不能被两个聊天共用（会话级增强提示词只有一个槽位）：扣下了就得说清是为什么。
+      elements.push({
+        tag: 'markdown',
+        content: `有 ${state.session.withheld} 个会话正被这台机器人的其它聊天使用，不能切过去`
+          + '（会话不能共用）。在那个聊天里点「新会话」解绑，或新建一个。',
+      });
     }
   }
 

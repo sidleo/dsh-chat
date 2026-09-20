@@ -214,6 +214,24 @@ function createFakeCtx(agent) {
   const effects = [];
   const logs = [];
   const uploads = [];
+  /** 假 systemPrompt：只收段，并按 agent 组装出文本（够演练"提示词走系统提示词"这条）。 */
+  const promptSections = new Map();
+  const systemPrompt = {
+    section(definition) {
+      promptSections.set(definition.name, definition);
+      return () => promptSections.delete(definition.name);
+    },
+    /** 按 agent 组装：把所有已注册段按 order 拼起来（空段丢掉）。 */
+    assembleFor(agent = {}) {
+      return [...promptSections.values()]
+        .sort((a, b) => a.order - b.order)
+        .map((definition) => (typeof definition.text === 'function'
+          ? definition.text({ agent })
+          : definition.text))
+        .filter((text) => typeof text === 'string' && text.trim())
+        .join('\n\n');
+    },
+  };
   const ctx = {
     logger: makeLogger(logs),
     provide(name, value) {
@@ -230,6 +248,7 @@ function createFakeCtx(agent) {
       return () => {};
     },
     get(name) {
+      if (name === 'systemPrompt') return systemPrompt;
       if (name === 'agentPresets') {
         return { remoteExportList: async () => ({ presets: [{ id: 'standard', isDefault: true }] }) };
       }
@@ -263,6 +282,8 @@ function createFakeCtx(agent) {
   };
   return {
     ctx,
+    systemPrompt,
+    promptSections,
     services,
     routes,
     logs,
@@ -499,7 +520,43 @@ async function main() {
         service.bots.read('fixture', BOT).contextEnhancement, 'direct', { senderId: OWNER },
       );
       assert.equal(scope.guidance, '只对这个人说的');
-      return `target=${own.kind}:${own.id} fields=${own.fields.length}`;
+
+      // 提示词本身走**系统提示词段**（不是拼在飞书那条消息前面）：
+      // ① 段已注册；② 按 agent 组装得到本会话的提示词；③ 别的会话组装不到东西；
+      // ④ 消息正文里只剩来源块，没有 <dsh_im_source_guidance>。
+      agent.state.scripts.push(agent.frames(['收到。']));
+      // 走渠道那条路拼正文：capture + enhanceContent（hub 决定拼不拼提示词块）。
+      const captured = service.contextEnhancement.captureContextEnhancementSource(
+        {
+          botId: BOT,
+          channel: 'fixture',
+          readConfig: () => service.bots.read('fixture', BOT).contextEnhancement,
+        },
+        'direct',
+        { senderId: OWNER },
+        () => ({ channel: 'fixture', senderId: OWNER }),
+      );
+      const content = service.contextEnhancement.enhanceContent(
+        [{ type: 'text', text: '你好' }],
+        captured?.snapshot ?? null,
+        captured?.source,
+      );
+      await service.sessions.ask({
+        channelId: 'fixture', botId: BOT, key: KEY, workspacePath: '/tmp/rehearsal-ws',
+        content, sourceGuidance: scope.guidance,
+      });
+      const section = harness.promptSections.get('dsh-chat:source-guidance');
+      assert.ok(section, '增强提示词段没有注册到 systemPrompt');
+      assert.equal(section.order, 400);
+      assert.equal(harness.systemPrompt.assembleFor({ id: 'rehearsal-1' }), '只对这个人说的');
+      assert.equal(harness.systemPrompt.assembleFor({ id: '别的会话' }), '',
+        '不是我们的会话不该拿到这段提示词');
+      const prompted = agent.state.prompts.at(-1).content
+        .filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+      assert.ok(!prompted.includes('<dsh_im_source_guidance>'),
+        '提示词已经在系统提示词里，正文不该再拼一份');
+      assert.ok(prompted.includes('<dsh_im_source>'), '来源块仍然跟着这条消息');
+      return `target=${own.kind}:${own.id} fields=${own.fields.length} 段=${section.order}`;
     });
 
     // ⑦ 图片回退：模型不收图片 → 换成同一会话的文件重试一次
@@ -672,15 +729,19 @@ async function main() {
       return `<dsh_im_reply> 标签 + 读不到时的标记都在`;
     });
 
-    // ⑫ /retitle：一次性给历史会话补「渠道 ·」前缀（幂等）
-    await step('/retitle：历史会话补「渠道 ·」前缀，重复执行不重复加', async () => {
+    // ⑫ /retitle：一次性给历史会话补「渠道 · 聊天 ·」前缀（幂等，且聊天身份可升级）
+    await step('/retitle：历史会话补「渠道 · 聊天 ·」前缀，重复执行不重复加', async () => {
       const first = await service.commands.handle({
         channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
         senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
       });
       assert.match(first.reply, /检查了 3 个绑定会话：补上 3 个/, first.reply);
       assert.equal(agent.state.renames.length, 3, '三个绑定会话各改一次标题');
-      assert.match(agent.state.renames[0].title, /^试用渠道 · /, `标题要带渠道前缀：${JSON.stringify(agent.state.renames[0])}`);
+      assert.match(
+        agent.state.renames[0].title,
+        /^试用渠道 · (私聊|群) [^·]+ · /,
+        `标题要带"渠道 + 哪个聊天"：${JSON.stringify(agent.state.renames[0])}`,
+      );
       const second = await service.commands.handle({
         channelId: 'fixture', botId: BOT, key: KEY, text: '/retitle',
         senderId: OWNER, isOwner: true, channelLabel: '试用渠道',
@@ -692,6 +753,35 @@ async function main() {
       });
       assert.match(member.reply, /只限属主/);
       return `重命名 ${agent.state.renames.length} 次，第二次幂等（已有前缀 3 个）`;
+    });
+
+    // ⑬ 会话不能共用：别人正在用的会话不出现在候选里，硬切也被拒（并说清是谁占着）
+    await step('会话共享限制：别人正在用的会话不列、切换被拒且给出可读理由', async () => {
+      const otherKey = 'group:oc_shared';
+      await service.sessions.bindings.bind('fixture', BOT, otherKey, { sessionId: 'rehearsal-1' });
+      const current = service.sessions.bindings.get('fixture', BOT, KEY);
+      const view = await service.panel.read({
+        channelId: 'fixture', botId: BOT, key: otherKey, conversationType: 'group',
+      });
+      assert.ok(view.session, '面板要给出会话段');
+      assert.equal(view.session.options.some((item) => item.id === 'rehearsal-1'), true,
+        '当前绑定的那个会话本身要在列表里');
+
+      // KEY 这个聊天想切到别人正在用的 rehearsal-1 → 拒绝，并说清是谁占着。
+      await assert.rejects(
+        () => service.panel.apply({
+          channelId: 'fixture', botId: BOT, key: KEY, field: 'session',
+          value: current.sessionId, isOwner: true, conversationType: 'direct',
+        }),
+        (error) => {
+          assert.equal(error.code, 'chat/session-in-use');
+          assert.match(error.message, /群 oc_shared/);
+          return true;
+        },
+      );
+      // 归还绑定，别影响后续步骤。
+      await service.sessions.bindings.bind('fixture', BOT, otherKey, { sessionId: 'rehearsal-9' });
+      return '候选里不列 + 硬切被拒（群 oc_shared）';
     });
 
   } finally {

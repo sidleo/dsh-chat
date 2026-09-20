@@ -246,6 +246,8 @@ async function makeBridge({
   deferred = null,
   /** true：模拟"设置还没读完盘"——ready() 之前 storage.read() 读到空文档。 */
   holdSettings = false,
+  /** 会话标题里的聊天名解析器（控制器在真机上注入；不传就退回掩码 id）。 */
+  resolveChatLabel = null,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -329,7 +331,9 @@ async function makeBridge({
       bindings: { adopt: async () => 0 },
     },
   };
-  const bridge = createFeishuBridge({ bot, deps, gateway, state, logger: silentLogger });
+  const bridge = createFeishuBridge({
+    bot, deps, gateway, state, logger: silentLogger, resolveChatLabel,
+  });
   return {
     bridge,
     gateway,
@@ -780,6 +784,63 @@ test('群聊 @ 后剥掉 @ 占位符再交给会话；上下文增强前缀与�
     assert.equal(asked.workspacePath, '/ws');
   } finally {
     await app.cleanup();
+  }
+});
+
+test('会话标题的聊天名：问控制器拿群名/人名，拿不到就退回掩码 id（绝不挡住消息）', async () => {
+  // ① 群聊：名字来自 resolveChatLabel。
+  let asked = null;
+  const app = await makeBridge({
+    onAsk: (options) => { asked = options; },
+    resolveChatLabel: async ({ conversationType, chatId }) => (
+      conversationType === 'group' && chatId === 'oc_chat' ? '日报临时推送群' : null
+    ),
+  });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_label_1',
+      chatType: 'group',
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      text: '@_user_1 你好',
+    }));
+    assert.equal(asked.chatLabel, '群 日报临时推送群');
+  } finally {
+    await app.cleanup();
+  }
+
+  // ② 私聊：查不到名字（缺通讯录权限）→ 掩码 id，消息照常处理。
+  //    发送者用属主（否则门禁会先挡下，测不到标题这条）。
+  const ownerId = 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5';
+  let privateAsked = null;
+  const fallback = await makeBridge({
+    bot: { ...BOT, ownerOpenIds: [ownerId] },
+    onAsk: (options) => { privateAsked = options; },
+    resolveChatLabel: async () => null,
+  });
+  try {
+    await fallback.bridge.accept(messageEvent({
+      messageId: 'om_label_2', chatType: 'p2p', text: '你好', senderId: ownerId,
+    }));
+    assert.equal(privateAsked.chatLabel, '私聊 ou_2b7e4d1a9…');
+  } finally {
+    await fallback.cleanup();
+  }
+
+  // ③ 解析器抛错：标题退回掩码 id，消息继续（取名字失败绝不能挡住消息）。
+  let throwingAsked = null;
+  const throwing = await makeBridge({
+    bot: { ...BOT, ownerOpenIds: [ownerId] },
+    onAsk: (options) => { throwingAsked = options; },
+    resolveChatLabel: async () => { throw new Error('contact api down'); },
+  });
+  try {
+    await throwing.bridge.accept(messageEvent({
+      messageId: 'om_label_3', chatType: 'p2p', text: '你好', senderId: ownerId,
+    }));
+    assert.ok(throwingAsked, '取名字失败不能挡住消息');
+    assert.equal(throwingAsked.chatLabel, '私聊 ou_2b7e4d1a9…');
+  } finally {
+    await throwing.cleanup();
   }
 });
 
@@ -3356,6 +3417,28 @@ test('控制面板卡：本会话的上下文增强下拉——只决定用哪�
   assert.equal(panelPick('context_pick', ['__global__']).value, '', '哨兵翻译回空串（= 跟随全局）');
   assert.deepEqual(panelPick('context_pick', ['']), { field: 'context', label: '设置本会话的上下文增强', invalid: true },
     '空取值 = 回调里没认出来，不能当成"跟随全局"静默改设置');
+});
+
+test('控制面板卡：被别的聊天占着的会话要说明（不能只是不显示）', async () => {
+  const { panelCard } = await import('../packages/dsh-chat-feishu/host/panel-card.mjs');
+  const base = {
+    bound: true,
+    sessionId: 'session-1',
+    session: { current: 'session-1', options: [{ id: 'session-1', label: '飞书 · 群 张三 · 日报' }] },
+    model: { current: null, options: [], efforts: [], currentEffort: null },
+    preset: { current: null, options: [] },
+    workspace: { current: null, options: [] },
+  };
+  const plain = JSON.stringify(panelCard(base));
+  assert.ok(!plain.includes('其它聊天使用'), '没有扣下的会话时不该多这一行');
+
+  const withWithheld = JSON.stringify(panelCard({ ...base, session: { ...base.session, withheld: 2 } }));
+  assert.match(withWithheld, /有 2 个会话正被这台机器人的其它聊天使用/);
+  assert.match(withWithheld, /不能切过去/);
+
+  // 读不到列表那条路不受影响。
+  const failed = JSON.stringify(panelCard({ ...base, session: { ...base.session, failed: true } }));
+  assert.match(failed, /读不到会话列表/);
 });
 
 test('控制面板卡：渠道自带字段一行两格——过程展示（私聊）与（群聊）都在卡上', async () => {

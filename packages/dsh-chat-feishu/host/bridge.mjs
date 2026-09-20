@@ -178,7 +178,14 @@ function isOwner(policyService, bot, senderId) {
  *   `deps` 是 hub 交给渠道的依赖包（storage / sessions / contextEnhancement / ready）。
  * @returns { accept, status }。
  */
-export function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
+export function createFeishuBridge({
+  bot, deps, gateway, state, logger = console,
+  /**
+   * 取"这个聊天叫什么"（群名/人名）：控制器提供（它有名字缓存与缺权限退避）。
+   * 缺席或查不到就退回掩码 id——**标题是锦上添花，绝不因此挡住消息**。
+   */
+  resolveChatLabel = null,
+}) {
   if (!bot?.id) throw new TypeError('飞书桥需要机器人配置。');
   if (!deps?.sessions || !deps?.contextEnhancement) {
     throw new TypeError('飞书桥需要 hub 的会话桥与上下文增强引擎。');
@@ -186,6 +193,26 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
   let handled = 0;
   let lastError = null;
   let lastHandledAt = null;
+
+  /**
+   * 会话标题里的"聊天身份"（`群 张三` / `私聊 ou_2b7e4d1a9c…`）。
+   *
+   * 为什么要有：DSH 侧边栏里同一台机器人的会话标题长得一样，用户分不清哪个是哪个群/哪个人。
+   * 名字问控制器（缓存 + 缺权限退避），拿不到就退回掩码 id——这条**只用于标题**，
+   * 任何失败都不影响消息本身，所以整体被 try/catch 包住。
+   */
+  async function chatLabelFor({ conversationType, senderId, chatId }) {
+    const kind = conversationType === 'group' ? '群' : '私聊';
+    const id = conversationType === 'group' ? chatId : senderId;
+    try {
+      const name = await resolveChatLabel?.({ conversationType, senderId, chatId });
+      if (typeof name === 'string' && name.trim()) return `${kind} ${name.trim()}`;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] 取聊天名失败（标题里先用掩码 id）：${error?.message ?? error}`);
+    }
+    const raw = typeof id === 'string' ? id : '';
+    return `${kind} ${raw.length > 12 ? `${raw.slice(0, 12)}…` : raw}`.trim();
+  }
 
   /**
    * 把一段文本发到某个会话（交互回传用）：会话键就是 `p2p:<openId>` / `group:<chatId>`，
@@ -612,6 +639,8 @@ export function createFeishuBridge({ bot, deps, gateway, state, logger = console
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 会话标题里带上"哪个群/哪个人"，否则侧边栏里一堆会话分不清。
+        chatLabel: await chatLabelFor({ conversationType, senderId, chatId: message.chat_id }),
         // 同一会话已有回合在跑：先回一句"排队中"，别让用户对着已读不回猜。
         onQueued: (ahead) => {
           void gateway.replyText({

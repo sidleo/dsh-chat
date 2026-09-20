@@ -127207,6 +127207,11 @@ function panelCard(state, { last = null, at = null, pending = null } = {}) {
     if (sessionPicker.element) elements.push(grid([field("\u4F1A\u8BDD", sessionPicker.element)]));
     if (state?.session?.failed === true) {
       elements.push({ tag: "markdown", content: "\u8BFB\u4E0D\u5230\u4F1A\u8BDD\u5217\u8868\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF08\u5F53\u524D\u7ED1\u5B9A\u7684\u4F1A\u8BDD\u4ECD\u663E\u793A\u5728\u4E0A\u9762\uFF09\u3002" });
+    } else if ((state?.session?.withheld ?? 0) > 0) {
+      elements.push({
+        tag: "markdown",
+        content: `\u6709 ${state.session.withheld} \u4E2A\u4F1A\u8BDD\u6B63\u88AB\u8FD9\u53F0\u673A\u5668\u4EBA\u7684\u5176\u5B83\u804A\u5929\u4F7F\u7528\uFF0C\u4E0D\u80FD\u5207\u8FC7\u53BB\uFF08\u4F1A\u8BDD\u4E0D\u80FD\u5171\u7528\uFF09\u3002\u5728\u90A3\u4E2A\u804A\u5929\u91CC\u70B9\u300C\u65B0\u4F1A\u8BDD\u300D\u89E3\u7ED1\uFF0C\u6216\u65B0\u5EFA\u4E00\u4E2A\u3002`
+      });
     }
   }
   if (shows("model") && modelCells.length > 0) elements.push(grid(modelCells));
@@ -127513,7 +127518,18 @@ function stripMentions(text, mentions) {
 function isOwner(policyService, bot, senderId) {
   return policyService?.isOwnerId?.(bot.ownerOpenIds, senderId) === true;
 }
-function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
+function createFeishuBridge({
+  bot,
+  deps,
+  gateway,
+  state,
+  logger = console,
+  /**
+   * 取"这个聊天叫什么"（群名/人名）：控制器提供（它有名字缓存与缺权限退避）。
+   * 缺席或查不到就退回掩码 id——**标题是锦上添花，绝不因此挡住消息**。
+   */
+  resolveChatLabel = null
+}) {
   if (!bot?.id) throw new TypeError("\u98DE\u4E66\u6865\u9700\u8981\u673A\u5668\u4EBA\u914D\u7F6E\u3002");
   if (!deps?.sessions || !deps?.contextEnhancement) {
     throw new TypeError("\u98DE\u4E66\u6865\u9700\u8981 hub \u7684\u4F1A\u8BDD\u6865\u4E0E\u4E0A\u4E0B\u6587\u589E\u5F3A\u5F15\u64CE\u3002");
@@ -127521,6 +127537,18 @@ function createFeishuBridge({ bot, deps, gateway, state, logger = console }) {
   let handled = 0;
   let lastError = null;
   let lastHandledAt = null;
+  async function chatLabelFor({ conversationType, senderId, chatId }) {
+    const kind = conversationType === "group" ? "\u7FA4" : "\u79C1\u804A";
+    const id = conversationType === "group" ? chatId : senderId;
+    try {
+      const name2 = await resolveChatLabel?.({ conversationType, senderId, chatId });
+      if (typeof name2 === "string" && name2.trim()) return `${kind} ${name2.trim()}`;
+    } catch (error) {
+      logger.warn?.(`[dsh-chat-feishu] \u53D6\u804A\u5929\u540D\u5931\u8D25\uFF08\u6807\u9898\u91CC\u5148\u7528\u63A9\u7801 id\uFF09\uFF1A${error?.message ?? error}`);
+    }
+    const raw = typeof id === "string" ? id : "";
+    return `${kind} ${raw.length > 12 ? `${raw.slice(0, 12)}\u2026` : raw}`.trim();
+  }
   async function sendToConversation({ key, text }) {
     const separator = key.indexOf(":");
     const kind = separator > 0 ? key.slice(0, separator) : "";
@@ -127864,6 +127892,8 @@ ${text}`
         workspacePath: record.workspace,
         content: finalParts,
         sourceGuidance: captured?.snapshot?.scope?.guidance,
+        // 会话标题里带上"哪个群/哪个人"，否则侧边栏里一堆会话分不清。
+        chatLabel: await chatLabelFor({ conversationType, senderId, chatId: message.chat_id }),
         // 同一会话已有回合在跑：先回一句"排队中"，别让用户对着已读不回猜。
         onQueued: (ahead) => {
           void gateway.replyText({
@@ -130244,7 +130274,26 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       if (deps.sessions?.bindings?.adopt) {
         await deps.sessions.bindings.adopt(deps.channelId, bot.id, state.sessions());
       }
-      const bridge = bridgeFactory({ bot: liveBot, deps, gateway, state, logger });
+      const bridge = bridgeFactory({
+        bot: liveBot,
+        deps,
+        gateway,
+        state,
+        logger,
+        /**
+         * 会话标题里的"哪个群/哪个人"：**复用这边的名字缓存**（含 10 分钟 TTL 与
+         * "缺权限"退避），桥自己不另开一套查询——否则设置页与标题会把同一批接口打两遍。
+         */
+        resolveChatLabel: async ({ conversationType, senderId, chatId }) => {
+          if (conversationType === "group") {
+            const cached = cacheFor(bot.id).chats.get(chatId);
+            if (cached) return cached;
+            await allChats(bot.id, { minIntervalMs: 6e4 });
+            return cacheFor(bot.id).chats.get(chatId) ?? null;
+          }
+          return await userName(bot.id, senderId) || null;
+        }
+      });
       record.gateway = gateway;
       record.bridge = bridge;
       await gateway.connect({
