@@ -22,7 +22,8 @@ packages/dsh-chat/             Hub：设置页入口 + 渠道注册表 + 共享�
   host/                        Node：plugin、registry、rpc、bot-settings、session-store、sessions、commands、delivery、tools、interactions、json-store
   client/                      浏览器：设置页 section、共享 UI 组件与 hook
                                （bot-shared-settings.js = 工作区/Agent 预设/访问策略三块，
-                                 delivery-targets.js = 主动投递，context-enhancement.js = 上下文增强）
+                                 delivery-targets.js = 主动投递，context-enhancement.js = 上下文增强，
+                                 list-order.js = 左栏渠道 / 机器人列表的拖动排序，存浏览器 localStorage）
 packages/dsh-chat-feishu/      飞书渠道（Lark SDK 长连接）
 packages/dsh-chat-weixin/      微信渠道（iLink 协议：扫码登录 + 长轮询，入站媒体解密，仅私聊）
 packages/dsh-chat-fixture/     契约验证假渠道（不发布）
@@ -56,6 +57,14 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
+- **列表顺序（左栏渠道 / 机器人）**：拖动把手是行内那个 `⋮⋮`（`draggable` 打在把手上、不打整行——
+  整行可拖会和"点一下切换渠道/机器人"抢手势，`button` 元素在部分浏览器上 draggable 也不生效），
+  顺序存**浏览器 localStorage**（`dsh-chat:order:channels`、`dsh-chat:order:bots:<渠道>`）：
+  只影响这台浏览器看到的顺序，不影响机器人行为——所以不必也不该动 hub 的磁盘数据；
+  换设备/清站点数据就回到默认顺序（渠道注册的 `order` 与机器人的自然顺序）。
+  **"拖的是谁"必须用 ref 记**：同一任务里连着派发 dragstart/drop 时 React 会把 setState 批起来，
+  drop 的闭包里读到的还是 null，顺序不会变（真机分属两个任务所以看不出来，是布局守门的模拟
+  把它暴露的）。布局守门会模拟一次真实拖放并断言顺序真的变了。
 - **写了 `hidden` 的元素照样显示**：`hidden` 属性只在 UA 样式里是 `display:none`，**任何作者样式里的
   `display` 都会盖掉它**——上下文增强弹窗的私聊/群聊两个页签就这么变成"内容一模一样"
   （真机截图两张页签内容完全相同）。给元素写了 `display` 又想用 `hidden` 隐藏，就补一条
