@@ -11,7 +11,8 @@ import { join } from 'node:path';
 
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
-import { createLarkCli } from './lark-cli.mjs';
+import { createLarkCli, normalizeLarkUserIdentity, profileNameFor } from './lark-cli.mjs';
+import { createLarkCliGuard } from './lark-guard.mjs';
 import { createLarkGateway, createLarkProbe } from './lark-gateway.mjs';
 import { createProvisionManager } from './provision.mjs';
 import { createFeishuStateStore } from './state-store.mjs';
@@ -213,6 +214,18 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       record.phase = 'running';
       record.error = null;
       logger.info?.(`[dsh-chat-feishu] ${bot.botName ?? bot.id} 长连接已就绪`);
+      /**
+       * 顺手把"这台机器人在 lark-cli 里的专用 profile"准备好（懒建一次、幂等）。
+       *
+       * 为什么在这儿做：聊天会话里的 lark-cli 调用被门禁要求**必须**带这个 profile，
+       * 而 profile 不存在时 lark-cli 会直接报 profile not found——模型会卡在
+       * "按要求写了参数却跑不起来"。所以机器人一起来就把它备好。
+       * 拿不到 secret / 没装 lark-cli 都只记一条日志，**绝不影响机器人启动**。
+       */
+      void larkCliFor(bot.id)?.ensureProfile?.().catch((error) => {
+        const level = error?.code === 'feishu/lark-cli-missing' ? 'info' : 'warn';
+        logger[level]?.(`[dsh-chat-feishu] ${bot.id} 准备 lark-cli 专用 profile 失败：${error?.message ?? error}`);
+      });
     } catch (error) {
       record.phase = 'failed';
       record.error = typeof error?.code === 'string' ? error.code : 'feishu/connect-failed';
@@ -279,6 +292,58 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       nameHint: nameCache.get(bot.id)?.nameHint ?? null,
     });
   }
+
+  /**
+   * 这个会话是不是本渠道的**聊天会话**，以及它属于哪台机器人。
+   *
+   * 门禁、会话环境事实、身份策略提示词都靠它——三处必须用同一份判据，
+   * 否则会出现"提示词说属主是 A、门禁按 B 判"这种自相矛盾。
+   *
+   * @param sessionId - DSH 会话 id。
+   * @returns { botId, botName, chatKey, mode, profileName } 或 null（不是聊天会话）。
+   */
+  function chatOwnership(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) return null;
+    const locate = deps.sessions?.bindings?.locate;
+    if (typeof locate !== 'function') return null;
+    const located = locate(sessionId);
+    if (!located || located.channelId !== deps.channelId) return null;
+    // 同步读：系统提示词段的 text 只能是同步函数（`dsh-system-prompt` 的类型就是同步）。
+    // 配置还没落盘就绪时返回 null——这一轮不渲染，下一轮自然就有了。
+    const bot = runtimes.get(located.botId)?.bot ?? configStore.get(located.botId);
+    if (!bot) return null;
+    return Object.freeze({
+      botId: bot.id,
+      botName: bot.botName ?? null,
+      chatKey: located.key,
+      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
+      profileName: profileNameFor(bot.appId),
+    });
+  }
+
+  /** 某台机器人的 lark-cli 身份策略（门禁用；读运行期那份，改设置立刻生效）。 */
+  async function larkPolicyFor(botId) {
+    await configStore.load();
+    const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
+    if (!bot) return null;
+    return {
+      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
+      profileName: profileNameFor(bot.appId),
+    };
+  }
+
+  /**
+   * 聊天会话里的 lark-cli 门禁：让「身份策略」对**模型自己跑的** lark-cli 也有约束力。
+   *
+   * 真机踩过：模型用 lark-cli 的 skill + bash 直接发消息，绕过本插件的 `host/lark-cli.mjs`，
+   * 于是"只用应用身份"这个开关对它毫无作用（第二条消息照样以用户身份发出去了）。
+   */
+  const larkGuard = createLarkCliGuard({
+    locate: (sessionId) => deps.sessions?.bindings?.locate?.(sessionId),
+    policyFor: larkPolicyFor,
+    channelId: deps.channelId,
+    logger,
+  });
 
   async function status() {
     await configStore.load();
@@ -853,6 +918,10 @@ export function createFeishuController({ deps, logger = console, config = {}, in
     },
     status,
     configStore,
+    /** 会话归属（不含则不是聊天会话）：门禁、会话环境事实、提示词段共用。 */
+    chatOwnership,
+    /** lark-cli 门禁：接在 `tools/pre-execute` 上。 */
+    larkGuard,
 
     endpoints: Object.freeze({
       'connection.status': async () => ({ ok: true, value: await status() }),

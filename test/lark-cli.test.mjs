@@ -66,6 +66,9 @@ function defaultReply({
     if (args.includes('strict-mode')) {
       return strictMode ?? { raw: 'strict-mode: off (source: global (default))\n' };
     }
+    if (args.includes('default-as')) {
+      return { raw: 'default-as: auto\n' };
+    }
     if (args.includes('add')) return { json: { ok: true } };
     return { json: { ok: true, data: {} } };
   };
@@ -129,7 +132,10 @@ test('省略身份不可控：代表某身份调用的命令一律显式带 --as
   const { cli, calls } = createCli();
   await cli.sendMessage({ chatId: 'oc_test', markdown: '**hi**' });
   // 列 profile / 写 strict-mode 这类本地命令不涉及"以谁的名义说话"，其余必须带 --as。
-  const local = (args) => (args[0] === 'profile') || (args[0] === 'config' && args[1] === 'strict-mode');
+  const local = (args) => {
+    const rest = args[0] === '--profile' ? args.slice(2) : args;
+    return rest[0] === 'profile' || rest[0] === 'config';
+  };
   for (const call of calls.filter((item) => !local(item.args))) {
     assert.ok(call.args.includes('--as'), `缺 --as：${call.args.join(' ')}`);
   }
@@ -197,6 +203,7 @@ test('自建 profile：secret 只走 stdin、不带 --use，建完只给自己�
       return { json: { ok: true } };
     }
     if (args.includes('strict-mode')) return { raw: 'strict-mode: off (source: global (default))\n' };
+    if (args.includes('default-as')) return { raw: 'default-as: auto\n' };
     if (args.includes('whoami')) return { json: { appId: APP_ID, identity: 'bot', available: true, tokenStatus: 'ready' } };
     return { json: { ok: true } };
   });
@@ -221,6 +228,82 @@ test('自建 profile：secret 只走 stdin、不带 --use，建完只给自己�
   const strict = fake.calls.find((call) => call.args.includes('strict-mode') && call.args.includes('bot'));
   assert.ok(strict, 'bot-only 策略下应给自己那个 profile 设 strict-mode=bot');
   assert.deepEqual(profilesIn(strict.args), [OWN_PROFILE]);
+});
+
+test('专用 profile：同应用的别的 profile 一概不用（只提示，不碰）', async () => {
+  const fake = createFakeRunner(({ args }) => {
+    if (args.includes('list')) {
+      // 只有"用户自己那份"同应用 profile（名字不是我们的）——必须另建自己的。
+      return { json: [{ name: 'my-personal-profile', appId: APP_ID, brand: 'feishu', user: '张三' }] };
+    }
+    if (args.includes('add')) return { json: { ok: true } };
+    if (args.includes('strict-mode')) return { raw: 'strict-mode: off (source: global (default))\n' };
+    if (args.includes('default-as')) return { raw: 'default-as: auto\n' };
+    return { json: { ok: true } };
+  });
+  let created = false;
+  const runner = async (call) => {
+    if (call.args.includes('list') && created) {
+      fake.calls.push(call);
+      return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID, brand: 'feishu' }]), stderr: '' };
+    }
+    if (call.args.includes('add')) created = true;
+    return fake.runner(call);
+  };
+  const cli = createLarkCli({
+    appId: APP_ID,
+    secretRef: 'DSH_FEISHU_APP_SECRET',
+    resolveSecret: async () => 'app-secret-value',
+    identityPolicy: () => ({ mode: 'bot-only', userOpenId: null }),
+    runner,
+    logger: silentLogger,
+  });
+  const profile = await cli.ensureProfile();
+  assert.equal(profile.name, OWN_PROFILE, '必须用自己的专用 profile');
+  assert.ok(fake.calls.some((call) => call.args.includes('add')), '同应用只有别人的 profile 时要自己建一个');
+  for (const call of fake.calls) {
+    assert.ok(!call.args.includes('my-personal-profile'), '不许把别人的 profile 当成自己的');
+  }
+});
+
+test('身份策略同步到自己的 profile：bot-only → strict-mode bot + default-as bot；user-allowed → off + auto', async () => {
+  const calls = [];
+  const runner = async ({ args, input }) => {
+    calls.push({ args, input });
+    if (args.includes('list')) return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID }]), stderr: '' };
+    if (args.includes('strict-mode') || args.includes('default-as')) return { code: 0, stdout: 'strict-mode: off (source: global (default))\n', stderr: '' };
+    return { code: 0, stdout: JSON.stringify({ ok: true }), stderr: '' };
+  };
+  const cli = createLarkCli({
+    appId: APP_ID,
+    identityPolicy: () => ({ mode: 'bot-only', userOpenId: null }),
+    runner,
+    logger: silentLogger,
+  });
+  await cli.ensureProfile();
+  assert.ok(calls.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config strict-mode bot`),
+    'bot-only 要给自己的 profile 设 strict-mode bot');
+  assert.ok(calls.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config default-as bot`),
+    'bot-only 还要把默认身份设成 bot（省略 --as 时不能落到 user）');
+  for (const call of calls) assert.ok(!call.args.includes('--global'), '绝不写全局');
+
+  const calls2 = [];
+  const cli2 = createLarkCli({
+    appId: APP_ID,
+    identityPolicy: () => ({ mode: 'user-allowed', userOpenId: USER_OPEN_ID }),
+    runner: async ({ args }) => {
+      calls2.push({ args });
+      if (args.includes('list')) return { code: 0, stdout: JSON.stringify([{ name: OWN_PROFILE, appId: APP_ID }]), stderr: '' };
+      if (args.includes('strict-mode')) return { code: 0, stdout: 'strict-mode: bot (source: profile)\n', stderr: '' };
+      if (args.includes('default-as')) return { code: 0, stdout: 'default-as: bot\n', stderr: '' };
+      return { code: 0, stdout: JSON.stringify({ ok: true }), stderr: '' };
+    },
+    logger: silentLogger,
+  });
+  await cli2.assertIdentity({ as: 'user' }).catch(() => undefined);
+  assert.ok(calls2.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config strict-mode off`),
+    '允许用户身份时要把 strict-mode 改回 off，否则 --as user 会被 lark-cli 自己挡住');
+  assert.ok(calls2.some((call) => call.args.join(' ') === `--profile ${OWN_PROFILE} config default-as auto`));
 });
 
 test('profile 名被别的应用占用：失败并说明，不覆盖别人的 profile', async () => {

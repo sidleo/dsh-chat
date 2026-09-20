@@ -128695,7 +128695,7 @@ function createLarkCli({
   const managedName = profileNameFor(ownAppId);
   let resolved = null;
   let resolving = null;
-  let appliedStrictMode = null;
+  let appliedPolicy = null;
   function policy() {
     let value;
     try {
@@ -128784,37 +128784,50 @@ function createLarkCli({
       effective: item?.effective === true
     }));
   }
-  async function findProfile() {
+  async function findOwnProfile() {
     const list = await listProfiles();
-    return list.find((item) => item.appId === ownAppId) ?? null;
+    return list.find((item) => item.name === managedName && item.appId === ownAppId) ?? null;
   }
-  async function readStrictMode() {
-    const result = await exec(["config", "strict-mode"], { allowPlainText: true });
+  async function sameAppElsewhere() {
+    const list = await listProfiles();
+    return list.filter((item) => item.appId === ownAppId && item.name !== managedName).map((item) => item.name);
+  }
+  async function readConfigValue(args, pattern) {
+    const result = await exec(args, { allowPlainText: true });
     const text = typeof result?.plain === "string" ? result.plain : "";
-    const found = /strict-mode:\s*(bot|user|off)/.exec(text);
+    const found = pattern.exec(text);
     return found ? found[1] : null;
   }
-  async function syncStrictMode(profile, mode) {
+  function desiredPolicy(mode) {
+    return mode === "user-allowed" ? { strictMode: "off", defaultAs: "auto" } : { strictMode: "bot", defaultAs: "bot" };
+  }
+  async function syncProfilePolicy(profile, mode) {
     if (profile?.name !== managedName) return;
-    const desired = mode === "user-allowed" ? "off" : "bot";
-    if (appliedStrictMode === desired) return;
-    const current = await readStrictMode();
-    if (current !== desired) {
-      await exec(["config", "strict-mode", desired], { allowPlainText: true });
-      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684 strict-mode \u5DF2\u8BBE\u4E3A ${desired}`);
+    const desired = desiredPolicy(mode);
+    if (appliedPolicy && appliedPolicy.strictMode === desired.strictMode && appliedPolicy.defaultAs === desired.defaultAs) return;
+    const currentStrict = await readConfigValue(["config", "strict-mode"], /strict-mode:\s*(bot|user|off)/);
+    if (currentStrict !== desired.strictMode) {
+      await exec(["config", "strict-mode", desired.strictMode], { allowPlainText: true });
+      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684 strict-mode \u5DF2\u8BBE\u4E3A ${desired.strictMode}`);
     }
-    appliedStrictMode = desired;
+    const currentDefault = await readConfigValue(["config", "default-as"], /default-as:\s*(bot|user|auto)/);
+    if (currentDefault !== desired.defaultAs) {
+      await exec(["config", "default-as", desired.defaultAs], { allowPlainText: true });
+      logger.info?.(`[dsh-chat-feishu] lark-cli profile ${profile.name} \u7684\u9ED8\u8BA4\u8EAB\u4EFD\u5DF2\u8BBE\u4E3A ${desired.defaultAs}`);
+    }
+    appliedPolicy = desired;
   }
   async function ensureProfile() {
     if (resolved) {
-      await syncStrictMode(resolved, policy().mode);
+      await syncProfilePolicy(resolved, policy().mode);
       return resolved;
     }
     if (resolving) return resolving;
     resolving = (async () => {
-      const found = await findProfile();
-      if (found) {
-        resolved = found;
+      const own2 = await findOwnProfile();
+      if (own2) {
+        resolved = own2;
+        await syncProfilePolicy(resolved, policy().mode);
         return resolved;
       }
       const list = await listProfiles();
@@ -128826,10 +128839,14 @@ function createLarkCli({
           { hint: "\u628A\u90A3\u4E2A profile \u6539\u540D\u6216\u5220\u6389\u540E\u91CD\u8BD5\uFF1B\u672C\u63D2\u4EF6\u4E0D\u4F1A\u8986\u76D6\u522B\u4EBA\u7684 profile\u3002" }
         );
       }
+      const others = list.filter((item) => item.appId === ownAppId).map((item) => item.name);
+      if (others.length > 0) {
+        logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u5DF2\u6709\u540C\u5E94\u7528\uFF08${ownAppId}\uFF09\u7684 profile ${others.join("\u3001")}\uFF1B\u672C\u63D2\u4EF6\u4E0D\u52A8\u5B83\uFF0C\u53E6\u5EFA\u81EA\u5DF1\u7684 ${managedName}`);
+      }
       if (typeof resolveSecret2 !== "function" || !cleanString(secretRef)) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14\u5F53\u524D\u62FF\u4E0D\u5230 App Secret\uFF0C\u65E0\u6CD5\u4E3A\u5B83\u65B0\u5EFA\u3002`,
+          `lark-cli \u91CC\u6CA1\u6709${managedName}\uFF08\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684 profile\uFF09\uFF0C\u4E14\u5F53\u524D\u62FF\u4E0D\u5230 App Secret\uFF0C\u65E0\u6CD5\u4E3A\u5B83\u65B0\u5EFA\u3002`,
           { hint: `\u8BF7\u6267\u884C lark-cli profile add --name ${managedName} --app-id ${ownAppId} --app-secret-stdin` }
         );
       }
@@ -128837,7 +128854,7 @@ function createLarkCli({
       if (!cleanString(secret)) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u91CC\u6CA1\u6709 ${ownAppId} \u7684 profile\uFF0C\u4E14 DSH \u91CC\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 App Secret \u8BFB\u4E0D\u5230\u3002`,
+          `lark-cli \u91CC\u6CA1\u6709${managedName}\uFF0C\u4E14 DSH \u91CC\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 App Secret \u8BFB\u4E0D\u5230\u3002`,
           { hint: "\u5230\u8BBE\u7F6E\u9875\u91CD\u65B0\u63A5\u5165\u8FD9\u53F0\u673A\u5668\u4EBA\uFF08\u586B App ID + App Secret\uFF09\uFF0C\u6216\u624B\u5DE5 lark-cli profile add\u3002" }
         );
       }
@@ -128847,22 +128864,22 @@ function createLarkCli({
           { input: secret, pin: false }
         );
       } catch (error) {
-        const again = await findProfile().catch(() => null);
+        const again = await findOwnProfile().catch(() => null);
         if (!again) throw error;
         resolved = again;
         return resolved;
       }
-      const created = await findProfile();
+      const created = await findOwnProfile();
       if (!created) {
         throw larkError(
           "feishu/lark-cli-profile-unavailable",
-          `lark-cli \u8BF4 profile \u5EFA\u597D\u4E86\uFF0C\u4F46\u5217\u8868\u91CC\u8BFB\u4E0D\u5230 ${ownAppId}\u3002`,
+          `lark-cli \u8BF4 profile \u5EFA\u597D\u4E86\uFF0C\u4F46\u5217\u8868\u91CC\u8BFB\u4E0D\u5230 ${managedName}\u3002`,
           { hint: "\u67E5\u770B lark-cli profile list\uFF1B\u82E5\u786E\u5B9E\u662F\u6743\u9650/\u94A5\u5319\u4E32\u95EE\u9898\uFF0C\u8BF7\u624B\u5DE5\u6267\u884C profile add\u3002" }
         );
       }
       resolved = created;
-      logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u4E3A ${ownAppId} \u65B0\u5EFA\u4E86 profile ${created.name}`);
-      await syncStrictMode(created, policy().mode);
+      logger.info?.(`[dsh-chat-feishu] lark-cli \u91CC\u4E3A ${ownAppId} \u65B0\u5EFA\u4E86\u4E13\u7528 profile ${created.name}`);
+      await syncProfilePolicy(created, policy().mode);
       return resolved;
     })();
     try {
@@ -128896,7 +128913,7 @@ function createLarkCli({
         );
       }
       const profile = await ensureProfile();
-      await syncStrictMode(profile, "user-allowed");
+      await syncProfilePolicy(profile, "user-allowed");
     }
     const info = await whoami({ as });
     if (cleanString(info?.appId) !== ownAppId) {
@@ -128935,8 +128952,10 @@ function createLarkCli({
     const current = policy();
     const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
     let profile = null;
+    let otherProfiles = [];
     try {
-      const found = await findProfile();
+      otherProfiles = await sameAppElsewhere();
+      const found = await findOwnProfile();
       if (found) {
         resolved = resolved ?? found;
         profile = found;
@@ -128950,7 +128969,14 @@ function createLarkCli({
         error: { code: error?.code ?? "feishu/lark-cli-failed", message: error?.message ?? String(error) }
       });
     }
-    if (!profile) return Object.freeze({ policy: current, profile: { found: false, name: managedName }, identity: null, checkedAt });
+    if (!profile) {
+      return Object.freeze({
+        policy: current,
+        profile: { found: false, name: managedName, otherProfiles },
+        identity: null,
+        checkedAt
+      });
+    }
     const identity2 = { bot: null, user: null };
     for (const as of ["bot", "user"]) {
       try {
@@ -128961,7 +128987,7 @@ function createLarkCli({
     }
     return Object.freeze({
       policy: current,
-      profile: Object.freeze({ found: true, ...profile }),
+      profile: Object.freeze({ found: true, otherProfiles, ...profile }),
       identity: Object.freeze(identity2),
       checkedAt
     });
@@ -129194,6 +129220,121 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
       });
     }
   };
+}
+
+// packages/dsh-chat-feishu/host/lark-guard.mjs
+var SHELL_TOOLS = Object.freeze(["bash", "pwsh"]);
+var LOCAL_SUBCOMMANDS = Object.freeze([
+  "profile",
+  "config",
+  "whoami",
+  "skills",
+  "schema",
+  "doctor",
+  "update",
+  "help",
+  "version"
+]);
+var BANNED_PATTERNS = Object.freeze([
+  { pattern: /--use(?![\w-])/, message: '\u4E0D\u8BB8\u5E26 --use\uFF1A\u5B83\u4F1A\u5207\u6362\u8FD9\u53F0\u673A\u5668\u4E0A lark-cli \u7684"\u5F53\u524D\u751F\u6548 profile"\uFF0C\u5F71\u54CD\u522B\u4EBA\u7684\u7528\u6CD5' },
+  { pattern: /--global(?![\w-])/, message: "\u4E0D\u8BB8\u5E26 --global\uFF1A\u90A3\u662F\u628A\u7B56\u7565\u5199\u5230\u5168\u5C40\uFF0C\u4F1A\u5F71\u54CD\u8FD9\u53F0\u673A\u5668\u4E0A\u6240\u6709\u5E94\u7528" },
+  { pattern: /profile\s+use(?![\w-])/, message: "\u4E0D\u8BB8\u6267\u884C `profile use`\uFF1A\u5B83\u662F\u5168\u5C40\u5F00\u5173\uFF0C\u4F1A\u5F71\u54CD\u8FD9\u53F0\u673A\u5668\u4E0A\u6240\u6709\u5E94\u7528" },
+  { pattern: /config\s+bind(?![\w-])/, message: "\u4E0D\u8BB8\u6267\u884C `config bind`\uFF1A\u90A3\u4F1A\u628A lark-cli \u7ED1\u5230\u522B\u7684 agent \u4E0A\u4E0B\u6587\u4E0A" },
+  { pattern: /config\s+remove(?![\w-])/, message: "\u4E0D\u8BB8\u6267\u884C `config remove`\uFF1A\u5B83\u4F1A\u6E05\u6389\u5E94\u7528\u914D\u7F6E\u4E0E\u4EE4\u724C" },
+  { pattern: /auth\s+logout(?![\w-])/, message: "\u4E0D\u8BB8\u6267\u884C `auth logout`\uFF1A\u5B83\u4F1A\u6CE8\u9500\u8FD9\u53F0\u673A\u5668\u4E0A\u7684\u767B\u5F55\u6001" }
+]);
+var VALUE_FLAGS = Object.freeze(["--profile", "--as", "--format", "--jq", "-q", "--domain", "--scope", "--output", "--output-dir"]);
+function splitCommandSegments(command) {
+  return String(command ?? "").split(/&&|\|\||;|\||\n/);
+}
+function segmentRunsLarkCli(segment) {
+  const wrappers = /* @__PURE__ */ new Set(["sudo", "env", "time", "command", "nohup", "nice", "caffeinate"]);
+  for (const part of String(segment ?? "").split(/\$\(|`/)) {
+    const tokens = part.trim().split(/\s+/).filter(Boolean);
+    let index = 0;
+    while (index < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]) || wrappers.has(tokens[index]))) index += 1;
+    if (index >= tokens.length) continue;
+    const head = tokens[index].replace(/^[({!]+/, "");
+    if (head === "lark-cli" || /(^|\/)lark-cli$/.test(head)) return true;
+  }
+  return false;
+}
+function flagValues(text, flag) {
+  const values = [];
+  const pattern = new RegExp(`${flag}[=\\s]+("[^"]*"|'[^']*'|\\S+)`, "g");
+  for (const match of String(text).matchAll(pattern)) {
+    values.push(match[1].replace(/^["']|["']$/g, ""));
+  }
+  return values;
+}
+function isLocalCommand(segment) {
+  const text = String(segment ?? "");
+  if (/(^|\s)(--help|-h|--version)(\s|$)/.test(text)) return true;
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const start = tokens.findIndex((token) => /(^|\/)lark-cli$/.test(token.replace(/^[({!]+/, "")));
+  if (start < 0) return false;
+  for (let index = start + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (VALUE_FLAGS.includes(token)) {
+      index += 1;
+      continue;
+    }
+    if (VALUE_FLAGS.some((flag) => token.startsWith(`${flag}=`))) continue;
+    if (token.startsWith("-")) continue;
+    const head = token.replace(/[^\w-]/g, "");
+    return LOCAL_SUBCOMMANDS.includes(head);
+  }
+  return false;
+}
+function evaluateLarkSegment({ segment, profileName, mode }) {
+  const text = String(segment ?? "");
+  for (const banned of BANNED_PATTERNS) {
+    if (banned.pattern.test(text)) {
+      return `\u8FD9\u53F0\u673A\u5668\u4EBA\u7684\u4F1A\u8BDD\u91CC${banned.message}\u3002\u8BF7\u6539\u7528\uFF1A\`lark-cli --profile ${profileName} <\u5B50\u547D\u4EE4> --as bot\`\u3002`;
+    }
+  }
+  if (!flagValues(text, "--profile").includes(profileName)) {
+    return `\u8FD9\u6761 lark-cli \u547D\u4EE4\u6CA1\u6709\u7ED1\u5B9A\u672C\u673A\u5668\u4EBA\u5728 lark-cli \u91CC\u7684 profile\u3002\u4E0D\u5E26 profile \u65F6 lark-cli \u4F1A\u7528\u8FD9\u53F0\u673A\u5668\u4E0A"\u5F53\u524D\u751F\u6548"\u7684\u90A3\u4EFD\u6388\u6743\u2014\u2014\u90A3\u53EF\u80FD\u662F\u522B\u7684\u5E94\u7528\u3001\u751A\u81F3\u522B\u4EBA\u7684\u8D26\u53F7\u3002\u8BF7\u5199\u6210\uFF1A\`lark-cli --profile ${profileName} <\u5B50\u547D\u4EE4> --as bot\`\u3002`;
+  }
+  if (isLocalCommand(text)) return null;
+  const identities = flagValues(text, "--as");
+  if (identities.length === 0) {
+    return `\u8FD9\u6761 lark-cli \u547D\u4EE4\u6CA1\u6709\u663E\u5F0F\u5199\u8EAB\u4EFD\uFF0Clark-cli \u4F1A\u81EA\u5DF1\u6311\uFF08\u8FD9\u53F0\u673A\u5668\u4E0A\u4F1A\u6311\u6210\u7528\u6237\u8EAB\u4EFD\uFF09\u3002\u8BF7\u663E\u5F0F\u52A0\u4E0A \`--as bot\`\uFF08\u4EE3\u8868\u8FD9\u53F0\u5E94\u7528\u81EA\u5DF1\uFF09\uFF1B${mode === "user-allowed" ? "\u8981\u4EE5\u67D0\u4E2A\u4EBA\u7684\u8EAB\u4EFD\u64CD\u4F5C\u65F6\u624D\u7528 `--as user`\u3002" : "\u672C\u673A\u5668\u4EBA\u53EA\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\uFF0C`--as user` \u4F1A\u88AB\u62D2\u7EDD\u3002"}`;
+  }
+  if (mode !== "user-allowed" && identities.includes("user")) {
+    return "\u672C\u673A\u5668\u4EBA\u7684 lark-cli \u8EAB\u4EFD\u7B56\u7565\u662F\u300C\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\u300D\uFF0C\u8FD9\u6B21\u8C03\u7528\u7528\u4E86 `--as user`\uFF0C\u5DF2\u62D2\u7EDD\u3002\u8BF7\u6539\u7528 `--as bot`\uFF1B\u8981\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF0C\u5230\u8BBE\u7F6E\u9875 \u2192 \u8FD9\u53F0\u673A\u5668\u4EBA \u2192 \u300Clark-cli \u8EAB\u4EFD\u300D\u91CC\u5F00\u542F\uFF08\u9700\u8981\u4E8C\u6B21\u786E\u8BA4\uFF09\u3002";
+  }
+  return null;
+}
+function createLarkCliGuard({ locate, policyFor, channelId, logger = console } = {}) {
+  async function evaluate(exec) {
+    if (typeof locate !== "function" || typeof policyFor !== "function") return null;
+    const toolName = typeof exec?.name === "string" ? exec.name : "";
+    if (!SHELL_TOOLS.includes(toolName)) return null;
+    const args = exec?.arguments;
+    const command = typeof args?.command === "string" ? args.command : typeof args?.script === "string" ? args.script : null;
+    if (!command || !segmentRunsLarkCli(command)) return null;
+    const sessionId = exec?.agent?.session?.header?.id;
+    if (typeof sessionId !== "string" || !sessionId) return null;
+    const owner = await locate(sessionId);
+    if (!owner || channelId !== void 0 && owner.channelId !== channelId) return null;
+    const policy = await policyFor(owner.botId);
+    if (!policy?.profileName) return null;
+    for (const segment of splitCommandSegments(command)) {
+      if (!segmentRunsLarkCli(segment)) continue;
+      const reason = evaluateLarkSegment({
+        segment,
+        profileName: policy.profileName,
+        mode: policy.mode
+      });
+      if (reason) {
+        logger.warn?.(`[dsh-chat-feishu] \u62E6\u4E0B\u4E00\u6761 lark-cli \u8C03\u7528\uFF08${owner.botId} / \u4F1A\u8BDD ${sessionId}\uFF09\uFF1A${reason}\uFF5C\u547D\u4EE4\uFF1A${segment.trim().slice(0, 200)}`);
+        return { kind: "deny", reason, botId: owner.botId };
+      }
+    }
+    return null;
+  }
+  return { evaluate };
 }
 
 // packages/dsh-chat-feishu/host/lark-gateway.mjs
@@ -130796,6 +130937,10 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       record.phase = "running";
       record.error = null;
       logger.info?.(`[dsh-chat-feishu] ${bot.botName ?? bot.id} \u957F\u8FDE\u63A5\u5DF2\u5C31\u7EEA`);
+      void larkCliFor(bot.id)?.ensureProfile?.().catch((error) => {
+        const level = error?.code === "feishu/lark-cli-missing" ? "info" : "warn";
+        logger[level]?.(`[dsh-chat-feishu] ${bot.id} \u51C6\u5907 lark-cli \u4E13\u7528 profile \u5931\u8D25\uFF1A${error?.message ?? error}`);
+      });
     } catch (error) {
       record.phase = "failed";
       record.error = typeof error?.code === "string" ? error.code : "feishu/connect-failed";
@@ -130859,6 +131004,37 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       nameHint: nameCache.get(bot.id)?.nameHint ?? null
     });
   }
+  function chatOwnership(sessionId) {
+    if (typeof sessionId !== "string" || !sessionId) return null;
+    const locate = deps.sessions?.bindings?.locate;
+    if (typeof locate !== "function") return null;
+    const located = locate(sessionId);
+    if (!located || located.channelId !== deps.channelId) return null;
+    const bot = runtimes.get(located.botId)?.bot ?? configStore.get(located.botId);
+    if (!bot) return null;
+    return Object.freeze({
+      botId: bot.id,
+      botName: bot.botName ?? null,
+      chatKey: located.key,
+      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
+      profileName: profileNameFor(bot.appId)
+    });
+  }
+  async function larkPolicyFor(botId) {
+    await configStore.load();
+    const bot = runtimes.get(botId)?.bot ?? configStore.get(botId);
+    if (!bot) return null;
+    return {
+      mode: normalizeLarkUserIdentity(bot.larkUserIdentity),
+      profileName: profileNameFor(bot.appId)
+    };
+  }
+  const larkGuard = createLarkCliGuard({
+    locate: (sessionId) => deps.sessions?.bindings?.locate?.(sessionId),
+    policyFor: larkPolicyFor,
+    channelId: deps.channelId,
+    logger
+  });
   async function status() {
     await configStore.load();
     const bots = configStore.list();
@@ -131282,6 +131458,10 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     },
     status,
     configStore,
+    /** 会话归属（不含则不是聊天会话）：门禁、会话环境事实、提示词段共用。 */
+    chatOwnership,
+    /** lark-cli 门禁：接在 `tools/pre-execute` 上。 */
+    larkGuard,
     endpoints: Object.freeze({
       "connection.status": async () => ({ ok: true, value: await status() }),
       "bot.reconnect": async (payload) => {
@@ -131808,6 +131988,23 @@ function apply(ctx) {
       `dsh-chat-feishu \u9700\u8981 dsh-chat \u5951\u7EA6 v${EXPECTED_CONTRACT}\uFF0C\u5F53\u524D hub \u63D0\u4F9B v${String(actual)}\uFF1B\u8BF7\u5347\u7EA7 dsh-chat \u6216\u5B89\u88C5\u5339\u914D\u7248\u672C\u7684\u6E20\u9053\u63D2\u4EF6\uFF08\u89C1 CONTRACT.md\uFF09\u3002`
     );
   }
+  let chatOwnership = null;
+  let larkGuard = null;
+  let ensureIdentitySection = () => false;
+  ctx.on("tools/pre-execute", async (exec, next) => {
+    ensureIdentitySection?.();
+    if (!larkGuard) return next();
+    let decision = null;
+    try {
+      decision = await larkGuard.evaluate(exec);
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-chat-feishu] lark-cli \u95E8\u7981\u5224\u65AD\u5931\u8D25\uFF0C\u5DF2\u653E\u884C\uFF1A${error?.message ?? error}`);
+    }
+    if (decision) return decision;
+    return next();
+  });
+  registerShellFacts(ctx, () => chatOwnership);
+  ensureIdentitySection = installLarkIdentitySection(ctx, () => chatOwnership);
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: "\u98DE\u4E66",
@@ -131820,6 +132017,8 @@ function apply(ctx) {
         deps.reportStatus("failed", error);
         deps.logger.error?.(`[dsh-chat-feishu] \u542F\u52A8\u5931\u8D25\uFF1A${error?.message ?? error}`);
       });
+      chatOwnership = controller.chatOwnership;
+      larkGuard = controller.larkGuard;
       return {
         async stop() {
           await controller.stop();
@@ -131831,10 +132030,98 @@ function apply(ctx) {
     }
   }), "dsh-chat-feishu: \u6CE8\u518C\u6E20\u9053");
 }
+function installLarkIdentitySection(ctx, ownershipOf) {
+  let installed = false;
+  let warned = false;
+  const text = (context) => {
+    const agent = context?.agent;
+    const sessionId = agent?.id ?? agent?.session?.id;
+    const lookup = ownershipOf();
+    if (typeof sessionId !== "string" || !sessionId || typeof lookup !== "function") return "";
+    let owner = null;
+    try {
+      owner = lookup(sessionId);
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-chat-feishu] \u8BFB\u4F1A\u8BDD\u5F52\u5C5E\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return "";
+    }
+    if (!owner) return "";
+    const userAllowed = owner.mode === "user-allowed";
+    return [
+      `\u672C\u4F1A\u8BDD\u5C5E\u4E8E\u98DE\u4E66\u673A\u5668\u4EBA\u300C${owner.botName ?? owner.botId}\u300D\uFF0C\u5B83\u5728 lark-cli \u91CC\u7684\u8EAB\u4EFD\u7B56\u7565\u662F${userAllowed ? "\u300C\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D" : "\u300C\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\u300D"}\u3002`,
+      "\u5728\u8FD9\u4E2A\u4F1A\u8BDD\u91CC\u8FD0\u884C lark-cli \u7684\u786C\u89C4\u77E9\uFF08\u95E8\u7981\u4F1A\u68C0\u67E5\uFF0C\u8FDD\u53CD\u76F4\u63A5\u62D2\u7EDD\uFF09\uFF1A",
+      `1. \u5FC5\u987B\u5E26 \`--profile ${owner.profileName}\`\u2014\u2014\u8FD9\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684 profile\u3002`,
+      '   \u4E0D\u5E26 profile \u65F6 lark-cli \u4F1A\u7528\u8FD9\u53F0\u673A\u5668\u4E0A"\u5F53\u524D\u751F\u6548"\u7684\u90A3\u4EFD\u6388\u6743\uFF0C\u53EF\u80FD\u662F\u522B\u7684\u5E94\u7528\u751A\u81F3\u522B\u4EBA\u7684\u8D26\u53F7\u3002',
+      `2. \u5FC5\u987B\u663E\u5F0F\u5199\u8EAB\u4EFD\uFF1A\`--as bot\`\uFF08\u4EE3\u8868\u8FD9\u53F0\u5E94\u7528\u81EA\u5DF1\uFF09${userAllowed ? "\uFF1B\u8981\u4EE3\u8868\u67D0\u4E2A\u4EBA\u7684\u8EAB\u4EFD\u64CD\u4F5C\u65F6\u624D\u7528 `--as user`\u3002" : "\uFF1B\u672C\u673A\u5668\u4EBA\u53EA\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\uFF0C`--as user` \u4F1A\u88AB\u62D2\u7EDD\u3002"}`,
+      "3. \u4E0D\u8981\u7528 `profile use` / `--use` / `config strict-mode --global` / `auth logout`\u2014\u2014",
+      "   \u5B83\u4EEC\u4F1A\u6539\u8FD9\u53F0\u673A\u5668\u4E0A lark-cli \u7684\u5168\u5C40\u72B6\u6001\uFF0C\u5F71\u54CD\u522B\u4EBA\u7684\u7528\u6CD5\u3002",
+      `profile \u540D\u4E5F\u5728\u73AF\u5883\u53D8\u91CF \`DSH_CHAT_LARK_PROFILE\` \u91CC\uFF08\u8EAB\u4EFD\u7B56\u7565\u5728 \`DSH_CHAT_LARK_IDENTITY\`\uFF09\u3002`
+    ].join("\n");
+  };
+  const tryInstall = () => {
+    if (installed) return true;
+    const systemPrompt = typeof ctx.get === "function" ? ctx.get("systemPrompt") : ctx.systemPrompt;
+    if (!systemPrompt || typeof systemPrompt.section !== "function") return false;
+    const register = () => systemPrompt.section({
+      name: "dsh-chat-feishu:lark-cli-identity",
+      order: 410,
+      text
+    });
+    try {
+      if (typeof ctx.effect === "function") ctx.effect(register, "dsh-chat-feishu: lark-cli \u8EAB\u4EFD\u7B56\u7565\u6BB5");
+      else register();
+      installed = true;
+      ctx.logger?.info?.("[dsh-chat-feishu] \u5DF2\u6CE8\u518C lark-cli \u8EAB\u4EFD\u7B56\u7565\u63D0\u793A\u8BCD\u6BB5\uFF08\u6309\u4F1A\u8BDD\u751F\u6548\uFF09\u3002");
+      return true;
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-chat-feishu] \u6CE8\u518C lark-cli \u8EAB\u4EFD\u7B56\u7565\u63D0\u793A\u8BCD\u6BB5\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return false;
+    }
+  };
+  if (!tryInstall() && !warned) {
+    warned = true;
+    ctx.logger?.warn?.("[dsh-chat-feishu] \u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u7684 systemPrompt \u670D\u52A1\uFF1Alark-cli \u8EAB\u4EFD\u7B56\u7565\u53EA\u4F1A\u4EE5\u95E8\u7981\u65B9\u5F0F\u751F\u6548\uFF08\u6A21\u578B\u4E0D\u4F1A\u88AB\u63D0\u524D\u544A\u77E5\uFF09\u2014\u2014\u670D\u52A1\u665A\u5230\u4F1A\u5728\u4E0B\u4E00\u6B21\u5DE5\u5177\u8C03\u7528\u524D\u8865\u88C5\u3002");
+  }
+  return tryInstall;
+}
+function registerShellFacts(ctx, ownershipOf) {
+  ctx.inject(["shellEnv"], (shellCtx) => {
+    shellCtx.shellEnv.register({
+      name: "dsh-chat-feishu",
+      variables: {
+        DSH_CHAT_LARK_PROFILE: {
+          description: "\u8FD9\u53F0\u98DE\u4E66\u673A\u5668\u4EBA\u5728 lark-cli \u91CC\u7684\u4E13\u7528 profile \u540D\uFF1B\u8C03 lark-cli \u65F6\u5FC5\u987B\u7528 --profile \u6307\u5B9A\u5B83\u3002"
+        },
+        DSH_CHAT_LARK_IDENTITY: {
+          description: "\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 lark-cli \u8EAB\u4EFD\u7B56\u7565\uFF1Abot-only\uFF08\u53EA\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\uFF09\u6216 user-allowed\uFF08\u5141\u8BB8\u4EE5\u8BE5 profile \u767B\u5F55\u7684\u7528\u6237\u8EAB\u4EFD\uFF09\u3002"
+        }
+      },
+      resolve: (execution) => {
+        const sessionId = execution?.agent?.session?.header?.id;
+        const lookup = ownershipOf();
+        if (!sessionId || typeof lookup !== "function") return {};
+        let owner = null;
+        try {
+          owner = lookup(sessionId);
+        } catch (error) {
+          ctx.logger?.warn?.(`[dsh-chat-feishu] \u8BFB\u4F1A\u8BDD\u5F52\u5C5E\u5931\u8D25\uFF08\u4F1A\u8BDD\u73AF\u5883\u4E8B\u5B9E\uFF09\uFF1A${error?.message ?? error}`);
+          return {};
+        }
+        if (!owner) return {};
+        return {
+          DSH_CHAT_LARK_PROFILE: owner.profileName,
+          DSH_CHAT_LARK_IDENTITY: owner.mode
+        };
+      }
+    });
+  });
+}
 export {
   apply,
   inject,
-  name
+  installLarkIdentitySection,
+  name,
+  registerShellFacts
 };
 /*! Bundled license information:
 

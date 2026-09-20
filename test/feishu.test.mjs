@@ -4580,6 +4580,9 @@ test('配置：setLarkIdentity 落盘并清空/拒绝可疑的 openId', async ()
   }
 });
 
+/** 门禁/环境事实测试用的会话 id（假绑定表里指向本渠道的 bot_lark）。 */
+const IDENTITY_SESSION = 'session-lark-guard-1';
+
 /** 控制器测试用的假 lark-cli：只实现设置页/端点会碰的那几个方法。 */
 function createFakeLarkCli(options = {}) {
   const calls = { inspect: 0, whoami: [] };
@@ -4639,7 +4642,13 @@ async function createIdentityController(dataDir, options = {}) {
       accessPolicy,
       sessions: {
         ask: async () => ({ text: '', reason: { kind: 'completed' } }),
-        bindings: { adopt: async () => 0 },
+        bindings: {
+          adopt: async () => 0,
+          // 会话绑定表（真机上是 hub 那份）：门禁/环境事实/提示词段共用同一份判据。
+          locate: (sessionId) => (sessionId === IDENTITY_SESSION
+            ? { channelId: 'feishu', botId: 'bot_lark', key: 'p2p:ou_owner' }
+            : undefined),
+        },
       },
     },
     logger: silentLogger,
@@ -4768,6 +4777,63 @@ test('lark-cli 身份：读不到 lark-cli 时如实报错，且取值必须合�
     }
     assert.equal((await controller.endpoints['bot.lark-identity.set']({ botId: 'ghost', value: 'bot-only' })).error.code,
       'feishu/unknown-bot');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('lark-cli 门禁：聊天会话里的调用按身份策略判，别的会话一概不管', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-larkguard-'));
+  try {
+    const { controller } = await createIdentityController(dataDir);
+    await controller.start();
+
+    const owner = controller.chatOwnership(IDENTITY_SESSION);
+    assert.equal(owner.botId, 'bot_lark');
+    assert.equal(owner.mode, 'bot-only', '默认只用应用身份');
+    assert.equal(owner.profileName, 'dsh-chat-cli_lark_identity_1', 'profile 名由 appId 推出');
+    assert.equal(controller.chatOwnership('session-not-ours'), null, '不是聊天会话就不管');
+
+    /** 一次 bash 调用（真机上就是模型跑 lark-cli 的那条路）。 */
+    const call = (command, sessionId = IDENTITY_SESSION) => ({
+      name: 'bash',
+      arguments: { command },
+      agent: { session: { header: { id: sessionId } } },
+    });
+
+    // 真机那次：没带 profile、还用了 --as user → 必须拦下。
+    const denied = await controller.larkGuard.evaluate(call(
+      'lark-cli im +messages-send --as user --user-id ou_x --text "测试"',
+    ));
+    assert.equal(denied?.kind, 'deny');
+    assert.match(denied.reason, /dsh-chat-cli_lark_identity_1/);
+
+    // 合规写法放行。
+    assert.equal(await controller.larkGuard.evaluate(call(
+      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as bot --text x',
+    )), null);
+
+    // 用户自己的会话（不是聊天会话）跑同样的命令，不管。
+    assert.equal(await controller.larkGuard.evaluate(call(
+      'lark-cli im +messages-send --as user --text x', 'session-user-own',
+    )), null);
+
+    // 设置页改成「允许用户身份」后，同一条命令立刻放行（门禁现读运行期策略）。
+    const enabled = await controller.endpoints['bot.lark-identity.set']({
+      botId: 'bot_lark', value: 'user-allowed', confirm: true,
+    });
+    assert.equal(enabled.ok, true, JSON.stringify(enabled));
+    assert.equal(await controller.larkGuard.evaluate(call(
+      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as user --text x',
+    )), null);
+
+    // 关回 bot-only：再次拦下（不用重启）。
+    await controller.endpoints['bot.lark-identity.set']({ botId: 'bot_lark', value: 'bot-only' });
+    assert.equal((await controller.larkGuard.evaluate(call(
+      'lark-cli --profile dsh-chat-cli_lark_identity_1 im +messages-send --as user --text x',
+    )))?.kind, 'deny');
+
+    await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
