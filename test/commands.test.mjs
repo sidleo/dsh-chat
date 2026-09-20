@@ -623,11 +623,14 @@ test('菜单：/menu（及短写 /m）带上控制面板状态，卡片据此渲
   // 工作区候选只给属主——群里的卡片所有人都能展开（这条也是"谁在读"传下去的证据）。
   assert.deepEqual(readCalls, [{
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound', isOwner: true,
+    // 会话类型必须传下去：漏了「本会话的访问策略」会在卡上静默消失（真机出现过）。
+    conversationType: 'direct',
   }]);
 
   const guestMenu = await registry.handle(context('/menu', { isOwner: false }));
   assert.deepEqual(readCalls.at(-1), {
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:bound', isOwner: false,
+    conversationType: 'direct',
   }, '非属主要如实传 false，由 hub 决定不给工作区候选');
   assert.ok(result.menu.length > 0, '命令清单仍然带着（卡片里作为子入口）');
   assert.match(result.reply, /可用命令/, '文本兜底仍要在（微信没有卡片）');

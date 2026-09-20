@@ -119,6 +119,22 @@ export function conversationTarget(key) {
 }
 
 /**
+ * 会话类型：优先用调用方给的，认不出就从**会话键**推。
+ *
+ * 为什么要有这条兜底：会话键（`p2p:` / `group:`）是 hub 自己的约定，而"本会话的访问策略"
+ * 这类字段必须知道是私聊还是群聊。调用方（命令内核、渠道）漏传一次，字段就会**静默消失**
+ * ——真机上出现过：手打 `/menu` 出的卡里没有「访问策略」，点下拉重画一次又有了。
+ * 认不出（键不合约定）仍然返回 null：宁可不给这一项，也不能照错的方向改设置。
+ */
+export function conversationTypeOf(key, given = null) {
+  if (given === 'direct' || given === 'group') return given;
+  const text = typeof key === 'string' ? key : '';
+  if (text.startsWith('group:')) return 'group';
+  if (text.startsWith('p2p:')) return 'direct';
+  return null;
+}
+
+/**
  * 本会话的上下文增强（面板字段 `context`）。
  *
  * 语义：**本会话用哪一份设置**——
@@ -609,6 +625,8 @@ export function createPanelService({
      */
     async read({ channelId, botId, key, isOwner = false, conversationType = null }) {
       await settings.ready?.();
+      // 会话类型以会话键为准（调用方漏传时不能把依赖它的字段丢掉）。
+      const scope = conversationTypeOf(key, conversationType);
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const [
@@ -629,8 +647,8 @@ export function createPanelService({
         sessionOptions({
           channelId, botId, key, currentSessionId: sessionId, workspace: record.workspace,
         }),
-        channelPanelFields({ channelId, botId, key, conversationType }),
-        channelPanelActions({ channelId, botId, key, conversationType, isOwner }),
+        channelPanelFields({ channelId, botId, key, conversationType: scope }),
+        channelPanelActions({ channelId, botId, key, conversationType: scope, isOwner }),
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -673,7 +691,7 @@ export function createPanelService({
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
         /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
-        policy: policyPanelState({ record, conversationType, isOwner }),
+        policy: policyPanelState({ record, conversationType: scope, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
         actions: channelActionState.actions,
         actionsFailed: channelActionState.failed === true,
@@ -777,7 +795,8 @@ export function createPanelService({
           throw panelError('chat/owner-only', '访问策略是机器人级设置，只有属主能改。');
         }
         return applyPolicyMode({
-          channelId, botId, conversationType, value, record, field, confirm,
+          channelId, botId, conversationType: conversationTypeOf(key, conversationType),
+          value, record, field, confirm,
         });
       }
 

@@ -618,6 +618,31 @@ test('渠道自带的面板字段：读得到就带出来，apply 透传给渠�
   );
 });
 
+test('会话类型漏传时从会话键兜底：不能把「本会话的访问策略」静默丢掉', async () => {
+  const { panel } = makePanel({});
+  // 群里发 /menu：命令内核与渠道都可能漏传 conversationType。
+  const group = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true });
+  assert.ok(group.policy, '从 group: 前缀要能推出群聊');
+  assert.equal(group.policy.conversationType, 'group');
+  assert.equal(group.policy.kindLabel, '群聊');
+  const direct = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.equal(direct.policy.kindLabel, '私聊');
+  // 显式给的值优先（渠道最清楚），但键与它不一致时以显式值为准。
+  const explicit = await panel.read({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', isOwner: true, conversationType: 'direct',
+  });
+  assert.equal(explicit.policy.kindLabel, '私聊');
+  // 认不出的键仍然不给（宁可不提供，也不能改错一份）。
+  const unknown = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'ou_a', isOwner: true });
+  assert.equal(unknown.policy, null);
+  // apply 同理：漏传也要能落到群聊那一份。
+  const applied = await panel.apply({
+    channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', field: 'policy', value: 'open',
+    isOwner: true, confirm: true,
+  });
+  assert.match(applied.message, /群聊的访问策略/);
+});
+
 test('访问策略下拉：放宽到"任何人可用"必须先确认一次；只改当前会话类型那一份', async () => {
   const defaultScope = () => ({
     mode: 'allowlist',
@@ -642,8 +667,11 @@ test('访问策略下拉：放宽到"任何人可用"必须先确认一次；只
 
   const asMember = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', conversationType: 'direct' });
   assert.equal(asMember.policy, null, '非属主不给');
-  const unknownScope = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
-  assert.equal(unknownScope.policy, null, '不知道私聊还是群聊时不给（免得改错一份）');
+  const derivedScope = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true });
+  assert.equal(derivedScope.policy.conversationType, 'direct',
+    '调用方漏传会话类型时从会话键兜底（否则这一项会静默消失）');
+  const unknownScope = await panel.read({ channelId: 'feishu', botId: 'bot_1', key: 'ou_a', isOwner: true });
+  assert.equal(unknownScope.policy, null, '认不出会话键时不给（免得改错一份）');
 
   const never = await panel.read({
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', isOwner: true, conversationType: 'direct',
@@ -761,7 +789,7 @@ test('渠道动作按钮：读出来透传，点击走 panel.act，失败原样�
   assert.equal(state.actionsFailed, false);
   const listed = seen.find((call) => call.method === 'panel.actions');
   assert.equal(listed.payload.isOwner, true, '属主要透传给渠道（渠道据此决定给不给按钮）');
-  assert.equal(listed.payload.conversationType, null);
+  assert.equal(listed.payload.conversationType, 'direct', 'p2p: 键推出私聊，透传给渠道');
 
   const done = await panel.act({
     channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', action: 'reconnect', isOwner: true,

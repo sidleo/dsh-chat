@@ -313,6 +313,8 @@ export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCo
           channelId: context.channelId, botId: context.botId, key: context.key,
           // 工作区候选含属主其它会话的绝对路径：非属主（比如群里被授权执行命令的成员）不给。
           isOwner: context.isOwner === true,
+          // 「本会话的访问策略」要知道私聊还是群聊；漏传那一项就会在卡上消失。
+          conversationType: context.conversationType ?? null,
         }).catch((error) => {
           context.log?.warn?.(`[dsh-chat] 读取控制面板状态失败：${error?.message ?? error}`);
           return null;

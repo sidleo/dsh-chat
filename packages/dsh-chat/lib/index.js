@@ -1388,7 +1388,9 @@ function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands 
           botId: context.botId,
           key: context.key,
           // 工作区候选含属主其它会话的绝对路径：非属主（比如群里被授权执行命令的成员）不给。
-          isOwner: context.isOwner === true
+          isOwner: context.isOwner === true,
+          // 「本会话的访问策略」要知道私聊还是群聊；漏传那一项就会在卡上消失。
+          conversationType: context.conversationType ?? null
         }).catch((error) => {
           context.log?.warn?.(`[dsh-chat] \u8BFB\u53D6\u63A7\u5236\u9762\u677F\u72B6\u6001\u5931\u8D25\uFF1A${error?.message ?? error}`);
           return null;
@@ -2573,6 +2575,13 @@ function conversationTarget(key) {
   if (!id) return null;
   return { kind: head === "group" ? "group" : "user", id };
 }
+function conversationTypeOf(key, given = null) {
+  if (given === "direct" || given === "group") return given;
+  const text = typeof key === "string" ? key : "";
+  if (text.startsWith("group:")) return "group";
+  if (text.startsWith("p2p:")) return "direct";
+  return null;
+}
 function contextPanelState({ record, key, isOwner }) {
   if (isOwner !== true) return null;
   const target = conversationTarget(key);
@@ -2937,6 +2946,7 @@ function createPanelService({
      */
     async read({ channelId, botId, key, isOwner = false, conversationType = null }) {
       await settings.ready?.();
+      const scope = conversationTypeOf(key, conversationType);
       const record = settings.read(channelId, botId) ?? {};
       const sessionId = boundSessionId(channelId, botId, key);
       const [
@@ -2963,8 +2973,8 @@ function createPanelService({
           currentSessionId: sessionId,
           workspace: record.workspace
         }),
-        channelPanelFields({ channelId, botId, key, conversationType }),
-        channelPanelActions({ channelId, botId, key, conversationType, isOwner })
+        channelPanelFields({ channelId, botId, key, conversationType: scope }),
+        channelPanelActions({ channelId, botId, key, conversationType: scope, isOwner })
       ]);
       const options = catalog.options;
       const selection = selectionState.selection;
@@ -2997,7 +3007,7 @@ function createPanelService({
         fields: channelFieldState.fields,
         fieldsFailed: channelFieldState.failed === true,
         /** 本会话类型的访问策略（只给属主，且要知道是私聊还是群聊）。 */
-        policy: policyPanelState({ record, conversationType, isOwner }),
+        policy: policyPanelState({ record, conversationType: scope, isOwner }),
         // 渠道自带的动作按钮（飞书：重连）。渠道没实现就是空数组。
         actions: channelActionState.actions,
         actionsFailed: channelActionState.failed === true,
@@ -3101,7 +3111,7 @@ function createPanelService({
         return applyPolicyMode({
           channelId,
           botId,
-          conversationType,
+          conversationType: conversationTypeOf(key, conversationType),
           value,
           record,
           field,
