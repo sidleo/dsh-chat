@@ -396,6 +396,20 @@ function measure() {
      * 组件拿到 null 就**永远显示全勾**，用户保存过的关闭项看起来根本没生效。
      * 假数据里 direct.policy=false / group.actions=false，渲染出来的勾选状态必须对得上。
      */
+    /**
+     * 弹窗里的页签面板：`hidden` 的那一个必须**真的不可见**。
+     *
+     * 这是全局的（弹窗通过 portal 挂在 body 上，不属于任何 frame），所以每个 frame 记一份同样的值，
+     * 由守门那边断言一次。
+     */
+    // 每个弹窗各算一份（每个渠道卡各点开过一次；弹窗是 portal，挂在 body 上）。
+    const dialogs = [...document.querySelectorAll('.dchat-dialog')].map((dialog) => ({
+      activeScope: dialog.querySelector('.dchat-tab[aria-selected="true"]')?.dataset?.scope ?? null,
+      visible: [...dialog.querySelectorAll('.dchat-tabPanel')]
+        .filter((el) => el.getClientRects().length > 0)
+        .map((el) => el.dataset.scope),
+      total: dialog.querySelectorAll('.dchat-tabPanel').length,
+    }));
     const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
       .filter((el) => el.getAttribute('aria-label').includes(' · '))
       .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
@@ -407,6 +421,7 @@ function measure() {
       tall,
       widest,
       sectionChecks,
+      dialogs,
     });
   }
   document.getElementById('dsh-layout-result')?.remove();
@@ -428,6 +443,10 @@ async function settle() {
   const clicks = {
     diagnosticsOpen: ['看最后 40 行'],
     deliveryRename: ['重命名'],
+    // 上下文增强弹窗：打开它才能测到"私聊/群聊两个页签只显示一个"（曾因作者样式压过
+    // `[hidden]` 而两个都显示，真机上两个页签内容一模一样）。
+    feishuCard: ['上下文增强'],
+    weixinCard: ['上下文增强'],
     // hub 页头两个入口都展开：诊断面板 + 版本面板都得在窄栏里排得下。
     hubPageOpen: ['诊断', '版本与更新'],
   };

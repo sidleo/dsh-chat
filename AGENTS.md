@@ -56,6 +56,11 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
 - **逐账号状态**：`POST /api/dsh-chat/<channel>` 方法 `connection.status`（或渠道服务 `dshChat.channels.call`）。返回每个机器人的 `state/connected/handled/lastHandledAt/errorMessage`。
 - **排查顺序**：① `~/.dsh/integrations/dsh-chat/logs/<渠道>.log`（hub 统一落盘，含 `[dsh-chat-*]` 全部 warn/error，>2MB 轮转） → ② `state.json` 的 `lastError` → ③ 会话日志（`~/.dsh/sessions/<cwd>/<sessionId>/session.v3.jsonl.zstd`，zstd 多帧拼接）→ ④ 终端输出。
+- **写了 `hidden` 的元素照样显示**：`hidden` 属性只在 UA 样式里是 `display:none`，**任何作者样式里的
+  `display` 都会盖掉它**——上下文增强弹窗的私聊/群聊两个页签就这么变成"内容一模一样"
+  （真机截图两张页签内容完全相同）。给元素写了 `display` 又想用 `hidden` 隐藏，就补一条
+  `.类名[hidden]{display:none}`；布局守门会点开那个弹窗、断言**每个弹窗只可见一个页签且
+  与选中项一致**（去掉这条 CSS 守门立刻红）。
 - **设置页加了字段**：布局守门除了"不溢出、不逐字竖排"，还会核对**控件的状态是否反映了假数据**——
   渠道卡把 `shared` 里的字段漏一项，组件拿到 null 就永远显示"全勾"，真机上就是"我明明关了却没生效"
   （`panelSections` 就这么翻过一次车）。**新加这类字段就往 `scripts/layout-fixture.mjs` 的假数据里

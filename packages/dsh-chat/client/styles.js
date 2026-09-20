@@ -648,6 +648,16 @@ const CSS = `
   flex-direction: column;
   gap: 14px;
 }
+.dchat-tabPanel[hidden] {
+  display: none;
+}
+/*
+ * hidden 属性靠 UA 样式里的 [hidden]{display:none} 生效，而上面那条 display:flex 是作者样式
+ * ——优先级更高，于是"隐藏"的页签照样显示：私聊与群聊两个页签看起来一模一样（真机截图就是
+ * 两张内容完全相同的页签）。任何给元素写了 display 的地方，用 hidden 都要补这条。
+ * 注意：本文件是模板字符串，注释里**不能出现反引号**（会把模板提前闭合，历史上栽过一次）。
+ */
+
 .dchat-contextGlobal,
 .dchat-contextTargets {
   display: flex;

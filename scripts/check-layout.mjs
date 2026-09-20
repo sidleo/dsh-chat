@@ -132,6 +132,22 @@ body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw
     else if (policyDirect.checked !== false) failures.push('配了关闭的「访问策略（本会话） · 私聊」渲染成了勾上');
   }
 
+  // 上下文增强弹窗的两个页签：每个弹窗只允许可见一个，且必须是选中的那个
+  // （hidden 属性被作者样式 display:flex 盖掉过，真机上两个页签内容一模一样）。
+  const dialogs = results.find((frame) => (frame.dialogs ?? []).length > 0)?.dialogs ?? [];
+  if (dialogs.length === 0) {
+    failures.push('没测到上下文增强弹窗的页签（守门本身失效了）');
+  }
+  for (const [index, dialog] of dialogs.entries()) {
+    if (dialog.total !== 2) failures.push(`弹窗 ${index + 1} 的页签数不是 2（${dialog.total}）`);
+    if (dialog.visible.length !== 1) {
+      failures.push(`弹窗 ${index + 1} 可见的页签有 ${dialog.visible.length} 个（应为 1）：`
+        + `${dialog.visible.join('、')}`);
+    } else if (dialog.activeScope && dialog.visible[0] !== dialog.activeScope) {
+      failures.push(`弹窗 ${index + 1} 可见的是 ${dialog.visible[0]}，但选中的是 ${dialog.activeScope}`);
+    }
+  }
+
   if (failures.length > 0) {
     console.error(`布局守门失败（${failures.length} 项）：`);
     for (const failure of failures) console.error(`  ✗ ${failure}`);
