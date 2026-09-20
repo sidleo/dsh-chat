@@ -131937,7 +131937,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.0.1";
+var CHANNEL_VERSION = "0.0.5";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;

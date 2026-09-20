@@ -166,8 +166,8 @@ export const zh = {
   '数据目录': '数据目录',
   '日志目录': '日志目录',
   '读取失败': '读取失败',
-  '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。':
-    '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。',
+  '更新方式：`dsh plugin --profile web add @sidleo3/dsh-chat`（从 npm），或从仓库重新打包后让 DSH 重新加载。':
+    '更新方式：`dsh plugin --profile web add @sidleo3/dsh-chat`（从 npm），或从仓库重新打包后让 DSH 重新加载。',
   '发一条测试消息': '发一条测试消息',
   '选择目标': '选择目标',
   '发送': '发送',
@@ -346,8 +346,8 @@ export const en = {
   '数据目录': 'Data directory',
   '日志目录': 'Log directory',
   '读取失败': 'Failed to read',
-  '更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。':
-    'To update: pull the repo, rebuild, then let DSH reload the plugin.',
+  '更新方式：`dsh plugin --profile web add @sidleo3/dsh-chat`（从 npm），或从仓库重新打包后让 DSH 重新加载。':
+    'Update with `dsh plugin --profile web add @sidleo3/dsh-chat` (from npm), or repack from the repo and let DSH reload the plugin.',
   '发一条测试消息': 'Send a test message',
   '选择目标': 'Choose a target',
   '发送': 'Send',

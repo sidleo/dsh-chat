@@ -25,8 +25,9 @@ import { createContext, runInContext } from 'node:vm';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = join(root, 'packages');
 
-const REQUIRED = ['dsh-chat', 'dsh-chat-feishu', 'dsh-chat-weixin'];
-const HUB = 'dsh-chat';
+// 包名带作用域（npm 上 `dsh-chat` 这个裸名已被别人的项目占用）。
+const REQUIRED = ['@sidleo3/dsh-chat', '@sidleo3/dsh-chat-feishu', '@sidleo3/dsh-chat-weixin'];
+const HUB = '@sidleo3/dsh-chat';
 
 const failures = [];
 const notes = [];
@@ -115,8 +116,11 @@ for (const [name, { dir, manifest }] of manifests) {
     check(existsSync(patchPath), `${name}: 找不到补丁文件 ${patchRel}`);
     if (existsSync(patchPath)) {
       const text = await readFile(patchPath, 'utf8');
-      check(text.includes(`id: ${name}`), `${name}: ${patchRel} 未插入 id: ${name} 的行`);
-      check(text.includes(`name: ${name}`), `${name}: ${patchRel} 未引用包名 ${name}`);
+      // name 必须指向本包（作用域包要带引号：YAML 里 @ 是保留字符）；id 只用于定向补丁，非空即可。
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      check(new RegExp(`name:\\s*['\"]?${escaped}['\"]?`).test(text),
+        `${name}: ${patchRel} 未引用包名 ${name}`);
+      check(/id:\s*\S+/.test(text), `${name}: ${patchRel} 缺少插件行 id`);
     }
   }
 
@@ -192,12 +196,14 @@ if (!existsSync(join(root, LARK_CLI_ENTRY))) {
 }
 
 // 契约版本必须只有 hub 一处定义。
-const contractFile = join(packagesDir, HUB, 'shared/contract.mjs');
+// 注意用**目录**而不是包名拼路径：作用域包名里带 `/`，拼出来不是一个目录。
+const hubDir = manifests.get(HUB)?.dir ?? join(packagesDir, 'dsh-chat');
+const contractFile = join(hubDir, 'shared/contract.mjs');
 if (existsSync(contractFile)) {
   const text = await readFile(contractFile, 'utf8');
   check(/CONTRACT_VERSION\s*=\s*1\b/.test(text), 'CONTRACT_VERSION 应为 1');
 } else {
-  failures.push(`找不到 ${HUB}/shared/contract.mjs`);
+  failures.push(`找不到 ${HUB} 的 shared/contract.mjs`);
 }
 
 // 渠道声明的 CHANNEL_VERSION 必须与自己的 package.json 一致。

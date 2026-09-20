@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: "dsh-chat",
+  id: "@sidleo3/dsh-chat",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -3276,7 +3276,7 @@ var zh = {
   "\u6570\u636E\u76EE\u5F55": "\u6570\u636E\u76EE\u5F55",
   "\u65E5\u5FD7\u76EE\u5F55": "\u65E5\u5FD7\u76EE\u5F55",
   "\u8BFB\u53D6\u5931\u8D25": "\u8BFB\u53D6\u5931\u8D25",
-  "\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002": "\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002",
+  "\u66F4\u65B0\u65B9\u5F0F\uFF1A`dsh plugin --profile web add @sidleo3/dsh-chat`\uFF08\u4ECE npm\uFF09\uFF0C\u6216\u4ECE\u4ED3\u5E93\u91CD\u65B0\u6253\u5305\u540E\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u3002": "\u66F4\u65B0\u65B9\u5F0F\uFF1A`dsh plugin --profile web add @sidleo3/dsh-chat`\uFF08\u4ECE npm\uFF09\uFF0C\u6216\u4ECE\u4ED3\u5E93\u91CD\u65B0\u6253\u5305\u540E\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u3002",
   "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F": "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F",
   "\u9009\u62E9\u76EE\u6807": "\u9009\u62E9\u76EE\u6807",
   "\u53D1\u9001": "\u53D1\u9001",
@@ -3436,7 +3436,7 @@ var en = {
   "\u6570\u636E\u76EE\u5F55": "Data directory",
   "\u65E5\u5FD7\u76EE\u5F55": "Log directory",
   "\u8BFB\u53D6\u5931\u8D25": "Failed to read",
-  "\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002": "To update: pull the repo, rebuild, then let DSH reload the plugin.",
+  "\u66F4\u65B0\u65B9\u5F0F\uFF1A`dsh plugin --profile web add @sidleo3/dsh-chat`\uFF08\u4ECE npm\uFF09\uFF0C\u6216\u4ECE\u4ED3\u5E93\u91CD\u65B0\u6253\u5305\u540E\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u3002": "Update with `dsh plugin --profile web add @sidleo3/dsh-chat` (from npm), or repack from the repo and let DSH reload the plugin.",
   "\u53D1\u4E00\u6761\u6D4B\u8BD5\u6D88\u606F": "Send a test message",
   "\u9009\u62E9\u76EE\u6807": "Choose a target",
   "\u53D1\u9001": "Send",
@@ -4116,7 +4116,7 @@ function VersionPanel(props) {
         h8(
           "code",
           { className: "dchat-code" },
-          `${info?.hubPackage ?? "dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
+          `${info?.hubPackage ?? "@sidleo3/dsh-chat"} ${info?.hubVersion ?? "\u2026"}`
         )
       ),
       h8(
@@ -4162,15 +4162,16 @@ function VersionPanel(props) {
     h8(
       "div",
       { className: "dchat-updateHint" },
-      h8("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A\u5728\u4ED3\u5E93\u91CC\u62C9\u53D6\u65B0\u4EE3\u7801\u540E\u91CD\u65B0\u6253\u5305\uFF0C\u518D\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002")),
+      h8("p", { className: "dchat-cardDescription" }, t("\u66F4\u65B0\u65B9\u5F0F\uFF1A`dsh plugin --profile web add @sidleo3/dsh-chat`\uFF08\u4ECE npm\uFF09\uFF0C\u6216\u4ECE\u4ED3\u5E93\u91CD\u65B0\u6253\u5305\u540E\u8BA9 DSH \u91CD\u65B0\u52A0\u8F7D\u3002")),
       h8("code", { className: "dchat-code dchat-codeBlock" }, "npm run check"),
       h8(
         "code",
         { className: "dchat-code dchat-codeBlock" },
-        "dsh plugin --profile web add <\u672C\u4ED3\u5E93 packages/dsh-chat \u7684\u7EDD\u5BF9\u8DEF\u5F84>"
+        "dsh plugin --profile web add @sidleo3/dsh-chat"
       )
     )
   );
+  ;
 }
 
 // packages/dsh-chat/client/section.js

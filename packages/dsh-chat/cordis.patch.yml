@@ -1,3 +1,5 @@
+# 这一行把插件挂进 DSH profile 的插件树。
+# name 必须是**包名**（作用域包要带引号，YAML 里 @ 是保留字符）；id 只用于定向补丁。
 - insert:
     - id: dsh-chat
-      name: dsh-chat
+      name: '@sidleo3/dsh-chat'

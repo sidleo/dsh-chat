@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: "dsh-chat-feishu",
+  id: "@sidleo3/dsh-chat-feishu",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

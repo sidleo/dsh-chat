@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: "dsh-chat-weixin",
+  id: "@sidleo3/dsh-chat-weixin",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

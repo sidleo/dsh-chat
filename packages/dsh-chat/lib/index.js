@@ -5251,7 +5251,7 @@ function apply(ctx, config = {}) {
         contractVersion: CONTRACT_VERSION,
         // 「版本与更新」面板要的三个层次：hub 版本、渠道契约版本、各渠道包版本。
         hubVersion: HUB_VERSION,
-        hubPackage: "dsh-chat",
+        hubPackage: "@sidleo3/dsh-chat",
         dataDir: hubDataDir(config.dataDir),
         logDir: logsDir,
         channels: registry.list()

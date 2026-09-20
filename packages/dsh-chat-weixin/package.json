@@ -1,7 +1,6 @@
 {
-  "name": "dsh-chat-weixin",
-  "version": "0.0.1",
-  "private": true,
+  "name": "@sidleo3/dsh-chat-weixin",
+  "version": "0.0.5",
   "type": "module",
   "description": "dsh-chat 微信渠道插件（iLink 扫码登录、长轮询、私聊收发）",
   "license": "MIT",
@@ -32,7 +31,21 @@
     },
     "compatibility": {
       "dsh": "0.1.5-rc.2",
-      "profiles": ["web"]
+      "profiles": [
+        "web"
+      ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidleo/dsh-chat.git",
+    "directory": "packages/dsh-chat-weixin"
+  },
+  "homepage": "https://github.com/sidleo/dsh-chat#readme",
+  "bugs": {
+    "url": "https://github.com/sidleo/dsh-chat/issues"
   }
 }

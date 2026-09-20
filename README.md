@@ -4,11 +4,14 @@
 每种聊天软件是独立的渠道插件，新增聊天软件只需新增一个包。
 
 ```
-packages/dsh-chat            Hub：设置页入口「Chat机器人」+ 渠道注册表 + 共享内核
-packages/dsh-chat-feishu     飞书渠道（凭据/长连接/私聊群聊/任务过程展示）
-packages/dsh-chat-weixin     微信渠道（iLink 扫码登录/长轮询/私聊）
+packages/dsh-chat            Hub：设置页入口「Chat机器人」+ 渠道注册表 + 共享内核     → @sidleo3/dsh-chat
+packages/dsh-chat-feishu     飞书渠道（凭据/长连接/私聊群聊/任务过程展示）          → @sidleo3/dsh-chat-feishu
+packages/dsh-chat-weixin     微信渠道（iLink 扫码登录/长轮询/私聊）               → @sidleo3/dsh-chat-weixin
 packages/dsh-chat-fixture    契约验证用假渠道（不发布）
 ```
+
+> npm 上必须带作用域：裸名 `dsh-chat` 属于**另一个项目**（[baixianger/dsh-chat](https://github.com/baixianger/dsh-chat)），
+> 不是本仓库。所以三个包都发布在 `@sidleo3` 作用域下。
 
 新渠道作者请直接读 [`CONTRACT.md`](./CONTRACT.md)——那是唯一需要的文档。
 
@@ -42,10 +45,20 @@ npm run rehearsal # 离线端到端演练：真实 hub + 真实飞书卡片 + �
 ## 安装
 
 ```bash
-dsh plugin --profile web add /绝对路径/packages/dsh-chat
-dsh plugin --profile web add /绝对路径/packages/dsh-chat-feishu
-dsh plugin --profile web add /绝对路径/packages/dsh-chat-weixin
+# 从 npm 装（推荐）
+dsh plugin --profile web add @sidleo3/dsh-chat
+dsh plugin --profile web add @sidleo3/dsh-chat-feishu
+dsh plugin --profile web add @sidleo3/dsh-chat-weixin
+
+# 或从仓库装（link 到本地目录；目录名不变，包名变了）
+dsh plugin --profile web add link:/绝对路径/packages/dsh-chat
+dsh plugin --profile web add link:/绝对路径/packages/dsh-chat-feishu
+dsh plugin --profile web add link:/绝对路径/packages/dsh-chat-weixin
 ```
+
+> 从旧版（裸名 `dsh-chat` / `dsh-chat-feishu` / `dsh-chat-weixin`）升级：包名变了，
+> **要先移除旧的三个再装新的**，否则同一台机器人会被挂两次（表现为双份回复）：
+> `dsh plugin --profile web remove dsh-chat dsh-chat-feishu dsh-chat-weixin`。
 
 安装后需重启 DSH Host（host 半边），并刷新浏览器页面（client 半边）。
 

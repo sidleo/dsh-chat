@@ -1,10 +1,15 @@
 {
-  "name": "dsh-chat",
-  "version": "0.0.1",
-  "private": true,
+  "name": "@sidleo3/dsh-chat",
+  "version": "0.0.5",
   "type": "module",
   "description": "DSH 聊天机器人管理入口：渠道注册表、共享内核与设置页入口（飞书/微信等渠道各自独立成插件）",
-  "keywords": ["deepseek-harness", "dsh", "dsh-plugin", "chat", "chatbot"],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "chat",
+    "chatbot"
+  ],
   "license": "MIT",
   "main": "./lib/index.js",
   "exports": {
@@ -35,10 +40,24 @@
     },
     "compatibility": {
       "dsh": "0.1.5-rc.2",
-      "profiles": ["web"]
+      "profiles": [
+        "web"
+      ]
     }
   },
   "scripts": {
     "build": "node ../../scripts/build-all.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidleo/dsh-chat.git",
+    "directory": "packages/dsh-chat"
+  },
+  "homepage": "https://github.com/sidleo/dsh-chat#readme",
+  "bugs": {
+    "url": "https://github.com/sidleo/dsh-chat/issues"
   }
 }

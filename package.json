@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-workspace",
-  "version": "0.0.1",
+  "version": "0.0.5",
   "private": true,
   "type": "module",
   "description": "DSH 聊天机器人插件工作区：dsh-chat 管理入口 + 各聊天软件渠道插件",

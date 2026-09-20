@@ -217,7 +217,7 @@ const RPC_FIXTURES = {
   'channel.list': () => ({
     contractVersion: 1,
     hubVersion: '0.1.0',
-    hubPackage: 'dsh-chat',
+    hubPackage: '@sidleo3/dsh-chat',
     dataDir: '/Users/zhang3/.dsh/integrations/dsh-chat',
     logDir: '/Users/zhang3/.dsh/integrations/dsh-chat/logs',
     channels: [

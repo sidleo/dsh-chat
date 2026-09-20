@@ -1,7 +1,6 @@
 {
-  "name": "dsh-chat-feishu",
-  "version": "0.0.1",
-  "private": true,
+  "name": "@sidleo3/dsh-chat-feishu",
+  "version": "0.0.5",
   "type": "module",
   "description": "dsh-chat 飞书渠道插件（凭据、长连接、私聊/群聊、任务过程展示）",
   "license": "MIT",
@@ -39,5 +38,17 @@
   },
   "devDependencies": {
     "@larksuiteoapi/node-sdk": "1.73.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sidleo/dsh-chat.git",
+    "directory": "packages/dsh-chat-feishu"
+  },
+  "homepage": "https://github.com/sidleo/dsh-chat#readme",
+  "bugs": {
+    "url": "https://github.com/sidleo/dsh-chat/issues"
   }
 }

@@ -66,7 +66,7 @@ export function VersionPanel(props) {
     h('li', { className: 'dchat-listItem' },
       h('span', null, t('Chat机器人内核')),
       h('code', { className: 'dchat-code' },
-        `${info?.hubPackage ?? 'dsh-chat'} ${info?.hubVersion ?? '…'}`)),
+        `${info?.hubPackage ?? '@sidleo3/dsh-chat'} ${info?.hubVersion ?? '…'}`)),
     h('li', { className: 'dchat-listItem' },
       h('span', null, t('渠道契约版本')),
       h('code', { className: 'dchat-code' }, `v${info?.contractVersion ?? '…'}`)),
@@ -90,8 +90,8 @@ export function VersionPanel(props) {
         h('code', { className: 'dchat-code' }, info.logDir)))
     : null,
   h('div', { className: 'dchat-updateHint' },
-    h('p', { className: 'dchat-cardDescription' }, t('更新方式：在仓库里拉取新代码后重新打包，再让 DSH 重新加载插件。')),
+    h('p', { className: 'dchat-cardDescription' }, t('更新方式：`dsh plugin --profile web add @sidleo3/dsh-chat`（从 npm），或从仓库重新打包后让 DSH 重新加载。')),
     h('code', { className: 'dchat-code dchat-codeBlock' }, 'npm run check'),
     h('code', { className: 'dchat-code dchat-codeBlock' },
-      'dsh plugin --profile web add <本仓库 packages/dsh-chat 的绝对路径>')));
+      'dsh plugin --profile web add @sidleo3/dsh-chat')));;
 }
