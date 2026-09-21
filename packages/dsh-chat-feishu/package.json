@@ -1,6 +1,6 @@
 {
   "name": "@sidleo3/dsh-chat-feishu",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "description": "dsh-chat 飞书渠道插件（凭据、长连接、私聊/群聊、任务过程展示）",
   "license": "MIT",
