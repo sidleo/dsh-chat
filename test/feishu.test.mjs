@@ -2614,7 +2614,9 @@ test('bot.register：扫码接入（新建机器人）——扫码的人成为�
         sdk: async () => ({ Client: class {}, WSClient: class {}, Domain: {}, LoggerLevel: {} }),
         createGateway: () => gateway,
         createProbe: () => ({ async verify() { return { botName: '扫码建的机器人', botOpenId: 'ou_bot' }; } }),
-        encodeQr: async (url) => `data:image/png;base64,${Buffer.from(url).toString('base64')}`,
+        // **不注入 encodeQr**：走 host 里那条真实的 `await import('qrcode')`。
+        // 这里若红，说明 qrcode 没解析出来——真机上就是"只能点链接、扫不了码"
+        // （曾经静默降级过：外置依赖没人提供，页面上只留一句"没能生成二维码"）。
         registerApp: (options) => {
           pending.options = options;
           return new Promise((resolve, reject) => {
@@ -2657,7 +2659,8 @@ test('bot.register：扫码接入（新建机器人）——扫码的人成为�
     const ready = await controller.endpoints['bot.register.status']({});
     assert.equal(ready.value.state, 'qr_ready');
     assert.equal(ready.value.verificationUrl, 'https://open.feishu.cn/register/abc');
-    assert.match(ready.value.qrCodeDataUrl, /^data:image\/png;base64,/);
+    assert.match(ready.value.qrCodeDataUrl ?? '', /^data:image\/png;base64,/,
+      '没编出二维码：qrcode 没解析出来（qrCodeDataUrl 为 null 时前端只能给链接）');
     assert.ok(ready.value.remainingSeconds > 0 && ready.value.remainingSeconds <= 600);
     assert.equal(ready.value.bot, null, '还没成功时不该有机器人');
 

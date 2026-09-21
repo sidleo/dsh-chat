@@ -117,8 +117,13 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   扫码那条路的**属主就是扫码的人**（`user_info.open_id`），域名跟着 `tenant_brand` 走，
   所以不需要放宽策略；手动那条路属主可留空（见下）。扫码状态机在
   `host/provision.mjs`（起始/qr_ready/polling/slow_down/saving/成功/过期/取消/失败），
-  二维码由 host 用 `qrcode` 编码成 data URL——**这个依赖是构建期外置的，拿不到就只回链接**，
-  前端会显示「打开授权页面」并写明原因（绝不因为缺一个可选依赖让这条路走不通）。
+  二维码由 host 用 `qrcode` 编码成 data URL——**这个依赖是构建期外置的**（`build-host.mjs` 的
+  `DEFAULT_EXTERNAL`），所以运行期必须真能解析到它：`packages/dsh-chat-feishu` 的 `dependencies`
+  里声明了 `qrcode`（工作区要把依赖装齐，`pnpm install`）。真机上翻过一次"怎么都出不来二维码"：
+  web profile 里没有它、插件又是软链到工作区（Node 按**真实路径**解析，根本不会看 profile 的
+  `node_modules`），于是每次都静默降级成"只能点链接"，页面上只有一句"没能生成二维码"。
+  拿不到仍只回链接（绝不因为缺一个可选依赖让这条路走不通），前端显示「打开授权页面」；
+  排查看日志里 `没能加载 qrcode`，**单测也钉了这条**（扫码那条路必须真编出一张 data URL）。
   **扫码时带应用清单**（`host/app-manifest.mjs` 的 `FEISHU_SCAN_REGISTER_OPTIONS`）：
   本渠道真的会用的权限/事件/回调（`addons`）+ 预填的应用名/描述（`appPreset`）+ `createOnly: true`
   （钉死"只能新建"，否则用户误选一台在用的应用就会去改它的配置）——这些**预填进扫码后的确认页**，

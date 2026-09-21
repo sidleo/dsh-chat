@@ -39,6 +39,9 @@
   "devDependencies": {
     "@larksuiteoapi/node-sdk": "1.73.0"
   },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
   "publishConfig": {
     "access": "public"
   },
