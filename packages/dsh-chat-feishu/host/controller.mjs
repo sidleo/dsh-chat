@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
+import { FEISHU_SCAN_REGISTER_OPTIONS } from './app-manifest.mjs';
 import { createFeishuBridge } from './bridge.mjs';
 import { createFeishuConfigStore } from './config-store.mjs';
 import { createLarkCli, normalizeLarkUserIdentity } from './lark-cli.mjs';
@@ -1129,10 +1130,14 @@ export function createFeishuController({ deps, logger = console, config = {}, in
        * （回显二维码/链接、剩余秒数、失败原因、成功后的机器人）、`cancel` 取消。
        * 二维码由 host 转成 data URL（`qrcode` 是构建期外置依赖）：拿不到就只回链接，
        * 前端照样能让人打开——**不静默**，状态里会写清为什么没有二维码。
+       *
+       * 带上 `FEISHU_SCAN_REGISTER_OPTIONS`：把本渠道真的要用的权限/事件/回调**预填进确认页**，
+       * 用户扫完在页面上点一次确认就一起开通；同时 `createOnly` 钉死"只能新建"，
+       * 免得误选一台正在用的应用去改它的配置。清单口径见 `app-manifest.mjs`。
        */
       'bot.register.start': async () => ({
         ok: true,
-        value: await provisionStatus(provision.start()),
+        value: await provisionStatus(provision.start(FEISHU_SCAN_REGISTER_OPTIONS)),
       }),
 
       'bot.register.status': async () => ({ ok: true, value: await provisionStatus(provision.status()) }),

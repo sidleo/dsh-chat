@@ -119,6 +119,13 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   `host/provision.mjs`（起始/qr_ready/polling/slow_down/saving/成功/过期/取消/失败），
   二维码由 host 用 `qrcode` 编码成 data URL——**这个依赖是构建期外置的，拿不到就只回链接**，
   前端会显示「打开授权页面」并写明原因（绝不因为缺一个可选依赖让这条路走不通）。
+  **扫码时带应用清单**（`host/app-manifest.mjs` 的 `FEISHU_SCAN_REGISTER_OPTIONS`）：
+  本渠道真的会用的权限/事件/回调（`addons`）+ 预填的应用名/描述（`appPreset`）+ `createOnly: true`
+  （钉死"只能新建"，否则用户误选一台在用的应用就会去改它的配置）——这些**预填进扫码后的确认页**，
+  用户点一次确认就一起开通，不必再自己去后台逐个勾。两条平台口径：**平台不校验权限点 id**
+  （写错 = 确认页静默忽略，所以改清单必须对着开放平台权限目录核实）；事件**订阅方式（长连接）**、
+  回调地址属敏感配置，`addons` 传不了，仍要人工确认。清单口径 = `lark-gateway.mjs` 里真实调用的接口，
+  不"顺手多要"（多要来的数据面只扩大暴露面），有单测钉住形状与最小权限。
   真机排查：点「扫码新建机器人」后日志应有 `扫码接入失败：…`（失败时）或成功那行
   `接入机器人：…`；状态一直停在 `starting` 说明 SDK 的 `registerApp` 没回调（版本不支持会
   明确回 `feishu/register-unsupported`）。
@@ -350,7 +357,7 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P5⁺ | 超时后的延迟交付 | ✅ 超时只登记一条待交付记录，之后有界复查（`probeTurn`）、拿到结果补发；飞书/微信都注册了补发函数，`/diag` 可见；**不承诺恰好一次**（宁可能重复，也不丢） |
 | P5 | 富媒体（图片/文件）与主动投递 | ✅  主动投递文本+出站文件/图片（飞书）、**投递目标可自定义名字**（微信没有昵称、飞书缺权限时只有掩码 id，一排认不出的 id 里挑不出要发给谁；自定义名不会被渠道补名顶掉，留空即回到自动名字）、飞书入站图片+入站文件已通；人在环回传已通：工具/思考/**已答提问**收进同一个折叠面板（默认收起、展开看全部；一行一项、形态对齐 DSH Web 会话：`工具调用 · wiki_get · …`/`Bash · 描述`/`Skill · 技能名`/`思考 · …`/`提问 · 口径 → 答案`；标题在本轮没结束时显示最新一项、结束后才显示「工具与思考(N)」）、已答提问**按发生顺序**在工具面板里**再嵌一层**「❓ N/M 已回答」折叠控件（控件本身留在面板外；Card 2.0，一页一题：单选按钮+输入框 / 多选勾选器 / 文本输入框；无进度卡时退回独立卡片）、**任务清单**单独一个面板放在工具面板下面（未结束展开、结束收起）、**交付文件**（`present` 声明）在回复后合成**一条不带任何文字的 `post` 消息**发出（图片按图片内嵌在前、文件进附件区在后）；微信入站图片+入站文件（CDN 下载 + AES-128-ECB 解密）与出站文件/图片（getuploadurl + 加密上传 CDN）已通 |
 | P6 | 平台化：会话渠道标识、更新面板、i18n 完整化 | 会话渠道标识 ✅（host 侧：工作区命名「渠道 · 机器人」+ 会话标题加「渠道 · 」前缀，均幂等；**历史会话用 `/retitle`（别名 `/fixtitles`，仅属主）一次性回填**——前缀只在"下一次发消息"时自动补，长期不说话的旧会话要手动补一次；client 侧：侧边栏会话行把前缀换渠道徽标——会话列表没有插槽，做的是纯装饰、可还原、**认结构不认类名**的 DOM 增强，见 `client/session-badges.js`）；版本与更新 ✅（Chat机器人 页右上角入口展开：内核/契约/各渠道包版本与状态、数据与日志目录、更新方式，`check` 会与 package.json 对账）；i18n 完整化 ✅（共享组件与上下文增强表单全部走 `t()`，渠道字典同步补齐）；⚠️ 会话标题前缀自 P6-① 起一直是坏的（`session/list` 漏 `_request`），已修，重启后每个会话在**下一次消息**结束时补上 |
-| P7 | 机器人自助接入与可用性 | ✅ 飞书「新建机器人接入」**两条路**（照 dsh-im 对齐）：**扫码新建**（`registerApp` 一次性授权链接 → 自动创建应用，**扫码的人就是属主**）与**手动接入已有机器人**（填 App ID + App Secret，属主可留空）——手动那条**先验凭据再写任何东西**（探针换 `tenant_access_token`），`botId`/`secretRef` 由 `sha256(appId)` 推导（重复接入直接拒绝），落盘失败回滚刚写的凭据；属主留空时客户端紧接着调 hub 的 `bot.access-policy.open-scope` 把私聊放宽到「任何人可用」（新机器人没有属主候选，默认策略谁都进不来），那一步失败只告警、绝不静默。另有：访问策略白名单显示「名字 + id」（飞书 `names.resolve`，人名走**通讯录 → 共同群成员**两条路，查不到只显示 id + 能行动的说明）|
+| P7 | 机器人自助接入与可用性 | ✅ 飞书「新建机器人接入」**两条路**（照 dsh-im 对齐）：**扫码新建**（`registerApp` 一次性授权链接 → 自动创建应用，**扫码的人就是属主**；授权链接上带**应用清单** `addons`/`appPreset`/`createOnly`，权限预填进确认页、点一次确认就一起开通，见 `host/app-manifest.mjs` 与「上线与排查」）与**手动接入已有机器人**（填 App ID + App Secret，属主可留空）——手动那条**先验凭据再写任何东西**（探针换 `tenant_access_token`），`botId`/`secretRef` 由 `sha256(appId)` 推导（重复接入直接拒绝），落盘失败回滚刚写的凭据；属主留空时客户端紧接着调 hub 的 `bot.access-policy.open-scope` 把私聊放宽到「任何人可用」（新机器人没有属主候选，默认策略谁都进不来），那一步失败只告警、绝不静默。另有：访问策略白名单显示「名字 + id」（飞书 `names.resolve`，人名走**通讯录 → 共同群成员**两条路，查不到只显示 id + 能行动的说明）|
 | P8 | 提示词与多会话的正确性 | ✅ 增强提示词改走**会话级系统提示词段**（`ctx.systemPrompt.section`，全局注册按 agent 求值；没有该服务的部署自动退回消息前缀并告警一次；`config.guidanceTarget` 可强制 `prefix`）；**会话不允许被两个聊天共用**（下拉扣下 + apply 拒绝 + 卡片明示，因为提示词一个会话只有一个槽位）；**会话标题带"哪个群/哪个人"**（渠道给 `chatLabel`，前缀可升级不叠加，`/retitle` 按绑定键兜底） |
 | P9 | lark-cli 身份红线 | ✅ 调 lark-cli 只能用自己的授权：① 插件自己调只走 `host/lark-cli.mjs`（守门：别的包文件不许引入 `node:child_process`），每次注入 `--profile <本应用那一份>` + 显式 `--as`，调用前 `whoami` 核对 `appId`（用户身份再核对钉住的 `openId`），对不上就拒绝、绝不回退到当前生效 profile；② 身份策略是**每机器人**设置（默认 `bot-only`），设置页「lark-cli 身份」可改，**开启用户身份必须二次确认**（不带 `confirm:true` 一个字节都不写），开启时由 lark-cli回答"登录的是谁"并钉住（`larkUserOpenId`）。profile 名不猜——按 appId 从 `lark-cli profile list`读回（见 P10 第 ③ 条） |
 | P10 | 身份策略真的生效（模型自己调的 lark-cli 也管得住） | ✅ 真机上「只用应用身份」形同虚设——模型用 lark-cli 的 skill + bash 直接 `--as user` 发消息，绕过了插件自己的调用入口。现在三件事一起上：① `host/lark-guard.mjs` 接 DSH 的 `tools/pre-execute`，**本渠道聊天会话**里的 lark-cli 必须带本机器人专用 profile + 显式身份，`bot-only` 时拒 `--as user`，并禁 `profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`（拒绝时把正确写法告诉模型，并留日志）；② 会话拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实 + 一段系统提示词，先写对再兜底；③ profile 用**本应用那一份**：按 appId 从 `lark-cli profile list` 读回真实名字（真机实测一个 appId 只有一份 profile，想另建会被 lark-cli 拒：`each profile must have a unique app-id`），机器人启动时解析并记住名字（门禁与提示词都报这个名字，报错了模型写什么都不对），拿不到只记日志、不影响启动；**不改**那份 profile 的 `strict-mode` / `default-as`（用户自己也在用它）。注意「只是提到 lark-cli」（`grep -rn lark-cli docs/`、`cat lark-cli.md`）不算调用，不拦 |

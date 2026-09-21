@@ -15,6 +15,7 @@ import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh-chat/shared/context-enhancement.mjs';
 import { enhanceReplyReference } from '../packages/dsh-chat/shared/reply-reference.mjs';
 import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
+import { FEISHU_SCAN_REGISTER_OPTIONS } from '../packages/dsh-chat-feishu/host/app-manifest.mjs';
 import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feishu/host/config-store.mjs';
 import { createFeishuController, deriveFeishuIdentity } from '../packages/dsh-chat-feishu/host/controller.mjs';
 import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
@@ -2562,6 +2563,27 @@ test('bot.add：验凭据 → 写凭据 → 落盘 → 起连接；重复接入�
   }
 });
 
+test('扫码接入的应用清单：形状合法、最小权限（平台不校验 id，形状错了也不会有人告诉你）', () => {
+  const { addons, appPreset, createOnly } = FEISHU_SCAN_REGISTER_OPTIONS;
+  // SDK 的 normalizeAddons 会拒掉空清单（"addons must contain at least one scope, event or callback"），
+  // 但**不校验权限点是否存在**（写错的 id 会被确认页静默忽略）——所以至少把形状钉在这里。
+  assert.equal(createOnly, true, '只允许新建');
+  assert.equal(addons.preset, false);
+  const all = [...addons.scopes.tenant, ...addons.events.items.tenant, ...addons.callbacks.items];
+  assert.ok(all.length > 0);
+  for (const item of all) {
+    assert.equal(typeof item, 'string');
+    assert.equal(item, item.trim());
+    assert.ok(item.length > 0);
+  }
+  assert.equal(new Set(all).size, all.length, '清单里不该有重复项');
+  for (const scope of addons.scopes.tenant) {
+    // 最小权限：这台机器人只碰 IM 与"把 id 换成名字"要用的通讯录字段，别的数据面一概不要。
+    assert.match(scope, /^(im|contact):/u, `清单里出现了与本渠道无关的权限点：${scope}`);
+  }
+  assert.match(appPreset.name, /\{user\}/u);
+});
+
 test('bot.register：扫码接入（新建机器人）——扫码的人成为属主，成功后才落盘', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-register-'));
   try {
@@ -2609,6 +2631,27 @@ test('bot.register：扫码接入（新建机器人）——扫码的人成为�
     assert.equal(started.ok, true);
     assert.equal(started.value.state, 'starting');
     assert.equal(started.value.qrCodeDataUrl, null);
+
+    // ①b 交给 SDK 的参数必须是**带清单的新建**：权限/事件/回调预填进确认页，且只允许新建。
+    //     这几条是"扫码建出来的应用有没有权限"的唯一保障——少传一个参数，真机上就是
+    //     "扫码建好了、发消息缺权限"，而单测全绿（所以必须在这里钉住）。
+    assert.equal(pending.options.createOnly, true, '新建这条路必须钉死"只能新建"，别让用户误改已有应用');
+    assert.deepEqual(pending.options.addons.events.items.tenant, ['im.message.receive_v1']);
+    assert.deepEqual(pending.options.addons.callbacks.items, ['card.action.trigger']);
+    assert.equal(pending.options.addons.preset, false, '不要平台默认模板，确认页上只列我们声明的项');
+    for (const scope of [
+      'im:message.p2p_msg:readonly',
+      'im:message.group_at_msg:readonly',
+      'im:message.group_at_msg.include_bot:readonly',
+      'im:message:readonly',
+      'im:message:send_as_bot',
+      'im:resource',
+      'im:chat:readonly',
+      'contact:user.base:readonly',
+    ]) {
+      assert.ok(pending.options.addons.scopes.tenant.includes(scope), `清单里少了 ${scope}`);
+    }
+    assert.match(pending.options.appPreset.name, /\{user\}/u, '应用名要能用扫码人的名字');
 
     pending.options.onQRCodeReady({ url: 'https://open.feishu.cn/register/abc', expireIn: 600 });
     const ready = await controller.endpoints['bot.register.status']({});

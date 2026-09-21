@@ -153,6 +153,7 @@ const zh = {
   '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。': '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。',
   '扫码新建机器人': '扫码新建机器人',
   '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。': '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。',
+  '扫码后的确认页会列出这台机器人需要的权限（已经替你选好），确认一次就一起开通；个别权限要管理员审批、应用发布后才生效。': '扫码后的确认页会列出这台机器人需要的权限（已经替你选好），确认一次就一起开通；个别权限要管理员审批、应用发布后才生效。',
   '手动接入已有机器人': '手动接入已有机器人',
   '打开授权页面': '打开授权页面',
   '这台 Host 没能生成二维码，请点上面的链接继续。': '这台 Host 没能生成二维码，请点上面的链接继续。',
@@ -314,6 +315,7 @@ const en = {
   '两种方式：扫码新建一个飞书机器人（推荐，扫码的人就是属主），或手动填已有机器人的凭据。': 'Two ways: scan to create a new Feishu bot (recommended — whoever scans becomes the owner), or paste the credentials of an existing bot.',
   '扫码新建机器人': 'Scan to create a bot',
   '点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。': 'This requests a one-time authorization link from Feishu. Scan it with Feishu (or open it in your browser) and a new app is created and connected automatically.',
+  '扫码后的确认页会列出这台机器人需要的权限（已经替你选好），确认一次就一起开通；个别权限要管理员审批、应用发布后才生效。': 'The confirmation page lists the permissions this bot needs, already selected for you — one confirmation grants them together. A few may need admin approval and take effect once the app is published.',
   '手动接入已有机器人': 'Connect an existing bot manually',
   '打开授权页面': 'Open the authorization page',
   '这台 Host 没能生成二维码，请点上面的链接继续。': 'This Host could not render the QR code — use the link above instead.',
@@ -1000,6 +1002,10 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
     h('h4', { className: 'dchat-onboardTitle' }, t('扫码新建机器人')),
     h('p', { className: 'dchat-cardDescription' },
       t('点下面的按钮会向飞书申请一个一次性授权链接：用飞书扫一扫，或在浏览器里打开它，就会自动创建应用并接入。')),
+    // 权限是**预填进确认页**的（host 侧 app-manifest.mjs）：用户要知道"扫完要点确认"这一步，
+    // 否则会以为扫码就已经全部就绪，遇到还没发布的权限又找不到原因。
+    h('p', { className: 'dchat-cardDescription' },
+      t('扫码后的确认页会列出这台机器人需要的权限（已经替你选好），确认一次就一起开通；个别权限要管理员审批、应用发布后才生效。')),
     h('div', { className: 'dchat-actions' },
       h('button', {
         type: 'button',

@@ -126480,6 +126480,50 @@ ${lines.join("\n")}
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+// packages/dsh-chat-feishu/host/app-manifest.mjs
+var FEISHU_APP_TENANT_SCOPES = Object.freeze([
+  // 收消息（事件 `im.message.receive_v1` 的准入权限，三个场景各一条）
+  "im:message.p2p_msg:readonly",
+  // 私聊消息
+  "im:message.group_at_msg:readonly",
+  // 群里 @ 机器人
+  "im:message.group_at_msg.include_bot:readonly",
+  // 群里其它机器人 @ 机器人
+  // 消息本身
+  "im:message:readonly",
+  // 读消息正文 / 下载消息里的图片与文件
+  "im:message:send_as_bot",
+  // 发消息、回消息、更新卡片
+  "im:message.reactions:write_only",
+  // 「在做了」表情（缺了不致命，但表情一直打不上）
+  // 资源
+  "im:resource",
+  // 上传机器人要发的图片 / 文件
+  // 把 id 换成名字（白名单、投递目标；查不到时设置页只能显示一串 ou_…）
+  "im:chat:readonly",
+  // 群名、群成员
+  "contact:user.base:readonly"
+  // 人名
+]);
+var FEISHU_APP_EVENTS = Object.freeze(["im.message.receive_v1"]);
+var FEISHU_APP_CALLBACKS = Object.freeze(["card.action.trigger"]);
+var FEISHU_APP_PRESET = Object.freeze({
+  name: "{user} \u7684 DSH \u52A9\u624B",
+  desc: "\u8FDE\u63A5\u98DE\u4E66\u4E0E DeepSeek Harness\uFF0C\u5728\u804A\u5929\u91CC\u4F7F\u7528 AI \u52A9\u624B\u3002"
+});
+var FEISHU_SCAN_REGISTER_OPTIONS = Object.freeze({
+  createOnly: true,
+  appPreset: FEISHU_APP_PRESET,
+  addons: Object.freeze({
+    // `preset: false` = 不要平台的默认模板，从「仅机器人能力、无业务权限」起，
+    // 确认页上就只是上面声明的这几项（默认模板里有什么、版本间会不会变，我们不去猜）。
+    preset: false,
+    scopes: Object.freeze({ tenant: FEISHU_APP_TENANT_SCOPES }),
+    events: Object.freeze({ items: Object.freeze({ tenant: FEISHU_APP_EVENTS }) }),
+    callbacks: Object.freeze({ items: FEISHU_APP_CALLBACKS })
+  })
+});
+
 // packages/dsh-chat-feishu/host/bridge.mjs
 import { stat } from "node:fs/promises";
 
@@ -131575,10 +131619,14 @@ function createFeishuController({ deps, logger = console, config = {}, internals
        * （回显二维码/链接、剩余秒数、失败原因、成功后的机器人）、`cancel` 取消。
        * 二维码由 host 转成 data URL（`qrcode` 是构建期外置依赖）：拿不到就只回链接，
        * 前端照样能让人打开——**不静默**，状态里会写清为什么没有二维码。
+       *
+       * 带上 `FEISHU_SCAN_REGISTER_OPTIONS`：把本渠道真的要用的权限/事件/回调**预填进确认页**，
+       * 用户扫完在页面上点一次确认就一起开通；同时 `createOnly` 钉死"只能新建"，
+       * 免得误选一台正在用的应用去改它的配置。清单口径见 `app-manifest.mjs`。
        */
       "bot.register.start": async () => ({
         ok: true,
-        value: await provisionStatus(provision.start())
+        value: await provisionStatus(provision.start(FEISHU_SCAN_REGISTER_OPTIONS))
       }),
       "bot.register.status": async () => ({ ok: true, value: await provisionStatus(provision.status()) }),
       "bot.register.cancel": async () => ({ ok: true, value: await provisionStatus(provision.cancel()) }),
