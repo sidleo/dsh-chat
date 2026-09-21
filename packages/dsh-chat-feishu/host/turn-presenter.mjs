@@ -226,9 +226,9 @@ export function askRow({ header, question, answer } = {}) {
  * 正文按"每条元素各自截断 + 总量预算"控制，绝不做字符串级截断——
  * 那会产出非法 JSON 让卡片整条发不出去。
  *
- * @param options - { title, rows, questionRows, answer, panelTitle, currentQuestion, template }。
+ * @param options - { title, rows, questionRows, answer, panelTitle, currentQuestion, currentApproval, template }。
  *   `rows` 是工具/思考行，`questionRows` 是已答提问行，两者同处一个折叠面板；
- *   `currentQuestion` 是**还没回答**的提问元素（控件必须留在面板外）。
+ *   `currentQuestion` / `currentApproval` 是**还没回答/处理**的交互元素（控件必须留在面板外）。
  * @returns 飞书交互卡片对象。
  */
 export function renderStepCard({
@@ -237,6 +237,7 @@ export function renderStepCard({
   answer = '',
   panelTitle = '',
   currentQuestion = [],
+  currentApproval = [],
   todos = null,
   template = 'blue',
 }) {
@@ -318,6 +319,10 @@ export function renderStepCard({
   if (Array.isArray(currentQuestion) && currentQuestion.length > 0) {
     elements.push(...currentQuestion);
   }
+  // 授权控件同样要留在面板外；处理完会变成工具面板里的一行记录。
+  if (Array.isArray(currentApproval) && currentApproval.length > 0) {
+    elements.push(...currentApproval);
+  }
   if (answer && budget.left > 0) {
     elements.push({ tag: 'hr' });
     elements.push({ tag: 'markdown', content: clampBudget(answer) });
@@ -368,7 +373,7 @@ export function renderAnswerCard({ title, answer, template = 'green' } = {}) {
  * @param options - {
  *   mode, gateway, message, chatType, bot, logger,
  * }。
- * @returns { tool, think, setQuestion, finish }。
+ * @returns { tool, think, setQuestion, setApproval, finish }。
  */
 export function createTurnPresenter({
   mode,
@@ -392,6 +397,10 @@ export function createTurnPresenter({
   let entries = [];
   /** 还没回答的提问元素（面板外）。 */
   let currentQuestion = [];
+  /** 还没处理的授权元素（面板外）。 */
+  let currentApproval = [];
+  /** 当前待处理/刚处理完的授权请求；按钮更新时不再带完整请求，所以要记住。 */
+  let approvalRequest = null;
   /** 提问进度：用于标题里的"第 N/M 题"。 */
   let questionProgress = null;
   /**
@@ -433,6 +442,7 @@ export function createTurnPresenter({
    * 真机反馈：一轮处理完了标题还写着"正在处理"，看不出结束没结束。
    */
   function currentTitle() {
+    if (currentApproval.length > 0) return '❓ 等你确认（授权）';
     if (currentQuestion.length > 0 && questionProgress) {
       return `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`;
     }
@@ -501,6 +511,7 @@ export function createTurnPresenter({
       answer,
       panelTitle: panelTitle(),
       currentQuestion,
+      currentApproval,
       todos: todos ? { ...todos, expanded: state === 'running' } : null,
       template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
     });
@@ -719,6 +730,52 @@ export function createTurnPresenter({
       });
     },
 
+    /**
+     * 把一次授权内嵌进本轮进度卡。
+     *
+     * 首次调用带 `request`，画「允许一次 / 拒绝」按钮；点击后再带 `decision` 调用，
+     * 把按钮收掉并在工具面板里留下一行「授权 · 工具 → 已允许/已拒绝」。
+     *
+     * @param payload - { request, decision }。
+     * @returns 是否成功内嵌（false 表示当前模式或渲染器不支持，应退回独立审批卡）。
+     */
+    setApproval(payload) {
+      if (mode !== 'streaming_card' || typeof gateway.renderApprovalElements !== 'function') {
+        return Promise.resolve(false);
+      }
+      if (patchTimer) {
+        clearTimeout(patchTimer);
+        patchTimer = null;
+      }
+      return enqueue(async () => {
+        const incoming = payload?.request ?? null;
+        const incomingId = incoming?.callId ?? incoming?.id ?? incoming?.toolName ?? null;
+        const currentId = approvalRequest?.callId ?? approvalRequest?.id ?? approvalRequest?.toolName ?? null;
+        const decision = payload?.decision === 'allowed-once' || payload?.decision === 'rejected'
+          ? payload.decision
+          : null;
+        const staleDecision = Boolean(
+          decision && incoming && currentId !== null && currentId !== incomingId,
+        );
+        if (incoming && !staleDecision) approvalRequest = incoming;
+        const rendered = gateway.renderApprovalElements({
+          request: incoming ?? approvalRequest,
+          decision,
+        });
+        for (const row of rendered.rows ?? []) {
+          putEntry({ key: `approval:${row.id}`, kind: 'approval', text: row.text });
+        }
+        // 连续两次授权时，前一次的回调可能晚于后一次出现；只补历史行，不抹掉当前待处理按钮。
+        if (!staleDecision) {
+          currentApproval = Array.isArray(rendered.elements) ? rendered.elements : [];
+        }
+        return patchNow();
+      });
+    },
+
+    /** @returns 本轮进度卡消息 id（尚未建卡则为 null）。 */
+    messageId: () => cardId,
+
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
@@ -746,6 +803,7 @@ export function createTurnPresenter({
         state = failed ? 'failed' : 'done';
         // 收尾时提问控件一律收起来（面板里那一行还在，可展开回看）。
         currentQuestion = [];
+        currentApproval = [];
         questionProgress = null;
         for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
         // 收尾一定刷新（把之前节流掉的过程一次性画上，并让标题变成 工具与思考(N)）

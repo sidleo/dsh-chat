@@ -178,6 +178,30 @@ test('提问元素：已答的给"提问 · 题 → 答案"行，未答的给面
   assert.match(done.rows[1].text, /再选 → B/);
 });
 
+test('授权元素：待处理给按钮，决定后给工具面板行', () => {
+  const gateway = makeGateway(createFakeSdk());
+  const request = { id: 'approval-1', toolName: 'bash', reason: '刷新 yh_bigdata 登录态' };
+
+  const pending = gateway.renderApprovalElements({ request });
+  assert.equal(pending.current.id, 'approval-1');
+  assert.equal(pending.rows.length, 0);
+  const buttons = pending.elements.filter((element) => element.tag === 'button');
+  assert.deepEqual(buttons.map((button) => button.text.content), ['允许一次', '拒绝']);
+  assert.deepEqual(
+    buttons.map((button) => button.behaviors[0].value.decision),
+    ['allowed-once', 'rejected'],
+  );
+  assert.deepEqual(
+    buttons.map((button) => button.behaviors[0].value.approvalId),
+    ['approval-1', 'approval-1'],
+  );
+
+  const done = gateway.renderApprovalElements({ request, decision: 'allowed-once' });
+  assert.deepEqual(done.rows, [{ id: 'approval-1', text: '授权 · bash → 已允许' }]);
+  assert.equal(done.current, null);
+  assert.deepEqual(done.elements, []);
+});
+
 test('独立提问卡：已答的行自己组成 `❓ N/M 已回答` 折叠面板，默认收起可展开', async () => {
   const sdk = createFakeSdk();
   const gateway = makeGateway(sdk);

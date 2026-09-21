@@ -55,6 +55,11 @@ const SLOW_ACTION_SETTLE_MS = 1_000;
  */
 const REPLY_REFERENCE_TIMEOUT_MS = 3000;
 
+/** 授权请求 id 的口径与网关内嵌按钮一致：优先 callId，再 id / 工具名。 */
+function approvalRequestId(request) {
+  return String(request?.callId ?? request?.id ?? request?.toolName ?? 'approval');
+}
+
 /** 卡片上的时间戳（本地 时:分:秒）：让"停在哪一次更新"在卡上可核对。 */
 function panelClock() {
   const now = new Date();
@@ -250,6 +255,8 @@ export function createFeishuBridge({
   const questionBatches = new Map();
   /** 会话键 → 本轮"正在处理"那张卡（提问优先内嵌进它，答完收起）。 */
   const activePresenters = new Map();
+  /** 内嵌了授权控件的请求 id → { presenter, key, request, messageId }；独立审批卡不进这张表。 */
+  const embeddedApprovalCards = new Map();
 
 
   /**
@@ -314,6 +321,25 @@ export function createFeishuBridge({
       }
     },
     sendApproval: async ({ key, request }) => {
+      // 优先把授权按钮内嵌进本轮进度卡：用户只看到一张"正在处理"卡。
+      const presenter = activePresenters.get(key);
+      if (presenter?.setApproval) {
+        try {
+          const embedded = await presenter.setApproval({ request });
+          if (embedded) {
+            const messageId = presenter.messageId?.();
+            if (messageId) {
+              embeddedApprovalCards.set(approvalRequestId(request), {
+                presenter, key, request, messageId,
+              });
+              rememberCardConversation(messageId, key);
+            }
+            return;
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat-feishu] 授权内嵌进度卡失败，改用独立卡片：${error?.message ?? error}`);
+        }
+      }
       try {
         const sent = await gateway.sendApprovalCard({ ...routeOf(key), request });
         // 同提问卡：审批卡也要留下会话映射，否则身份门禁可能按错的会话类型判。
@@ -677,6 +703,9 @@ export function createFeishuBridge({
       });
 
       activePresenters.delete(conversationKey);
+      for (const [messageId, active] of embeddedApprovalCards) {
+        if (active?.presenter === presenter) embeddedApprovalCards.delete(messageId);
+      }
       logger.info?.(`[dsh-chat-feishu] 回合结束，准备回复：${bot.id} ${conversationKey}`
         + ` reason=${result?.reason?.kind ?? 'unknown'} 文本=${(result?.text ?? '').length}字`);
       await presenter.finish(result?.text, result?.reason);
@@ -694,6 +723,9 @@ export function createFeishuBridge({
       lastError = presenter.lastError?.() ?? null;
     } catch (error) {
       activePresenters.delete(conversationKey);
+      for (const [messageId, active] of embeddedApprovalCards) {
+        if (active?.key === conversationKey) embeddedApprovalCards.delete(messageId);
+      }
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] 处理消息失败：${lastError}`);
       try {
@@ -1495,8 +1527,25 @@ export function createFeishuBridge({
       }
       // 同样排在应答之后：否则卡片上的"已允许"也会被还原成两个按钮。
       const markTitle = decision === 'allowed-once' ? '已允许' : '已拒绝';
-      afterResponse(() => markAnswered(event, value.dsh, markTitle)
-        .catch((error) => noteCardError('审批卡片标记失败', error?.message ?? error)));
+      const approvalId = typeof value.approvalId === 'string' ? value.approvalId : null;
+      const embeddedEntry = approvalId ? embeddedApprovalCards.get(approvalId) : null;
+      const matched = embeddedEntry
+        ? { approvalId, entry: embeddedEntry }
+        : [...embeddedApprovalCards.entries()].find(([, entry]) => entry.messageId === event.messageId)
+          ?? null;
+      const embedded = matched?.entry ?? null;
+      const embeddedPresenter = embedded?.presenter ?? null;
+      if (embeddedPresenter) {
+        afterResponse(() => embeddedPresenter.setApproval({ request: embedded.request, decision })
+          .then((updated) => {
+            if (!updated) throw new Error('进度卡更新失败');
+            embeddedApprovalCards.delete(matched.approvalId);
+          })
+          .catch((error) => noteCardError('内嵌授权卡片更新失败', error?.message ?? error)));
+      } else {
+        afterResponse(() => markAnswered(event, value.dsh, markTitle)
+          .catch((error) => noteCardError('审批卡片标记失败', error?.message ?? error)));
+      }
       return { toast: { type: 'success', content: decision === 'allowed-once' ? '已允许执行' : '已拒绝' } };
     }
 

@@ -526,6 +526,59 @@ export function createLarkGateway({
   }
 
   /**
+   * 渲染一次授权，供"正在处理"进度卡内嵌使用（纯函数，不发请求）。
+   *
+   * 未决定时给「允许一次 / 拒绝」按钮；已决定时给工具面板里的一行记录。
+   * 按钮仍走与独立审批卡相同的 `dsh: 'approval'` 回调，不另造一套协议。
+   *
+   * @param options - { request, decision }。`decision` 为 null 表示仍待处理。
+   * @returns { rows, elements, current }。
+   */
+  function renderApprovalElements({ request = null, decision = null } = {}) {
+    const toolName = String(request?.toolName ?? '未知');
+    const requestId = String(request?.id ?? request?.callId ?? toolName);
+    const decided = decision === 'allowed-once' || decision === 'rejected';
+    if (decided) {
+      return {
+        rows: [{
+          id: requestId,
+          text: `授权 · ${toolName} → ${decision === 'allowed-once' ? '已允许' : '已拒绝'}`,
+        }],
+        elements: [],
+        current: null,
+      };
+    }
+
+    const lines = ['**需要授权**', '', `工具：${toolName}`];
+    if (request?.reason) lines.push(`原因：${request.reason}`);
+    const elements = [
+      { tag: 'hr' },
+      { tag: 'markdown', content: lines.join('\n') },
+      {
+        tag: 'button',
+        type: 'primary_filled',
+        width: 'fill',
+        text: { tag: 'plain_text', content: '允许一次' },
+        behaviors: [{
+          type: 'callback',
+          value: { dsh: 'approval', decision: 'allowed-once', approvalId: requestId },
+        }],
+      },
+      {
+        tag: 'button',
+        type: 'danger',
+        width: 'fill',
+        text: { tag: 'plain_text', content: '拒绝' },
+        behaviors: [{
+          type: 'callback',
+          value: { dsh: 'approval', decision: 'rejected', approvalId: requestId },
+        }],
+      },
+    ];
+    return { rows: [], elements, current: { id: requestId, toolName } };
+  }
+
+  /**
    * 上传一个文件，返回 `file_key`。
    *
    * 注意：`im.v1.file.create` / `image.create` 直接返回 data（`{ file_key }`），
@@ -890,6 +943,9 @@ export function createLarkGateway({
 
     /** 供进度卡内嵌提问区使用（纯渲染）。 */
     renderQuestionElements,
+
+    /** 供进度卡内嵌授权区使用（纯渲染）。 */
+    renderApprovalElements,
 
     /**
      * 把一个提问渲染成带按钮的卡片发出去。

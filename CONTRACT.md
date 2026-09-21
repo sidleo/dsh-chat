@@ -478,7 +478,9 @@ const detach = deps.interactions.attach({
   // 表单值回调在 action.form_value[组件name]：勾选器名 `chk_<序号>_<问题id>`（值为布尔，
   // 选项原文由渠道按批次反查），输入框名 `text_<问题id>`。
   sendQuestions: async ({ key, questions, answered, final }) => {},
-  // 可选：审批（允许/拒绝）
+  // 可选：审批（允许/拒绝）。同提问一样，渠道可以优先内嵌进本轮进度卡：
+  // 待处理时放「允许一次 / 拒绝」按钮，决定后换成工具面板里的一行记录；
+  // 没有进度卡可用时才另发独立审批卡。按钮回调仍走 `dsh: 'approval'`。
   sendApproval: async ({ key, request }) => {},
 });
 

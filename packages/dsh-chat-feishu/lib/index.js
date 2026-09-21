@@ -126665,6 +126665,7 @@ function renderStepCard({
   answer = "",
   panelTitle = "",
   currentQuestion = [],
+  currentApproval = [],
   todos = null,
   template = "blue"
 }) {
@@ -126741,6 +126742,9 @@ function renderStepCard({
   if (Array.isArray(currentQuestion) && currentQuestion.length > 0) {
     elements.push(...currentQuestion);
   }
+  if (Array.isArray(currentApproval) && currentApproval.length > 0) {
+    elements.push(...currentApproval);
+  }
   if (answer && budget.left > 0) {
     elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: clampBudget(answer) });
@@ -126786,6 +126790,8 @@ function createTurnPresenter({
   const title = "\u6B63\u5728\u5904\u7406";
   let entries = [];
   let currentQuestion = [];
+  let currentApproval = [];
+  let approvalRequest = null;
   let questionProgress = null;
   const askBatches = /* @__PURE__ */ new Map();
   let todos = null;
@@ -126808,6 +126814,7 @@ function createTurnPresenter({
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
   function currentTitle() {
+    if (currentApproval.length > 0) return "\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u6388\u6743\uFF09";
     if (currentQuestion.length > 0 && questionProgress) {
       return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${questionProgress.index}/${questionProgress.total} \u9898\uFF09`;
     }
@@ -126859,6 +126866,7 @@ function createTurnPresenter({
       answer,
       panelTitle: panelTitle(),
       currentQuestion,
+      currentApproval,
       todos: todos ? { ...todos, expanded: state === "running" } : null,
       template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
     });
@@ -127037,6 +127045,47 @@ function createTurnPresenter({
         return patchNow();
       });
     },
+    /**
+     * 把一次授权内嵌进本轮进度卡。
+     *
+     * 首次调用带 `request`，画「允许一次 / 拒绝」按钮；点击后再带 `decision` 调用，
+     * 把按钮收掉并在工具面板里留下一行「授权 · 工具 → 已允许/已拒绝」。
+     *
+     * @param payload - { request, decision }。
+     * @returns 是否成功内嵌（false 表示当前模式或渲染器不支持，应退回独立审批卡）。
+     */
+    setApproval(payload) {
+      if (mode !== "streaming_card" || typeof gateway.renderApprovalElements !== "function") {
+        return Promise.resolve(false);
+      }
+      if (patchTimer) {
+        clearTimeout(patchTimer);
+        patchTimer = null;
+      }
+      return enqueue(async () => {
+        const incoming = payload?.request ?? null;
+        const incomingId = incoming?.callId ?? incoming?.id ?? incoming?.toolName ?? null;
+        const currentId = approvalRequest?.callId ?? approvalRequest?.id ?? approvalRequest?.toolName ?? null;
+        const decision = payload?.decision === "allowed-once" || payload?.decision === "rejected" ? payload.decision : null;
+        const staleDecision = Boolean(
+          decision && incoming && currentId !== null && currentId !== incomingId
+        );
+        if (incoming && !staleDecision) approvalRequest = incoming;
+        const rendered = gateway.renderApprovalElements({
+          request: incoming ?? approvalRequest,
+          decision
+        });
+        for (const row2 of rendered.rows ?? []) {
+          putEntry({ key: `approval:${row2.id}`, kind: "approval", text: row2.text });
+        }
+        if (!staleDecision) {
+          currentApproval = Array.isArray(rendered.elements) ? rendered.elements : [];
+        }
+        return patchNow();
+      });
+    },
+    /** @returns 本轮进度卡消息 id（尚未建卡则为 null）。 */
+    messageId: () => cardId,
     /** @returns 本轮最后一次呈现失败（无失败则为 null）。 */
     lastError: () => lastFailure,
     /** @returns 最终答案的投递方式：card / text / failed / null（还没收尾）。 */
@@ -127059,6 +127108,7 @@ function createTurnPresenter({
         lastAnswer = body;
         state = failed ? "failed" : "done";
         currentQuestion = [];
+        currentApproval = [];
         questionProgress = null;
         for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
         if (patchTimer) {
@@ -127534,6 +127584,9 @@ var MENU_ROW_SIZE = 4;
 var RESPONSE_SETTLE_MS = 50;
 var SLOW_ACTION_SETTLE_MS = 1e3;
 var REPLY_REFERENCE_TIMEOUT_MS = 3e3;
+function approvalRequestId(request) {
+  return String(request?.callId ?? request?.id ?? request?.toolName ?? "approval");
+}
 function panelClock() {
   const now = /* @__PURE__ */ new Date();
   const pad = (value) => String(value).padStart(2, "0");
@@ -127656,6 +127709,7 @@ ${text}`
   const questionCards = /* @__PURE__ */ new Map();
   const questionBatches = /* @__PURE__ */ new Map();
   const activePresenters = /* @__PURE__ */ new Map();
+  const embeddedApprovalCards = /* @__PURE__ */ new Map();
   function noteCardError(what, reason) {
     lastError = `${what}\uFF1A${reason}`;
     logger.error?.(`[dsh-chat-feishu] ${lastError}`);
@@ -127703,6 +127757,27 @@ ${text}`
       }
     },
     sendApproval: async ({ key, request }) => {
+      const presenter = activePresenters.get(key);
+      if (presenter?.setApproval) {
+        try {
+          const embedded = await presenter.setApproval({ request });
+          if (embedded) {
+            const messageId = presenter.messageId?.();
+            if (messageId) {
+              embeddedApprovalCards.set(approvalRequestId(request), {
+                presenter,
+                key,
+                request,
+                messageId
+              });
+              rememberCardConversation(messageId, key);
+            }
+            return;
+          }
+        } catch (error) {
+          logger.warn?.(`[dsh-chat-feishu] \u6388\u6743\u5185\u5D4C\u8FDB\u5EA6\u5361\u5931\u8D25\uFF0C\u6539\u7528\u72EC\u7ACB\u5361\u7247\uFF1A${error?.message ?? error}`);
+        }
+      }
       try {
         const sent = await gateway.sendApprovalCard({ ...routeOf(key), request });
         if (sent?.messageId) rememberCardConversation(sent.messageId, key);
@@ -128013,6 +128088,9 @@ ${text}`
         }
       });
       activePresenters.delete(conversationKey);
+      for (const [messageId, active] of embeddedApprovalCards) {
+        if (active?.presenter === presenter) embeddedApprovalCards.delete(messageId);
+      }
       logger.info?.(`[dsh-chat-feishu] \u56DE\u5408\u7ED3\u675F\uFF0C\u51C6\u5907\u56DE\u590D\uFF1A${bot.id} ${conversationKey} reason=${result?.reason?.kind ?? "unknown"} \u6587\u672C=${(result?.text ?? "").length}\u5B57`);
       await presenter.finish(result?.text, result?.reason);
       logger.info?.(`[dsh-chat-feishu] \u6700\u7EC8\u7B54\u6848\u6295\u9012\u65B9\u5F0F\uFF1A${presenter.delivery?.() ?? "unknown"}\uFF08${bot.id} ${conversationKey}\uFF09`);
@@ -128024,6 +128102,9 @@ ${text}`
       lastError = presenter.lastError?.() ?? null;
     } catch (error) {
       activePresenters.delete(conversationKey);
+      for (const [messageId, active] of embeddedApprovalCards) {
+        if (active?.key === conversationKey) embeddedApprovalCards.delete(messageId);
+      }
       lastError = error?.message ?? String(error);
       logger.error?.(`[dsh-chat-feishu] \u5904\u7406\u6D88\u606F\u5931\u8D25\uFF1A${lastError}`);
       try {
@@ -128567,7 +128648,19 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         return { toast: { type: "info", content: "\u8FD9\u6B21\u6388\u6743\u5DF2\u7ECF\u5904\u7406\u8FC7\u4E86\u3002" } };
       }
       const markTitle = decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD";
-      afterResponse(() => markAnswered(event, value.dsh, markTitle).catch((error) => noteCardError("\u5BA1\u6279\u5361\u7247\u6807\u8BB0\u5931\u8D25", error?.message ?? error)));
+      const approvalId = typeof value.approvalId === "string" ? value.approvalId : null;
+      const embeddedEntry = approvalId ? embeddedApprovalCards.get(approvalId) : null;
+      const matched = embeddedEntry ? { approvalId, entry: embeddedEntry } : [...embeddedApprovalCards.entries()].find(([, entry]) => entry.messageId === event.messageId) ?? null;
+      const embedded = matched?.entry ?? null;
+      const embeddedPresenter = embedded?.presenter ?? null;
+      if (embeddedPresenter) {
+        afterResponse(() => embeddedPresenter.setApproval({ request: embedded.request, decision }).then((updated) => {
+          if (!updated) throw new Error("\u8FDB\u5EA6\u5361\u66F4\u65B0\u5931\u8D25");
+          embeddedApprovalCards.delete(matched.approvalId);
+        }).catch((error) => noteCardError("\u5185\u5D4C\u6388\u6743\u5361\u7247\u66F4\u65B0\u5931\u8D25", error?.message ?? error)));
+      } else {
+        afterResponse(() => markAnswered(event, value.dsh, markTitle).catch((error) => noteCardError("\u5BA1\u6279\u5361\u7247\u6807\u8BB0\u5931\u8D25", error?.message ?? error)));
+      }
       return { toast: { type: "success", content: decision === "allowed-once" ? "\u5DF2\u5141\u8BB8\u6267\u884C" : "\u5DF2\u62D2\u7EDD" } };
     }
     const formValue = event?.action?.formValue ?? {};
@@ -129701,6 +129794,48 @@ function createLarkGateway({
     });
     return { rows, elements, current };
   }
+  function renderApprovalElements({ request = null, decision = null } = {}) {
+    const toolName = String(request?.toolName ?? "\u672A\u77E5");
+    const requestId = String(request?.id ?? request?.callId ?? toolName);
+    const decided = decision === "allowed-once" || decision === "rejected";
+    if (decided) {
+      return {
+        rows: [{
+          id: requestId,
+          text: `\u6388\u6743 \xB7 ${toolName} \u2192 ${decision === "allowed-once" ? "\u5DF2\u5141\u8BB8" : "\u5DF2\u62D2\u7EDD"}`
+        }],
+        elements: [],
+        current: null
+      };
+    }
+    const lines = ["**\u9700\u8981\u6388\u6743**", "", `\u5DE5\u5177\uFF1A${toolName}`];
+    if (request?.reason) lines.push(`\u539F\u56E0\uFF1A${request.reason}`);
+    const elements = [
+      { tag: "hr" },
+      { tag: "markdown", content: lines.join("\n") },
+      {
+        tag: "button",
+        type: "primary_filled",
+        width: "fill",
+        text: { tag: "plain_text", content: "\u5141\u8BB8\u4E00\u6B21" },
+        behaviors: [{
+          type: "callback",
+          value: { dsh: "approval", decision: "allowed-once", approvalId: requestId }
+        }]
+      },
+      {
+        tag: "button",
+        type: "danger",
+        width: "fill",
+        text: { tag: "plain_text", content: "\u62D2\u7EDD" },
+        behaviors: [{
+          type: "callback",
+          value: { dsh: "approval", decision: "rejected", approvalId: requestId }
+        }]
+      }
+    ];
+    return { rows: [], elements, current: { id: requestId, toolName } };
+  }
   async function uploadFileKey(path2, fileName) {
     const uploaded = await client.im.v1.file.create({
       data: { file_type: fileTypeFor(fileName), file_name: fileName, file: createReadStream(path2) }
@@ -130025,6 +130160,8 @@ function createLarkGateway({
     },
     /** 供进度卡内嵌提问区使用（纯渲染）。 */
     renderQuestionElements,
+    /** 供进度卡内嵌授权区使用（纯渲染）。 */
+    renderApprovalElements,
     /**
      * 把一个提问渲染成带按钮的卡片发出去。
      *
@@ -131985,7 +132122,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.0.6";
+var CHANNEL_VERSION = "0.0.7";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;

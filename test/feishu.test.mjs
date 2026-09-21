@@ -100,6 +100,30 @@ function createFakeGateway() {
       calls.patches.push({ messageId, card });
       return { messageId };
     },
+    /** 与真实网关同形状：未决定给按钮，已决定给工具面板行。 */
+    renderApprovalElements({ request, decision }) {
+      const toolName = request?.toolName ?? '未知';
+      const requestId = request?.callId ?? request?.id ?? toolName;
+      if (decision) {
+        return {
+          rows: [{
+            id: String(requestId),
+            text: `授权 · ${toolName} → ${decision === 'allowed-once' ? '已允许' : '已拒绝'}`,
+          }],
+          elements: [],
+          current: null,
+        };
+      }
+      return {
+        rows: [],
+        elements: [
+          { tag: 'markdown', content: `需要授权：${toolName} / ${request?.reason ?? ''}` },
+          { tag: 'button', text: { tag: 'plain_text', content: '允许一次' } },
+          { tag: 'button', text: { tag: 'plain_text', content: '拒绝' } },
+        ],
+        current: { id: String(requestId), toolName },
+      };
+    },
     /**
      * 交互驱动的卡片更新（飞书延迟更新 token 路径）。
      * 真机上用 message.patch 更新交互卡片会被客户端还原，所以交互必须走这里。
@@ -340,7 +364,7 @@ async function makeBridge({
         return { receiptId: 'receipt-test-1', file: { attachmentId: 'sha256:x', name: options.name, bytes: options.bytes?.length ?? 0 } };
       },
       ask: async (options) => {
-        onAsk(options);
+        await onAsk(options);
         // 模拟 hub 的会话桥：发布 guidance 后回调过程事件。
         deps.guidance.publish('session-1', options.sourceGuidance ?? '');
         for (const handler of [options.handlers?.onToolCall]) {
@@ -1787,6 +1811,52 @@ test('交互回传：审批卡片点「允许」→ allowed-once；卡片发不�
   }
 });
 
+test('交互回传：授权优先内嵌进度卡，点击后只更新原卡不另发审批卡', async () => {
+  let app;
+  let approveStarted;
+  let releaseAsk;
+  const started = new Promise((resolve) => { approveStarted = resolve; });
+  const release = new Promise((resolve) => { releaseAsk = resolve; });
+  app = await makeBridge({
+    bot: { ...BOT, stepPushDirect: 'streaming_card' },
+    onAsk: async () => {
+      await app.attached[0].sendApproval({
+        key: 'p2p:ou_owner',
+        request: { id: 'approval-1', callId: 'call-1', toolName: 'bash', reason: '刷新登录态' },
+      });
+      approveStarted();
+      await release;
+    },
+  });
+  try {
+    const accepting = app.bridge.accept(messageEvent({ messageId: 'om_ask', chatId: 'oc_chat' }));
+    await started;
+    app.interactions.claimKey = 'p2p:ou_owner';
+
+    assert.equal(app.gateway.calls.approvalCards.length, 0, '进度卡模式不应另发独立审批卡');
+    const pending = JSON.stringify(app.gateway.calls.cards.at(-1)?.card ?? app.gateway.calls.patches.at(-1)?.card);
+    assert.match(pending, /需要授权：bash/);
+    assert.match(pending, /允许一次/);
+
+    const response = await app.bridge.handleCardAction({
+      messageId: 'om_card', chatId: 'oc_chat', operator: { openId: 'ou_owner' },
+      action: { value: { dsh: 'approval', decision: 'allowed-once', approvalId: 'call-1' } },
+    });
+    assert.equal(response.toast.type, 'success');
+    assert.equal(app.offers.at(-1).text, '允许');
+
+    releaseAsk();
+    await accepting;
+    await app.flushPaints();
+    const updated = JSON.stringify(app.gateway.calls.patches.at(-1)?.card);
+    assert.match(updated, /授权 · bash → 已允许/);
+    assert.doesNotMatch(updated, /允许一次/);
+    assert.equal(app.gateway.calls.markedCards.length, 0, '内嵌授权不能替换整张进度卡');
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('交互回传：多选/自由文本走表单值（action.form_value[组件名]），按组件名后缀认领到题', async () => {
   const app = await makeBridge();
   try {
@@ -1904,6 +1974,128 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
   assert.match(last, /提问 · 选一个 → A/, '提问行还在面板里，可展开回看');
   assert.match(last, /工具与思考\(1\)/, '本轮结束后标题显示条数');
   assert.match(last, /最终答案/);
+});
+
+test('授权内嵌进"正在处理"那张卡：按钮在同一张卡里，处理后变一行记录', async () => {
+  const patches = [];
+  const replies = [];
+  const gateway = {
+    async replyCard({ card, messageId }) {
+      replies.push({ card, messageId });
+      return { messageId: 'om_progress' };
+    },
+    async patchCard({ card, messageId }) {
+      patches.push({ card, messageId });
+      return { messageId };
+    },
+    renderApprovalElements({ request, decision }) {
+      const toolName = request?.toolName ?? '未知';
+      const requestId = request?.callId ?? request?.id ?? toolName;
+      if (decision) {
+        return {
+          rows: [{
+            id: String(requestId),
+            text: `授权 · ${toolName} → ${decision === 'allowed-once' ? '已允许' : '已拒绝'}`,
+          }],
+          elements: [],
+          current: null,
+        };
+      }
+      return {
+        rows: [],
+        elements: [
+          { tag: 'markdown', content: `需要授权：${toolName}` },
+          { tag: 'button', text: { tag: 'plain_text', content: '允许一次' } },
+          { tag: 'button', text: { tag: 'plain_text', content: '拒绝' } },
+        ],
+        current: { id: String(requestId), toolName },
+      };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_msg', chat_id: 'oc_chat' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  const request = { id: 'approval-1', callId: 'call-1', toolName: 'bash', reason: '刷新登录态' };
+
+  await presenter.setApproval({ request });
+  const pending = JSON.stringify(patches.at(-1)?.card ?? replies.at(-1)?.card);
+  assert.match(pending, /需要授权：bash/);
+  assert.match(pending, /允许一次/);
+  assert.match(pending, /等你确认（授权）/);
+
+  await presenter.setApproval({ decision: 'allowed-once' });
+  const decided = JSON.stringify(patches.at(-1).card);
+  assert.doesNotMatch(decided, /允许一次/);
+  assert.match(decided, /授权 · bash → 已允许/);
+
+  await presenter.finish('已查完', { kind: 'completed' });
+  const last = JSON.stringify(patches.at(-1).card);
+  assert.match(last, /授权 · bash → 已允许/);
+  assert.match(last, /已查完/);
+  assert.doesNotMatch(last, /等你确认/);
+});
+
+test('授权内嵌：前一次决定晚到时，不能抹掉后一次刚出现的按钮', async () => {
+  const patches = [];
+  const gateway = {
+    async replyCard() { return { messageId: 'om_progress' }; },
+    async patchCard({ card, messageId }) {
+      patches.push({ card, messageId });
+      return { messageId };
+    },
+    renderApprovalElements({ request, decision }) {
+      const toolName = request?.toolName ?? '未知';
+      const requestId = request?.callId ?? request?.id ?? toolName;
+      if (decision) {
+        return {
+          rows: [{
+            id: String(requestId),
+            text: `授权 · ${toolName} → ${decision === 'allowed-once' ? '已允许' : '已拒绝'}`,
+          }],
+          elements: [],
+          current: null,
+        };
+      }
+      return {
+        rows: [],
+        elements: [
+          { tag: 'markdown', content: `需要授权：${toolName}` },
+          { tag: 'button', text: { tag: 'plain_text', content: '允许一次' } },
+        ],
+        current: { id: String(requestId), toolName },
+      };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_msg', chat_id: 'oc_chat' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+
+  const first = { id: 'approval-a', toolName: 'bash' };
+  const second = { id: 'approval-b', toolName: 'read' };
+  await presenter.setApproval({ request: first });
+  await presenter.setApproval({ request: second });
+  await presenter.setApproval({ request: first, decision: 'allowed-once' });
+
+  const card = JSON.stringify(patches.at(-1).card);
+  assert.match(card, /授权 · bash → 已允许/);
+  assert.match(card, /需要授权：read/, '后一次待处理控件还在');
+  assert.match(card, /允许一次/);
+
+  await presenter.setApproval({ request: second, decision: 'rejected' });
+  const finished = JSON.stringify(patches.at(-1).card);
+  assert.match(finished, /授权 · bash → 已允许/);
+  assert.match(finished, /授权 · read → 已拒绝/);
+  assert.doesNotMatch(finished, /允许一次/, '第二次决定后按钮才收起');
 });
 
 test('过程展示为 off 时，setQuestion 明确说不支持（桥据此退回独立卡片）', async () => {
