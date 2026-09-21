@@ -1029,14 +1029,18 @@ export function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
         height: 200,
       })
       : null,
-    // Host 没能把链接编码成二维码（缺 qrcode 模块）时**必须说清**，并给一条还能走的路。
-    scan.verificationUrl && !scan.qrCodeDataUrl
+    // 二维码与链接**两条路都给**（真机反馈：二维码出来之后链接就没了）：桌面端直接点链接
+    // 比"掏手机扫屏幕"省事，手机端扫码更快——两种都留着，谁方便用谁。
+    // 只有 Host 编不出二维码（缺 `qrcode` 模块）时，链接才是唯一的路，这时补一句说明。
+    scan.verificationUrl
       ? h('div', null,
         h('a', {
           className: 'dchat-onboardLink', href: scan.verificationUrl, target: '_blank', rel: 'noreferrer',
         }, t('打开授权页面')),
-        h('p', { className: 'dchat-cardDescription' },
-          `${t('这台 Host 没能生成二维码，请点上面的链接继续。')}`))
+        !scan.qrCodeDataUrl
+          ? h('p', { className: 'dchat-cardDescription' },
+            `${t('这台 Host 没能生成二维码，请点上面的链接继续。')}`)
+          : null)
       : null,
     h('p', { className: 'dchat-cardDescription', role: 'status' },
       scan.remainingSeconds !== null && scan.remainingSeconds !== undefined && scanActive

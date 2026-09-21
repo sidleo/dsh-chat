@@ -547,6 +547,7 @@ function measure() {
       headings: [...frame.querySelectorAll('.dchat-onboardTitle')]
         .map((el) => (el.textContent ?? '').trim()),
       qr: Boolean(frame.querySelector('.dchat-onboardQr')),
+      link: Boolean(frame.querySelector('.dchat-onboardLink')),
     };
     results.push({
       scenario: frame.dataset.scenario,

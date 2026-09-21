@@ -975,8 +975,10 @@ function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
         width: 200,
         height: 200
       }) : null,
-      // Host 没能把链接编码成二维码（缺 qrcode 模块）时**必须说清**，并给一条还能走的路。
-      scan.verificationUrl && !scan.qrCodeDataUrl ? h(
+      // 二维码与链接**两条路都给**（真机反馈：二维码出来之后链接就没了）：桌面端直接点链接
+      // 比"掏手机扫屏幕"省事，手机端扫码更快——两种都留着，谁方便用谁。
+      // 只有 Host 编不出二维码（缺 `qrcode` 模块）时，链接才是唯一的路，这时补一句说明。
+      scan.verificationUrl ? h(
         "div",
         null,
         h("a", {
@@ -985,11 +987,11 @@ function FeishuOnboard({ chatUi, connection, translate, onAdded }) {
           target: "_blank",
           rel: "noreferrer"
         }, t("\u6253\u5F00\u6388\u6743\u9875\u9762")),
-        h(
+        !scan.qrCodeDataUrl ? h(
           "p",
           { className: "dchat-cardDescription" },
           `${t("\u8FD9\u53F0 Host \u6CA1\u80FD\u751F\u6210\u4E8C\u7EF4\u7801\uFF0C\u8BF7\u70B9\u4E0A\u9762\u7684\u94FE\u63A5\u7EE7\u7EED\u3002")}`
-        )
+        ) : null
       ) : null,
       h(
         "p",

@@ -230,8 +230,15 @@ try {
         failures.push(`${where}: 接入页缺「${expected}」（实际：${headings.join('、')}）`);
       }
     }
-    if (frame.scenario === 'feishuOnboardQr' && frame.onboard?.qr !== true) {
-      failures.push(`${where}: 点了「扫码新建机器人」之后没有渲染二维码`);
+    if (frame.scenario === 'feishuOnboardQr') {
+      if (frame.onboard?.qr !== true) {
+        failures.push(`${where}: 点了「扫码新建机器人」之后没有渲染二维码`);
+      }
+      // 二维码与链接**两条路都要在**（真机反馈"扫码有了、打开链接的方式没了"）：
+      // 桌面端直接点链接比掏手机扫屏幕省事，手机端扫码更快。
+      if (frame.onboard?.link !== true) {
+        failures.push(`${where}: 有二维码时把「打开授权页面」链接去掉了`);
+      }
     }
   }
 

@@ -123,6 +123,8 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   web profile 里没有它、插件又是软链到工作区（Node 按**真实路径**解析，根本不会看 profile 的
   `node_modules`），于是每次都静默降级成"只能点链接"，页面上只有一句"没能生成二维码"。
   拿不到仍只回链接（绝不因为缺一个可选依赖让这条路走不通），前端显示「打开授权页面」；
+  **二维码和链接两条路都留着**（真机反馈"扫码有了、打开链接的方式没了"）：桌面端点链接、
+  手机端扫码，谁方便用谁——缺二维码时才只剩链接，并补一句说明。布局守门钉了这条。
   排查看日志里 `没能加载 qrcode`，**单测也钉了这条**（扫码那条路必须真编出一张 data URL）。
   **扫码时带应用清单**（`host/app-manifest.mjs` 的 `FEISHU_SCAN_REGISTER_OPTIONS`）：
   本渠道真的会用的权限/事件/回调（`addons`）+ 预填的应用名/描述（`appPreset`）+ `createOnly: true`
