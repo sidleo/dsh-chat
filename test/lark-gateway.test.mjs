@@ -384,3 +384,42 @@ test('网关：读被引用消息的正文（文字 / 富文本 / 媒体只给�
     (error) => /读取被引用的消息|message not found/.test(error.message),
   );
 });
+
+test('网关：读合并转发的原始条目（扁平数组，子消息靠 upper_message_id 指回父级）', async () => {
+  const items = [
+    { message_id: 'om_merge', msg_type: 'merge_forward' },
+    {
+      message_id: 'om_sub',
+      upper_message_id: 'om_merge',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: '被合并进来的话' }) },
+    },
+  ];
+  const sdk = createFakeSdk({
+    createReturns: { messageGet: { code: 0, msg: 'success', data: { items } } },
+  });
+  const fetched = await makeGateway(sdk).getMessageItems({ messageId: 'om_merge' });
+  assert.deepEqual(fetched, items);
+  // 打的是同一个接口：路径里带的必须是那条外壳消息的 id。
+  assert.deepEqual(sdk.__calls.messageGets.at(-1), { path: { message_id: 'om_merge' } });
+
+  // 没有 items 时给空数组（调用方靠"空"决定给"没有可读内容"标记，而不是崩掉）。
+  const sdkEmpty = createFakeSdk({
+    createReturns: { messageGet: { code: 0, msg: 'success', data: {} } },
+  });
+  assert.deepEqual(await makeGateway(sdkEmpty).getMessageItems({ messageId: 'om_x' }), []);
+
+  // 业务失败（HTTP 200 + code!==0）必须抛，不能把失败当"这包是空的"。
+  const sdkFail = createFakeSdk({
+    createReturns: { messageGet: { code: 230002, msg: 'message not found' } },
+  });
+  await assert.rejects(
+    () => makeGateway(sdkFail).getMessageItems({ messageId: 'om_gone' }),
+    (error) => /message not found/.test(error.message),
+  );
+
+  await assert.rejects(
+    () => makeGateway(createFakeSdk()).getMessageItems({ messageId: '' }),
+    (error) => error instanceof TypeError,
+  );
+});

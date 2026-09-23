@@ -146,6 +146,17 @@ DSH 会按 `dsh.bundle.patch` 自动把这行加进 `dsh.profile.bundles`；顺�
 
   contextEnhancement: { /* §4 全部导出，见 CONTRACT 附录 A */ },
   /**
+   * 合并转发（如飞书的 `merge_forward`）：渠道只负责把**外壳 id 与查回来的原始条目**
+   * 交进来，展开由 hub 做一次（所有渠道复用）。
+   * enhanceForwardedMessages(content, forward) -> 拼好展开块的内容（没有可展开内容时原样返回）。
+   *   forward = { messageId?, items?, reason? }；`items` 是平台原样的条目数组（飞书是**扁平**数组，
+   *   子消息靠 `upper_message_id` 指回父级，父消息自己也在数组里且没有该字段）。
+   *   `reason` 有值表示**读不到**（无权限/超时/已删除）：只出"内容不可用"标记，当前消息照常进模型。
+   *   展开有限条（50）与限深（3），嵌套的合并转发递归展开。
+   * forwardedMessagesText(forward) -> 只要展开后的**纯文本**（不带标签）。给"引用回复"那条路用：
+   *   引用块自己会写"被引用的是合并转发的消息"，再塞标签就成了块里套块。
+   */
+  /**
    * 引用回复：渠道只把平台字段映射成 `reply`，拼装由 hub 做一次（所有渠道复用）。
    * enhanceReplyReference(content, reply) -> 拼好引用块的内容（`reply` 为 null 时原样返回）。
    *   reply = { messageId?, senderId?, kind?, text?, fileName?, reason? }

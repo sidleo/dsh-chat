@@ -13,6 +13,7 @@ import test from 'node:test';
 
 import * as accessPolicy from '../packages/dsh-chat/shared/access-policy.mjs';
 import { captureContextEnhancementSource, enhanceContent } from '../packages/dsh-chat/shared/context-enhancement.mjs';
+import { enhanceForwardedMessages, forwardedMessagesText } from '../packages/dsh-chat/shared/forwarded-messages.mjs';
 import { enhanceReplyReference } from '../packages/dsh-chat/shared/reply-reference.mjs';
 import { createFeishuBridge } from '../packages/dsh-chat-feishu/host/bridge.mjs';
 import { FEISHU_SCAN_REGISTER_OPTIONS } from '../packages/dsh-chat-feishu/host/app-manifest.mjs';
@@ -147,6 +148,27 @@ function createFakeGateway() {
       };
     },
 
+    /**
+     * 假"读合并转发的子消息"：默认给一包两条（父 + 一条子），可由用例替换成失败或换内容。
+     * 形状与飞书一致：**扁平**数组，子消息靠 `upper_message_id` 指回父级。
+     */
+    async getMessageItems({ messageId }) {
+      calls.forwarded = calls.forwarded ?? [];
+      calls.forwarded.push({ messageId });
+      if (gatewayState.failures.getMessageItems) throw gatewayState.failures.getMessageItems;
+      return gatewayState.forwardedItems ?? [
+        { message_id: messageId, msg_type: 'merge_forward' },
+        {
+          message_id: 'om_sub_1',
+          upper_message_id: messageId,
+          msg_type: 'text',
+          create_time: '1789000000000',
+          sender: { id: 'ou_a', name: '张三' },
+          body: { content: JSON.stringify({ text: '月饼日销数据为啥没云贵的门店' }) },
+        },
+      ];
+    },
+
     /** 假资源下载：默认给一张 1x1 PNG，可由用例替换成失败/超限。 */
     async downloadResource({ messageId, fileKey, type }) {
       calls.resources.push({ messageId, fileKey, type });
@@ -261,11 +283,13 @@ function messageEvent({
   fileKey = 'file_v3_test',
   fileName = '报表.xlsx',
   parentId = null,
+  /** 直接给正文（富文本/合并转发这类形状在用例里自己拼，避免 helper 越堆越大）。 */
+  content = null,
 } = {}) {
-  const content = messageType === 'text'
+  const body = content ?? (messageType === 'text'
     ? JSON.stringify({ text })
     : messageType === 'image' ? JSON.stringify({ image_key: imageKey })
-      : messageType === 'file' ? JSON.stringify({ file_key: fileKey, file_name: fileName }) : '{}';
+      : messageType === 'file' ? JSON.stringify({ file_key: fileKey, file_name: fileName }) : '{}');
   return {
     sender: { sender_id: { open_id: senderId } },
     message: {
@@ -274,10 +298,15 @@ function messageEvent({
       ...(parentId ? { parent_id: parentId } : {}),
       chat_type: chatType,
       message_type: messageType,
-      content,
+      content: body,
       ...(mentions ? { mentions } : {}),
     },
   };
+}
+
+/** 飞书富文本的正文形状：多语言包裹 + 段落数组。 */
+function postContent(nodes, { title = '' } = {}) {
+  return JSON.stringify({ zh_cn: { ...(title ? { title } : {}), content: nodes } });
 }
 
 async function makeBridge({
@@ -350,6 +379,7 @@ async function makeBridge({
     },
     contextEnhancement: { captureContextEnhancementSource, enhanceContent },
     replyReference: { enhanceReplyReference },
+    forwardedMessages: { enhanceForwardedMessages, forwardedMessagesText },
     interactions,
     accessPolicy,
     guidance: { publish: (sessionId, text) => published.push({ sessionId, text }) },
@@ -1386,6 +1416,160 @@ test('图片消息：开着上下文增强时，来源文本块插在图片前�
     assert.ok(asked.content[0].text.includes('"senderId":"ou_owner"'));
     assert.equal(asked.content[1].type, 'image');
     assert.equal(asked.sourceGuidance, '私聊全局提示词');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：文字进正文、内嵌图片按图片收，不再回"不支持"', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_1',
+      messageType: 'post',
+      content: postContent([
+        [{ tag: 'text', text: '看下这个门店' }],
+        [{ tag: 'img', image_key: 'img_v2_inline' }],
+        [{ tag: 'a', text: '报表', href: 'https://x' }],
+      ], { title: '月饼日销' }),
+    }));
+
+    assert.equal(app.gateway.calls.replies.length, 0, '不该再回"暂时还不能处理"');
+    assert.equal(asked.content.length, 2, '正文文本块 + 内嵌图片');
+    assert.equal(asked.content[0].type, 'text');
+    // 标题、正文、链接都进文本；图片位置留占位说明。
+    assert.match(asked.content[0].text, /月饼日销/);
+    assert.match(asked.content[0].text, /看下这个门店/);
+    assert.match(asked.content[0].text, /报表/);
+    assert.match(asked.content[0].text, /\[图片\]/);
+    assert.equal(asked.content[1].type, 'image');
+    assert.equal(asked.content[1].mediaType, 'image/png');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：只有文字时走纯文本链路，不产生图片块', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_2',
+      messageType: 'post',
+      content: postContent([[{ tag: 'text', text: '两行\n文字' }]]),
+    }));
+    assert.equal(asked.content.length, 1);
+    assert.equal(asked.content[0].type, 'text');
+    assert.match(asked.content[0].text, /两行/);
+    assert.deepEqual(app.gateway.calls.resources, [], '没有图就不该下载资源');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：内嵌图下载失败只少一张图，正文照进模型', async () => {
+  const failure = new Error('下载飞书资源失败：resource not found（code 234043）');
+  failure.code = 'feishu/resource-failed';
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    app.gateway.setDownload({ downloadError: failure });
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_3',
+      messageType: 'post',
+      content: postContent([
+        [{ tag: 'text', text: '这段文字不能丢' }],
+        [{ tag: 'img', image_key: 'img_v2_bad' }],
+      ]),
+    }));
+    assert.ok(asked, '正文照进模型');
+    assert.equal(asked.content.length, 1);
+    assert.match(asked.content[0].text, /这段文字不能丢/);
+    assert.equal(app.gateway.calls.replies.length, 0, '配图失败不打扰用户');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：内容解析不出来时仍走"不支持"兜底，不静默吞掉', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_4', messageType: 'post', content: '{"zh_cn":{}}',
+    }));
+    assert.equal(app.gateway.calls.replies.length, 1);
+    assert.match(app.gateway.calls.replies[0].text, /富文本（内容无法解析）/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('合并转发（merge_forward）：展开成正文块进模型，不再回"不支持"', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_merge_1', messageType: 'merge_forward',
+    }));
+
+    assert.equal(app.gateway.calls.replies.length, 0, '不该再回"暂时还不能处理"');
+    assert.deepEqual(app.gateway.calls.forwarded, [{ messageId: 'om_merge_1' }]);
+    assert.equal(asked.content.length, 1);
+    assert.match(asked.content[0].text, /^<forwarded_messages>/);
+    assert.match(asked.content[0].text, /月饼日销数据为啥没云贵的门店/);
+    assert.match(asked.content[0].text, /张三/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('合并转发：读不到子消息时给结构化标记，当前问题照样进模型', async () => {
+  const warnings = [];
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    app.gateway.setFailure('getMessageItems', new Error('permission denied'));
+    // 展开失败要留痕。这一轮本身是成功的，`lastError` 归呈现层管，所以这里看日志。
+    app.deps.logger.warn = (...args) => warnings.push(args.join(' '));
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_merge_2', messageType: 'merge_forward',
+    }));
+    assert.ok(asked, '当前消息不能因为展开失败而丢掉');
+    assert.match(asked.content[0].text, /合并转发的消息内容不可用/);
+    assert.match(asked.content[0].text, /permission denied/);
+    assert.ok(
+      warnings.some((line) => /展开合并转发失败/.test(line)),
+      '展开失败要在日志里留痕',
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('合并转发：空包也给标记，不留一个空块', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    app.gateway.setDownload({ forwardedItems: [] });
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_merge_3', messageType: 'merge_forward',
+    }));
+    assert.ok(asked);
+    assert.match(asked.content[0].text, /没有可读内容/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('合并转发：未 @ 的群消息同样不展开、不进模型', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_merge_g', chatType: 'group', messageType: 'merge_forward',
+    }));
+    assert.equal(app.gateway.calls.forwarded, undefined, '没放行就不该去查子消息');
+    assert.equal(app.gateway.calls.replies.length, 0);
   } finally {
     await app.cleanup();
   }
@@ -4728,6 +4912,46 @@ test('引用回复：用户引用一条消息后提问，被引用正文要一�
     const prompt2 = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
     assert.match(prompt2, /引用内容不可用/, '读不到要有结构化标记');
     assert.match(prompt2, /那这个呢/, '当前问题照样进模型');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('引用回复：引用的是一条合并转发时，要把子消息展开进引用块', async () => {
+  const asked = [];
+  const app = await makeBridge({ onAsk: (options) => asked.push(options) });
+  try {
+    // 被引用的那条是 merge_forward：getMessageText 只能给类型，正文要再展开一次。
+    app.gateway.setDownload({ quotedKind: 'merge_forward', quotedText: '' });
+    await app.bridge.accept(messageEvent({ text: '这段你怎么看', parentId: 'om_forward_parent' }));
+
+    assert.deepEqual(app.gateway.calls.forwarded, [{ messageId: 'om_forward_parent' }]);
+    const prompt = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
+    assert.match(prompt, /被引用的是合并转发的消息/);
+    assert.match(prompt, /月饼日销数据为啥没云贵的门店/, '子消息正文要进引用块');
+    assert.match(prompt, /这段你怎么看/, '当前提问照常在');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('引用回复：展开被引用的合并转发失败时降级成类型描述，不拖垮提问', async () => {
+  const asked = [];
+  const warnings = [];
+  const app = await makeBridge({ onAsk: (options) => asked.push(options) });
+  try {
+    app.gateway.setDownload({ quotedKind: 'merge_forward', quotedText: '' });
+    app.gateway.setFailure('getMessageItems', new Error('permission denied'));
+    app.deps.logger.warn = (...args) => warnings.push(args.join(' '));
+
+    await app.bridge.accept(messageEvent({ text: '那这个呢', parentId: 'om_forward_bad' }));
+    const prompt = asked.at(-1).content.map((part) => part.text ?? `[${part.type}]`).join('');
+    assert.match(prompt, /被引用的是合并转发的消息/, '降级成类型描述，不空着');
+    assert.match(prompt, /那这个呢/, '当前提问不能因为展开失败而丢');
+    assert.ok(
+      warnings.some((line) => /展开被引用的合并转发失败/.test(line)),
+      '展开失败要留痕',
+    );
   } finally {
     await app.cleanup();
   }

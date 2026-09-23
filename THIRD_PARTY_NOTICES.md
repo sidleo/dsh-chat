@@ -19,6 +19,7 @@
      | 渠道图标 `icon` | ① 飞书：**飞书开放平台官网公开的矢量标志**——`https://lf-package-cn.feishucdn.com/obj/feishu-static/lark/open/website/favicon-logo.svg`（`open.feishu.cn` 的站点图标），三条 `path` 逐字节照搬；相对原件只做两处改动：删掉官方文件里那层白色圆角底 `<rect … fill="white"/>`（它会让图标变成白底方图），并按官方 48px favicon 的留白比例把 `viewBox` 收到标志外框（`0.977 0.673 14.655 14.655`）。改后与原件去白底渲染实测逐像素一致（平均通道差 0.05/255）；② 微信：**simple-icons**（CC0-1.0）的 `wechat` 路径，按品牌色 `#07C160` 填充 | 设置页渠道卡片与侧边栏会话行徽标共用的渠道图标，仅用于标识对应渠道。**不使用**上游 dsh-im 的自绘图形——它与官方标志有差异。飞书/微信标志的版权与商标归其权利人（飞书为字节跳动旗下产品），此处仅作渠道标识用途 |
      | `packages/dsh-chat/client/session-badges.js` + 渠道的 `icon.svg` | `plugin-src/client/session-channel-logos.js` | 侧边栏会话行的渠道徽标：沿用「保留文字前缀 + 只加自有属性 + 一张样式表用伪元素替换」的做法，**匹配方式不同**（上游按产品 CSS 类名找标题行，本项目只按"叶子元素文本以「渠道名 · 」开头"匹配，不依赖类名），并按本项目规范做了可还原的卸载 |
      | `packages/dsh-chat-weixin/host/media.mjs` | 同上 + `src/channels/shared/image-prompt.mjs` | 入站图片/文件的 AES-128-ECB 解密与 CDN 下载、出站加密与 CDN 上传（收窄为"下载解密"与"加密上传"两组纯函数，去掉上游 i18n、artifact 错误分类与惰性引用包装） |
+     | `packages/dsh-chat/shared/forwarded-messages.mjs` | `convertMergeForward` / `buildChildrenMap` / `formatSubTree`（`registerDispatcherHandlers` 内的消息转换分发表） | 合并转发的展开**算法**：一次查回的扁平条目按 `upper_message_id` 建父子表、按时间正序渲染、嵌套合并转发递归展开、`<forwarded_messages>` 标签与 50 条上限。重新编写（上游把 `MAX_ITEMS`、时间格式与渲染耦合在一个分发表里，本项目拆成纯函数并补了限深与标签转义） |
 - 上游许可原文：
 
 ```

@@ -1264,6 +1264,29 @@ export function createLarkGateway({
     },
 
     /**
+     * 读一条消息的**原始条目**（合并转发要用：子消息只能这样拿到）。
+     *
+     * 为什么单开一个方法：飞书把"合并转发"当成**一条消息**投递，正文里只有一个
+     * `message_id` 外壳；被合并进来的那些消息**不在事件体里**，必须拿这个 id 再查一次。
+     * 查回来的 `items` 是**扁平**的（父 + 全部子），层级靠每条的 `upper_message_id`
+     * 指回父级——所以这里只做"取回来"，建树是 hub 的活（`shared/forwarded-messages.mjs`）。
+     *
+     * 与 `getMessageText` 同一套错误口径：读不到就抛，由调用方决定降级文案。
+     *
+     * @param options - { messageId }。
+     * @returns 原始条目的数组（可能为空数组，但不会为 undefined）。
+     */
+    async getMessageItems({ messageId }) {
+      if (typeof messageId !== 'string' || !messageId) {
+        throw new TypeError('getMessageItems 需要 messageId。');
+      }
+      const response = await client.im.v1.message.get({ path: { message_id: messageId } });
+      assertSuccess('飞书读取消息条目', response);
+      const items = response?.data?.items;
+      return Array.isArray(items) ? items : [];
+    },
+
+    /**
      * 下载消息里的资源（图片/文件）。
      *
      * 飞书这个接口用**二进制流**返回成功结果，业务失败则回一段 JSON；因此这里

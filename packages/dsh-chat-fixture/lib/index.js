@@ -44,6 +44,7 @@ function apply(ctx) {
                 storage: typeof deps.storage?.read === "function",
                 contextEnhancement: typeof deps.contextEnhancement?.enhanceContent === "function",
                 replyReference: typeof deps.replyReference?.enhanceReplyReference === "function",
+                forwardedMessages: typeof deps.forwardedMessages?.enhanceForwardedMessages === "function",
                 deferred: typeof deps.deferred?.register === "function",
                 accessPolicy: typeof deps.accessPolicy?.evaluateAccess === "function",
                 commands: typeof deps.commands?.handle === "function",

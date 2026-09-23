@@ -18,6 +18,10 @@ import {
 } from '../shared/contract.mjs';
 import * as accessPolicy from '../shared/access-policy.mjs';
 import * as contextEnhancement from '../shared/context-enhancement.mjs';
+import {
+  enhanceForwardedMessages as enhanceForwardedMessagesFn,
+  forwardedMessagesText as forwardedMessagesTextFn,
+} from '../shared/forwarded-messages.mjs';
 import { enhanceReplyReference as enhanceReplyReferenceFn } from '../shared/reply-reference.mjs';
 import { createBotSettingsStore } from './bot-settings.mjs';
 import { createChannelRegistry } from './channel-registry.mjs';
@@ -297,6 +301,14 @@ export function apply(ctx, config = {}) {
        * 拼装（标签、限长、安全转义、读不到时的标记）由 hub 实现一次、所有渠道复用。
        */
       replyReference: Object.freeze({ enhanceReplyReference: enhanceReplyReferenceFn }),
+      /**
+       * 合并转发：渠道把外壳 id 与查回来的原始条目交给 hub，展开（建树、限深限条、
+       * 标签渲染）由 hub 实现一次、所有渠道复用。
+       */
+      forwardedMessages: Object.freeze({
+        enhanceForwardedMessages: enhanceForwardedMessagesFn,
+        forwardedMessagesText: forwardedMessagesTextFn,
+      }),
       /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
       accessPolicy: Object.freeze({ ...accessPolicy }),
       /** 机器人命令：渠道把入站文本交进来即可，命令实现只在 hub 一份。 */
@@ -821,6 +833,11 @@ export function apply(ctx, config = {}) {
     }),
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference: enhanceReplyReferenceFn }),
+    /** 合并转发的展开函数（服务面同样暴露一份，渠道按需取用）。 */
+    forwardedMessages: Object.freeze({
+      enhanceForwardedMessages: enhanceForwardedMessagesFn,
+      forwardedMessagesText: forwardedMessagesTextFn,
+    }),
     guidance: Object.freeze({
       publish: (sessionId, text) => guidanceForBridge.publish(sessionId, text),
       forget: (sessionId) => guidanceForBridge.forget(sessionId),

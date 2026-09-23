@@ -33,6 +33,7 @@ const KIND_LABELS = Object.freeze({
   media: '视频',
   sticker: '表情',
   post: '富文本',
+  merge_forward: '合并转发的消息',
   interactive: '卡片',
   system: '系统消息',
   share_chat: '群名片',

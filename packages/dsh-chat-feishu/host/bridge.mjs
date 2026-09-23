@@ -114,10 +114,61 @@ function sniffImageMediaType(bytes, contentType) {
 }
 
 /**
+ * 把飞书富文本（`post`）的 `content` 解析成正文 + 图片键。
+ *
+ * 飞书这个字段是**多语言包裹**的（`{ zh_cn: { title, content: [[{tag,...}]] } }`），
+ * 优先取 `zh_cn`，没有就取第一个像样的语言分支。`title` 要拼在最前面——它就是正文的一部分。
+ *
+ * 为什么要单独收 `image_key`：富文本里的图片**是正文的一部分**（配图说明就是这个形态），
+ * 只取文字等于把图丢了；收出来交给下游走与单张图片**完全相同**的下载/回退链路。
+ *
+ * @param content - `message.content`（JSON 字符串）。
+ * @returns `{ text, imageKeys }`；解析失败给空值（绝不抛）。
+ */
+function parsePostContent(content) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(content ?? '{}');
+  } catch {
+    return { text: '', imageKeys: [] };
+  }
+  const localised = parsed?.zh_cn
+    ?? Object.values(parsed ?? {}).find((value) => value && typeof value === 'object')
+    ?? {};
+  const rows = Array.isArray(localised.content) ? localised.content : [];
+  const imageKeys = [];
+  const lineOf = (node) => {
+    if (!node || typeof node !== 'object') return '';
+    if (node.tag === 'img') {
+      if (typeof node.image_key === 'string' && node.image_key) imageKeys.push(node.image_key);
+      return '[图片]';
+    }
+    if (node.tag === 'media') return '[视频]';
+    if (node.tag === 'at') {
+      const id = typeof node.user_id === 'string' ? node.user_id.trim() : '';
+      return id ? `@${id}` : '@';
+    }
+    const text = typeof node.text === 'string' ? node.text : '';
+    return text || (typeof node.href === 'string' ? node.href : '');
+  };
+  const lines = rows
+    .filter(Array.isArray)
+    .map((row) => row.map(lineOf).join(''))
+    .filter((line) => line.trim());
+  const title = typeof localised.title === 'string' ? localised.title.trim() : '';
+  return {
+    text: [title, ...lines].filter(Boolean).join('\n').trim(),
+    imageKeys,
+  };
+}
+
+/**
  * 解析入站消息的内容部分。
  *
  * @param message - 飞书消息体。
- * @returns `{ kind:'text', text }` | `{ kind:'image', fileKey }` | `{ kind:'unsupported', label }`。
+ * @returns `{ kind:'text', text }` | `{ kind:'image', fileKey }`
+ *   | `{ kind:'post', text, imageKeys }` | `{ kind:'merge_forward' }`
+ *   | `{ kind:'unsupported', label }`。
  */
 function parseInbound(message) {
   const text = messageText(message);
@@ -139,6 +190,16 @@ function parseInbound(message) {
     }
     return { kind: 'unsupported', label: `${type === 'image' ? '图片' : '文件'}（内容无法解析）` };
   }
+  // 富文本：文字进正文，内嵌图片按图片收（正文里保留 `[图片]` 占位说明位置）。
+  if (type === 'post') {
+    const { text: postText, imageKeys } = parsePostContent(message.content);
+    if (!postText && imageKeys.length === 0) {
+      return { kind: 'unsupported', label: '富文本（内容无法解析）' };
+    }
+    return { kind: 'post', text: postText, imageKeys };
+  }
+  // 合并转发：飞书只给一个外壳 id，子消息要再查一次（展开在 hub 做）。
+  if (type === 'merge_forward') return { kind: 'merge_forward' };
   return { kind: 'unsupported', label: type };
 }
 
@@ -374,13 +435,31 @@ export function createFeishuBridge({
         logger.warn?.(`[dsh-chat-feishu] 读被引用的消息超时：${parentId}`);
         return { messageId: parentId, reason: '读取超时' };
       }
-      return {
+      const base = {
         messageId: fetched.messageId ?? parentId,
         senderId: fetched.senderId ?? null,
         kind: fetched.kind ?? 'text',
         text: fetched.text ?? '',
         fileName: fetched.fileName ?? null,
       };
+      /**
+       * 引用的是**合并转发**时，正文得再展开一层：`getMessageText` 对这类消息只能给出
+       * "类型是 merge_forward"，子消息的正文一个字都没有——不展开的话，用户"引用一包聊天记录
+       * 再提问"等于什么都没引用（真机上就是这么表现的）。
+       *
+       * 展开失败**不影响提问**：退回只带类型描述的块（引用块自己会写"被引用的是…"）。
+       */
+      if (base.kind === 'merge_forward') {
+        try {
+          const items = await gateway.getMessageItems?.({ messageId: base.messageId }) ?? [];
+          base.text = deps.forwardedMessages?.forwardedMessagesText?.({ messageId: base.messageId, items })
+            ?? '';
+        } catch (error) {
+          logger.warn?.(`[dsh-chat-feishu] 展开被引用的合并转发失败（${base.messageId}）：`
+            + `${error?.message ?? error}`);
+        }
+      }
+      return base;
     } catch (error) {
       // 不静默：引用读不到要留痕，同时让模型知道"引用内容不可用"。
       logger.warn?.(`[dsh-chat-feishu] 读被引用的消息失败（${parentId}）：${error?.message ?? error}`);
@@ -423,7 +502,8 @@ export function createFeishuBridge({
     if (inbound.kind === 'unsupported') {
       await gateway.replyText({
         messageId: message.message_id,
-        text: `暂时还不能处理「${inbound.label}」类型的消息（目前支持文本、图片与文件）。`,
+        text: `暂时还不能处理「${inbound.label}」类型的消息`
+          + '（目前支持文本、富文本、图片、文件与合并转发）。',
       });
       return;
     }
@@ -435,7 +515,8 @@ export function createFeishuBridge({
     // 正在等这个会话回答 agent 的提问/审批：这条消息就是答案，不再进模型。
     // 位置很关键——放在门禁**之后**（陌生人不能替人回答）、@ 检查**之前**
     // （回答问题时不需要再 @ 机器人）。
-    if (inbound.kind === 'text') {
+    // 富文本的手打答案也要认（用户按了富文本格式发"是"，同样是在回答问题）。
+    if (inbound.kind === 'text' || inbound.kind === 'post') {
       const candidate = stripMentions(inbound.text, message.mentions);
       if (candidate && deps.interactions?.offer?.({
         channelId: deps.channelId,
@@ -458,47 +539,110 @@ export function createFeishuBridge({
     // 收到即反馈：打一个「在做了」表情，处理完再撤掉（比等卡片刷新更即时，也不刷屏）。
     const workingReaction = await markWorking(message);
 
-    // 图片/文件：先下载，再变成 PromptContentPart，和文本走同一条会话链路。
+    // 图片/文件/富文本内嵌图：先下载，再变成 PromptContentPart，和文本走同一条会话链路。
     let attachmentParts = null;
     let text = '';
-    if (inbound.kind === 'image' || inbound.kind === 'file') {
-      const isImage = inbound.kind === 'image';
-      let downloaded;
+    /**
+     * 下载一张入站图片并转成内容块。
+     *
+     * 失败返回 `{ part: null, reason }`：单张图片（`image` 消息）要拿 `reason` 回一句
+     * **具体**原因给用户；富文本里的配图只是正文的一部分，一张失败不该把整条消息扔掉，
+     * 所以那条路只记日志、继续走。
+     */
+    const inboundImagePart = async (fileKey) => {
       try {
-        downloaded = await gateway.downloadResource({
+        const downloaded = await gateway.downloadResource({
           messageId: message.message_id,
-          fileKey: inbound.fileKey,
-          type: isImage ? 'image' : 'file',
+          fileKey,
+          type: 'image',
         });
+        const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
+        if (!mediaType) {
+          const reason = `格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`;
+          logger.info?.(`[dsh-chat-feishu] 跳过不支持的图片类型：${downloaded.contentType ?? '未知'}`);
+          return { part: null, reason };
+        }
+        return {
+          part: {
+            type: 'image',
+            mediaType,
+            data: downloaded.bytes.toString('base64'),
+            name: 'feishu-image',
+          },
+          reason: null,
+        };
       } catch (error) {
         const reason = error?.message ?? String(error);
-        lastError = reason;
-        logger.error?.(`[dsh-chat-feishu] 下载${isImage ? '图片' : '文件'}失败：${reason}`);
-        await gateway.replyText({
-          messageId: message.message_id,
-          text: `${isImage ? '图片' : '文件'}下载失败：${reason}`,
-        }).catch(() => {});
+        logger.warn?.(`[dsh-chat-feishu] 下载图片失败（${fileKey}）：${reason}`);
+        return { part: null, reason };
+      }
+    };
+
+    if (inbound.kind === 'post') {
+      // 富文本：文字进正文，内嵌图片按图片收（下载失败的图只是少一张，正文照进模型）。
+      text = stripMentions(inbound.text, message.mentions);
+      const parts = [];
+      for (const fileKey of inbound.imageKeys) {
+        const { part } = await inboundImagePart(fileKey);
+        if (part) parts.push(part);
+      }
+      if (parts.length > 0) attachmentParts = parts;
+      if (!text && parts.length === 0) {
         await clearWorking(message, workingReaction);
         return;
       }
+    } else if (inbound.kind === 'merge_forward') {
+      // 合并转发：飞书只投递一个外壳，子消息要再查一次；展开成文本块当正文（在 hub 拼装）。
+      let forward = null;
+      try {
+        const items = await gateway.getMessageItems({ messageId: message.message_id });
+        forward = { messageId: message.message_id, items };
+        logger.info?.(`[dsh-chat-feishu] 已展开合并转发：${bot.id}`
+          + ` ${message.message_id}（${items.length} 条）`);
+      } catch (error) {
+        const reason = error?.message ?? String(error);
+        lastError = reason;
+        logger.warn?.(`[dsh-chat-feishu] 展开合并转发失败（${message.message_id}）：${reason}`);
+        // 读不到也**不丢**：给一个结构化标记，用户当前的问题照常进模型。
+        forward = { messageId: message.message_id, reason };
+      }
+      // 展开块本身就是正文：用一个空的内容数组当底座，enhance 前置插入后只剩这一块。
+      const enhanced = deps.forwardedMessages?.enhanceForwardedMessages?.([], forward);
+      attachmentParts = Array.isArray(enhanced) ? enhanced : null;
+      text = '';
+    } else if (inbound.kind === 'image' || inbound.kind === 'file') {
+      const isImage = inbound.kind === 'image';
       if (isImage) {
-        const mediaType = sniffImageMediaType(downloaded.bytes, downloaded.contentType);
-        if (!mediaType) {
-          logger.info?.(`[dsh-chat-feishu] 忽略不支持的图片类型：${downloaded.contentType ?? '未知'}`);
+        const { part, reason } = await inboundImagePart(inbound.fileKey);
+        if (!part) {
+          lastError = reason;
           await gateway.replyText({
             messageId: message.message_id,
-            text: `这张图片的格式暂不支持（${downloaded.contentType ?? '未知类型'}），请发 PNG/JPEG/WebP/GIF。`,
-          });
+            text: /^格式暂不支持/.test(reason) ? `这张图片的${reason}` : `图片下载失败：${reason}`,
+          }).catch(() => {});
           await clearWorking(message, workingReaction);
           return;
         }
-        attachmentParts = [{
-          type: 'image',
-          mediaType,
-          data: downloaded.bytes.toString('base64'),
-          name: 'feishu-image',
-        }];
+        attachmentParts = [part];
       } else {
+        let downloaded;
+        try {
+          downloaded = await gateway.downloadResource({
+            messageId: message.message_id,
+            fileKey: inbound.fileKey,
+            type: 'file',
+          });
+        } catch (error) {
+          const reason = error?.message ?? String(error);
+          lastError = reason;
+          logger.error?.(`[dsh-chat-feishu] 下载文件失败：${reason}`);
+          await gateway.replyText({
+            messageId: message.message_id,
+            text: `文件下载失败：${reason}`,
+          }).catch(() => {});
+          await clearWorking(message, workingReaction);
+          return;
+        }
         // 文件内容块只能引用"本会话上传"得到的 receipt，因此先上传再交给模型。
         try {
           const { sessionId } = await deps.sessions.ensure({
@@ -629,22 +773,23 @@ export function createFeishuBridge({
       const withReply = (content) => (typeof deps.replyReference?.enhanceReplyReference === 'function'
         ? deps.replyReference.enhanceReplyReference(content, replyTo)
         : content);
+      /**
+       * 正文与附件合并。富文本（`post`）会**同时**有文字与内嵌图，两个都不能丢。
+       *
+       * 纯文字消息仍按**字符串**交给增强引擎：那是既有行为（来源块与正文拼进同一个文本块），
+       * 改成数组会平白多出一个内容块，既有会话与用例都按老形状断言。
+       */
+      const base = attachmentParts
+        ? [...(text ? [{ type: 'text', text }] : []), ...attachmentParts]
+        : text;
+      const enhancedContent = deps.contextEnhancement.enhanceContent(
+        base,
+        captured?.snapshot ?? null,
+        captured?.source,
+      );
       let finalParts;
-      if (attachmentParts) {
-        const enhancedContent = deps.contextEnhancement.enhanceContent(
-          attachmentParts,
-          captured?.snapshot ?? null,
-          captured?.source,
-        );
-        finalParts = Array.isArray(enhancedContent) ? enhancedContent : attachmentParts;
-      } else {
-        const enhancedText = deps.contextEnhancement.enhanceContent(
-          text,
-          captured?.snapshot ?? null,
-          captured?.source,
-        );
-        finalParts = [{ type: 'text', text: enhancedText }];
-      }
+      if (Array.isArray(enhancedContent)) finalParts = enhancedContent;
+      else finalParts = [{ type: 'text', text: enhancedContent }];
       if (replyTo) finalParts = withReply(finalParts);
 
       const mode = conversationType === 'direct' ? bot.stepPushDirect : bot.stepPushGroup;

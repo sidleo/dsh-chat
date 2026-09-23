@@ -58,6 +58,8 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | Issue #192「模型失效自救」 | `sessions.mjs` 的 `recoverUnavailableModel` | 识别 `session/model-unavailable`，切回可用模型（优先 Host 默认）并重试一次，答案前加一行说明 |
 | 「入站图片在非视觉模型下回退为文件」 | `sessions.ask()` 的图片回退（`imagesAsFiles`） | 拒绝信号与文案沿用上游（`MODEL_DOES_NOT_SUPPORT_IMAGES`），但降级目标改为"本会话的文件"而不是自写工作区文件——复用已验证的 `uploadFile` 通道；转换失败**原样抛**，不静默丢图片 |
 | Issue #106「引用/回复消息」 | `shared/reply-reference.mjs` + 飞书 `getMessageText` | 用户引用一条消息再提问时，被引用正文一起进提示词；读不到只加"引用内容不可用"标记，不丢当前问题 |
+| 「富文本（`post`）入站」 | 飞书 `parseInbound` + `parsePostContent` | 上游 `convertPost` 只把富文本转成文本；我们把**正文与内嵌图都收下**——文字进正文、`img` 节点按图片走与单张图片完全相同的下载/回退链路（配图是正文的一部分，只取文字等于把图丢了），标题拼在最前 |
+| 「合并转发（`merge_forward`）入站」 | `shared/forwarded-messages.mjs` + 飞书 `getMessageItems` | 上游 `convertMergeForward` 的同一套算法（扁平条目按 `upper_message_id` 建树 → `<forwarded_messages>` 渲染）；补了限深（上下游只有限条）与标签转义，子消息读不到时只加"内容不可用"标记，不丢当前问题 |
 | Issue #188「机器人别名」 | 已有等价物 | 飞书自身的机器人名 + 我们设置页的机器人卡片，不再单做一层别名 |
 | `stepPush` 过程展示 | 设置页已有，这一轮又搬进**聊天面板** | 走新加的「渠道自带面板字段」契约（`panel.fields` / `panel.apply`），hub 不认渠道语义 |
 | Issue #61「npm 更新检查」 | **不适用** | 我们是按路径安装的本地工作区，不是 npm 包；已有「版本与更新」面板显示版本与更新方式 |

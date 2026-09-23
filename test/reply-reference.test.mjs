@@ -21,6 +21,13 @@ test('引用块：正文 + 类型描述 + 读不到时的标记', () => {
   const image = replyReferenceBlock({ messageId: 'om_img', kind: 'image', fileName: '截图.png' });
   assert.match(image, /被引用的是图片：截图\.png/);
 
+  // 合并转发有可读标签（渠道会把子消息展开后填进 text），不再是裸类型名。
+  const forward = replyReferenceBlock({
+    messageId: 'om_fwd', kind: 'merge_forward', text: '朱俊龙: 月饼日销为啥没云贵',
+  });
+  assert.match(forward, /被引用的是合并转发的消息/);
+  assert.match(forward, /月饼日销为啥没云贵/);
+
   const unknown = replyReferenceBlock({ messageId: 'om_x', kind: 'something_new' });
   assert.match(unknown, /被引用的消息类型：something_new/);
 
