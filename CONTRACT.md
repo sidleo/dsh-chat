@@ -422,8 +422,8 @@ isCommand: true)`（属主绕过）。提问/审批按钮是人在环回传，�
 | `names.resolve` | `{ botId, ids }` | 渠道自己的设置页 | 白名单里的 id → 名字；**可选**（见下） |
 | `bot.add` | `{ appId, appSecret, domain?, ownerOpenIds? }` | 渠道自己的设置页 | 「手动接入已有机器人」：**先验凭据再写任何东西**，成功后返回新机器人的状态；**可选**，名字自定 |
 | `bot.register.start` / `bot.register.status` / `bot.register.cancel` | 三者都无参数 | 渠道自己的设置页 | 「扫码接入」那条路：`start` 向平台申请一次性授权链接（同一时刻只有一个进行中的尝试），前端轮 `status` 拿 `{ state, verificationUrl, qrCodeDataUrl, remainingSeconds, error, bot }`，`cancel` 取消。**可选**，状态名与状态机由渠道自己定 |
-| `bot.lark-identity.get` | `{ botId }` | 渠道自己的设置页 | 飞书：**只读**体检——这台机器人在 `lark-cli` 里有没有对应 profile、当前会以谁的身份说话（不建 profile、不写盘） |
-| `bot.lark-identity.set` | `{ botId, value: 'bot-only' \| 'user-allowed', confirm? }` | 渠道自己的设置页 | 飞书：能不能用 `lark-cli` 的**用户身份**。**开启必须先确认**：不带 `confirm: true` 就只回 `requiresConfirm` + `confirmPrompt`，一个字节都不写；开启时由 `lark-cli` 自己回答"登录的是谁"并把它钉住。关回 `bot-only` 是收窄，立即生效、不用确认 |
+| `bot.lark-identity.get` | `{ botId }` | 渠道自己的设置页 | 飞书：**只读**体检——返回分层身份策略 `identity`（`{ global, direct, group, targets }`，每层 `{ bot, user }`）、一行 `summary`、钉住的 `pinnedUserOpenId`，以及 `lark-cli` 自己的体检（`profile` / `larkCli.bot` / `larkCli.user`，看登录的是谁）。不建 profile、不写盘 |
+| `bot.lark-identity.set` | `{ botId, identity, confirm? }` | 渠道自己的设置页 | 飞书：设置**分层**的 `lark-cli` 身份策略（`targets → 群聊/私聊 → global` 就近覆盖；每层两个开关各自独立）。传的是**整份** `identity`（不做字段级合并：合并语义表达不了"删掉一条指定设置"）。**放开用户身份要先确认**：任一层把 `user` 从关到开且还没钉住用户时，不带 `confirm: true` 就只回 `requiresConfirm` + `confirmPrompt`，一个字节都不写；收窄（关掉 user）立即生效、不用确认。开启时由 `lark-cli` 自己回答"登录的是谁"并钉住；**已钉住后改配置不重复确认、也不清掉那个人** |
 
 渠道的投递实现（`instance.delivery`）有三块，后两块可选、缺席要能被查出来（`supportsFile`）：
 
@@ -698,6 +698,13 @@ lark-cli 允许同一台机器登录**多个应用**，还有一个**全局可�
 （`scripts/verify-package.mjs` 会检查"没有别的文件引入 `node:child_process`"），它每次调用都带
 `--profile <本机器人 appId 对应的 profile>` 与显式 `--as`，并在调用前核对自己的 `appId`（用户身份还要核对
 钉住的 `openId`）——对不上就失败，**绝不回退**。不要自己 spawn、不要 `profile use`、不要 `strict-mode --global`。
+
+**能不能用某个身份是分层的**（`host/lark-identity.mjs`）：`targets → 群聊/私聊 → global` 就近覆盖，
+每层 `{ bot, user }` 两个开关各自独立，默认全局仅应用。**门禁按会话键解析**——`policyFor` 收的是
+owner（`{ botId, key }`）而不是 botId，只给 botId 会让 A 群放开的用户身份泄漏到 B 群。
+⚠️ 语义边界：打开 `user` 只是"**允许**以用户身份调用"，**不等于换成发言人的授权**——
+lark-cli 一个 appId 只有一份 profile、一份 profile 只挂一个登录人，实际是谁由 `assertIdentity`
+核对钉住的 `openId`。要做"按发言人切身份"得绕开 lark-cli 的登录态，本契约不提供。
 
 **可选：`names.resolve({ botId, ids })`** —— 把平台 id 换成人能认出的名字，给设置页的
 「访问策略」白名单用（名单里只存 id，一排 `ou_4f6a8c0e…` 认不出是谁，也没法确认自己加错了人）。

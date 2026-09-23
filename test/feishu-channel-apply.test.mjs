@@ -20,7 +20,8 @@ const OWNER = Object.freeze({
   botId: 'bot_b6e11ebfaedb4413bf7c5eaa65387204',
   botName: '张三',
   chatKey: 'p2p:ou_x',
-  mode: 'bot-only',
+  // 身份策略是分层的：这里给的是**本会话**解析出来的两个开关（不是机器人级的单一 mode）。
+  scope: Object.freeze({ bot: true, user: false, source: 'global' }),
   profileName: PROFILE,
 });
 
@@ -98,9 +99,19 @@ test('会话环境事实：只有本渠道的聊天会话拿得到 profile 与�
   ownership = (sessionId) => (sessionId === SESSION ? OWNER : null);
   assert.deepEqual(contributor.resolve({ agent: { session: { header: { id: SESSION } } } }), {
     DSH_CHAT_LARK_PROFILE: PROFILE,
-    DSH_CHAT_LARK_IDENTITY: 'bot-only',
+    DSH_CHAT_LARK_IDENTITY: 'bot',
   });
   assert.deepEqual(contributor.resolve({ agent: { session: { header: { id: 'session-other' } } } }), {});
+
+  // 环境事实报的是**本会话**实际生效的权限（不是机器人级全局值），四种组合都要能表达。
+  const withScope = (scope) => {
+    ownership = () => ({ ...OWNER, scope });
+    return contributor.resolve({ agent: { session: { header: { id: SESSION } } } }).DSH_CHAT_LARK_IDENTITY;
+  };
+  assert.equal(withScope({ bot: true, user: true }), 'bot+user');
+  assert.equal(withScope({ bot: true, user: false }), 'bot');
+  assert.equal(withScope({ bot: false, user: true }), 'user');
+  assert.equal(withScope({ bot: false, user: false }), 'none');
 });
 
 test('身份策略提示词段：只说给聊天会话听，且写明必须带 profile 与显式身份', () => {
@@ -115,13 +126,20 @@ test('身份策略提示词段：只说给聊天会话听，且写明必须带 p
   const text = section.text({ agent: { id: SESSION } });
   assert.match(text, new RegExp(PROFILE), '要给出这台机器人自己的 profile 名');
   assert.match(text, /--as bot/);
-  assert.match(text, /只用应用身份/);
+  assert.match(text, /不允许用户身份/, '要说清本会话的实际权限');
   assert.match(text, /DSH_CHAT_LARK_PROFILE/);
   assert.match(text, /profile use/, '要写明禁止切换全局 profile');
 
-  const userAllowed = { ...OWNER, mode: 'user-allowed' };
-  ownership = () => userAllowed;
-  assert.match(section.text({ agent: { id: SESSION } }), /允许用户身份/);
+  // 提示词必须说**本会话**那一份，否则模型按全局猜、门禁按会话判，两边自相矛盾。
+  const groupScope = { ...OWNER, scope: { bot: true, user: true, source: 'target' } };
+  ownership = () => groupScope;
+  const allowed = section.text({ agent: { id: SESSION } });
+  assert.match(allowed, /允许用户身份/);
+  assert.doesNotMatch(allowed, /不允许用户身份/);
+
+  // 都不允许的场合也要如实说（否则模型会以为能用 bot）。
+  ownership = () => ({ ...OWNER, scope: { bot: false, user: false, source: 'target' } });
+  assert.match(section.text({ agent: { id: SESSION } }), /两种身份都会被拒绝/);
 });
 
 test('没有 systemPrompt 服务的部署：提示词段装不上也不报错（门禁照旧生效）', () => {

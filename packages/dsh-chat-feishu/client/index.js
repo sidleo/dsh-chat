@@ -119,6 +119,26 @@ const zh = {
     '每一步都单独发一条消息（含工具调用）；长任务会连续发送较多消息',
   'lark-cli 身份': 'lark-cli 身份',
   '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK',
+  '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK':
+    '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK',
+  '全局': '全局',
+  '应用身份': '应用身份',
+  '用户身份': '用户身份',
+  '继承上一层': '继承上一层',
+  '仅应用身份': '仅应用身份',
+  '仅用户身份': '仅用户身份',
+  '应用 + 用户': '应用 + 用户',
+  '都不允许': '都不允许',
+  '两个身份可以同时允许。选「继承上一层」表示这一层不单独设置，听上一层的（群聊/私聊继承全局，指定条目自己说了算）。':
+    '两个身份可以同时允许。选「继承上一层」表示这一层不单独设置，听上一层的（群聊/私聊继承全局，指定条目自己说了算）。',
+  '注意：允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。':
+    '注意：允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。',
+  '指定群或人': '指定群或人',
+  '还没有指定设置：所有会话都按上面的分类与全局生效。': '还没有指定设置：所有会话都按上面的分类与全局生效。',
+  '群': '群',
+  '人': '人',
+  '还没有会话可选：这台机器人跟人聊过之后，会话会出现在这里。':
+    '还没有会话可选：这台机器人跟人聊过之后，会话会出现在这里。',
   '调用身份': '调用身份',
   '只用应用身份（bot）': '只用应用身份（bot）',
   '允许用户身份（--as user）': '允许用户身份（--as user）',
@@ -282,6 +302,27 @@ const en = {
     'Every step is its own message; long tasks send many messages',
   'lark-cli 身份': 'lark-cli identity',
   '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': 'Which identity this bot uses when calling lark-cli; message send/receive still goes through the official SDK',
+  '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK':
+    'Choose which identities are allowed per context: nearest wins (specific chats/people → group/direct → global); send/receive still goes through the official SDK',
+  '全局': 'Global',
+  '应用身份': 'Application identity',
+  '用户身份': 'User identity',
+  '继承上一层': 'Inherit from above',
+  '仅应用身份': 'Application only',
+  '仅用户身份': 'User only',
+  '应用 + 用户': 'Application + user',
+  '都不允许': 'Neither allowed',
+  '两个身份可以同时允许。选「继承上一层」表示这一层不单独设置，听上一层的（群聊/私聊继承全局，指定条目自己说了算）。':
+    'Both identities can be allowed at once. "Inherit from above" means this level is not set separately: group/direct inherit global, and specific entries always decide for themselves.',
+  '注意：允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。':
+    'Note: allowing the user identity only permits calling as a user; the actual user is still the signed-in person shown below — one lark-cli profile holds a single signed-in user, so it never switches per sender.',
+  '指定群或人': 'Specific chats or people',
+  '还没有指定设置：所有会话都按上面的分类与全局生效。':
+    'No specific entries yet: every conversation follows the levels above.',
+  '群': 'Group',
+  '人': 'Person',
+  '还没有会话可选：这台机器人跟人聊过之后，会话会出现在这里。':
+    'No conversations to pick yet: they appear here once this bot has chatted with someone.',
   '调用身份': 'Identity',
   '只用应用身份（bot）': 'Application identity only (bot)',
   '允许用户身份（--as user）': 'Allow user identity (--as user)',
@@ -372,36 +413,97 @@ const STEP_PUSH_OPTIONS = [
 ];
 
 /**
- * lark-cli 身份：这台机器人调 lark-cli 时用哪个身份。
+ * lark-cli 身份：分层配置每个场合能用哪些身份。
  *
- * 为什么要有这个开关：lark-cli 里可以同时登录**多个应用**，谁不显式指定 profile、
- * 谁省略 `--as`，谁就可能在用别人的授权。策略（能不能用用户身份）由这里设置；
- * **真正调用时的绑定与断言**在 host 的 `lark-cli.mjs`（唯一入口）里做——
- * 它每次都会核对自己是不是那台应用、以及用户是不是这里钉住的那个人。
+ * 为什么要有它：早期只有一个机器人级开关，而"谁能用用户身份"实际按场合变——
+ * 私聊可以放开、几百人的大群不该放开；同一个群里也常常只信得过某一个人。
+ * 所以配置分四层、**就近覆盖**：指定群/指定人 → 群聊/私聊分类 → 全局。
+ * 每层两个开关（应用身份 / 用户身份）互相独立。
+ *
+ * **语义边界**：某一层打开"用户身份"只是"**允许**以用户身份调用"，
+ * 不会因为发言人变了就自动换成那个人的授权——lark-cli 一个 appId 只有一份 profile，
+ * 实际是谁由 host 侧 `assertIdentity` 核对（就是卡片下方"登录人"那一行）。
  */
-const LARK_IDENTITY_OPTIONS = [
+
+/** 一层里两个开关的说明（顺序固定：应用身份在前）。 */
+const LARK_IDENTITY_SWITCHES = Object.freeze([
   {
-    value: 'bot-only',
-    label: '只用应用身份（bot）',
-    help: '以应用自己的身份调 lark-cli，只能访问这台机器人自己的资源',
+    key: 'bot',
+    label: '应用身份',
+    help: '以应用自己的身份调 lark-cli（--as bot），只能访问这台机器人自己的资源',
   },
   {
-    value: 'user-allowed',
-    label: '允许用户身份（--as user）',
-    help: '以某个人的名义调 lark-cli（能读写他的云文档、日历等个人资源）；开启前需要确认，并会钉住当前登录的人',
+    key: 'user',
+    label: '用户身份',
+    help: '允许以 lark-cli 里登录的那个人调 lark-cli（--as user，能读写他的云文档、日历等个人资源）',
   },
-];
+]);
+
+/** 分类层在界面上的顺序。 */
+const LARK_IDENTITY_SCOPES = Object.freeze([
+  { key: 'direct', label: '私聊' },
+  { key: 'group', label: '群聊' },
+]);
 
 /**
- * 「lark-cli 身份」设置块。
+ * 一层的取值只有"继承上一层"或"两个开关的 4 种组合"，共 5 个选项。
  *
- * 开启用户身份是**放权**（能以某个人的名义读写他的个人资源），所以照访问策略那条口径：
+ * 用下拉而不是两个勾选框：**"没配（继承）"这个状态必须能表达**，
+ * 两个孤立的勾选框表达不了"我这一层不管、听上层的"。
+ */
+const LARK_SCOPE_CHOICES = Object.freeze([
+  { value: 'inherit', label: '继承上一层', bot: null, user: null },
+  { value: 'bot', label: '仅应用身份', bot: true, user: false },
+  { value: 'user', label: '仅用户身份', bot: false, user: true },
+  { value: 'both', label: '应用 + 用户', bot: true, user: true },
+  { value: 'none', label: '都不允许', bot: false, user: false },
+]);
+
+/** 一层取值 → 下拉选项值。 */
+function scopeChoiceOf(scope) {
+  if (!scope) return 'inherit';
+  if (scope.bot && scope.user) return 'both';
+  if (scope.bot) return 'bot';
+  if (scope.user) return 'user';
+  return 'none';
+}
+
+/** 下拉选项值 → 一层取值（继承为 null）。 */
+function scopeFromChoice(choice) {
+  const found = LARK_SCOPE_CHOICES.find((item) => item.value === choice);
+  if (!found || found.value === 'inherit') return null;
+  return { bot: found.bot, user: found.user };
+}
+
+/**
+ * 界面上的条目列表 → host 认的 `targets`。
+ *
+ * 群聊里的"人"必须带 chatId（B 方案按"群 + 人"组合命中）——从会话列表里选时
+ * 天然带着这个信息，所以界面上不让手填 id。
+ */
+function targetsFromRows(rows) {
+  return rows.map((row) => (row.kind === 'group'
+    ? { kind: 'group', id: row.id, label: row.label ?? null, bot: row.bot === true, user: row.user === true }
+    : {
+      kind: 'user',
+      id: row.id,
+      chatId: row.chatId ?? null,
+      label: row.label ?? null,
+      bot: row.bot === true,
+      user: row.user === true,
+    }));
+}
+
+/**
+ * 「lark-cli 身份」设置块（分层）。
+ *
+ * 允许用户身份是**放权**（能以某个人的名义读写他的个人资源），所以照访问策略那条口径：
  * 服务端不带 `confirm: true` 就只回 `requiresConfirm`、**一个字节都不写**，确认画在同一张卡上。
  *
- * @param props - { botId, value, chatUi, connection, translate, onChanged }。
+ * @param props - { botId, value, conversations, chatUi, connection, translate, onChanged }。
  * @returns React 元素。
  */
-function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onChanged }) {
+function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel } = chatUi.components;
   const [probe, setProbe] = React.useState({ phase: 'loading', value: null, error: null });
@@ -409,6 +511,8 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
   const [notice, setNotice] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  /** 待新增的指定设置（从会话里选）。 */
+  const [draftTarget, setDraftTarget] = React.useState('');
 
   /** 只读体检：lark-cli 里到底有没有这台机器人的 profile、现在会以谁的身份说话。 */
   const load = React.useCallback(async () => {
@@ -423,16 +527,22 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
 
   React.useEffect(() => { void load(); }, [load]);
 
-  const submit = async (next, { confirm = false } = {}) => {
+  /**
+   * 保存一份新的分层策略。
+   *
+   * 传的是**整份** `identity`（界面本来就持有全量）：字段级合并在"删掉一条指定设置"
+   * 时无法表达"就是要删掉"，反而更难用。
+   */
+  const submit = async (identity, { confirm = false } = {}) => {
     setBusy(true);
     setError(null);
     try {
       const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.lark-identity.set', {
-        botId, value: next, confirm,
+        botId, identity, confirm,
       });
       const applied = chatUi.unwrapRpc(result);
       if (applied?.requiresConfirm === true) {
-        setPending({ value: next, prompt: applied.confirmPrompt ?? applied.message ?? '' });
+        setPending({ identity, prompt: applied.confirmPrompt ?? applied.message ?? '' });
         setNotice(null);
         return;
       }
@@ -447,8 +557,8 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
     }
   };
 
-  const mode = value?.mode === 'user-allowed' ? 'user-allowed' : 'bot-only';
-  const selected = LARK_IDENTITY_OPTIONS.find((item) => item.value === mode) ?? LARK_IDENTITY_OPTIONS[0];
+  const scopes = value ?? { global: { bot: true, user: false }, direct: null, group: null, targets: [] };
+  const targets = Array.isArray(scopes.targets) ? scopes.targets : [];
   const info = probe.value;
   const line = (label, text) => h('div', { className: 'dchat-scopeRow' },
     h('span', { className: 'dchat-scopeLabel' }, label),
@@ -460,9 +570,69 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
     return t('可用');
   };
 
+  /** 改某一层的取值并立即保存。 */
+  const chooseScope = (key, choice) => {
+    setPending(null);
+    void submit({ ...scopes, [key]: scopeFromChoice(choice) });
+  };
+
+  /** 改某条指定设置的取值。 */
+  const chooseTarget = (index, choice) => {
+    setPending(null);
+    const next = targets.map((target, at) => (
+      at === index ? { ...target, ...(scopeFromChoice(choice) ?? { bot: false, user: false }) } : target
+    ));
+    void submit({ ...scopes, targets: next });
+  };
+
+  const removeTarget = (index) => {
+    setPending(null);
+    void submit({ ...scopes, targets: targets.filter((_, at) => at !== index) });
+  };
+
+  /** 从会话列表里加一条指定设置。 */
+  const addTarget = () => {
+    if (!draftTarget) return;
+    const picked = (conversations ?? []).find((item) => item.value === draftTarget);
+    if (!picked) return;
+    setDraftTarget('');
+    setPending(null);
+    void submit({
+      ...scopes,
+      targets: [...targets, {
+        kind: picked.kind,
+        id: picked.id,
+        chatId: picked.chatId ?? null,
+        label: picked.label ?? null,
+        // 新条目默认"仅应用身份"：加一条时最可能是想收窄，而不是放权。
+        bot: true,
+        user: false,
+      }],
+    });
+  };
+
+  /** 一层下拉的渲染（标签 + 下拉 + 该层帮助文案）。 */
+  const scopeRow = ({ key, label, id }) => {
+    const choice = scopeChoiceOf(scopes[key]);
+    return h('div', { key, className: 'dchat-scopeRow' },
+      h('label', { className: 'dchat-scopeLabel', htmlFor: id }, t(label)),
+      h('select', {
+        id,
+        className: 'dchat-select',
+        // 布局守门按这个属性核对"控件状态确实来自假数据"。
+        'data-lark-scope': `${key}:${choice}`,
+        value: choice,
+        disabled: busy,
+        onChange: (event) => chooseScope(key, event.target.value),
+      }, LARK_SCOPE_CHOICES.map((option) => h('option', {
+        key: option.value,
+        value: option.value,
+      }, t(option.label)))));
+  };
+
   return h(Panel, {
     title: t('lark-cli 身份'),
-    description: t('这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK'),
+    description: t('按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK'),
     actions: h('button', {
       type: 'button',
       className: 'dchat-button',
@@ -470,28 +640,70 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
       onClick: () => { void load(); },
     }, t('重读 lark-cli 状态')),
   },
+    // 全局：唯一必填的一层（其余都可以"继承"）。
+    h('div', { className: 'dchat-scopeGrid' }, scopeRow({ key: 'global', label: '全局', id: `lark-scope-global-${botId}` })),
     h('div', { className: 'dchat-scopeGrid' },
-      h('div', { className: 'dchat-scopeRow' },
-        h('label', {
-          className: 'dchat-scopeLabel',
-          htmlFor: `lark-identity-${botId}`,
-        }, t('调用身份')),
-        h('select', {
-          id: `lark-identity-${botId}`,
-          className: 'dchat-select',
-          // 布局守门按这个属性核对"控件状态确实来自假数据"。
-          'data-lark-identity': mode,
-          value: mode,
-          disabled: busy,
-          onChange: (event) => {
-            setPending(null);
-            void submit(event.target.value);
-          },
-        }, LARK_IDENTITY_OPTIONS.map((option) => h('option', {
-          key: option.value,
-          value: option.value,
-        }, t(option.label)))))),
-    h('p', { className: 'dchat-cardDescription' }, t(selected.help)),
+      LARK_IDENTITY_SCOPES.map((scope) => scopeRow({
+        key: scope.key, label: scope.label, id: `lark-scope-${scope.key}-${botId}`,
+      }))),
+    h('p', { className: 'dchat-cardDescription' },
+      t('两个身份可以同时允许。选「继承上一层」表示这一层不单独设置，听上一层的（群聊/私聊继承全局，指定条目自己说了算）。')),
+    h('p', { className: 'dchat-cardDescription' },
+      t('注意：允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。')),
+
+    // 指定群 / 指定人：按会话列表选，不手填 id。
+    h('h4', { className: 'dchat-scopeLabel' }, t('指定群或人')),
+    targets.length === 0
+      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置：所有会话都按上面的分类与全局生效。'))
+      : h('div', null, targets.map((target, index) => h('div', {
+        key: `${target.kind}:${target.chatId ?? ''}:${target.id}`,
+        className: 'dchat-scopeRow',
+      },
+      h('label', { className: 'dchat-scopeLabel', htmlFor: `lark-target-${index}-${botId}` },
+        `${target.kind === 'group' ? t('群') : t('人')}·${target.label ?? target.id}`),
+      h('select', {
+        id: `lark-target-${index}-${botId}`,
+        className: 'dchat-select',
+        'data-lark-target': `${index}:${scopeChoiceOf(target)}`,
+        value: scopeChoiceOf(target),
+        disabled: busy,
+        // 条目级的"继承"没有意义（它就是要覆盖上层），所以只给 4 种组合。
+        onChange: (event) => chooseTarget(index, event.target.value),
+      }, LARK_SCOPE_CHOICES.filter((option) => option.value !== 'inherit').map((option) => h('option', {
+        key: option.value,
+        value: option.value,
+      }, t(option.label)))),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        disabled: busy,
+        onClick: () => removeTarget(index),
+      }, t('删除'))))),
+
+    h('div', { className: 'dchat-scopeRow' },
+      h('select', {
+        className: 'dchat-select',
+        value: draftTarget,
+        disabled: busy,
+        'aria-label': t('从会话里选…'),
+        onChange: (event) => setDraftTarget(event.target.value),
+      },
+      h('option', { value: '' }, t('从会话里选…')),
+      (conversations ?? []).map((item) => h('option', { key: item.value, value: item.value }, item.label))),
+      h('button', {
+        type: 'button',
+        className: 'dchat-button',
+        disabled: busy || !draftTarget,
+        onClick: () => addTarget(),
+      }, t('新增'))),
+    (conversations ?? []).length === 0
+      ? h('p', { className: 'dchat-cardDescription' }, t('还没有会话可选：这台机器人跟人聊过之后，会话会出现在这里。'))
+      : null,
+
+    h('div', { className: 'dchat-scopeGrid' },
+      LARK_IDENTITY_SWITCHES.map((item) => h('p', { key: item.key, className: 'dchat-cardDescription' },
+        `${t(item.label)}：${t(item.help)}`))),
+
     pending ? h('div', { className: 'dchat-warning', role: 'alert' },
       h('p', null, pending.prompt),
       h('div', { className: 'dchat-actions' },
@@ -499,7 +711,7 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
           type: 'button',
           className: 'dchat-button dchat-buttonPrimary',
           disabled: busy,
-          onClick: () => { void submit(pending.value, { confirm: true }); },
+          onClick: () => { void submit(pending.identity, { confirm: true }); },
         }, t('确认开启')),
         h('button', {
           type: 'button',
@@ -520,14 +732,14 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
         ? `${info.profile.name ?? '?'}（${info.profile.appId ?? '?'}）`
         : t('lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）'))
       : null,
-    probe.phase === 'ready' && info?.identity
-      ? line(t('应用身份：'), identityText(info.identity.bot, t('不可用')))
+    probe.phase === 'ready' && info?.larkCli
+      ? line(t('应用身份：'), identityText(info.larkCli.bot, t('不可用')))
       : null,
-    probe.phase === 'ready' && info?.identity
-      ? line(t('用户身份：'), info.identity.user?.onBehalfOf?.openId
-        ? `${t('登录人：')}${info.identity.user.onBehalfOf.userName ?? ''}`
-          + ` (${info.identity.user.onBehalfOf.openId})`
-        : (identityText(info.identity.user, t('没有用户登录'))))
+    probe.phase === 'ready' && info?.larkCli
+      ? line(t('用户身份：'), info.larkCli.user?.onBehalfOf?.openId
+        ? `${t('登录人：')}${info.larkCli.user.onBehalfOf.userName ?? ''}`
+          + ` (${info.larkCli.user.onBehalfOf.openId})`
+        : (identityText(info.larkCli.user, t('没有用户登录'))))
       : null,
   );
 }
@@ -561,6 +773,40 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
       kind: item.kind,
     }))
     .filter((item) => typeof item.id === 'string' && item.id);
+
+  /**
+   * 「lark-cli 身份」的指定设置候选项。
+   *
+   * 会话列表来自可投递目标，**群条目只有 chatId、没有"群里的人"**（群成员要另打接口，
+   * 设置页不该为一个下拉去翻通讯录）。所以这里只能给出两类候选：
+   * - 每个群 → `kind:'group'`（对群里所有人生效）；
+   * - 每个私聊 → `kind:'user'`（只对这个人的私聊生效）。
+   *
+   * **群里的"某个人"这一类，界面暂时给不出来**：它需要"群 id + 人 id"两个值，
+   * 而会话列表提供不了人 id。host 与门禁是支持的（命中方式已是组合键），
+   * 这类条目要靠配置文件的 `targets` 手工补，或在 bridge 里记下群发言人后再补。
+   */
+  const identityTargets = [];
+  const seenTargets = new Set();
+  for (const item of chatUi.hooks.useConversations({ connection, channelId: CHANNEL_ID, botId: bot.id }).conversations) {
+    const chatId = item.route?.chatId;
+    const openId = item.route?.openId;
+    const push = (entry) => {
+      const key = `${entry.kind}:${entry.chatId ?? ''}:${entry.id}`;
+      if (seenTargets.has(key)) return;
+      seenTargets.add(key);
+      identityTargets.push({ ...entry, value: key });
+    };
+    if (item.kind === 'group') {
+      if (typeof chatId === 'string' && chatId) {
+        push({ kind: 'group', id: chatId, label: item.name || chatId });
+      }
+      continue;
+    }
+    if (typeof openId === 'string' && openId) {
+      push({ kind: 'user', id: openId, label: item.name || openId });
+    }
+  }
   /**
    * 访问策略白名单里那些 id 是谁。
    *
@@ -781,7 +1027,9 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
 
   h(LarkIdentityEditor, {
     botId: bot.id,
-    value: status.larkIdentity ?? { mode: 'bot-only', userOpenId: null },
+    // 策略取自机器人状态（分层结构）；老状态里没有时给一份"全局仅应用"的默认。
+    value: status.larkIdentity?.scopes ?? null,
+    conversations: identityTargets,
     chatUi,
     connection,
     translate: t,

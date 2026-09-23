@@ -144,7 +144,16 @@ export function createLarkCli({
   let resolved = null;
   let resolving = null;
 
-  /** 现读身份策略：设置页改完这一条立刻生效。 */
+  /**
+   * 现读身份策略：设置页改完这一条立刻生效。
+   *
+   * 策略是**分层**的（全局 / 私聊 / 群聊 / 指定群与人），调用方（`identityPolicy`）
+   * 负责按当前会话解析好再交进来；这里只做兜底归一化，并兼容两种形态：
+   * - 新：`{ bot, user, userOpenId }`（已解析的作用域）；
+   * - 旧：`{ mode: 'bot-only' | 'user-allowed', userOpenId }`（本地升级中途/测试替身）。
+   *
+   * **保守方向**：认不出来一律"只允许 bot"，绝不因为解析失败而放开用户身份。
+   */
   function policy() {
     let value;
     try {
@@ -153,8 +162,11 @@ export function createLarkCli({
       logger.warn?.(`[dsh-chat-feishu] 读取 lark-cli 身份策略失败：${error?.message ?? error}`);
       value = null;
     }
+    const legacyMode = typeof value?.mode === 'string' ? normalizeLarkUserIdentity(value.mode) : null;
+    const user = value?.user === true || legacyMode === 'user-allowed';
     return {
-      mode: normalizeLarkUserIdentity(value?.mode),
+      bot: value?.bot === true || value?.bot === undefined,
+      user,
       userOpenId: cleanString(value?.userOpenId),
     };
   }
@@ -361,13 +373,22 @@ export function createLarkCli({
     if (as !== 'bot' && as !== 'user') {
       throw larkError('feishu/lark-cli-bad-identity', `身份只能是 bot 或 user（收到 ${JSON.stringify(as)}）。`);
     }
+    // 两个开关各自独立：只用应用身份时 `--as bot` 也必须被允许，
+    // 而"都不允许"的场合（用户显式关掉了 bot）要在这里挡下，不能默认放行。
+    if (as === 'bot' && !policy().bot) {
+      throw larkError(
+        'feishu/lark-cli-bot-not-allowed',
+        '当前场合没有开启「允许以应用身份调用 lark-cli」（身份策略是分层的，就近覆盖），已拒绝这次调用。',
+        { hint: '到设置页 → 这台机器人 → 「lark-cli 身份」里为该场合开启应用身份。' },
+      );
+    }
     if (as === 'user') {
       const current = policy();
-      if (current.mode !== 'user-allowed') {
+      if (!current.user) {
         throw larkError(
           'feishu/lark-cli-user-not-allowed',
-          '这台机器人没有开启「允许以用户身份调用 lark-cli」，已拒绝这次调用。',
-          { hint: '到设置页 → 这台机器人 → 「lark-cli 身份」里开启（需要二次确认）。' },
+          '当前场合没有开启「允许以用户身份调用 lark-cli」（身份策略是分层的：全局 / 私聊 / 群聊 / 指定群与指定人，就近覆盖），已拒绝这次调用。',
+          { hint: '到设置页 → 这台机器人 → 「lark-cli 身份」里为该场合开启用户身份。' },
         );
       }
       if (!current.userOpenId) {
@@ -399,7 +420,7 @@ export function createLarkCli({
       if (cleanString(info?.identity) !== 'user' || actual !== expected) {
         throw larkError(
           'feishu/lark-cli-user-mismatch',
-          `lark-cli 里的用户身份是 ${actual ?? '<未知>'}，不是这台机器人钉住的 ${expected}；已拒绝这次调用。`,
+          `lark-cli 里的用户身份是 ${actual ?? '<未知>'}，不是这台机器人钉住的 ${expected ?? '<未钉住>'}；已拒绝这次调用。`,
           { hint: '在 lark-cli 里重新登录正确的人，或到设置页重新开启一次「允许用户身份」。' },
         );
       }

@@ -122,10 +122,11 @@ export function isLocalCommand(segment) {
 /**
  * 检查一段 lark-cli 命令是否符合本机器人的身份策略。
  *
- * @param options - { segment, profileName, mode }：mode 为 'bot-only' | 'user-allowed'。
+ * @param options - { segment, profileName, allowBot, allowUser }：该**场合**解析出来的两个开关
+ *   （分层就近覆盖的结果，由调用方按会话算好；门禁自己不做继承判断）。
  * @returns 拒绝原因；合规时返回 null。
  */
-export function evaluateLarkSegment({ segment, profileName, mode }) {
+export function evaluateLarkSegment({ segment, profileName, allowBot = true, allowUser = false }) {
   const text = String(segment ?? '');
   for (const banned of BANNED_PATTERNS) {
     if (banned.pattern.test(text)) {
@@ -142,13 +143,19 @@ export function evaluateLarkSegment({ segment, profileName, mode }) {
   if (identities.length === 0) {
     return '这条 lark-cli 命令没有显式写身份，lark-cli 会自己挑（这台机器上会挑成用户身份）。'
       + `请显式加上 \`--as bot\`（代表这台应用自己）；${
-        mode === 'user-allowed'
+        allowUser
           ? '要以某个人的身份操作时才用 `--as user`。'
-          : '本机器人只允许应用身份，`--as user` 会被拒绝。'}`;
+          : '当前场合只允许应用身份，`--as user` 会被拒绝。'}`;
   }
-  if (mode !== 'user-allowed' && identities.includes('user')) {
-    return '本机器人的 lark-cli 身份策略是「只用应用身份」，这次调用用了 `--as user`，已拒绝。'
-      + '请改用 `--as bot`；要允许用户身份，到设置页 → 这台机器人 → 「lark-cli 身份」里开启（需要二次确认）。';
+  if (identities.includes('user') && !allowUser) {
+    return '当前场合的 lark-cli 身份策略没有允许用户身份（策略是分层的：全局 / 私聊 / 群聊 / 指定群与指定人，就近覆盖），'
+      + '这次调用用了 `--as user`，已拒绝。请改用 `--as bot`；'
+      + '要允许用户身份，到设置页 → 这台机器人 → 「lark-cli 身份」里为这个场合开启。';
+  }
+  // 反过来也要挡：用户显式关掉应用身份的场合，`--as bot` 同样不该放行。
+  if (identities.includes('bot') && !allowBot) {
+    return '当前场合的 lark-cli 身份策略没有允许应用身份（就近覆盖的结果），这次调用用了 `--as bot`，已拒绝。'
+      + '到设置页 → 这台机器人 → 「lark-cli 身份」里检查这个场合的配置。';
   }
   return null;
 }
@@ -158,7 +165,9 @@ export function evaluateLarkSegment({ segment, profileName, mode }) {
  *
  * @param options - 依赖：
  *   - `locate(sessionId)`：这个会话属于哪个 (渠道, 机器人, 会话键)（hub 的会话绑定表）；
- *   - `policyFor(botId)`：该机器人的 lark-cli 身份策略 `{ mode, profileName }`（拿不到返回 null）；
+ *   - `policyFor(owner)`：该**会话**的 lark-cli 身份策略
+ *     `{ allowBot, allowUser, profileName }`（拿不到返回 null）。**入参是 owner 而不是 botId**：
+ *     身份策略是分层的，"哪个群/哪个人"必须参与解析，只给 botId 会让 A 群的放开泄漏到 B 群；
  *   - `channelId`：只管本渠道的会话（别的渠道的会话一概不管）；
  *   - `logger`：拒绝要留日志（静默拦截是最难查的故障形态）。
  * @returns `{ evaluate(exec) }`：返回 null = 放行，否则返回 `{ kind:'deny', reason }`。
@@ -178,14 +187,16 @@ export function createLarkCliGuard({ locate, policyFor, channelId, logger = cons
     if (typeof sessionId !== 'string' || !sessionId) return null;
     const owner = await locate(sessionId);
     if (!owner || (channelId !== undefined && owner.channelId !== channelId)) return null;
-    const policy = await policyFor(owner.botId);
+    // 把整个 owner 交出去：策略要按会话键（群/私聊）解析，botId 不够。
+    const policy = await policyFor(owner);
     if (!policy?.profileName) return null;
     for (const segment of splitCommandSegments(command)) {
       if (!segmentRunsLarkCli(segment)) continue;
       const reason = evaluateLarkSegment({
         segment,
         profileName: policy.profileName,
-        mode: policy.mode,
+        allowBot: policy.allowBot !== false,
+        allowUser: policy.allowUser === true,
       });
       if (reason) {
         logger.warn?.(`[dsh-chat-feishu] 拦下一条 lark-cli 调用（${owner.botId} / 会话 ${sessionId}）：`

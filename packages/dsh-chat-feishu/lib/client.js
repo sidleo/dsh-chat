@@ -140,6 +140,22 @@ var zh = {
   "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F": "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F",
   "lark-cli \u8EAB\u4EFD": "lark-cli \u8EAB\u4EFD",
   "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK",
+  "\u6309\u573A\u5408\u914D\u7F6E\u80FD\u7528\u54EA\u4E9B\u8EAB\u4EFD\uFF1A\u5C31\u8FD1\u8986\u76D6\uFF08\u6307\u5B9A\u7FA4/\u4EBA \u2192 \u7FA4\u804A/\u79C1\u804A \u2192 \u5168\u5C40\uFF09\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "\u6309\u573A\u5408\u914D\u7F6E\u80FD\u7528\u54EA\u4E9B\u8EAB\u4EFD\uFF1A\u5C31\u8FD1\u8986\u76D6\uFF08\u6307\u5B9A\u7FA4/\u4EBA \u2192 \u7FA4\u804A/\u79C1\u804A \u2192 \u5168\u5C40\uFF09\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK",
+  "\u5168\u5C40": "\u5168\u5C40",
+  "\u5E94\u7528\u8EAB\u4EFD": "\u5E94\u7528\u8EAB\u4EFD",
+  "\u7528\u6237\u8EAB\u4EFD": "\u7528\u6237\u8EAB\u4EFD",
+  "\u7EE7\u627F\u4E0A\u4E00\u5C42": "\u7EE7\u627F\u4E0A\u4E00\u5C42",
+  "\u4EC5\u5E94\u7528\u8EAB\u4EFD": "\u4EC5\u5E94\u7528\u8EAB\u4EFD",
+  "\u4EC5\u7528\u6237\u8EAB\u4EFD": "\u4EC5\u7528\u6237\u8EAB\u4EFD",
+  "\u5E94\u7528 + \u7528\u6237": "\u5E94\u7528 + \u7528\u6237",
+  "\u90FD\u4E0D\u5141\u8BB8": "\u90FD\u4E0D\u5141\u8BB8",
+  "\u4E24\u4E2A\u8EAB\u4EFD\u53EF\u4EE5\u540C\u65F6\u5141\u8BB8\u3002\u9009\u300C\u7EE7\u627F\u4E0A\u4E00\u5C42\u300D\u8868\u793A\u8FD9\u4E00\u5C42\u4E0D\u5355\u72EC\u8BBE\u7F6E\uFF0C\u542C\u4E0A\u4E00\u5C42\u7684\uFF08\u7FA4\u804A/\u79C1\u804A\u7EE7\u627F\u5168\u5C40\uFF0C\u6307\u5B9A\u6761\u76EE\u81EA\u5DF1\u8BF4\u4E86\u7B97\uFF09\u3002": "\u4E24\u4E2A\u8EAB\u4EFD\u53EF\u4EE5\u540C\u65F6\u5141\u8BB8\u3002\u9009\u300C\u7EE7\u627F\u4E0A\u4E00\u5C42\u300D\u8868\u793A\u8FD9\u4E00\u5C42\u4E0D\u5355\u72EC\u8BBE\u7F6E\uFF0C\u542C\u4E0A\u4E00\u5C42\u7684\uFF08\u7FA4\u804A/\u79C1\u804A\u7EE7\u627F\u5168\u5C40\uFF0C\u6307\u5B9A\u6761\u76EE\u81EA\u5DF1\u8BF4\u4E86\u7B97\uFF09\u3002",
+  "\u6CE8\u610F\uFF1A\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u53EA\u662F\u300C\u5141\u8BB8\u4EE5\u7528\u6237\u8EAB\u4EFD\u8C03\u7528\u300D\uFF0C\u5B9E\u9645\u7528\u7684\u4ECD\u662F\u4E0B\u9762\u300C\u767B\u5F55\u4EBA\u300D\u90A3\u4E00\u4E2A\u2014\u2014lark-cli \u4E00\u4EFD profile \u53EA\u6709\u4E00\u4E2A\u767B\u5F55\u4EBA\uFF0C\u4E0D\u4F1A\u6309\u53D1\u8A00\u4EBA\u81EA\u52A8\u5207\u6362\u3002": "\u6CE8\u610F\uFF1A\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u53EA\u662F\u300C\u5141\u8BB8\u4EE5\u7528\u6237\u8EAB\u4EFD\u8C03\u7528\u300D\uFF0C\u5B9E\u9645\u7528\u7684\u4ECD\u662F\u4E0B\u9762\u300C\u767B\u5F55\u4EBA\u300D\u90A3\u4E00\u4E2A\u2014\u2014lark-cli \u4E00\u4EFD profile \u53EA\u6709\u4E00\u4E2A\u767B\u5F55\u4EBA\uFF0C\u4E0D\u4F1A\u6309\u53D1\u8A00\u4EBA\u81EA\u52A8\u5207\u6362\u3002",
+  "\u6307\u5B9A\u7FA4\u6216\u4EBA": "\u6307\u5B9A\u7FA4\u6216\u4EBA",
+  "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\uFF1A\u6240\u6709\u4F1A\u8BDD\u90FD\u6309\u4E0A\u9762\u7684\u5206\u7C7B\u4E0E\u5168\u5C40\u751F\u6548\u3002": "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\uFF1A\u6240\u6709\u4F1A\u8BDD\u90FD\u6309\u4E0A\u9762\u7684\u5206\u7C7B\u4E0E\u5168\u5C40\u751F\u6548\u3002",
+  "\u7FA4": "\u7FA4",
+  "\u4EBA": "\u4EBA",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u53EF\u9009\uFF1A\u8FD9\u53F0\u673A\u5668\u4EBA\u8DDF\u4EBA\u804A\u8FC7\u4E4B\u540E\uFF0C\u4F1A\u8BDD\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u53EF\u9009\uFF1A\u8FD9\u53F0\u673A\u5668\u4EBA\u8DDF\u4EBA\u804A\u8FC7\u4E4B\u540E\uFF0C\u4F1A\u8BDD\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002",
   "\u8C03\u7528\u8EAB\u4EFD": "\u8C03\u7528\u8EAB\u4EFD",
   "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09": "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09",
   "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09": "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09",
@@ -293,6 +309,22 @@ var en = {
   "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F": "Every step is its own message; long tasks send many messages",
   "lark-cli \u8EAB\u4EFD": "lark-cli identity",
   "\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "Which identity this bot uses when calling lark-cli; message send/receive still goes through the official SDK",
+  "\u6309\u573A\u5408\u914D\u7F6E\u80FD\u7528\u54EA\u4E9B\u8EAB\u4EFD\uFF1A\u5C31\u8FD1\u8986\u76D6\uFF08\u6307\u5B9A\u7FA4/\u4EBA \u2192 \u7FA4\u804A/\u79C1\u804A \u2192 \u5168\u5C40\uFF09\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK": "Choose which identities are allowed per context: nearest wins (specific chats/people \u2192 group/direct \u2192 global); send/receive still goes through the official SDK",
+  "\u5168\u5C40": "Global",
+  "\u5E94\u7528\u8EAB\u4EFD": "Application identity",
+  "\u7528\u6237\u8EAB\u4EFD": "User identity",
+  "\u7EE7\u627F\u4E0A\u4E00\u5C42": "Inherit from above",
+  "\u4EC5\u5E94\u7528\u8EAB\u4EFD": "Application only",
+  "\u4EC5\u7528\u6237\u8EAB\u4EFD": "User only",
+  "\u5E94\u7528 + \u7528\u6237": "Application + user",
+  "\u90FD\u4E0D\u5141\u8BB8": "Neither allowed",
+  "\u4E24\u4E2A\u8EAB\u4EFD\u53EF\u4EE5\u540C\u65F6\u5141\u8BB8\u3002\u9009\u300C\u7EE7\u627F\u4E0A\u4E00\u5C42\u300D\u8868\u793A\u8FD9\u4E00\u5C42\u4E0D\u5355\u72EC\u8BBE\u7F6E\uFF0C\u542C\u4E0A\u4E00\u5C42\u7684\uFF08\u7FA4\u804A/\u79C1\u804A\u7EE7\u627F\u5168\u5C40\uFF0C\u6307\u5B9A\u6761\u76EE\u81EA\u5DF1\u8BF4\u4E86\u7B97\uFF09\u3002": 'Both identities can be allowed at once. "Inherit from above" means this level is not set separately: group/direct inherit global, and specific entries always decide for themselves.',
+  "\u6CE8\u610F\uFF1A\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u53EA\u662F\u300C\u5141\u8BB8\u4EE5\u7528\u6237\u8EAB\u4EFD\u8C03\u7528\u300D\uFF0C\u5B9E\u9645\u7528\u7684\u4ECD\u662F\u4E0B\u9762\u300C\u767B\u5F55\u4EBA\u300D\u90A3\u4E00\u4E2A\u2014\u2014lark-cli \u4E00\u4EFD profile \u53EA\u6709\u4E00\u4E2A\u767B\u5F55\u4EBA\uFF0C\u4E0D\u4F1A\u6309\u53D1\u8A00\u4EBA\u81EA\u52A8\u5207\u6362\u3002": "Note: allowing the user identity only permits calling as a user; the actual user is still the signed-in person shown below \u2014 one lark-cli profile holds a single signed-in user, so it never switches per sender.",
+  "\u6307\u5B9A\u7FA4\u6216\u4EBA": "Specific chats or people",
+  "\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\uFF1A\u6240\u6709\u4F1A\u8BDD\u90FD\u6309\u4E0A\u9762\u7684\u5206\u7C7B\u4E0E\u5168\u5C40\u751F\u6548\u3002": "No specific entries yet: every conversation follows the levels above.",
+  "\u7FA4": "Group",
+  "\u4EBA": "Person",
+  "\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u53EF\u9009\uFF1A\u8FD9\u53F0\u673A\u5668\u4EBA\u8DDF\u4EBA\u804A\u8FC7\u4E4B\u540E\uFF0C\u4F1A\u8BDD\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002": "No conversations to pick yet: they appear here once this bot has chatted with someone.",
   "\u8C03\u7528\u8EAB\u4EFD": "Identity",
   "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09": "Application identity only (bot)",
   "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09": "Allow user identity (--as user)",
@@ -378,19 +410,42 @@ var STEP_PUSH_OPTIONS = [
     help: "\u6BCF\u4E00\u6B65\u90FD\u5355\u72EC\u53D1\u4E00\u6761\u6D88\u606F\uFF08\u542B\u5DE5\u5177\u8C03\u7528\uFF09\uFF1B\u957F\u4EFB\u52A1\u4F1A\u8FDE\u7EED\u53D1\u9001\u8F83\u591A\u6D88\u606F"
   }
 ];
-var LARK_IDENTITY_OPTIONS = [
+var LARK_IDENTITY_SWITCHES = Object.freeze([
   {
-    value: "bot-only",
-    label: "\u53EA\u7528\u5E94\u7528\u8EAB\u4EFD\uFF08bot\uFF09",
-    help: "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90"
+    key: "bot",
+    label: "\u5E94\u7528\u8EAB\u4EFD",
+    help: "\u4EE5\u5E94\u7528\u81EA\u5DF1\u7684\u8EAB\u4EFD\u8C03 lark-cli\uFF08--as bot\uFF09\uFF0C\u53EA\u80FD\u8BBF\u95EE\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684\u8D44\u6E90"
   },
   {
-    value: "user-allowed",
-    label: "\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF08--as user\uFF09",
-    help: "\u4EE5\u67D0\u4E2A\u4EBA\u7684\u540D\u4E49\u8C03 lark-cli\uFF08\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09\uFF1B\u5F00\u542F\u524D\u9700\u8981\u786E\u8BA4\uFF0C\u5E76\u4F1A\u9489\u4F4F\u5F53\u524D\u767B\u5F55\u7684\u4EBA"
+    key: "user",
+    label: "\u7528\u6237\u8EAB\u4EFD",
+    help: "\u5141\u8BB8\u4EE5 lark-cli \u91CC\u767B\u5F55\u7684\u90A3\u4E2A\u4EBA\u8C03 lark-cli\uFF08--as user\uFF0C\u80FD\u8BFB\u5199\u4ED6\u7684\u4E91\u6587\u6863\u3001\u65E5\u5386\u7B49\u4E2A\u4EBA\u8D44\u6E90\uFF09"
   }
-];
-function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onChanged }) {
+]);
+var LARK_IDENTITY_SCOPES = Object.freeze([
+  { key: "direct", label: "\u79C1\u804A" },
+  { key: "group", label: "\u7FA4\u804A" }
+]);
+var LARK_SCOPE_CHOICES = Object.freeze([
+  { value: "inherit", label: "\u7EE7\u627F\u4E0A\u4E00\u5C42", bot: null, user: null },
+  { value: "bot", label: "\u4EC5\u5E94\u7528\u8EAB\u4EFD", bot: true, user: false },
+  { value: "user", label: "\u4EC5\u7528\u6237\u8EAB\u4EFD", bot: false, user: true },
+  { value: "both", label: "\u5E94\u7528 + \u7528\u6237", bot: true, user: true },
+  { value: "none", label: "\u90FD\u4E0D\u5141\u8BB8", bot: false, user: false }
+]);
+function scopeChoiceOf(scope) {
+  if (!scope) return "inherit";
+  if (scope.bot && scope.user) return "both";
+  if (scope.bot) return "bot";
+  if (scope.user) return "user";
+  return "none";
+}
+function scopeFromChoice(choice) {
+  const found = LARK_SCOPE_CHOICES.find((item) => item.value === choice);
+  if (!found || found.value === "inherit") return null;
+  return { bot: found.bot, user: found.user };
+}
+function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === "function" ? translate : (key) => key;
   const { Panel } = chatUi.components;
   const [probe, setProbe] = React.useState({ phase: "loading", value: null, error: null });
@@ -398,6 +453,7 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
   const [notice, setNotice] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [draftTarget, setDraftTarget] = React.useState("");
   const load = React.useCallback(async () => {
     try {
       const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.lark-identity.get", { botId });
@@ -409,18 +465,18 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
   React.useEffect(() => {
     void load();
   }, [load]);
-  const submit = async (next, { confirm = false } = {}) => {
+  const submit = async (identity, { confirm = false } = {}) => {
     setBusy(true);
     setError(null);
     try {
       const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, "bot.lark-identity.set", {
         botId,
-        value: next,
+        identity,
         confirm
       });
       const applied = chatUi.unwrapRpc(result);
       if (applied?.requiresConfirm === true) {
-        setPending({ value: next, prompt: applied.confirmPrompt ?? applied.message ?? "" });
+        setPending({ identity, prompt: applied.confirmPrompt ?? applied.message ?? "" });
         setNotice(null);
         return;
       }
@@ -434,8 +490,8 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
       setBusy(false);
     }
   };
-  const mode = value?.mode === "user-allowed" ? "user-allowed" : "bot-only";
-  const selected = LARK_IDENTITY_OPTIONS.find((item) => item.value === mode) ?? LARK_IDENTITY_OPTIONS[0];
+  const scopes = value ?? { global: { bot: true, user: false }, direct: null, group: null, targets: [] };
+  const targets = Array.isArray(scopes.targets) ? scopes.targets : [];
   const info = probe.value;
   const line = (label, text) => h(
     "div",
@@ -449,11 +505,63 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
     if (entry.available === false) return t("\u4E0D\u53EF\u7528");
     return t("\u53EF\u7528");
   };
+  const chooseScope = (key, choice) => {
+    setPending(null);
+    void submit({ ...scopes, [key]: scopeFromChoice(choice) });
+  };
+  const chooseTarget = (index, choice) => {
+    setPending(null);
+    const next = targets.map((target, at) => at === index ? { ...target, ...scopeFromChoice(choice) ?? { bot: false, user: false } } : target);
+    void submit({ ...scopes, targets: next });
+  };
+  const removeTarget = (index) => {
+    setPending(null);
+    void submit({ ...scopes, targets: targets.filter((_, at) => at !== index) });
+  };
+  const addTarget = () => {
+    if (!draftTarget) return;
+    const picked = (conversations ?? []).find((item) => item.value === draftTarget);
+    if (!picked) return;
+    setDraftTarget("");
+    setPending(null);
+    void submit({
+      ...scopes,
+      targets: [...targets, {
+        kind: picked.kind,
+        id: picked.id,
+        chatId: picked.chatId ?? null,
+        label: picked.label ?? null,
+        // 新条目默认"仅应用身份"：加一条时最可能是想收窄，而不是放权。
+        bot: true,
+        user: false
+      }]
+    });
+  };
+  const scopeRow = ({ key, label, id }) => {
+    const choice = scopeChoiceOf(scopes[key]);
+    return h(
+      "div",
+      { key, className: "dchat-scopeRow" },
+      h("label", { className: "dchat-scopeLabel", htmlFor: id }, t(label)),
+      h("select", {
+        id,
+        className: "dchat-select",
+        // 布局守门按这个属性核对"控件状态确实来自假数据"。
+        "data-lark-scope": `${key}:${choice}`,
+        value: choice,
+        disabled: busy,
+        onChange: (event) => chooseScope(key, event.target.value)
+      }, LARK_SCOPE_CHOICES.map((option) => h("option", {
+        key: option.value,
+        value: option.value
+      }, t(option.label))))
+    );
+  };
   return h(
     Panel,
     {
       title: t("lark-cli \u8EAB\u4EFD"),
-      description: t("\u8FD9\u53F0\u673A\u5668\u4EBA\u8C03 lark-cli \u65F6\u7528\u54EA\u4E2A\u8EAB\u4EFD\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK"),
+      description: t("\u6309\u573A\u5408\u914D\u7F6E\u80FD\u7528\u54EA\u4E9B\u8EAB\u4EFD\uFF1A\u5C31\u8FD1\u8986\u76D6\uFF08\u6307\u5B9A\u7FA4/\u4EBA \u2192 \u7FA4\u804A/\u79C1\u804A \u2192 \u5168\u5C40\uFF09\uFF1B\u98DE\u4E66\u6E20\u9053\u7684\u6536\u53D1\u4ECD\u8D70\u5B98\u65B9 SDK"),
       actions: h("button", {
         type: "button",
         className: "dchat-button",
@@ -463,34 +571,91 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
         }
       }, t("\u91CD\u8BFB lark-cli \u72B6\u6001"))
     },
+    // 全局：唯一必填的一层（其余都可以"继承"）。
+    h("div", { className: "dchat-scopeGrid" }, scopeRow({ key: "global", label: "\u5168\u5C40", id: `lark-scope-global-${botId}` })),
     h(
       "div",
       { className: "dchat-scopeGrid" },
-      h(
-        "div",
-        { className: "dchat-scopeRow" },
-        h("label", {
-          className: "dchat-scopeLabel",
-          htmlFor: `lark-identity-${botId}`
-        }, t("\u8C03\u7528\u8EAB\u4EFD")),
-        h("select", {
-          id: `lark-identity-${botId}`,
-          className: "dchat-select",
-          // 布局守门按这个属性核对"控件状态确实来自假数据"。
-          "data-lark-identity": mode,
-          value: mode,
-          disabled: busy,
-          onChange: (event) => {
-            setPending(null);
-            void submit(event.target.value);
-          }
-        }, LARK_IDENTITY_OPTIONS.map((option) => h("option", {
-          key: option.value,
-          value: option.value
-        }, t(option.label))))
-      )
+      LARK_IDENTITY_SCOPES.map((scope) => scopeRow({
+        key: scope.key,
+        label: scope.label,
+        id: `lark-scope-${scope.key}-${botId}`
+      }))
     ),
-    h("p", { className: "dchat-cardDescription" }, t(selected.help)),
+    h(
+      "p",
+      { className: "dchat-cardDescription" },
+      t("\u4E24\u4E2A\u8EAB\u4EFD\u53EF\u4EE5\u540C\u65F6\u5141\u8BB8\u3002\u9009\u300C\u7EE7\u627F\u4E0A\u4E00\u5C42\u300D\u8868\u793A\u8FD9\u4E00\u5C42\u4E0D\u5355\u72EC\u8BBE\u7F6E\uFF0C\u542C\u4E0A\u4E00\u5C42\u7684\uFF08\u7FA4\u804A/\u79C1\u804A\u7EE7\u627F\u5168\u5C40\uFF0C\u6307\u5B9A\u6761\u76EE\u81EA\u5DF1\u8BF4\u4E86\u7B97\uFF09\u3002")
+    ),
+    h(
+      "p",
+      { className: "dchat-cardDescription" },
+      t("\u6CE8\u610F\uFF1A\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u53EA\u662F\u300C\u5141\u8BB8\u4EE5\u7528\u6237\u8EAB\u4EFD\u8C03\u7528\u300D\uFF0C\u5B9E\u9645\u7528\u7684\u4ECD\u662F\u4E0B\u9762\u300C\u767B\u5F55\u4EBA\u300D\u90A3\u4E00\u4E2A\u2014\u2014lark-cli \u4E00\u4EFD profile \u53EA\u6709\u4E00\u4E2A\u767B\u5F55\u4EBA\uFF0C\u4E0D\u4F1A\u6309\u53D1\u8A00\u4EBA\u81EA\u52A8\u5207\u6362\u3002")
+    ),
+    // 指定群 / 指定人：按会话列表选，不手填 id。
+    h("h4", { className: "dchat-scopeLabel" }, t("\u6307\u5B9A\u7FA4\u6216\u4EBA")),
+    targets.length === 0 ? h("p", { className: "dchat-cardDescription" }, t("\u8FD8\u6CA1\u6709\u6307\u5B9A\u8BBE\u7F6E\uFF1A\u6240\u6709\u4F1A\u8BDD\u90FD\u6309\u4E0A\u9762\u7684\u5206\u7C7B\u4E0E\u5168\u5C40\u751F\u6548\u3002")) : h("div", null, targets.map((target, index) => h(
+      "div",
+      {
+        key: `${target.kind}:${target.chatId ?? ""}:${target.id}`,
+        className: "dchat-scopeRow"
+      },
+      h(
+        "label",
+        { className: "dchat-scopeLabel", htmlFor: `lark-target-${index}-${botId}` },
+        `${target.kind === "group" ? t("\u7FA4") : t("\u4EBA")}\xB7${target.label ?? target.id}`
+      ),
+      h("select", {
+        id: `lark-target-${index}-${botId}`,
+        className: "dchat-select",
+        "data-lark-target": `${index}:${scopeChoiceOf(target)}`,
+        value: scopeChoiceOf(target),
+        disabled: busy,
+        // 条目级的"继承"没有意义（它就是要覆盖上层），所以只给 4 种组合。
+        onChange: (event) => chooseTarget(index, event.target.value)
+      }, LARK_SCOPE_CHOICES.filter((option) => option.value !== "inherit").map((option) => h("option", {
+        key: option.value,
+        value: option.value
+      }, t(option.label)))),
+      h("button", {
+        type: "button",
+        className: "dchat-button",
+        disabled: busy,
+        onClick: () => removeTarget(index)
+      }, t("\u5220\u9664"))
+    ))),
+    h(
+      "div",
+      { className: "dchat-scopeRow" },
+      h(
+        "select",
+        {
+          className: "dchat-select",
+          value: draftTarget,
+          disabled: busy,
+          "aria-label": t("\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026"),
+          onChange: (event) => setDraftTarget(event.target.value)
+        },
+        h("option", { value: "" }, t("\u4ECE\u4F1A\u8BDD\u91CC\u9009\u2026")),
+        (conversations ?? []).map((item) => h("option", { key: item.value, value: item.value }, item.label))
+      ),
+      h("button", {
+        type: "button",
+        className: "dchat-button",
+        disabled: busy || !draftTarget,
+        onClick: () => addTarget()
+      }, t("\u65B0\u589E"))
+    ),
+    (conversations ?? []).length === 0 ? h("p", { className: "dchat-cardDescription" }, t("\u8FD8\u6CA1\u6709\u4F1A\u8BDD\u53EF\u9009\uFF1A\u8FD9\u53F0\u673A\u5668\u4EBA\u8DDF\u4EBA\u804A\u8FC7\u4E4B\u540E\uFF0C\u4F1A\u8BDD\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")) : null,
+    h(
+      "div",
+      { className: "dchat-scopeGrid" },
+      LARK_IDENTITY_SWITCHES.map((item) => h(
+        "p",
+        { key: item.key, className: "dchat-cardDescription" },
+        `${t(item.label)}\uFF1A${t(item.help)}`
+      ))
+    ),
     pending ? h(
       "div",
       { className: "dchat-warning", role: "alert" },
@@ -503,7 +668,7 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
           className: "dchat-button dchat-buttonPrimary",
           disabled: busy,
           onClick: () => {
-            void submit(pending.value, { confirm: true });
+            void submit(pending.identity, { confirm: true });
           }
         }, t("\u786E\u8BA4\u5F00\u542F")),
         h("button", {
@@ -521,8 +686,8 @@ function LarkIdentityEditor({ botId, value, chatUi, connection, translate, onCha
     error ? h("p", { className: "dchat-error", role: "alert" }, error) : null,
     probe.phase === "failed" ? h("p", { className: "dchat-error", role: "alert" }, `${t("\u8BFB\u53D6 lark-cli \u72B6\u6001\u5931\u8D25\uFF1A")}${probe.error}`) : null,
     probe.phase === "ready" && info ? line(t("lark-cli \u91CC\u7684 profile"), info.profile?.found ? `${info.profile.name ?? "?"}\uFF08${info.profile.appId ?? "?"}\uFF09` : t("lark-cli \u91CC\u8FD8\u6CA1\u6709\u8FD9\u53F0\u673A\u5668\u4EBA\u7684 profile\uFF08\u771F\u6B63\u8C03\u7528\u65F6\u4F1A\u81EA\u52A8\u521B\u5EFA\uFF09")) : null,
-    probe.phase === "ready" && info?.identity ? line(t("\u5E94\u7528\u8EAB\u4EFD\uFF1A"), identityText(info.identity.bot, t("\u4E0D\u53EF\u7528"))) : null,
-    probe.phase === "ready" && info?.identity ? line(t("\u7528\u6237\u8EAB\u4EFD\uFF1A"), info.identity.user?.onBehalfOf?.openId ? `${t("\u767B\u5F55\u4EBA\uFF1A")}${info.identity.user.onBehalfOf.userName ?? ""} (${info.identity.user.onBehalfOf.openId})` : identityText(info.identity.user, t("\u6CA1\u6709\u7528\u6237\u767B\u5F55"))) : null
+    probe.phase === "ready" && info?.larkCli ? line(t("\u5E94\u7528\u8EAB\u4EFD\uFF1A"), identityText(info.larkCli.bot, t("\u4E0D\u53EF\u7528"))) : null,
+    probe.phase === "ready" && info?.larkCli ? line(t("\u7528\u6237\u8EAB\u4EFD\uFF1A"), info.larkCli.user?.onBehalfOf?.openId ? `${t("\u767B\u5F55\u4EBA\uFF1A")}${info.larkCli.user.onBehalfOf.userName ?? ""} (${info.larkCli.user.onBehalfOf.openId})` : identityText(info.larkCli.user, t("\u6CA1\u6709\u7528\u6237\u767B\u5F55"))) : null
   );
 }
 function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
@@ -557,6 +722,27 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     name: item.name,
     kind: item.kind
   })).filter((item) => typeof item.id === "string" && item.id);
+  const identityTargets = [];
+  const seenTargets = /* @__PURE__ */ new Set();
+  for (const item of chatUi.hooks.useConversations({ connection, channelId: CHANNEL_ID, botId: bot.id }).conversations) {
+    const chatId = item.route?.chatId;
+    const openId = item.route?.openId;
+    const push = (entry) => {
+      const key = `${entry.kind}:${entry.chatId ?? ""}:${entry.id}`;
+      if (seenTargets.has(key)) return;
+      seenTargets.add(key);
+      identityTargets.push({ ...entry, value: key });
+    };
+    if (item.kind === "group") {
+      if (typeof chatId === "string" && chatId) {
+        push({ kind: "group", id: chatId, label: item.name || chatId });
+      }
+      continue;
+    }
+    if (typeof openId === "string" && openId) {
+      push({ kind: "user", id: openId, label: item.name || openId });
+    }
+  }
   const policyIds = React.useMemo(() => {
     const policy = settings.record?.accessPolicy;
     const users = [
@@ -765,7 +951,9 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
     }),
     h(LarkIdentityEditor, {
       botId: bot.id,
-      value: status.larkIdentity ?? { mode: "bot-only", userOpenId: null },
+      // 策略取自机器人状态（分层结构）；老状态里没有时给一份"全局仅应用"的默认。
+      value: status.larkIdentity?.scopes ?? null,
+      conversations: identityTargets,
       chatUi,
       connection,
       translate: t,

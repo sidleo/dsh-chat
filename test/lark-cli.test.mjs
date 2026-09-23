@@ -441,7 +441,8 @@ test('只读体检：profile 在时报告 appId 与两个身份', async () => {
   assert.equal(info.profile.appId, APP_ID);
   assert.equal(info.identity.bot.identity, 'bot');
   assert.equal(info.identity.user.onBehalfOf.openId, USER_OPEN_ID);
-  assert.deepEqual(info.policy, { mode: 'bot-only', userOpenId: null });
+  // 策略已解析成两个独立开关；默认只允许应用身份。
+  assert.deepEqual(info.policy, { bot: true, user: false, userOpenId: null });
 });
 
 test('没装 lark-cli：给一句能照做的错误，而不是 ENOENT 原样抛', async () => {

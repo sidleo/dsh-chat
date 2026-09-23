@@ -16,7 +16,12 @@
 10. **调 `lark-cli` 只能用自己的授权**（两层，缺一不可）：
     ① **插件自己调**走唯一入口 `packages/dsh-chat-feishu/host/lark-cli.mjs`——只有它拉起 lark-cli（守门检查"别的包文件不许引入 `node:child_process`"），每次调用必然带 `--profile <本应用那份 profile>` + 显式 `--as`，并在调用前核对 `appId`（用户身份还要核对钉住的 `openId`），对不上就失败、**绝不回退**到当前生效 profile。
     ⚠️ **一个 appId 在 lark-cli 里只有一份 profile**（真机实测：想另建一份"插件专用"的会被拒——`app-id "cli_…" is already used by profile "cli_…"; each profile must have a unique app-id`）。所以 profile 名**不能猜**：按 appId 从 `lark-cli profile list` 读回来（用户可能起过别的名字），也**不能**去改那一份的 `strict-mode` / `default-as`（用户自己也在用它做 user 身份的事）——身份靠"逐次核对 + 门禁"，不靠改全局设置。
-    ② **模型自己调**（skill + bash 那条路，真机就是这么绕过去的）由 `host/lark-guard.mjs` 接 `tools/pre-execute` 门禁拦：本渠道聊天会话里跑 lark-cli 必须带本机器人的 profile、必须显式写身份，`bot-only` 时禁 `--as user`，并禁掉会改本机全局状态的写法（`profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`）；违规直接拒绝并告诉它正确写法。会话还会拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实与一段系统提示词，先写对、再谈兜底。要不要允许用户身份是**每机器人**的设置，默认 `bot-only`（开启要二次确认）。
+    ② **模型自己调**（skill + bash 那条路，真机就是这么绕过去的）由 `host/lark-guard.mjs` 接 `tools/pre-execute` 门禁拦：本渠道聊天会话里跑 lark-cli 必须带本机器人的 profile、必须显式写身份，未放开用户身份的场合禁 `--as user`，并禁掉会改本机全局状态的写法（`profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`）；违规直接拒绝并告诉它正确写法。会话还会拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实与一段系统提示词，先写对、再谈兜底。
+    ③ **身份策略是分层的、按会话解析**（`host/lark-identity.mjs`）：`targets 命中 → 群聊/私聊分类 → global` **就近覆盖**，每层 `{ bot, user }` 两个开关**各自独立**（可同时允许，也可都不允许）。默认**全局仅应用身份**；历史字段 `larkUserIdentity: 'user-allowed'` 读取时迁移成"全局 应用+用户"，用户不必重配。
+    ⚠️ **门禁必须按 `owner.key` 解析，不能只看 botId**：否则 A 群放开的用户身份会顺着 botId 泄漏到 B 群（单测 `A 群放开的用户身份不会泄漏到 B 群` 钉住了这一条）。提示词段与环境事实报的也必须是**本会话**那一份，否则"提示词说全局、门禁按会话"自相矛盾。
+    ⚠️ **命中方式两类**：`kind:'group'` 只认群聊 `chatId`；`kind:'user'` 私聊按 `senderId`、**群聊按 `chatId + senderId` 组合**（"这个群里只有这个人"）。但会话键里**没有发言人**（群聊键是会话维度），所以按会话解析时群聊里的"指定某人"**命不中**——要在群聊按人区分，得由 bridge 把 senderId 带进解析（当前未做）。
+    ⚠️ **语义边界**：`user: true` 只是"**允许**以用户身份调用"，**不等于"换成发言人本人的授权"**。lark-cli 一个 appId 一份 profile、一份 profile 只挂一个登录人，实际是谁由 `assertIdentity` 核对（`larkUserOpenId`）。收窄配置**不清掉**这个钉住的人（否则来回切一次设置就得重新扫码）。
+    放开用户身份要**二次确认**（不带 `confirm: true` 一个字节都不写）；已钉住用户后再改分层配置不重复确认、也不重复问 lark-cli。
 
 ## 目录结构
 
@@ -240,8 +245,13 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   的 lark-cli 必须带本机器人的 profile + 显式 `--as`，`bot-only` 时 `--as user` 直接拒绝——
   **"设置页改了却没生效"这条真机故障（第二条消息照样以用户身份发出）就是靠它堵上的**：
   那次模型走的是 skill + bash，根本不经过 ①。
-  身份开关在设置页「lark-cli 身份」：默认 **只用应用身份**；开启用户身份要**二次确认**，并且由
-  lark-cli 自己回答"登录的是谁"并钉住（`larkUserOpenId`）——登录的人换了就拒绝，绝不偷偷换人。
+  身份策略在设置页「lark-cli 身份」，是**分层**的：全局 / 私聊 / 群聊 / 指定群或人，
+  就近覆盖，每层两个开关（应用身份、用户身份）各自独立；默认 **全局只用应用身份**。
+  放开用户身份要**二次确认**，并且由 lark-cli 自己回答"登录的是谁"并钉住（`larkUserOpenId`）
+  ——登录的人换了就拒绝，绝不偷偷换人。**改某一层的配置却看到"没生效"时**，先确认
+  你改的是**哪个场合**：门禁按 `owner.key` 解析（群聊会话命中群聊那一层），
+  在私聊里改的配置不会影响群聊。另外"允许用户身份"**不等于**换成发言人的授权——
+  实际永远是 `登录人` 那一个。
   那条 profile 上如果没有用户登录（`whoami --as user` 读不到人），设置页会拒绝开启并给出
   `lark-cli auth login` 的命令（**不偷偷借用别的应用的登录态**）。
   自查：`lark-cli profile list`（看每个 profile 的 appId 与登录人）、
@@ -367,7 +377,8 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P7 | 机器人自助接入与可用性 | ✅ 飞书「新建机器人接入」**两条路**（照 dsh-im 对齐）：**扫码新建**（`registerApp` 一次性授权链接 → 自动创建应用，**扫码的人就是属主**；授权链接上带**应用清单** `addons`/`appPreset`/`createOnly`，权限预填进确认页、点一次确认就一起开通，见 `host/app-manifest.mjs` 与「上线与排查」）与**手动接入已有机器人**（填 App ID + App Secret，属主可留空）——手动那条**先验凭据再写任何东西**（探针换 `tenant_access_token`），`botId`/`secretRef` 由 `sha256(appId)` 推导（重复接入直接拒绝），落盘失败回滚刚写的凭据；属主留空时客户端紧接着调 hub 的 `bot.access-policy.open-scope` 把私聊放宽到「任何人可用」（新机器人没有属主候选，默认策略谁都进不来），那一步失败只告警、绝不静默。另有：访问策略白名单显示「名字 + id」（飞书 `names.resolve`，人名走**通讯录 → 共同群成员**两条路，查不到只显示 id + 能行动的说明）|
 | P8 | 提示词与多会话的正确性 | ✅ 增强提示词改走**会话级系统提示词段**（`ctx.systemPrompt.section`，全局注册按 agent 求值；没有该服务的部署自动退回消息前缀并告警一次；`config.guidanceTarget` 可强制 `prefix`）；**会话不允许被两个聊天共用**（下拉扣下 + apply 拒绝 + 卡片明示，因为提示词一个会话只有一个槽位）；**会话标题带"哪个群/哪个人"**（渠道给 `chatLabel`，前缀可升级不叠加，`/retitle` 按绑定键兜底） |
 | P9 | lark-cli 身份红线 | ✅ 调 lark-cli 只能用自己的授权：① 插件自己调只走 `host/lark-cli.mjs`（守门：别的包文件不许引入 `node:child_process`），每次注入 `--profile <本应用那一份>` + 显式 `--as`，调用前 `whoami` 核对 `appId`（用户身份再核对钉住的 `openId`），对不上就拒绝、绝不回退到当前生效 profile；② 身份策略是**每机器人**设置（默认 `bot-only`），设置页「lark-cli 身份」可改，**开启用户身份必须二次确认**（不带 `confirm:true` 一个字节都不写），开启时由 lark-cli回答"登录的是谁"并钉住（`larkUserOpenId`）。profile 名不猜——按 appId 从 `lark-cli profile list`读回（见 P10 第 ③ 条） |
-| P10 | 身份策略真的生效（模型自己调的 lark-cli 也管得住） | ✅ 真机上「只用应用身份」形同虚设——模型用 lark-cli 的 skill + bash 直接 `--as user` 发消息，绕过了插件自己的调用入口。现在三件事一起上：① `host/lark-guard.mjs` 接 DSH 的 `tools/pre-execute`，**本渠道聊天会话**里的 lark-cli 必须带本机器人专用 profile + 显式身份，`bot-only` 时拒 `--as user`，并禁 `profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`（拒绝时把正确写法告诉模型，并留日志）；② 会话拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实 + 一段系统提示词，先写对再兜底；③ profile 用**本应用那一份**：按 appId 从 `lark-cli profile list` 读回真实名字（真机实测一个 appId 只有一份 profile，想另建会被 lark-cli 拒：`each profile must have a unique app-id`），机器人启动时解析并记住名字（门禁与提示词都报这个名字，报错了模型写什么都不对），拿不到只记日志、不影响启动；**不改**那份 profile 的 `strict-mode` / `default-as`（用户自己也在用它）。注意「只是提到 lark-cli」（`grep -rn lark-cli docs/`、`cat lark-cli.md`）不算调用，不拦 |
+| P10 | 身份策略真的生效（模型自己调的 lark-cli 也管得住） | ✅ 真机上「只用应用身份」形同虚设——模型用 lark-cli 的 skill + bash 直接 `--as user` 发消息，绕过了插件自己的调用入口。现在三件事一起上：① `host/lark-guard.mjs` 接 DSH 的 `tools/pre-execute`，**本渠道聊天会话**里的 lark-cli 必须带本机器人专用 profile + 显式身份，未放开用户身份的场合拒 `--as user`，并禁 `profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`（拒绝时把正确写法告诉模型，并留日志）；② 会话拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实 + 一段系统提示词，先写对再兜底；③ profile 用**本应用那一份**：按 appId 从 `lark-cli profile list` 读回真实名字（真机实测一个 appId 只有一份 profile，想另建会被 lark-cli 拒：`each profile must have a unique app-id`），机器人启动时解析并记住名字（门禁与提示词都报这个名字，报错了模型写什么都不对），拿不到只记日志、不影响启动；**不改**那份 profile 的 `strict-mode` / `default-as`（用户自己也在用它）。注意「只是提到 lark-cli」（`grep -rn lark-cli docs/`、`cat lark-cli.md`）不算调用，不拦 |
+| P11 | 身份策略分场合配置（分层就近覆盖） | ✅ 单一机器人级开关不够用：私聊可以放开、大群不该放开，同一个群也常只信得过某一个人。`host/lark-identity.mjs` 定四层并**就近覆盖**：`targets → 群聊/私聊分类 → global`，每层 `{ bot, user }` 两个开关**各自独立**（可同时允许 / 都不允许 / 继承）。默认**全局仅应用**；旧字段 `larkUserIdentity: 'user-allowed'` 读取时迁移成"全局 应用+用户"，升级零重配。**门禁按 `owner.key` 解析**（`policyFor(owner)` 而非 `policyFor(botId)`）——只给 botId 会让 A 群放开的用户身份泄漏到 B 群，单测钉住了；提示词段与环境事实同样报**本会话**那一份，三处判据一致。命中方式：`kind:'group'` 认群 `chatId`；`kind:'user'` 私聊认 `senderId`、群聊认 **`chatId + senderId` 组合**。⚠️ 已知边界：会话键里没有发言人，所以按会话解析时**群聊的"指定某人"命不中**（要在群聊按人区分需 bridge 把 senderId 带进解析，未做）；设置页的候选只给得出「群」与「私聊的人」——群里的"人"需要"群 id + 人 id"两个值，列表提供不了，得手工写 `targets`。⚠️ 语义边界：`user: true` 只是"**允许**以用户身份调用"，**不是换成发言人本人的授权**（lark-cli 一份 profile 一个登录人）；收窄配置**不清掉**已钉住的 `larkUserOpenId`，否则来回切一次就得重新扫码 |
 
 ## 工作方式
 

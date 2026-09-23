@@ -135,16 +135,19 @@ export function installLarkIdentitySection(ctx, ownershipOf) {
       return '';
     }
     if (!owner) return '';
-    const userAllowed = owner.mode === 'user-allowed';
+    // 身份策略是分层的：提示词必须说**这个会话**实际生效的那一份，
+    // 否则模型会按"全局"猜，而门禁是按会话判的（两边说法不一致比不说更糟）。
+    const allowUser = owner.scope?.user === true;
+    const allowBot = owner.scope?.bot !== false;
     return [
-      `本会话属于飞书机器人「${owner.botName ?? owner.botId}」，它在 lark-cli 里的身份策略是`
-        + `${userAllowed ? '「允许用户身份」' : '「只用应用身份」'}。`,
+      `本会话属于飞书机器人「${owner.botName ?? owner.botId}」，这个会话的 lark-cli 身份策略是`
+        + `${allowBot ? '「允许应用身份」' : '「不允许应用身份」'} + ${allowUser ? '「允许用户身份」' : '「不允许用户身份」'}。`,
       '在这个会话里运行 lark-cli 的硬规矩（门禁会检查，违反直接拒绝）：',
       `1. 必须带 \`--profile ${owner.profileName}\`——这是这台机器人自己的 profile。`,
       '   不带 profile 时 lark-cli 会用这台机器上"当前生效"的那份授权，可能是别的应用甚至别人的账号。',
-      `2. 必须显式写身份：\`--as bot\`（代表这台应用自己）${userAllowed
-        ? '；要代表某个人的身份操作时才用 `--as user`。'
-        : '；本机器人只允许应用身份，`--as user` 会被拒绝。'}`,
+      `2. 必须显式写身份：\`--as bot\`（代表这台应用自己）${allowUser
+        ? '；要代表某个人的身份操作时才用 `--as user`（实际是谁由 lark-cli 里登录的那个人决定）。'
+        : '；本会话没有允许用户身份，`--as user` 会被拒绝。'}${allowBot ? '' : ' 本会话也没允许应用身份，两种身份都会被拒绝。'}`,
       '3. 不要用 `profile use` / `--use` / `config strict-mode --global` / `auth logout`——',
       '   它们会改这台机器上 lark-cli 的全局状态，影响别人的用法。',
       `profile 名也在环境变量 \`DSH_CHAT_LARK_PROFILE\` 里（身份策略在 \`DSH_CHAT_LARK_IDENTITY\`）。`,
@@ -202,7 +205,8 @@ export function registerShellFacts(ctx, ownershipOf) {
           description: '这台飞书机器人在 lark-cli 里的专用 profile 名；调 lark-cli 时必须用 --profile 指定它。',
         },
         DSH_CHAT_LARK_IDENTITY: {
-          description: '这台机器人的 lark-cli 身份策略：bot-only（只允许应用身份）或 user-allowed（允许以该 profile 登录的用户身份）。',
+          description: '本会话实际生效的 lark-cli 身份权限，形如 bot+user / bot / user / none'
+            + '（策略分层：全局 / 私聊 / 群聊 / 指定群与指定人，就近覆盖）。',
         },
       },
       resolve: (execution) => {
@@ -217,9 +221,14 @@ export function registerShellFacts(ctx, ownershipOf) {
           return {};
         }
         if (!owner) return {};
+        const allowBot = owner.scope?.bot !== false;
+        const allowUser = owner.scope?.user === true;
         return {
           DSH_CHAT_LARK_PROFILE: owner.profileName,
-          DSH_CHAT_LARK_IDENTITY: owner.mode,
+          // 报**本会话**实际生效的那份权限（不是机器人级的全局值）：模型照它写命令才不会被门禁挡。
+          DSH_CHAT_LARK_IDENTITY: allowBot && allowUser
+            ? 'bot+user'
+            : allowBot ? 'bot' : allowUser ? 'user' : 'none',
         };
       },
     });
