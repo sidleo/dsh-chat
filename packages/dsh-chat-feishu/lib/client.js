@@ -949,6 +949,8 @@ function BotCard({ bot, status, chatUi, connection, translate, onChanged }) {
         { className: "dchat-check" },
         h("input", {
           type: "checkbox",
+          // 守门用（与 data-lark-scope 同一条路子）：断言这个勾选状态真的反映了保存的配置。
+          "data-card-answer": "1",
           checked: status.cardAnswer !== false,
           disabled: busy || settings.phase !== "ready",
           onChange: async (event) => {
