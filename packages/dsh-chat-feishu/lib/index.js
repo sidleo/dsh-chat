@@ -28674,7 +28674,7 @@ function unwrapLocale(parsed) {
   }
   return void 0;
 }
-function formatDuration2(ms) {
+function formatDuration(ms) {
   if (ms == null || !Number.isFinite(ms) || ms < 0)
     return void 0;
   if (ms < 1e3)
@@ -125696,7 +125696,7 @@ var init_es = __esm({
       if (!fileKey)
         return { content: "[audio]", resources: [] };
       const duration = parsed === null || parsed === void 0 ? void 0 : parsed.duration;
-      const durAttr = formatDuration2(duration);
+      const durAttr = formatDuration(duration);
       const attr = durAttr ? ` duration="${durAttr}"` : "";
       const content = `<audio key="${fileKey}"${attr}/>`;
       const resources = [
@@ -125930,7 +125930,7 @@ ${lines.join("\n")}
       if (!fileKey)
         return { content: "[video]", resources: [] };
       const nameAttr = (parsed === null || parsed === void 0 ? void 0 : parsed.file_name) ? ` name="${escapeAttr(parsed.file_name)}"` : "";
-      const durStr = formatDuration2(parsed === null || parsed === void 0 ? void 0 : parsed.duration);
+      const durStr = formatDuration(parsed === null || parsed === void 0 ? void 0 : parsed.duration);
       const durAttr = durStr ? ` duration="${durStr}"` : "";
       const content = `<video key="${fileKey}"${nameAttr}${durAttr}/>`;
       const resources = [
@@ -126609,15 +126609,6 @@ function summaryTitle(ranked) {
   const title = [first, ...labels.slice(1).map(continuation)].join(TITLE_JOIN.comma);
   return ranked.length > 3 ? `${title}${TITLE_JOIN.more}` : title;
 }
-function formatDuration(ms) {
-  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1e3));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor(total / 60) % 60;
-  const seconds = total % 60;
-  const pad = (value) => String(value).padStart(2, "0");
-  if (hours > 0) return `${hours}\u5C0F\u65F6${pad(minutes)}\u5206${pad(seconds)}\u79D2`;
-  return minutes > 0 ? `${minutes}\u5206${pad(seconds)}\u79D2` : `${seconds}\u79D2`;
-}
 function formatLiveDuration(ms) {
   const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1e3));
   const hours = Math.floor(total / 3600);
@@ -126806,7 +126797,7 @@ function renderStepCard({
     elements.push(...currentApproval);
   }
   if (answer && budget.left > 0) {
-    elements.push({ tag: "hr" });
+    if (elements.length > 0) elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: clampBudget(answer) });
   }
   if (elements.length === 0) {
@@ -126815,9 +126806,13 @@ function renderStepCard({
   return {
     schema: "2.0",
     config: { update_multi: true, width_mode: "default" },
+    /**
+     * `header.title` 在 Card 2.0 里是**必填**，所以它一直在；只是**内容可以为空**——
+     * 结束时不留任何文案（完成/失败/用时都不写），状态只由 `template` 颜色表达。
+     */
     header: {
       template,
-      title: { tag: "plain_text", content: String(title).slice(0, 100) }
+      title: { tag: "plain_text", content: String(title ?? "").slice(0, 100) }
     },
     body: { direction: "vertical", elements }
   };
@@ -126857,8 +126852,6 @@ function createTurnPresenter({
   let todos = null;
   let lastAnswer = "";
   let state = "running";
-  let finishedReason = null;
-  let finishedAt = null;
   let cardId = null;
   let cardBroken = false;
   let lastFailure = null;
@@ -126885,11 +126878,7 @@ function createTurnPresenter({
     if (state === "running") {
       return `\u6DF1\u5EA6\u6C42\u7D22\u4E2D\uFF0C\u7528\u65F6${formatLiveDuration(Date.now() - startedAt)}`;
     }
-    if (state === "failed") {
-      return finishedReason === "aborted" || finishedReason === "cancelled" || finishedReason === "interrupted" ? "\u5DF2\u505C\u6B62" : "\u5904\u7406\u5931\u8D25";
-    }
-    const elapsed = (finishedAt ?? Date.now()) - startedAt;
-    return `\u7528\u65F6 ${formatDuration(Math.max(1e3, elapsed))}`;
+    return "";
   }
   function panelTitle() {
     const count = entries.length;
@@ -127250,8 +127239,6 @@ function createTurnPresenter({
         const body = text || (failed ? `\u672C\u8F6E\u8FD0\u884C\u5931\u8D25\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         lastAnswer = body;
         state = failed ? "failed" : "done";
-        finishedReason = typeof reason?.kind === "string" ? reason.kind : null;
-        finishedAt = Date.now();
         currentQuestion = [];
         currentApproval = [];
         questionProgress = null;

@@ -8,9 +8,10 @@
  *
  * 呈现口径对齐 **DSH 桌面/Web 会话的「工作步骤展示 = 标准」**（真机反馈："每一项工具跟思考
  * 要跟 dsh web 的会话一样，显示为 web 会话未展开的样子"）。卡片正好映射它的两层折叠：
- * - **卡片头**＝桌面的整轮控件：运行中 `深度求索中`，结束 `用时 X`，失败 `处理失败`，
- *   被中断 `已停止`（对齐 `chat/TurnProcessNodeView.tsx` 的文案与空格）。
- *   完成与否不再单独写「已完成 / 未正常完成」——**只由卡片头颜色表达**。
+ * - **卡片头**＝桌面的整轮控件：运行中 `深度求索中，用时 X`；**结束之后一个字都不写**
+ *   （完成 / 失败 / 中断都不写状态词，**也不显示已用时**）——完成与否只由 `template` 颜色表达
+ *   （绿＝正常结束、橙＝失败或中断），失败原因在正文里。⚠️ Card 2.0 的 `header.title` 是**必填**，
+ *   所以字段一直在、内容传空串。
  * - **折叠面板标题**＝桌面的组头：没结束时显示最新一项（一眼看到在干什么），
  *   结束后显示按类别拼的摘要（`执行了命令并已调用工具`，前 3 类、超过 3 类结尾加「等」、
  *   **不带计数**；对齐 `chat/step-process.ts` 的 `processTitle`）。
@@ -183,26 +184,9 @@ function summaryTitle(ranked) {
 }
 
 /**
- * 一轮用时的文案（对齐 Web 的 `formatRunDuration`：`{n}秒` / `{m}分{ss}秒` / `{h}小时{mm}分{ss}秒`）。
- *
- * @param ms - 毫秒。
- * @returns 文案。
- */
-function formatDuration(ms) {
-  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor(total / 60) % 60;
-  const seconds = total % 60;
-  const pad = (value) => String(value).padStart(2, '0');
-  if (hours > 0) return `${hours}小时${pad(minutes)}分${pad(seconds)}秒`;
-  return minutes > 0 ? `${minutes}分${pad(seconds)}秒` : `${seconds}秒`;
-}
-
-/**
  * 运行中用时的文案（对齐 Web 的 `formatLiveRunDuration`：秒数**不补零**、满 60 秒才进位）。
  *
- * 与结束后的 `formatDuration` 是两套口径，别合并：桌面上运行中是 `1分5秒`、
- * 结束后是 `1分05秒`。
+ * 只有运行中那条「深度求索中，用时 X」会用到——结束时卡片头不再显示用时。
  *
  * @param ms - 毫秒。
  * @returns 文案。
@@ -473,7 +457,11 @@ export function renderStepCard({
     elements.push(...currentApproval);
   }
   if (answer && budget.left > 0) {
-    elements.push({ tag: 'hr' });
+    /**
+     * 分割线只在**它上面真有东西**时才画：没有过程面板 / 任务清单 / 待答提问时，
+     * 卡里第一块就是答案，再顶一条线纯属噪声（真机截图：整张卡只有一条线 + 答案）。
+     */
+    if (elements.length > 0) elements.push({ tag: 'hr' });
     elements.push({ tag: 'markdown', content: clampBudget(answer) });
   }
   if (elements.length === 0) {
@@ -482,9 +470,13 @@ export function renderStepCard({
   return {
     schema: '2.0',
     config: { update_multi: true, width_mode: 'default' },
+    /**
+     * `header.title` 在 Card 2.0 里是**必填**，所以它一直在；只是**内容可以为空**——
+     * 结束时不留任何文案（完成/失败/用时都不写），状态只由 `template` 颜色表达。
+     */
     header: {
       template,
-      title: { tag: 'plain_text', content: String(title).slice(0, 100) },
+      title: { tag: 'plain_text', content: String(title ?? '').slice(0, 100) },
     },
     body: { direction: 'vertical', elements },
   };
@@ -493,9 +485,9 @@ export function renderStepCard({
 /**
  * 只装最终答案的卡片（「不显示过程」那条路用）。
  *
- * 为什么不用过程卡：过程卡的头是「深度求索中，用时 X / 用时 X」、正文按 `· ` 逐行排过程——
+ * 为什么不用过程卡：过程卡的头是「深度求索中，用时 X」、正文按 `· ` 逐行排过程——
  * 关掉过程时它是空的，只剩答案，用户看到的会是一张"什么都没有"的卡。
- * 这里给一张干净的卡：同一套 header 文案（`用时 X` / `处理失败`）与配色，
+ * 这里给一张干净的卡：同一套**配色**（结束＝绿、失败＝橙；标题留空，见 `currentTitle`），
  * 正文只有答案的 markdown——**格式（表格、代码块、链接）因此得以保留**，这正是要卡片的原因。
  *
  * @param options - { title, answer, template }。
@@ -564,10 +556,6 @@ export function createTurnPresenter({
   let lastAnswer = '';
   /** 呈现状态：running（默认）/ done / failed。 */
   let state = 'running';
-  /** 结束原因（DSH 的 `turn/end.reason.kind`）：决定标题是「已停止」还是「处理失败」。 */
-  let finishedReason = null;
-  /** 收尾时刻：标题里的「用时 X」按它算，**不在每次 patch 时重算**（否则会一直跳）。 */
-  let finishedAt = null;
   let cardId = null;
   let cardBroken = false;
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
@@ -607,16 +595,17 @@ export function createTurnPresenter({
       return `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`;
     }
     if (state === 'running') {
-      // 桌面口径：`深度求索中，用时{duration}`（**「用时」后面没有空格**，与结束后的 `用时 X` 不同）；
+      // 桌面口径：`深度求索中，用时{duration}`（**「用时」后面没有空格**）；
       // 时长靠 10 秒慢时钟刷新，见 CLOCK_INTERVAL_MS。
       return `深度求索中，用时${formatLiveDuration(Date.now() - startedAt)}`;
     }
-    if (state === 'failed') {
-      return finishedReason === 'aborted' || finishedReason === 'cancelled'
-        || finishedReason === 'interrupted' ? '已停止' : '处理失败';
-    }
-    const elapsed = (finishedAt ?? Date.now()) - startedAt;
-    return `用时 ${formatDuration(Math.max(1_000, elapsed))}`;
+    /**
+     * 结束（含失败/中断）之后，卡片头**一个字都不写**：
+     * 完成与否只看 `template` 颜色（绿＝正常结束、橙＝失败/中断），不用再单独写
+     * 「已完成 / 未正常完成」，也**不显示已用时**（真机反馈：那行只是噪声）。
+     * 失败原因在正文里（`本轮运行失败（<reason>）。` 或答案本身），信息不丢。
+     */
+    return '';
   }
 
   /**
@@ -1078,8 +1067,6 @@ export function createTurnPresenter({
 
         lastAnswer = body;
         state = failed ? 'failed' : 'done';
-        finishedReason = typeof reason?.kind === 'string' ? reason.kind : null;
-        finishedAt = Date.now();
         // 收尾时提问控件一律收起来（面板里那一行还在，可展开回看）。
         currentQuestion = [];
         currentApproval = [];

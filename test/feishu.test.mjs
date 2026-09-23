@@ -686,14 +686,14 @@ test('过程展示 off：不产生任何过程消息，最终答案用**卡片**
     assert.equal(app.gateway.calls.texts.length, 0);
     assert.equal(app.gateway.calls.replies.length, 0);
     assert.equal(app.gateway.calls.patches.length, 0);
-    // 答案走一张新卡（不是过程卡）：正文就是答案，头是桌面的那一行「用时 X」。
+    // 答案走一张新卡（不是过程卡）：正文就是答案，头**只有颜色、没有文案**。
     assert.equal(app.gateway.calls.cards.length, 1);
     const card = app.gateway.calls.cards[0].card;
     assert.equal(card.schema, '2.0');
     assert.match(JSON.stringify(card), /最终答案/);
-    assert.match(JSON.stringify(card.header), /"content":"用时 \d+秒"/);
-    assert.doesNotMatch(JSON.stringify(card.header), /已完成|未正常完成/, '完成与否不再单独写状态词');
-    assert.equal(card.body.elements.length, 1, '答案卡只有正文一块，不带过程面板');
+    assert.equal(card.header.title.content, '', '结束的卡不写状态词、也不显示已用时');
+    assert.equal(card.header.template, 'green', '完成与否只看配色');
+    assert.equal(card.body.elements.length, 1, '答案卡只有正文一块，不带过程面板，也没有分割线');
     assert.equal(card.body.elements[0].tag, 'markdown');
   } finally {
     await app.cleanup();
@@ -2344,7 +2344,7 @@ test('收到即打「在做了」表情，处理完撤掉；表情失败不影�
   }
 });
 
-test('卡片头只放桌面的状态行：深度求索中 / 用时 X / 处理失败 / 已停止（完成与否靠颜色）', async () => {
+test('卡片头只放运行中那一行；结束之后只有颜色（不写状态词、不显示已用时）', async () => {
   const cards = [];
   const gateway = {
     async replyCard({ card }) {
@@ -2381,13 +2381,13 @@ test('卡片头只放桌面的状态行：深度求索中 / 用时 X / 处理失
   // 结束后：面板标题换成桌面的组头摘要（按类别拼、不带计数）
   assert.match(withThink, /"content":"执行了命令"/, '结束后标题＝类别摘要');
 
-  const done = JSON.stringify(cards.at(-1));
-  assert.match(done, /"content":"用时 \d+秒"/, '完成后标题＝桌面的「用时 X」');
-  assert.doesNotMatch(done, /深度求索中/);
-  assert.doesNotMatch(done, /张三-DSH/, '完成状态同样不带机器人名');
-  assert.match(done, /"template":"green"/, '配色也变绿');
+  const done = cards.at(-1);
+  assert.equal(done.header.title.content, '', '结束之后卡片头不写任何文案（含已用时）');
+  assert.equal(done.header.template, 'green', '完成与否只看配色');
+  assert.doesNotMatch(JSON.stringify(done), /深度求索中/);
+  assert.doesNotMatch(JSON.stringify(done), /张三-DSH/, '完成状态同样不带机器人名');
 
-  // 非正常结束：标题写「处理失败」（桌面口径），不再写「未正常完成」
+  // 非正常结束：同样不写状态词，只有配色变橙；原因在正文里
   const broken = createTurnPresenter({
     mode: 'streaming_card',
     gateway,
@@ -2398,12 +2398,12 @@ test('卡片头只放桌面的状态行：深度求索中 / 用时 X / 处理失
   });
   await broken.finish('', { kind: 'timeout' });
   const failed = JSON.stringify(cards.at(-1));
-  assert.match(failed, /"content":"处理失败"/);
-  assert.match(failed, /本轮运行失败（timeout）。/, '失败时正文占位用桌面的措辞，不再写「未正常完成」');
-  assert.doesNotMatch(JSON.stringify(cards.at(-1).header), /未正常完成/);
+  assert.equal(cards.at(-1).header.title.content, '');
+  assert.doesNotMatch(JSON.stringify(cards.at(-1).header), /未正常完成|处理失败|用时/);
+  assert.match(failed, /本轮运行失败（timeout）。/, '失败原因在正文里，信息不丢');
   assert.match(failed, /"template":"orange"/);
 
-  // 被中断：桌面写「已停止」
+  // 被中断：一样只有配色
   const stopped = createTurnPresenter({
     mode: 'streaming_card',
     gateway,
@@ -2413,7 +2413,25 @@ test('卡片头只放桌面的状态行：深度求索中 / 用时 X / 处理失
     logger: silentLogger,
   });
   await stopped.finish('', { kind: 'aborted' });
-  assert.match(JSON.stringify(cards.at(-1)), /"content":"已停止"/);
+  assert.equal(cards.at(-1).header.title.content, '');
+  assert.match(JSON.stringify(cards.at(-1)), /"template":"orange"/);
+});
+
+test('没有过程时的答案卡不画分割线（上头没东西，线就是噪声）', () => {
+  const bare = renderStepCard({ title: '', panelItems: [], answer: '答案正文' });
+  assert.deepEqual(bare.body.elements.map((element) => element.tag), ['markdown'],
+    '只有答案时不该有 hr');
+  assert.equal(bare.header.title.content, '', 'Card 2.0 的 header.title 必填但可以留空');
+  assert.equal(bare.header.template, 'blue');
+
+  const withPanel = renderStepCard({
+    title: '',
+    panelItems: [{ kind: 'rows', rows: ['运行命令 · ls'] }],
+    panelTitle: '执行了命令',
+    answer: '答案正文',
+  });
+  assert.deepEqual(withPanel.body.elements.map((element) => element.tag), ['collapsible_panel', 'hr', 'markdown'],
+    '有过程面板时仍用一条线把过程与答案分开');
 });
 
 test('中间叙述进过程面板、不进答案正文（答案只留真答案）', async () => {
@@ -2598,7 +2616,7 @@ test('运行中的「深度求索中，用时 X」按 10 秒慢时钟自己走�
   assert.match(JSON.stringify(cards.at(-1).header), /深度求索中，用时10秒/);
 
   await presenter.finish('答案', { kind: 'completed' });
-  assert.match(JSON.stringify(cards.at(-1).header), /"content":"用时 10秒"/, '结束后换成补零的「用时 X」');
+  assert.equal(cards.at(-1).header.title.content, '', '结束后卡片头留空（不再显示用时）');
 });
 
 test('被飞书限频（99991400）时退避重试，而不是把卡片判死退回纯文本', async () => {
