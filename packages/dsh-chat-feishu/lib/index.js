@@ -28674,7 +28674,7 @@ function unwrapLocale(parsed) {
   }
   return void 0;
 }
-function formatDuration(ms) {
+function formatDuration2(ms) {
   if (ms == null || !Number.isFinite(ms) || ms < 0)
     return void 0;
   if (ms < 1e3)
@@ -125696,7 +125696,7 @@ var init_es = __esm({
       if (!fileKey)
         return { content: "[audio]", resources: [] };
       const duration = parsed === null || parsed === void 0 ? void 0 : parsed.duration;
-      const durAttr = formatDuration(duration);
+      const durAttr = formatDuration2(duration);
       const attr = durAttr ? ` duration="${durAttr}"` : "";
       const content = `<audio key="${fileKey}"${attr}/>`;
       const resources = [
@@ -125930,7 +125930,7 @@ ${lines.join("\n")}
       if (!fileKey)
         return { content: "[video]", resources: [] };
       const nameAttr = (parsed === null || parsed === void 0 ? void 0 : parsed.file_name) ? ` name="${escapeAttr(parsed.file_name)}"` : "";
-      const durStr = formatDuration(parsed === null || parsed === void 0 ? void 0 : parsed.duration);
+      const durStr = formatDuration2(parsed === null || parsed === void 0 ? void 0 : parsed.duration);
       const durAttr = durStr ? ` duration="${durStr}"` : "";
       const content = `<video key="${fileKey}"${nameAttr}${durAttr}/>`;
       const resources = [
@@ -126534,52 +126534,109 @@ var MAX_PANEL_TITLE = 46;
 var MAX_THINK_CHARS = 120;
 var MAX_NOTE_CHARS = 120;
 var MAX_TOOL_SUMMARY = 60;
-var TOOL_VARIANTS = Object.freeze({
-  bash: "bash",
-  pwsh: "bash",
-  read: "read",
-  read_image: "read",
-  web_fetch: "read",
-  web_search: "search",
-  grep: "search",
-  glob: "search",
-  write: "write",
-  edit: "edit",
-  run_code: "code",
-  cordis_package_inspect: "read",
-  cordis_runtime_inspect: "read",
-  cordis_run: "others",
-  cordis_stop: "others",
-  cordis_undefine: "others"
-});
-var VARIANT_TITLES = Object.freeze({
-  search: "\u641C\u7D22",
-  read: "\u8BFB\u53D6",
-  bash: "Bash",
-  write: "\u5199\u5165",
-  edit: "\u7F16\u8F91",
-  code: "\u4EE3\u7801",
-  others: "\u5DE5\u5177\u8C03\u7528"
+var CLOCK_INTERVAL_MS = 1e4;
+var RATE_LIMIT_BACKOFF_MS = 3e4;
+var RATE_LIMIT_CODE = 99991400;
+var TOOL_SPECS = Object.freeze({
+  read: { activity: "read", title: "\u8BFB\u53D6", keys: ["path", "file_path", "url"] },
+  read_image: { activity: "readImage", title: "\u8BFB\u53D6\u56FE\u7247", keys: ["path", "file_path", "url"] },
+  write: { activity: "write", title: "\u5199\u5165", keys: ["path", "file_path"] },
+  edit: { activity: "edit", title: "\u7F16\u8F91", keys: ["path", "file_path"] },
+  apply_patch: { activity: "edit", title: "\u7F16\u8F91", keys: ["path", "file_path"] },
+  bash: { activity: "commands", title: "\u8FD0\u884C\u547D\u4EE4", keys: ["description", "command"] },
+  pwsh: { activity: "commands", title: "\u8FD0\u884C\u547D\u4EE4", keys: ["description", "command"] },
+  exec_command: { activity: "commands", title: "\u8FD0\u884C\u547D\u4EE4", keys: ["description", "command"] },
+  run_code: { activity: "code", title: "\u4EE3\u7801", keys: ["description"] },
+  grep: { activity: "search", title: "\u641C\u7D22\u6587\u4EF6\u5185\u5BB9", keys: ["pattern", "query", "url"] },
+  glob: { activity: "search", title: "\u67E5\u627E\u6587\u4EF6", keys: ["pattern", "query", "url"] },
+  web_search: { activity: "webSearch", title: "\u7F51\u9875\u641C\u7D22", keys: ["query", "url"] },
+  web_fetch: { activity: "webFetch", title: "\u7F51\u9875\u83B7\u53D6", keys: ["url"] },
+  cordis_package_inspect: { activity: "search", title: "\u68C0\u67E5\u52A8\u6001\u63D2\u4EF6", keys: ["package", "name"] },
+  cordis_runtime_inspect: { activity: "search", title: "\u67E5\u8BE2\u8FD0\u884C\u65F6", keys: ["name"] }
 });
 var TOOL_TITLES = Object.freeze({
   skill: "Skill",
   todo_write: "\u66F4\u65B0\u4EFB\u52A1\u6E05\u5355",
+  create_goal: "\u521B\u5EFA\u76EE\u6807",
+  update_goal: "\u66F4\u65B0\u76EE\u6807",
+  get_goal: "\u67E5\u770B\u76EE\u6807",
   ask_user_question: "\u63D0\u95EE",
+  request_user_input: "\u63D0\u95EE",
   present: "\u4EA4\u4ED8\u6587\u4EF6",
   chat_send: "\u53D1\u9001\u6D88\u606F",
   chat_send_file: "\u53D1\u9001\u6587\u4EF6",
   chat_targets: "\u67E5\u770B\u6295\u9012\u76EE\u6807",
   chat_save_target: "\u4FDD\u5B58\u6295\u9012\u76EE\u6807"
 });
-var SUMMARY_KEYS = Object.freeze({
-  bash: ["description", "command"],
-  read: ["path", "file_path", "url"],
-  search: ["query", "pattern", "url"],
-  write: ["path", "file_path"],
-  edit: ["path", "file_path"],
-  code: ["description"],
-  others: []
+var ACTIVITY_DONE = Object.freeze({
+  read: "\u5DF2\u8BFB\u53D6\u6587\u4EF6",
+  readImage: "\u5DF2\u8BFB\u53D6\u56FE\u7247",
+  search: "\u5DF2\u641C\u7D22\u4EE3\u7801",
+  write: "\u5DF2\u5199\u5165\u6587\u4EF6",
+  edit: "\u4FEE\u6539\u4E86\u6587\u4EF6",
+  commands: "\u6267\u884C\u4E86\u547D\u4EE4",
+  code: "\u8FD0\u884C\u4E86\u4EE3\u7801",
+  webSearch: "\u5DF2\u641C\u7D22\u7F51\u9875",
+  webFetch: "\u5DF2\u8BBF\u95EE\u7F51\u9875",
+  subagents: "\u5DF2\u534F\u8C03\u5B50\u667A\u80FD\u4F53",
+  plan: "\u66F4\u65B0\u4E86\u8BA1\u5212",
+  questions: "\u5411\u7528\u6237\u63D0\u51FA\u4E86\u95EE\u9898",
+  tools: "\u5DF2\u8C03\u7528\u5DE5\u5177"
 });
+var TITLE_JOIN = Object.freeze({ two: "\u5E76", comma: "\uFF0C", more: "\u7B49", sharedPrefix: "\u5DF2" });
+var FAIL_PREFIX = "\u5931\u8D25 ";
+function activityOf(name2) {
+  const spec = TOOL_SPECS[name2];
+  if (spec) return spec.activity;
+  if (name2.endsWith("_inspect")) return "search";
+  if (name2.startsWith("terminal_")) return "commands";
+  if (name2 === "subagent" || name2.startsWith("subagent_")) return "subagents";
+  if (name2 === "todo_write" || name2 === "create_goal" || name2 === "update_goal" || name2 === "get_goal") return "plan";
+  if (name2 === "ask_user_question" || name2 === "request_user_input") return "questions";
+  return "tools";
+}
+function summaryTitle(ranked) {
+  const labels = ranked.slice(0, 3).map(({ activity }) => ACTIVITY_DONE[activity] ?? ACTIVITY_DONE.tools);
+  const first = labels[0];
+  if (first === void 0) return "\u5DF2\u5B8C\u6210\u5206\u6790";
+  const continuation = (label) => label.charAt(0).toLowerCase() + label.slice(1);
+  const second = labels[1];
+  if (second === void 0) return first;
+  if (labels.length === 2) {
+    const shared = first.startsWith(TITLE_JOIN.sharedPrefix) && second.startsWith(TITLE_JOIN.sharedPrefix);
+    return `${first}${TITLE_JOIN.two}${continuation(shared ? second.slice(TITLE_JOIN.sharedPrefix.length) : second)}`;
+  }
+  const title = [first, ...labels.slice(1).map(continuation)].join(TITLE_JOIN.comma);
+  return ranked.length > 3 ? `${title}${TITLE_JOIN.more}` : title;
+}
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1e3));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  if (hours > 0) return `${hours}\u5C0F\u65F6${pad(minutes)}\u5206${pad(seconds)}\u79D2`;
+  return minutes > 0 ? `${minutes}\u5206${pad(seconds)}\u79D2` : `${seconds}\u79D2`;
+}
+function formatLiveDuration(ms) {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1e3));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = String(total % 60);
+  if (hours > 0) return `${hours}\u5C0F\u65F6${String(minutes).padStart(2, "0")}\u5206${seconds}\u79D2`;
+  return minutes > 0 ? `${minutes}\u5206${seconds}\u79D2` : `${seconds}\u79D2`;
+}
+function isRateLimited(error) {
+  const candidates = [
+    error?.providerCode,
+    error?.code,
+    error?.response?.data?.code,
+    error?.response?.code,
+    error?.data?.code
+  ];
+  if (candidates.some((code) => Number(code) === RATE_LIMIT_CODE)) return true;
+  return String(error?.message ?? "").includes(String(RATE_LIMIT_CODE));
+}
 function firstLine(text) {
   const value = typeof text === "string" ? text : "";
   const newline = value.indexOf("\n");
@@ -126603,14 +126660,15 @@ function pickString(args, keys) {
   }
   return void 0;
 }
-function deriveSummary(variant, args, argsRaw) {
+function deriveSummary(name2, args, argsRaw) {
   const parsed = args ?? parseArgs(argsRaw);
   if (parsed === null) return firstLine(typeof argsRaw === "string" ? argsRaw : "");
-  if (variant === "search" && Array.isArray(parsed.queries)) {
+  const spec = TOOL_SPECS[name2];
+  if ((spec?.activity === "search" || spec?.activity === "webSearch") && Array.isArray(parsed.queries)) {
     const queries = parsed.queries.filter((query) => typeof query === "string" && query !== "");
     if (queries.length > 0) return queries.map(firstLine).join(", ");
   }
-  const picked = pickString(parsed, SUMMARY_KEYS[variant] ?? []);
+  const picked = pickString(parsed, spec?.keys ?? []);
   if (picked !== void 0) return firstLine(picked);
   for (const value of Object.values(parsed)) {
     if (typeof value === "string" && value !== "") return firstLine(value);
@@ -126623,17 +126681,14 @@ function clamp(text, max) {
 }
 function toolRow({ name: name2, arguments: argsRaw } = {}) {
   const toolName = typeof name2 === "string" && name2 ? name2 : "\u5DE5\u5177";
-  const variant = TOOL_VARIANTS[toolName] ?? "others";
-  const summary = clamp(deriveSummary(variant, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
+  const spec = TOOL_SPECS[toolName];
+  const summary = clamp(deriveSummary(toolName, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
   const own2 = TOOL_TITLES[toolName];
   if (own2) {
     return summary ? `${own2} \xB7 ${summary}` : own2;
   }
-  if (variant === "others") {
-    return summary ? `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName} \xB7 ${summary}` : `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName}`;
-  }
-  const title = VARIANT_TITLES[variant];
-  return summary ? `${title} \xB7 ${summary}` : title;
+  if (spec) return summary ? `${spec.title} \xB7 ${summary}` : spec.title;
+  return summary ? `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName} \xB7 ${summary}` : `\u5DE5\u5177\u8C03\u7528 \xB7 ${toolName}`;
 }
 function thinkRow(text) {
   const line = clamp(firstLine(text), MAX_THINK_CHARS);
@@ -126792,7 +126847,7 @@ function createTurnPresenter({
   const messageId = message?.message_id;
   const chatId = message?.chat_id;
   const replyInThread = chatType === "group" && bot?.groupTopicReply === true;
-  const title = "\u6B63\u5728\u5904\u7406";
+  const startedAt = Date.now();
   let entries = [];
   let currentQuestion = [];
   let currentApproval = [];
@@ -126802,12 +126857,16 @@ function createTurnPresenter({
   let todos = null;
   let lastAnswer = "";
   let state = "running";
+  let finishedReason = null;
+  let finishedAt = null;
   let cardId = null;
   let cardBroken = false;
   let lastFailure = null;
   const PATCH_MIN_INTERVAL_MS = 1200;
   let lastPatchAt = 0;
   let patchTimer = null;
+  let clockTimer = null;
+  let nextAllowedAt = 0;
   let lastDelivery = null;
   let chain = Promise.resolve();
   function enqueue(task) {
@@ -126823,15 +126882,28 @@ function createTurnPresenter({
     if (currentQuestion.length > 0 && questionProgress) {
       return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${questionProgress.index}/${questionProgress.total} \u9898\uFF09`;
     }
-    if (state === "done") return "\u2705 \u5DF2\u5B8C\u6210";
-    if (state === "failed") return "\u26A0\uFE0F \u672A\u6B63\u5E38\u5B8C\u6210";
-    return title;
+    if (state === "running") {
+      return `\u6DF1\u5EA6\u6C42\u7D22\u4E2D\uFF0C\u7528\u65F6${formatLiveDuration(Date.now() - startedAt)}`;
+    }
+    if (state === "failed") {
+      return finishedReason === "aborted" || finishedReason === "cancelled" || finishedReason === "interrupted" ? "\u5DF2\u505C\u6B62" : "\u5904\u7406\u5931\u8D25";
+    }
+    const elapsed = (finishedAt ?? Date.now()) - startedAt;
+    return `\u7528\u65F6 ${formatDuration(Math.max(1e3, elapsed))}`;
   }
   function panelTitle() {
     const count = entries.length;
     if (count === 0) return "";
-    if (state !== "running") return `\u5DE5\u5177\u4E0E\u601D\u8003(${count})`;
+    if (state !== "running") return clamp(summaryTitle(rankedActivities()), MAX_PANEL_TITLE);
     return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
+  }
+  function rankedActivities() {
+    const counts = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      if (entry.kind !== "tool" || !entry.activity) continue;
+      counts.set(entry.activity, (counts.get(entry.activity) ?? 0) + 1);
+    }
+    return [...counts].map(([activity, count]) => ({ activity, count })).sort((left, right) => right.count - left.count);
   }
   function panelItems() {
     const items = [];
@@ -126908,14 +126980,14 @@ function createTurnPresenter({
       return false;
     }
   }
-  function putEntry({ key, kind, text }) {
+  function putEntry({ key, kind, activity, text }) {
     if (!text) return;
     const index = key ? entries.findIndex((entry) => entry.key === key) : -1;
     if (index >= 0) {
-      entries = entries.map((entry, at) => at === index ? { ...entry, text } : entry);
+      entries = entries.map((entry, at) => at === index ? { ...entry, text, ...activity === void 0 ? {} : { activity } } : entry);
       return;
     }
-    entries = [...entries, { key, kind, text }].slice(-MAX_ROWS);
+    entries = [...entries, { key, kind, activity, text }].slice(-MAX_ROWS);
   }
   async function patchNow(answer = lastAnswer) {
     lastPatchAt = Date.now();
@@ -126927,7 +126999,10 @@ function createTurnPresenter({
       void enqueue(() => patchNow());
       return;
     }
-    const wait = PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt);
+    const wait = Math.max(
+      PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt),
+      nextAllowedAt - Date.now()
+    );
     if (wait <= 0) {
       void enqueue(() => patchNow());
       return;
@@ -126938,14 +127013,39 @@ function createTurnPresenter({
       void enqueue(() => patchNow());
     }, wait);
   }
+  function ensureClock() {
+    if (clockTimer || mode !== "streaming_card" || cardBroken || !cardId) return;
+    if (state !== "running") return;
+    clockTimer = setInterval(() => {
+      if (state !== "running" || cardBroken) {
+        stopClock();
+        return;
+      }
+      if (Date.now() < nextAllowedAt) return;
+      void enqueue(() => patchNow());
+    }, CLOCK_INTERVAL_MS);
+    clockTimer.unref?.();
+  }
+  function stopClock() {
+    if (!clockTimer) return;
+    clearInterval(clockTimer);
+    clockTimer = null;
+  }
   async function patch(answer) {
     const id = await ensureCard();
     if (!id) return false;
     try {
       await gateway.patchCard({ messageId: id, card: cardPayload(answer) });
+      ensureClock();
       return true;
     } catch (error) {
+      if (isRateLimited(error)) {
+        nextAllowedAt = Date.now() + RATE_LIMIT_BACKOFF_MS;
+        logger.warn?.(`[dsh-chat-feishu] \u66F4\u65B0\u8FC7\u7A0B\u5361\u88AB\u98DE\u4E66\u9650\u9891\uFF08${RATE_LIMIT_CODE}\uFF09\uFF0C\u9000\u907F ${Math.round(RATE_LIMIT_BACKOFF_MS / 1e3)}s \u540E\u7EE7\u7EED\uFF08\u8FC7\u7A0B\u884C\u4E0D\u4E22\uFF0C\u4E0B\u6B21\u4E00\u8D77\u5237\uFF09\u3002`);
+        return false;
+      }
       cardBroken = true;
+      stopClock();
       noteFailure("\u66F4\u65B0\u8FC7\u7A0B\u5361\u5931\u8D25", error);
       return false;
     }
@@ -126990,16 +127090,41 @@ function createTurnPresenter({
     /**
      * 记录一次工具调用，渲染成 Web 那样的一行。
      *
-     * @param call - { name, arguments }。
+     * @param call - { name, arguments, callId? }。
+     *   `callId` 给了就按它原地更新——工具跑失败时那一行会被改成 `失败 …`（见 `toolResult`）。
      */
     tool(call) {
       const row2 = toolRow(call);
-      putEntry({ kind: "tool", text: row2 });
+      const callId = typeof call?.callId === "string" && call.callId ? call.callId : null;
+      putEntry({
+        key: callId ? `tool:${callId}` : void 0,
+        kind: "tool",
+        activity: activityOf(typeof call?.name === "string" ? call.name : ""),
+        text: row2
+      });
       if (call?.name === "todo_write") {
         const parsed = todoRows(call.arguments);
         if (parsed) todos = parsed;
       }
       return push(row2);
+    },
+    /**
+     * 记录一次工具调用的结果：**失败**时把它那一行标成 `失败 …`（对齐 Web 的行前缀）。
+     *
+     * 成功的调用不用改行（Web 也不标"成功"）。
+     *
+     * @param result - { callId, isError }。
+     * @returns 是否更新了行。
+     */
+    toolResult(result) {
+      const callId = typeof result?.callId === "string" && result.callId ? result.callId : null;
+      if (!callId || result?.isError !== true) return Promise.resolve(false);
+      const key = `tool:${callId}`;
+      const entry = entries.find((item) => item.key === key);
+      if (!entry || entry.text.startsWith(FAIL_PREFIX)) return Promise.resolve(false);
+      const failed = `${FAIL_PREFIX}${entry.text}`;
+      putEntry({ key, kind: entry.kind, text: failed });
+      return push(failed).then(() => true);
     },
     /**
      * 记录一段思考（模型的推理），与工具调用同处一个折叠面板。
@@ -127122,12 +127247,15 @@ function createTurnPresenter({
       return enqueue(async () => {
         const text = typeof answer === "string" ? answer.trim() : "";
         const failed = reason?.kind && reason.kind !== "completed";
-        const body = text || (failed ? `\u4EFB\u52A1\u672A\u6B63\u5E38\u5B8C\u6210\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
+        const body = text || (failed ? `\u672C\u8F6E\u8FD0\u884C\u5931\u8D25\uFF08${reason.kind}\uFF09\u3002` : "\uFF08\u672C\u8F6E\u6CA1\u6709\u6587\u672C\u8F93\u51FA\uFF09");
         lastAnswer = body;
         state = failed ? "failed" : "done";
+        finishedReason = typeof reason?.kind === "string" ? reason.kind : null;
+        finishedAt = Date.now();
         currentQuestion = [];
         currentApproval = [];
         questionProgress = null;
+        stopClock();
         for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
         if (patchTimer) {
           clearTimeout(patchTimer);
@@ -128178,7 +128306,22 @@ ${text}`
           onToolCall: (toolEvent) => {
             const name2 = toolEvent?.data?.name ?? "\u5DE5\u5177";
             if (name2 === "ask_user_question") return;
-            presenter.tool({ name: name2, arguments: toolEvent?.data?.arguments });
+            presenter.tool({
+              name: name2,
+              arguments: toolEvent?.data?.arguments,
+              // 带上 callId：结果失败时按它把那行原地标成「失败 …」（对齐 Web 的行前缀）。
+              callId: toolEvent?.data?.callId
+            });
+          },
+          /**
+           * 工具结果：只关心**失败**——把对应那一行前面加「失败」（Web 的行前缀）。
+           * 成功的调用不改行（Web 也不标"成功"）。
+           */
+          onToolResult: (resultEvent) => {
+            presenter.toolResult({
+              callId: resultEvent?.data?.message?.source?.callId,
+              isError: resultEvent?.data?.message?.isError === true
+            });
           },
           // 思考（推理摘要）进同一个折叠面板：一行一条，够看轮廓即可。
           onAssistantMessage: (messageEvent) => {

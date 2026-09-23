@@ -686,12 +686,13 @@ test('过程展示 off：不产生任何过程消息，最终答案用**卡片**
     assert.equal(app.gateway.calls.texts.length, 0);
     assert.equal(app.gateway.calls.replies.length, 0);
     assert.equal(app.gateway.calls.patches.length, 0);
-    // 答案走一张新卡（不是过程卡）：正文就是答案，头是「✅ 已完成」。
+    // 答案走一张新卡（不是过程卡）：正文就是答案，头是桌面的那一行「用时 X」。
     assert.equal(app.gateway.calls.cards.length, 1);
     const card = app.gateway.calls.cards[0].card;
     assert.equal(card.schema, '2.0');
     assert.match(JSON.stringify(card), /最终答案/);
-    assert.match(JSON.stringify(card.header), /已完成/);
+    assert.match(JSON.stringify(card.header), /"content":"用时 \d+秒"/);
+    assert.doesNotMatch(JSON.stringify(card.header), /已完成|未正常完成/, '完成与否不再单独写状态词');
     assert.equal(card.body.elements.length, 1, '答案卡只有正文一块，不带过程面板');
     assert.equal(card.body.elements[0].tag, 'markdown');
   } finally {
@@ -731,9 +732,9 @@ test('过程展示 post：工具调用逐步回消息，最后单独回答案', 
   const app = await makeBridge({ bot: { ...BOT, stepPushDirect: 'post' } });
   try {
     await app.bridge.accept(messageEvent());
-    const stepReplies = app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash'));
+    const stepReplies = app.gateway.calls.replies.filter((reply) => reply.text.startsWith('运行命令'));
     assert.equal(stepReplies.length, 1);
-    assert.equal(stepReplies[0].text, 'Bash', '没有参数时只显示标题（与 Web 一致）');
+    assert.equal(stepReplies[0].text, '运行命令', '没有参数时只显示标题（与 Web 一致）');
     assert.equal(app.gateway.calls.replies.at(-1).text, '最终答案');
     assert.equal(app.gateway.calls.cards.length, 0);
   } finally {
@@ -749,7 +750,7 @@ test('过程展示 streaming_card：一张卡原地刷新，最终答案进同�
     assert.ok(app.gateway.calls.patches.length >= 2, '过程与答案都应 patch 到同一张卡');
     const last = app.gateway.calls.patches.at(-1).card;
     const body = JSON.stringify(last);
-    assert.ok(body.includes('Bash'), '工具行用 Web 的标题（bash → Bash）');
+    assert.ok(body.includes('运行命令'), '工具行用 Web 的标题（bash → 运行命令）');
     assert.ok(body.includes('最终答案'));
     assert.equal(app.gateway.calls.replies.length, 0, '卡片模式下不再另发文本');
   } finally {
@@ -767,11 +768,11 @@ test('过程展示按会话类型各取一份：私聊 post、群聊 off', async
       mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
       text: '@_user_1 帮我看下',
     }));
-    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash')).length, 0);
+    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('运行命令')).length, 0);
 
     // 私聊走私聊设置 → 推过程。
     await app.bridge.accept(messageEvent({ messageId: 'om_direct' }));
-    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('Bash')).length, 1);
+    assert.equal(app.gateway.calls.replies.filter((reply) => reply.text.startsWith('运行命令')).length, 1);
   } finally {
     await app.cleanup();
   }
@@ -2156,7 +2157,7 @@ test('提问内嵌进"正在处理"那张卡：题目画在同一张卡里，答
   assert.match(last, /collapsible_panel/, '收起要保留可展开的面板，而不是整块删掉');
   assert.match(last, /"expanded":false/, '默认收起');
   assert.match(last, /提问 · 选一个 → A/, '提问行还在面板里，可展开回看');
-  assert.match(last, /工具与思考\(1\)/, '本轮结束后标题显示条数');
+  assert.match(last, /"content":"已完成分析"/, '结束后标题＝类别摘要（本轮没有工具行）');
   assert.match(last, /最终答案/);
 });
 
@@ -2343,7 +2344,7 @@ test('收到即打「在做了」表情，处理完撤掉；表情失败不影�
   }
 });
 
-test('处理完卡片标题不再是"正在处理"', async () => {
+test('卡片头只放桌面的状态行：深度求索中 / 用时 X / 处理失败 / 已停止（完成与否靠颜色）', async () => {
   const cards = [];
   const gateway = {
     async replyCard({ card }) {
@@ -2366,26 +2367,27 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   await presenter.tool({ name: 'bash', arguments: JSON.stringify({ command: 'grep -n try bridge.mjs', description: '检查 try 结构' }) });
   await presenter.think('先看 bridge 的 try 块');
   const running = JSON.stringify(cards.at(-1));
-  assert.match(running, /"content":"正在处理"/, '标题不带机器人名前缀');
+  assert.match(running, /"content":"深度求索中，用时\d+秒"/, '运行中＝桌面的「深度求索中，用时 X」，不带机器人名');
   assert.doesNotMatch(running, /张三-DSH/, '标题里不要机器人名');
-  assert.match(running, /collapsible_panel/, '工具与思考放进一个折叠面板');
+  assert.match(running, /collapsible_panel/, '过程放进一个折叠面板');
   assert.match(running, /"expanded":false/, '默认收起');
   // 本轮没结束时，收起状态的面板标题是**最新一项**（真机要求：一眼看到在干什么）
-  assert.match(running, /"content":"Bash · 检查 try 结构"/, '未结束时标题显示最新一项');
-  assert.doesNotMatch(running, /工具与思考\(/, '没结束就不显示条数');
+  assert.match(running, /"content":"运行命令 · 检查 try 结构"/, '未结束时标题显示最新一项');
+  assert.doesNotMatch(running, /工具与思考/, '没有 DSH 也不存在的「工具与思考(N)」');
   // 第二条（思考）会被节流合并，收尾时一定会补上
   await presenter.finish('答案', { kind: 'completed' });
   const withThink = JSON.stringify(cards.at(-1));
   assert.match(withThink, /思考 · 先看 bridge 的 try 块/, '思考也在同一个面板里（Web 的"思考 ·"行）');
-  assert.match(withThink, /工具与思考\(2\)/, '本轮结束后才显示 工具与思考(N)');
+  // 结束后：面板标题换成桌面的组头摘要（按类别拼、不带计数）
+  assert.match(withThink, /"content":"执行了命令"/, '结束后标题＝类别摘要');
 
   const done = JSON.stringify(cards.at(-1));
-  assert.match(done, /✅ 已完成/, '完成后标题要变成已完成');
-  assert.doesNotMatch(done, /正在处理/);
+  assert.match(done, /"content":"用时 \d+秒"/, '完成后标题＝桌面的「用时 X」');
+  assert.doesNotMatch(done, /深度求索中/);
   assert.doesNotMatch(done, /张三-DSH/, '完成状态同样不带机器人名');
   assert.match(done, /"template":"green"/, '配色也变绿');
 
-  // 非正常结束：标题提示未正常完成
+  // 非正常结束：标题写「处理失败」（桌面口径），不再写「未正常完成」
   const broken = createTurnPresenter({
     mode: 'streaming_card',
     gateway,
@@ -2396,8 +2398,22 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   });
   await broken.finish('', { kind: 'timeout' });
   const failed = JSON.stringify(cards.at(-1));
-  assert.match(failed, /未正常完成/);
+  assert.match(failed, /"content":"处理失败"/);
+  assert.match(failed, /本轮运行失败（timeout）。/, '失败时正文占位用桌面的措辞，不再写「未正常完成」');
+  assert.doesNotMatch(JSON.stringify(cards.at(-1).header), /未正常完成/);
   assert.match(failed, /"template":"orange"/);
+
+  // 被中断：桌面写「已停止」
+  const stopped = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_3', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await stopped.finish('', { kind: 'aborted' });
+  assert.match(JSON.stringify(cards.at(-1)), /"content":"已停止"/);
 });
 
 test('中间叙述进过程面板、不进答案正文（答案只留真答案）', async () => {
@@ -2421,7 +2437,7 @@ test('中间叙述进过程面板、不进答案正文（答案只留真答案�
 
   const body = JSON.stringify(cards.at(-1));
   assert.match(body, /说明 · 我先查一下数据。/, '念叨要进面板（标签是「说明」不是「思考」）');
-  assert.match(body, /工具与思考\(2\)/, '说明与工具一起计数');
+  assert.match(body, /"content":"执行了命令"/, '结束后标题＝类别摘要（执行了命令）');
   // 答案正文只有真答案：面板里那份"说明"不能同时出现在答案里。
   const panel = cards.at(-1).body.elements.find((element) => element.tag === 'collapsible_panel');
   const answerElement = cards.at(-1).body.elements.find(
@@ -2450,7 +2466,7 @@ test('面板内容按发生顺序：提问嵌在它出现的位置，不在底�
   const card = renderStepCard({
     title: '正在处理',
     panelItems: [
-      { kind: 'rows', rows: ['Bash · 检查 try 结构', '思考 · 先看有没有外层 try'] },
+      { kind: 'rows', rows: ['运行命令 · 检查 try 结构', '思考 · 先看有没有外层 try'] },
       {
         kind: 'ask',
         title: '❓ 1/1 已回答',
@@ -2459,16 +2475,16 @@ test('面板内容按发生顺序：提问嵌在它出现的位置，不在底�
       },
       { kind: 'rows', rows: ['读取 · bridge.mjs'] },
     ],
-    panelTitle: '工具与思考(4)',
+    panelTitle: '已读取文件并执行了命令',
   });
   const panel = card.body.elements.find((element) => element.tag === 'collapsible_panel');
-  assert.ok(panel, '工具与思考要在一个折叠面板里');
+  assert.ok(panel, '过程行要在一个折叠面板里');
   assert.equal(panel.expanded, false, '默认收起');
-  assert.equal(panel.header.title.content, '工具与思考(4)', '标题只留名称与条数');
+  assert.equal(panel.header.title.content, '已读取文件并执行了命令', '标题就是桌面的组头摘要');
 
   // 顺序：工具行 → 提问嵌层 → 后面的工具行
   assert.deepEqual(panel.elements.map((element) => element.tag), ['markdown', 'collapsible_panel', 'markdown']);
-  assert.match(panel.elements[0].content, /Bash · 检查 try 结构/, '提问之前的行在前');
+  assert.match(panel.elements[0].content, /运行命令 · 检查 try 结构/, '提问之前的行在前');
   assert.match(panel.elements[2].content, /读取 · bridge.mjs/, '提问之后的行在提问后面');
   const nested = panel.elements[1];
   assert.equal(nested.header.title.content, '❓ 1/1 已回答');
@@ -2530,9 +2546,9 @@ test('任务清单单独一个面板：没结束时展开看进度，结束后�
   assert.equal(todoRows('not-json'), null);
 
   const running = renderStepCard({
-    title: '正在处理',
-    panelItems: [{ kind: 'rows', rows: ['Bash · ls'] }],
-    panelTitle: 'Bash · ls',
+    title: '深度求索中',
+    panelItems: [{ kind: 'rows', rows: ['运行命令 · ls'] }],
+    panelTitle: '运行命令 · ls',
     todos: { ...todo, expanded: true },
   });
   const panels = running.body.elements.filter((element) => element.tag === 'collapsible_panel');
@@ -2542,27 +2558,106 @@ test('任务清单单独一个面板：没结束时展开看进度，结束后�
   assert.match(panels[1].elements[0].content, /🔄 第二步/);
 
   const done = renderStepCard({
-    title: '✅ 已完成',
-    panelItems: [{ kind: 'rows', rows: ['Bash · ls'] }],
-    panelTitle: '工具与思考(1)',
+    title: '用时 12秒',
+    panelItems: [{ kind: 'rows', rows: ['运行命令 · ls'] }],
+    panelTitle: '执行了命令',
     todos: { ...todo, expanded: false },
   });
   const donePanels = done.body.elements.filter((element) => element.tag === 'collapsible_panel');
   assert.equal(donePanels[1].expanded, false, '结束后收起');
 });
 
-test('工具行按 Web 的口径渲染：种类标题 + 摘要参数', () => {
-  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls","description":"看看目录"}' }), 'Bash · 看看目录');
-  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls -la"}' }), 'Bash · ls -la', '没有 description 时用 command');
+test('运行中的「深度求索中，用时 X」按 10 秒慢时钟自己走（不做 1 秒时钟）', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_c' }; },
+    async patchCard({ card }) { cards.push(card); return { messageId: 'om_c' }; },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await presenter.tool({ name: 'bash', arguments: '{"command":"ls"}' });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.match(JSON.stringify(cards.at(-1).header), /深度求索中，用时0秒/, '刚建卡时从 0 秒起算');
+
+  const before = cards.length;
+  t.mock.timers.tick(5_000);
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(cards.length, before, '10 秒之内不额外刷（慢时钟的意义就在这儿）');
+
+  t.mock.timers.tick(5_000);
+  await new Promise((resolve) => { setImmediate(resolve); });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.ok(cards.length > before, '满 10 秒刷一次');
+  assert.match(JSON.stringify(cards.at(-1).header), /深度求索中，用时10秒/);
+
+  await presenter.finish('答案', { kind: 'completed' });
+  assert.match(JSON.stringify(cards.at(-1).header), /"content":"用时 10秒"/, '结束后换成补零的「用时 X」');
+});
+
+test('被飞书限频（99991400）时退避重试，而不是把卡片判死退回纯文本', async () => {
+  const cards = [];
+  const warns = [];
+  let limited = true;
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_r' }; },
+    async patchCard({ card }) {
+      if (limited) {
+        throw Object.assign(new Error('飞书更新卡片失败：99991400'), { providerCode: 99991400 });
+      }
+      cards.push(card);
+      return { messageId: 'om_r' };
+    },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { groupTopicReply: false },
+    logger: { info() {}, warn: (message) => warns.push(message) },
+  });
+  await presenter.tool({ name: 'bash', arguments: '{"command":"ls"}' });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.ok(warns.some((message) => /限频/.test(message)), '限频要留一条日志');
+  assert.equal(presenter.lastError(), null, '限频不是"卡片废了"，不该污染 lastError');
+
+  // 退避窗口内不立刻刷（行攒在面板里，下次刷一次全上）
+  const before = cards.length;
+  await presenter.tool({ name: 'read', arguments: '{"file_path":"/ws/a"}' });
+  assert.equal(cards.length, before, '退避窗口内不刷');
+
+  // 窗口过去之后照常刷；收尾的答案**必须**发出去（不受退避影响）
+  limited = false;
+  await presenter.finish('答案', { kind: 'completed' });
+  assert.equal(presenter.delivery(), 'card', '退避不该让答案退化成文本');
+  const body = JSON.stringify(cards.at(-1));
+  assert.match(body, /读取 · \/ws\/a/, '退避期间攒下的行最后一次全刷上');
+  assert.match(body, /答案/);
+});
+
+test('工具行按桌面的口径渲染：tool.title.* 标题 + 摘要参数', () => {
+  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls","description":"看看目录"}' }), '运行命令 · 看看目录');
+  assert.equal(toolRow({ name: 'bash', arguments: '{"command":"ls -la"}' }), '运行命令 · ls -la', '没有 description 时用 command');
   assert.equal(toolRow({ name: 'read', arguments: '{"file_path":"/ws/a.mjs"}' }), '读取 · /ws/a.mjs');
+  assert.equal(toolRow({ name: 'read_image', arguments: '{"path":"/ws/a.png"}' }), '读取图片 · /ws/a.png');
   assert.equal(
     toolRow({ name: 'wiki_search', arguments: '{"query":"商行 firm_s_id"}' }),
     '工具调用 · wiki_search · 商行 firm_s_id',
     '未知工具保留工具名（与 Web 一致）',
   );
   assert.equal(toolRow({ name: 'skill', arguments: '{"name":"yh-bigdata"}' }), 'Skill · yh-bigdata');
-  assert.equal(toolRow({ name: 'grep', arguments: '{"pattern":"try","path":"host"}' }), '搜索 · try');
-  assert.equal(toolRow({ name: 'web_search', arguments: '{"queries":["a","b"]}' }), '搜索 · a, b');
+  assert.equal(toolRow({ name: 'grep', arguments: '{"pattern":"try","path":"host"}' }), '搜索文件内容 · try');
+  assert.equal(toolRow({ name: 'glob', arguments: '{"pattern":"**/*.mjs"}' }), '查找文件 · **/*.mjs');
+  assert.equal(toolRow({ name: 'web_search', arguments: '{"queries":["a","b"]}' }), '网页搜索 · a, b');
+  assert.equal(toolRow({ name: 'web_fetch', arguments: '{"url":"https://x/y"}' }), '网页获取 · https://x/y');
+  assert.equal(toolRow({ name: 'todo_write', arguments: '{"todos":[]}' }), '更新任务清单 · {"todos":[]}');
   // 参数不是 JSON：不抛错，退化成第一行原文
   assert.equal(toolRow({ name: 'wiki_list', arguments: 'not-json' }), '工具调用 · wiki_list · not-json');
   assert.equal(toolRow({ name: 'wiki_list' }), '工具调用 · wiki_list', '连参数都没有时只留工具名');
@@ -2570,6 +2665,78 @@ test('工具行按 Web 的口径渲染：种类标题 + 摘要参数', () => {
   // 思考行：压成一行并截断
   assert.equal(thinkRow('先看一眼\n再看第二眼'), '思考 · 先看一眼');
   assert.ok(thinkRow('x'.repeat(500)).length <= 126);
+});
+
+test('收起时那一行＝桌面的组头摘要：按类别拼、不带计数', async () => {
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_s' }; },
+    async patchCard({ card }) { cards.push(card); return { messageId: 'om_s' }; },
+  };
+  const makePresenter = () => createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { groupTopicReply: false },
+    logger: silentLogger,
+  });
+  const titleAfter = async (calls) => {
+    const presenter = makePresenter();
+    for (const [name, args] of calls) await presenter.tool({ name, arguments: JSON.stringify(args) });
+    await presenter.finish('答案', { kind: 'completed' });
+    const panel = cards.at(-1).body.elements.find((element) => element.tag === 'collapsible_panel');
+    // 重开一次每轮都会新建卡；这里拿最后一张卡的面板标题
+    return panel?.header?.title?.content ?? '';
+  };
+
+  // 两类 → 「A并B」
+  assert.equal(await titleAfter([['read', { path: '/ws/a' }], ['bash', { command: 'ls' }]]), '已读取文件并执行了命令');
+  // 三类 → 顿号连接
+  assert.equal(
+    await titleAfter([['read', { path: '/ws/a' }], ['bash', { command: 'ls' }], ['grep', { pattern: 'x' }]]),
+    '已读取文件，执行了命令，已搜索代码',
+  );
+  // 超过三类 → 前 3 类 + 「等」
+  assert.equal(
+    await titleAfter([
+      ['read', { path: '/ws/a' }], ['bash', { command: 'ls' }],
+      ['grep', { pattern: 'x' }], ['web_fetch', { url: 'https://x' }],
+    ]),
+    '已读取文件，执行了命令，已搜索代码等',
+  );
+  // 数量多的类别排前面
+  assert.equal(
+    await titleAfter([['read', { path: '/ws/a' }], ['bash', { command: 'ls' }], ['bash', { command: 'pwd' }]]),
+    '执行了命令并已读取文件',
+  );
+});
+
+test('失败的工具行标「失败」（对齐 Web 的行前缀），成功的行不动', async () => {
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_f' }; },
+    async patchCard({ card }) { cards.push(card); return { messageId: 'om_f' }; },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await presenter.tool({ name: 'bash', callId: 'c1', arguments: '{"command":"false","description":"注定失败"}' });
+  await presenter.tool({ name: 'bash', callId: 'c2', arguments: '{"command":"true","description":"会成功"}' });
+  assert.equal(await presenter.toolResult({ callId: 'c2', isError: false }), false, '成功的行不改');
+  assert.equal(await presenter.toolResult({ callId: 'c1', isError: true }), true);
+  await presenter.finish('答案', { kind: 'completed' });
+  const panel = cards.at(-1).body.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.match(panel.elements[0].content, /失败 运行命令 · 注定失败/);
+  assert.doesNotMatch(panel.elements[0].content, /失败 运行命令 · 会成功/);
+  // 重复回报同一次失败不会叠加前缀
+  await presenter.toolResult({ callId: 'c1', isError: true });
+  assert.doesNotMatch(JSON.stringify(cards.at(-1)), /失败 失败/);
 });
 
 test('名字解析：并发查询合并成一次、缺权限长退避、「重新连接」立刻重取', async () => {

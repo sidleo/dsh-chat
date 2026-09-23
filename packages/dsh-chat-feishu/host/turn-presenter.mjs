@@ -6,19 +6,26 @@
  * - `post`：每一步单独回一条消息（工具调用、注入上下文等）；
  * - `streaming_card`：全程一张交互卡片，过程与最终答案都在这张卡里原地刷新。
  *
- * 呈现口径对齐 **DSH Web 会话**（真机反馈："每一项工具跟思考要跟 dsh web 的会话一样，
- * 显示为 web 会话未展开的样子"）：
- * - 一行一项，形如 `工具调用 · wiki_get · 永辉/组织架构/品类架构`、`思考 · …`、`提问 · …`；
- *   项目分类与摘要口径直接照搬 Web 的工具行模型（见下方 `TOOL_VARIANTS` / `SUMMARY_KEYS`，
- *   来源：DSH 安装目录内 `@deepseek-ai/dsh-client-ui-tool` 的 `toolRowModel`）。
- * - 工具、思考、**已答的提问**全部收进**同一个**折叠面板：默认收起、展开看全部；
+ * 呈现口径对齐 **DSH 桌面/Web 会话的「工作步骤展示 = 标准」**（真机反馈："每一项工具跟思考
+ * 要跟 dsh web 的会话一样，显示为 web 会话未展开的样子"）。卡片正好映射它的两层折叠：
+ * - **卡片头**＝桌面的整轮控件：运行中 `深度求索中`，结束 `用时 X`，失败 `处理失败`，
+ *   被中断 `已停止`（对齐 `chat/TurnProcessNodeView.tsx` 的文案与空格）。
+ *   完成与否不再单独写「已完成 / 未正常完成」——**只由卡片头颜色表达**。
+ * - **折叠面板标题**＝桌面的组头：没结束时显示最新一项（一眼看到在干什么），
+ *   结束后显示按类别拼的摘要（`执行了命令并已调用工具`，前 3 类、超过 3 类结尾加「等」、
+ *   **不带计数**；对齐 `chat/step-process.ts` 的 `processTitle`）。
+ * - 一行一项，形如 `运行命令 · 看看目录`、`读取 · /ws/a.mjs`、`思考 · …`、`提问 · …`；
+ *   工具类别与行标题、摘要取参照搬 DSH 的 `process-activity.ts` / `tool.title.*`
+ *   （见下方 `TOOL_SPECS` / `TOOL_TITLES`），失败的行前面加「失败」。
+ * - 工具、思考、中间叙述、**已答的提问**全部收进**同一个**折叠面板：默认收起、展开看全部；
  *   已答提问在面板里再嵌一层 `❓ N/M 已回答` 折叠面板（真机要求：提问也要能自己收起/展开；
  *   Card 2.0 的容器最多嵌套 5 层），**位置就是它本来出现的顺序**（不能被推到面板底部）；
- * - 面板标题：本轮没结束时显示**最新的一项**（一眼看到在干什么），本轮结束后显示
- *   `工具与思考(N)`；
  * - **任务清单**（`todo_write`）单独一个面板放在工具面板**下面**：本轮没结束时默认展开
  *   （看得到完成进度），结束后收起；
  * - 还没回答的提问控件放在面板**外面**——Card 2.0 的折叠面板里不能放 form/输入框。
+ * - 运行中那行「深度求索中，用时 X」靠**10 秒慢时钟**自己走（桌面端是客户端 1 秒定时器、零网络；
+ *   飞书每次刷新都是整卡 patch，成本结构不同，见 `CLOCK_INTERVAL_MS`）；
+ *   被飞书限频（`99991400`）时**退避**而不是判死（见 `patch`）——判死会让整轮退回纯文本。
  *
  * @module dsh-chat-feishu/turn-presenter
  */
@@ -49,48 +56,60 @@ const MAX_NOTE_CHARS = 120;
 const MAX_TOOL_SUMMARY = 60;
 
 /**
- * 工具名 → 行的"种类"（决定用什么标题与摘要取哪些参数）。
+ * 运行中「深度求索中，用时 X」的刷新间隔。
  *
- * 照搬 Web：`dsh-client-ui-tool` 的 `TOOL_VARIANTS`。没列出的工具归 `others`。
+ * 桌面端那行是**客户端 1 秒定时器**（零网络）；飞书每刷一次都是**整卡 JSON 走一次
+ * `im.v1.message.patch`**，所以这里取 10 秒的慢时钟：秒数最多滞后 10 秒，
+ * 而请求量级与"工具密集的回合本来就几十次 patch"同阶（5 分钟回合 = +30 次）。
+ * 事件到达时照旧按 `PATCH_MIN_INTERVAL_MS` 合并刷新，时钟只补"没有事件的那段空档"。
  */
-const TOOL_VARIANTS = Object.freeze({
-  bash: 'bash',
-  pwsh: 'bash',
-  read: 'read',
-  read_image: 'read',
-  web_fetch: 'read',
-  web_search: 'search',
-  grep: 'search',
-  glob: 'search',
-  write: 'write',
-  edit: 'edit',
-  run_code: 'code',
-  cordis_package_inspect: 'read',
-  cordis_runtime_inspect: 'read',
-  cordis_run: 'others',
-  cordis_stop: 'others',
-  cordis_undefine: 'others',
-});
+const CLOCK_INTERVAL_MS = 10_000;
 
-/** 种类 → 行标题（对齐 Web 的 `tool.title.*` 中文文案）。 */
-const VARIANT_TITLES = Object.freeze({
-  search: '搜索',
-  read: '读取',
-  bash: 'Bash',
-  write: '写入',
-  edit: '编辑',
-  code: '代码',
-  others: '工具调用',
+/** 被飞书限频后的退避时长（见下方 `RATE_LIMIT_CODE`）。 */
+const RATE_LIMIT_BACKOFF_MS = 30_000;
+
+/** 飞书应用级频控超限的错误码（HTTP 400 + 该码）。 */
+const RATE_LIMIT_CODE = 99991400;
+
+/**
+ * 工具名 → 过程类别 + 行标题 + 摘要取哪些参数。
+ *
+ * 照搬 DSH：类别来自 `dsh-client-ui-chat` 的 `process-activity.ts`（`activity()`），
+ * 行标题来自 `dsh-client-ui-conversation` 的 `tool.title.*` 中文文案。
+ * 类别用于"收起时那一行"的摘要（`执行了命令并已调用工具`），标题用于面板里的明细行
+ * （`运行命令 · 看看目录`）。没列出的工具归 `tools`，行标题退化成
+ * `工具调用 · <工具名> · <摘要>`（与 Web 一致）。
+ */
+const TOOL_SPECS = Object.freeze({
+  read: { activity: 'read', title: '读取', keys: ['path', 'file_path', 'url'] },
+  read_image: { activity: 'readImage', title: '读取图片', keys: ['path', 'file_path', 'url'] },
+  write: { activity: 'write', title: '写入', keys: ['path', 'file_path'] },
+  edit: { activity: 'edit', title: '编辑', keys: ['path', 'file_path'] },
+  apply_patch: { activity: 'edit', title: '编辑', keys: ['path', 'file_path'] },
+  bash: { activity: 'commands', title: '运行命令', keys: ['description', 'command'] },
+  pwsh: { activity: 'commands', title: '运行命令', keys: ['description', 'command'] },
+  exec_command: { activity: 'commands', title: '运行命令', keys: ['description', 'command'] },
+  run_code: { activity: 'code', title: '代码', keys: ['description'] },
+  grep: { activity: 'search', title: '搜索文件内容', keys: ['pattern', 'query', 'url'] },
+  glob: { activity: 'search', title: '查找文件', keys: ['pattern', 'query', 'url'] },
+  web_search: { activity: 'webSearch', title: '网页搜索', keys: ['query', 'url'] },
+  web_fetch: { activity: 'webFetch', title: '网页获取', keys: ['url'] },
+  cordis_package_inspect: { activity: 'search', title: '检查动态插件', keys: ['package', 'name'] },
+  cordis_runtime_inspect: { activity: 'search', title: '查询运行时', keys: ['name'] },
 });
 
 /**
- * 有专属卡片的工具：Web 里由插件注册了专门的卡片，标题不是"工具调用"。
+ * 有专属标题的工具：Web 里由插件注册了专门的卡片，标题不是"工具调用"。
  * 这里只补真正会出现在会话里、且 Web 显示为专属标题的那几个。
  */
 const TOOL_TITLES = Object.freeze({
   skill: 'Skill',
   todo_write: '更新任务清单',
+  create_goal: '创建目标',
+  update_goal: '更新目标',
+  get_goal: '查看目标',
   ask_user_question: '提问',
+  request_user_input: '提问',
   present: '交付文件',
   chat_send: '发送消息',
   chat_send_file: '发送文件',
@@ -98,16 +117,122 @@ const TOOL_TITLES = Object.freeze({
   chat_save_target: '保存投递目标',
 });
 
-/** 摘要优先取哪个参数（对齐 Web 的 `SUMMARY_KEYS`）。 */
-const SUMMARY_KEYS = Object.freeze({
-  bash: ['description', 'command'],
-  read: ['path', 'file_path', 'url'],
-  search: ['query', 'pattern', 'url'],
-  write: ['path', 'file_path'],
-  edit: ['path', 'file_path'],
-  code: ['description'],
-  others: [],
+/** 类别 → 「已完成」口径的那句话（对齐 Web 的 `message.stepProcess.done.*`）。 */
+const ACTIVITY_DONE = Object.freeze({
+  read: '已读取文件',
+  readImage: '已读取图片',
+  search: '已搜索代码',
+  write: '已写入文件',
+  edit: '修改了文件',
+  commands: '执行了命令',
+  code: '运行了代码',
+  webSearch: '已搜索网页',
+  webFetch: '已访问网页',
+  subagents: '已协调子智能体',
+  plan: '更新了计划',
+  questions: '向用户提出了问题',
+  tools: '已调用工具',
 });
+
+/** 摘要句的连接口径（对齐 Web：两类 `A并B`、三类 `A，B，C`、超过三类结尾加 `等`）。 */
+const TITLE_JOIN = Object.freeze({ two: '并', comma: '，', more: '等', sharedPrefix: '已' });
+
+/** 失败的工具行前缀（对齐 Web：`失败 运行命令 …`）。 */
+const FAIL_PREFIX = '失败 ';
+
+/**
+ * 工具名 → 过程类别。表的补充规则与 Web 的 `activity()` 逐条对齐。
+ *
+ * @param name - 工具名。
+ * @returns 类别。
+ */
+function activityOf(name) {
+  const spec = TOOL_SPECS[name];
+  if (spec) return spec.activity;
+  if (name.endsWith('_inspect')) return 'search';
+  if (name.startsWith('terminal_')) return 'commands';
+  if (name === 'subagent' || name.startsWith('subagent_')) return 'subagents';
+  if (name === 'todo_write' || name === 'create_goal'
+    || name === 'update_goal' || name === 'get_goal') return 'plan';
+  if (name === 'ask_user_question' || name === 'request_user_input') return 'questions';
+  return 'tools';
+}
+
+/**
+ * 收起时那一行：按类别出现次数取前 3 类拼成一句话（对齐 Web 的 `processTitle`）。
+ *
+ * 数量相同按首次出现的顺序；**不带计数**（Web 也不带，计数只在 DOM 属性里）。
+ *
+ * @param ranked - 已按数量降序排好的 `[{ activity, count }]`。
+ * @returns 一句话；一类都没有时回落到「已完成分析」。
+ */
+function summaryTitle(ranked) {
+  const labels = ranked.slice(0, 3).map(({ activity }) => ACTIVITY_DONE[activity] ?? ACTIVITY_DONE.tools);
+  const first = labels[0];
+  if (first === undefined) return '已完成分析';
+  // 英文文案要去掉重复前缀后小写首字母；中文这里是空操作，照 Web 原样保留。
+  const continuation = (label) => label.charAt(0).toLowerCase() + label.slice(1);
+  const second = labels[1];
+  if (second === undefined) return first;
+  if (labels.length === 2) {
+    const shared = first.startsWith(TITLE_JOIN.sharedPrefix) && second.startsWith(TITLE_JOIN.sharedPrefix);
+    return `${first}${TITLE_JOIN.two}${continuation(shared ? second.slice(TITLE_JOIN.sharedPrefix.length) : second)}`;
+  }
+  const title = [first, ...labels.slice(1).map(continuation)].join(TITLE_JOIN.comma);
+  return ranked.length > 3 ? `${title}${TITLE_JOIN.more}` : title;
+}
+
+/**
+ * 一轮用时的文案（对齐 Web 的 `formatRunDuration`：`{n}秒` / `{m}分{ss}秒` / `{h}小时{mm}分{ss}秒`）。
+ *
+ * @param ms - 毫秒。
+ * @returns 文案。
+ */
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  const pad = (value) => String(value).padStart(2, '0');
+  if (hours > 0) return `${hours}小时${pad(minutes)}分${pad(seconds)}秒`;
+  return minutes > 0 ? `${minutes}分${pad(seconds)}秒` : `${seconds}秒`;
+}
+
+/**
+ * 运行中用时的文案（对齐 Web 的 `formatLiveRunDuration`：秒数**不补零**、满 60 秒才进位）。
+ *
+ * 与结束后的 `formatDuration` 是两套口径，别合并：桌面上运行中是 `1分5秒`、
+ * 结束后是 `1分05秒`。
+ *
+ * @param ms - 毫秒。
+ * @returns 文案。
+ */
+function formatLiveDuration(ms) {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = String(total % 60);
+  if (hours > 0) return `${hours}小时${String(minutes).padStart(2, '0')}分${seconds}秒`;
+  return minutes > 0 ? `${minutes}分${seconds}秒` : `${seconds}秒`;
+}
+
+/**
+ * 这次失败是不是飞书的**应用级频控**（HTTP 400 + `99991400`）。
+ *
+ * 各层 SDK 报错形状不一（我们自己的 `providerCode`、SDK 的 `code`、或原始响应体），
+ * 所以按"任一层能读到这个码"判断，读不到就退回消息里找码——**宁可漏判成普通失败，也不误判**。
+ *
+ * @param error - 抛出来的任意错误。
+ * @returns 是否限频。
+ */
+function isRateLimited(error) {
+  const candidates = [
+    error?.providerCode, error?.code,
+    error?.response?.data?.code, error?.response?.code, error?.data?.code,
+  ];
+  if (candidates.some((code) => Number(code) === RATE_LIMIT_CODE)) return true;
+  return String(error?.message ?? '').includes(String(RATE_LIMIT_CODE));
+}
 
 function firstLine(text) {
   const value = typeof text === 'string' ? text : '';
@@ -136,14 +261,16 @@ function pickString(args, keys) {
 }
 
 /** 按 Web 的口径从参数里挑一句摘要；挑不到就退化到第一个非空字符串参数。 */
-function deriveSummary(variant, args, argsRaw) {
+function deriveSummary(name, args, argsRaw) {
   const parsed = args ?? parseArgs(argsRaw);
   if (parsed === null) return firstLine(typeof argsRaw === 'string' ? argsRaw : '');
-  if (variant === 'search' && Array.isArray(parsed.queries)) {
+  const spec = TOOL_SPECS[name];
+  if ((spec?.activity === 'search' || spec?.activity === 'webSearch')
+    && Array.isArray(parsed.queries)) {
     const queries = parsed.queries.filter((query) => typeof query === 'string' && query !== '');
     if (queries.length > 0) return queries.map(firstLine).join(', ');
   }
-  const picked = pickString(parsed, SUMMARY_KEYS[variant] ?? []);
+  const picked = pickString(parsed, spec?.keys ?? []);
   if (picked !== undefined) return firstLine(picked);
   for (const value of Object.values(parsed)) {
     if (typeof value === 'string' && value !== '') return firstLine(value);
@@ -160,26 +287,23 @@ function clamp(text, max) {
 /**
  * 把一次工具调用渲染成 Web 那样的一行。
  *
- * 未知工具跟 Web 一样保留工具名：`工具调用 · wiki_get · 永辉/组织架构/品类架构`，
- * 已知工具用自己的标题：`Bash · Show current date and time`、`Skill · yh-bigdata`。
+ * 已知工具用自己的标题：`运行命令 · 看看目录`、`读取 · /ws/a.mjs`、`搜索文件内容 · try`；
+ * 未知工具跟 Web 一样保留工具名：`工具调用 · wiki_get · 永辉/组织架构/品类架构`。
  *
  * @param options - { name, arguments }（`arguments` 可以是对象或原始 JSON 串）。
  * @returns 一行文本。
  */
 export function toolRow({ name, arguments: argsRaw } = {}) {
   const toolName = typeof name === 'string' && name ? name : '工具';
-  const variant = TOOL_VARIANTS[toolName] ?? 'others';
-  const summary = clamp(deriveSummary(variant, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
+  const spec = TOOL_SPECS[toolName];
+  const summary = clamp(deriveSummary(toolName, parseArgs(argsRaw), argsRaw), MAX_TOOL_SUMMARY);
   const own = TOOL_TITLES[toolName];
   if (own) {
     // 有专属标题的工具（Skill / 更新任务清单…）：Web 只用它的标题 + 关键参数。
     return summary ? `${own} · ${summary}` : own;
   }
-  if (variant === 'others') {
-    return summary ? `工具调用 · ${toolName} · ${summary}` : `工具调用 · ${toolName}`;
-  }
-  const title = VARIANT_TITLES[variant];
-  return summary ? `${title} · ${summary}` : title;
+  if (spec) return summary ? `${spec.title} · ${summary}` : spec.title;
+  return summary ? `工具调用 · ${toolName} · ${summary}` : `工具调用 · ${toolName}`;
 }
 
 /**
@@ -369,9 +493,9 @@ export function renderStepCard({
 /**
  * 只装最终答案的卡片（「不显示过程」那条路用）。
  *
- * 为什么不用过程卡：过程卡的头是「工具与思考(N)」、正文按 `· ` 逐行排过程——
+ * 为什么不用过程卡：过程卡的头是「深度求索中，用时 X / 用时 X」、正文按 `· ` 逐行排过程——
  * 关掉过程时它是空的，只剩答案，用户看到的会是一张"什么都没有"的卡。
- * 这里给一张干净的卡：同一套 header 文案（✅ 已完成 / ⚠️ 未正常完成）与配色，
+ * 这里给一张干净的卡：同一套 header 文案（`用时 X` / `处理失败`）与配色，
  * 正文只有答案的 markdown——**格式（表格、代码块、链接）因此得以保留**，这正是要卡片的原因。
  *
  * @param options - { title, answer, template }。
@@ -412,12 +536,13 @@ export function createTurnPresenter({
   const chatId = message?.chat_id;
   // 群聊开启"话题回复"时，所有回复落在同一话题里。
   const replyInThread = chatType === 'group' && bot?.groupTopicReply === true;
-  // 标题不带机器人名前缀（真机反馈：卡片本身就在这个机器人的会话里，重复没意义）。
-  const title = '正在处理';
+  /** 本轮起始时刻：结束后标题显示「用时 X」（对齐桌面端的 turn-process 行）。 */
+  const startedAt = Date.now();
 
   /**
-   * 面板里的行，按发生顺序：`{ key, text }`。
-   * key 用来原地更新（同一条提问被回答多次时不能重复占行）。
+   * 面板里的行，按发生顺序：`{ key, kind, activity, text }`。
+   * key 用来原地更新（同一条提问被回答多次时不能重复占行）；activity 是工具的过程类别，
+   * 用来拼"收起时那一行"（`执行了命令并已调用工具`）。
    */
   let entries = [];
   /** 还没回答的提问元素（面板外）。 */
@@ -439,6 +564,10 @@ export function createTurnPresenter({
   let lastAnswer = '';
   /** 呈现状态：running（默认）/ done / failed。 */
   let state = 'running';
+  /** 结束原因（DSH 的 `turn/end.reason.kind`）：决定标题是「已停止」还是「处理失败」。 */
+  let finishedReason = null;
+  /** 收尾时刻：标题里的「用时 X」按它算，**不在每次 patch 时重算**（否则会一直跳）。 */
+  let finishedAt = null;
   let cardId = null;
   let cardBroken = false;
   /** 本轮的最后一个呈现失败：调用方（桥）要把它变成可见的状态，不能只留在日志里。 */
@@ -447,6 +576,10 @@ export function createTurnPresenter({
   const PATCH_MIN_INTERVAL_MS = 1_200;
   let lastPatchAt = 0;
   let patchTimer = null;
+  /** 运行中的慢时钟（只补"没有事件"的空档），见 `CLOCK_INTERVAL_MS`。 */
+  let clockTimer = null;
+  /** 被限频后的最早可刷时刻；期间不刷（行都攒着，下次刷一次全上）。 */
+  let nextAllowedAt = 0;
   /** 最终答案实际走了哪条路（card/text/failed），供桥记录"用户到底收到没有"。 */
   let lastDelivery = null;
   // 所有呈现动作串行执行：过程事件是"发出去就不等"的，若不排队，
@@ -463,31 +596,57 @@ export function createTurnPresenter({
   }
 
   /**
-   * 当前卡片的标题：随状态变化。
-   * 真机反馈：一轮处理完了标题还写着"正在处理"，看不出结束没结束。
+   * 当前卡片的标题：**只放桌面的那条状态行**（`深度求索中` / `用时 X` / `处理失败` / `已停止`），
+   * 不再单独写「✅ 已完成」「⚠️ 未正常完成」——完成与否由卡片头颜色表达。
+   *
+   * 对齐桌面 `chat/TurnProcessNodeView.tsx` 的文案，包括「用时 X」里的空格。
    */
   function currentTitle() {
     if (currentApproval.length > 0) return '❓ 等你确认（授权）';
     if (currentQuestion.length > 0 && questionProgress) {
       return `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`;
     }
-    if (state === 'done') return '✅ 已完成';
-    if (state === 'failed') return '⚠️ 未正常完成';
-    return title;
+    if (state === 'running') {
+      // 桌面口径：`深度求索中，用时{duration}`（**「用时」后面没有空格**，与结束后的 `用时 X` 不同）；
+      // 时长靠 10 秒慢时钟刷新，见 CLOCK_INTERVAL_MS。
+      return `深度求索中，用时${formatLiveDuration(Date.now() - startedAt)}`;
+    }
+    if (state === 'failed') {
+      return finishedReason === 'aborted' || finishedReason === 'cancelled'
+        || finishedReason === 'interrupted' ? '已停止' : '处理失败';
+    }
+    const elapsed = (finishedAt ?? Date.now()) - startedAt;
+    return `用时 ${formatDuration(Math.max(1_000, elapsed))}`;
   }
 
   /**
    * 折叠面板的标题。
    *
-   * 真机反馈两条，一起满足：
+   * 两层口径，正好对上桌面的两层折叠：
    * - 本轮**没结束**时显示最新的一项（一眼看到此刻在干什么），不写前缀；
-   * - 本轮**结束后**才显示 `工具与思考(N)`。
+   * - 本轮**结束后**换成桌面的「组头」那句话——按类别出现次数拼的摘要
+   *   （`执行了命令并已调用工具`），**不带计数**（桌面端也不带）。
    */
   function panelTitle() {
     const count = entries.length;
     if (count === 0) return '';
-    if (state !== 'running') return `工具与思考(${count})`;
+    if (state !== 'running') return clamp(summaryTitle(rankedActivities()), MAX_PANEL_TITLE);
     return clamp(entries[count - 1].text, MAX_PANEL_TITLE);
+  }
+
+  /**
+   * 面板里出现过的工具类别，按数量降序（数量相同按首次出现顺序，与 Web 的排序一致）。
+   *
+   * @returns `[{ activity, count }]`。
+   */
+  function rankedActivities() {
+    const counts = new Map();
+    for (const entry of entries) {
+      if (entry.kind !== 'tool' || !entry.activity) continue;
+      counts.set(entry.activity, (counts.get(entry.activity) ?? 0) + 1);
+    }
+    return [...counts].map(([activity, count]) => ({ activity, count }))
+      .sort((left, right) => right.count - left.count);
   }
 
   /**
@@ -581,14 +740,16 @@ export function createTurnPresenter({
   }
 
   /** 追加/原地更新一行（超出上限丢最旧的）。 */
-  function putEntry({ key, kind, text }) {
+  function putEntry({ key, kind, activity, text }) {
     if (!text) return;
     const index = key ? entries.findIndex((entry) => entry.key === key) : -1;
     if (index >= 0) {
-      entries = entries.map((entry, at) => (at === index ? { ...entry, text } : entry));
+      entries = entries.map((entry, at) => (at === index
+        ? { ...entry, text, ...(activity === undefined ? {} : { activity }) }
+        : entry));
       return;
     }
-    entries = [...entries, { key, kind, text }].slice(-MAX_ROWS);
+    entries = [...entries, { key, kind, activity, text }].slice(-MAX_ROWS);
   }
 
   /** 立刻刷新一次卡片（记下时间用于节流）。 */
@@ -600,6 +761,9 @@ export function createTurnPresenter({
   /**
    * 过程事件到达时按最小间隔合并刷新：一次 patch 是**整卡重写**，
    * 一轮几十上百个工具调用如果每个都刷，既慢又浪费；收尾时一定会再刷一次。
+   *
+   * 被限频时把等待时间**顺延到退避窗口之后**——行都攒在 `entries` 里，
+   * 下次刷一次全上，不丢内容。
    */
   function schedulePatch() {
     if (mode !== 'streaming_card' || cardBroken) return;
@@ -608,7 +772,10 @@ export function createTurnPresenter({
       void enqueue(() => patchNow());
       return;
     }
-    const wait = PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt);
+    const wait = Math.max(
+      PATCH_MIN_INTERVAL_MS - (Date.now() - lastPatchAt),
+      nextAllowedAt - Date.now(),
+    );
     if (wait <= 0) {
       void enqueue(() => patchNow());
       return;
@@ -620,15 +787,56 @@ export function createTurnPresenter({
     }, wait);
   }
 
+  /**
+   * 运行中的慢时钟：只在**没有过程事件**的空档里，每 `CLOCK_INTERVAL_MS` 刷一次，
+   * 让卡片头上的「深度求索中，用时 X」自己走。
+   *
+   * 三条约束，缺一不可：
+   * - 只刷卡片模式、建卡成功、本轮还在跑（**收尾之后不再重新起表**）；
+   * - 被限频的退避窗口内不刷（跳过一个周期）；
+   * - `unref()`——定时器不能把宿主进程钉住（测试里也不会挂着不退出）。
+   */
+  function ensureClock() {
+    if (clockTimer || mode !== 'streaming_card' || cardBroken || !cardId) return;
+    if (state !== 'running') return;
+    clockTimer = setInterval(() => {
+      if (state !== 'running' || cardBroken) {
+        stopClock();
+        return;
+      }
+      if (Date.now() < nextAllowedAt) return;
+      void enqueue(() => patchNow());
+    }, CLOCK_INTERVAL_MS);
+    clockTimer.unref?.();
+  }
+
+  function stopClock() {
+    if (!clockTimer) return;
+    clearInterval(clockTimer);
+    clockTimer = null;
+  }
+
   /** @returns 卡片是否可用（更新成功才算）。 */
   async function patch(answer) {
     const id = await ensureCard();
     if (!id) return false;
     try {
       await gateway.patchCard({ messageId: id, card: cardPayload(answer) });
+      ensureClock();
       return true;
     } catch (error) {
+      /**
+       * 限频**不是**"这张卡废了"：飞书要求退避重试（HTTP 400 + 99991400）。
+       * 判死会整轮退回纯文本、表格和代码块全丢，代价远大于晚几秒——所以只退避、记一条日志。
+       */
+      if (isRateLimited(error)) {
+        nextAllowedAt = Date.now() + RATE_LIMIT_BACKOFF_MS;
+        logger.warn?.(`[dsh-chat-feishu] 更新过程卡被飞书限频（${RATE_LIMIT_CODE}），`
+          + `退避 ${Math.round(RATE_LIMIT_BACKOFF_MS / 1000)}s 后继续（过程行不丢，下次一起刷）。`);
+        return false;
+      }
       cardBroken = true;
+      stopClock();
       noteFailure('更新过程卡失败', error);
       return false;
     }
@@ -688,17 +896,43 @@ export function createTurnPresenter({
     /**
      * 记录一次工具调用，渲染成 Web 那样的一行。
      *
-     * @param call - { name, arguments }。
+     * @param call - { name, arguments, callId? }。
+     *   `callId` 给了就按它原地更新——工具跑失败时那一行会被改成 `失败 …`（见 `toolResult`）。
      */
     tool(call) {
       const row = toolRow(call);
-      putEntry({ kind: 'tool', text: row });
+      const callId = typeof call?.callId === 'string' && call.callId ? call.callId : null;
+      putEntry({
+        key: callId ? `tool:${callId}` : undefined,
+        kind: 'tool',
+        activity: activityOf(typeof call?.name === 'string' ? call.name : ''),
+        text: row,
+      });
       // 任务清单每次都带全量，直接覆盖；渲染在工具面板下面的独立面板里。
       if (call?.name === 'todo_write') {
         const parsed = todoRows(call.arguments);
         if (parsed) todos = parsed;
       }
       return push(row);
+    },
+
+    /**
+     * 记录一次工具调用的结果：**失败**时把它那一行标成 `失败 …`（对齐 Web 的行前缀）。
+     *
+     * 成功的调用不用改行（Web 也不标"成功"）。
+     *
+     * @param result - { callId, isError }。
+     * @returns 是否更新了行。
+     */
+    toolResult(result) {
+      const callId = typeof result?.callId === 'string' && result.callId ? result.callId : null;
+      if (!callId || result?.isError !== true) return Promise.resolve(false);
+      const key = `tool:${callId}`;
+      const entry = entries.find((item) => item.key === key);
+      if (!entry || entry.text.startsWith(FAIL_PREFIX)) return Promise.resolve(false);
+      const failed = `${FAIL_PREFIX}${entry.text}`;
+      putEntry({ key, kind: entry.kind, text: failed });
+      return push(failed).then(() => true);
     },
 
     /**
@@ -834,18 +1068,25 @@ export function createTurnPresenter({
       return enqueue(async () => {
         const text = typeof answer === 'string' ? answer.trim() : '';
         const failed = reason?.kind && reason.kind !== 'completed';
+        /**
+         * 失败且没有正文时的占位。用桌面的 `turn-error` 口径（「本轮运行失败」）——
+         * 卡片头已经是「处理失败」，正文里再说一遍「未正常完成」是重复的。
+         */
         const body = text || (failed
-          ? `任务未正常完成（${reason.kind}）。`
+          ? `本轮运行失败（${reason.kind}）。`
           : '（本轮没有文本输出）');
 
         lastAnswer = body;
         state = failed ? 'failed' : 'done';
+        finishedReason = typeof reason?.kind === 'string' ? reason.kind : null;
+        finishedAt = Date.now();
         // 收尾时提问控件一律收起来（面板里那一行还在，可展开回看）。
         currentQuestion = [];
         currentApproval = [];
         questionProgress = null;
+        stopClock();
         for (const [key, info] of askBatches) askBatches.set(key, { ...info, expanded: false });
-        // 收尾一定刷新（把之前节流掉的过程一次性画上，并让标题变成 工具与思考(N)）
+        // 收尾一定刷新（把之前节流掉的过程一次性画上，并让面板标题变成类别摘要）
         if (patchTimer) {
           clearTimeout(patchTimer);
           patchTimer = null;

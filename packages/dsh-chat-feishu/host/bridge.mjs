@@ -827,7 +827,22 @@ export function createFeishuBridge({
             const name = toolEvent?.data?.name ?? '工具';
             // 提问由交互服务渲染成"提问"行，这里不再重复占一行（与 Web 一致）。
             if (name === 'ask_user_question') return;
-            presenter.tool({ name, arguments: toolEvent?.data?.arguments });
+            presenter.tool({
+              name,
+              arguments: toolEvent?.data?.arguments,
+              // 带上 callId：结果失败时按它把那行原地标成「失败 …」（对齐 Web 的行前缀）。
+              callId: toolEvent?.data?.callId,
+            });
+          },
+          /**
+           * 工具结果：只关心**失败**——把对应那一行前面加「失败」（Web 的行前缀）。
+           * 成功的调用不改行（Web 也不标"成功"）。
+           */
+          onToolResult: (resultEvent) => {
+            presenter.toolResult({
+              callId: resultEvent?.data?.message?.source?.callId,
+              isError: resultEvent?.data?.message?.isError === true,
+            });
           },
           // 思考（推理摘要）进同一个折叠面板：一行一条，够看轮廓即可。
           onAssistantMessage: (messageEvent) => {
