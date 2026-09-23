@@ -1896,7 +1896,7 @@ function createWeixinController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-weixin/host/index.mjs
-var CHANNEL_VERSION = "0.0.5";
+var CHANNEL_VERSION = "0.1.0";
 var name = "dsh-chat-weixin-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;
