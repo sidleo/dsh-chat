@@ -471,7 +471,7 @@ function authenticatedHeaders(token) {
   return headers;
 }
 function baseInfo() {
-  return { channel_version: PROTOCOL_VERSION, bot_agent: "dsh-chat/0.0.1" };
+  return { channel_version: PROTOCOL_VERSION, bot_agent: "dsh-chat" };
 }
 async function requestJson(fetchImpl, {
   method,

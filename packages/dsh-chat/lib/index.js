@@ -16,7 +16,7 @@ import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
-var HUB_VERSION = "0.0.1";
+var HUB_VERSION = "0.0.5";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";
@@ -543,17 +543,178 @@ function contextStatusLabel(config) {
   return active === 0 ? scopeText : `${scopeText} \xB7 ${active} \u9879\u6307\u5B9A`;
 }
 
+// packages/dsh-chat/shared/forwarded-messages.mjs
+var FORWARD_TAG_OPEN = "<forwarded_messages>";
+var FORWARD_TAG_CLOSE = "</forwarded_messages>";
+var MAX_FORWARD_ITEMS = 50;
+var MAX_FORWARD_DEPTH = 3;
+var MAX_FORWARD_ITEM_TEXT = 2e3;
+var KIND_LABELS = Object.freeze({
+  text: "\u6587\u672C",
+  post: "\u5BCC\u6587\u672C",
+  image: "\u56FE\u7247",
+  file: "\u6587\u4EF6",
+  audio: "\u8BED\u97F3",
+  media: "\u89C6\u9891",
+  sticker: "\u8868\u60C5",
+  interactive: "\u5361\u7247",
+  share_chat: "\u7FA4\u540D\u7247",
+  share_user: "\u4E2A\u4EBA\u540D\u7247",
+  location: "\u4F4D\u7F6E",
+  todo: "\u4EFB\u52A1",
+  calendar: "\u65E5\u7A0B",
+  system: "\u7CFB\u7EDF\u6D88\u606F"
+});
+function safeText(value) {
+  return String(value ?? "").split(FORWARD_TAG_OPEN).join("\uFF1Cforwarded_messages\uFF1E").split(FORWARD_TAG_CLOSE).join("\uFF1C/forwarded_messages\uFF1E").trim();
+}
+function clip(value, max) {
+  const text = safeText(value);
+  return text.length > max ? `${text.slice(0, max)}\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : text;
+}
+function indentLines(text, indent) {
+  return String(text).split("\n").map((line2) => `${indent}${line2}`).join("\n");
+}
+function itemText(item) {
+  const msgType = typeof item?.msg_type === "string" && item.msg_type ? item.msg_type : "unknown";
+  let body = {};
+  try {
+    body = JSON.parse(item?.body?.content ?? "{}");
+  } catch {
+    body = {};
+  }
+  const plain = (value) => typeof value === "string" ? value.trim() : "";
+  if (msgType === "text") return plain(body.text);
+  if (msgType === "post") {
+    const localised = body.zh_cn ?? Object.values(body).find((value) => value && typeof value === "object");
+    const rows = Array.isArray(localised?.content) ? localised.content : [];
+    const lineOf = (node) => {
+      if (!node || typeof node !== "object") return "";
+      if (node.tag === "img" || node.tag === "media") {
+        return `[${node.tag === "img" ? "\u56FE\u7247" : "\u89C6\u9891"}]`;
+      }
+      if (node.tag === "at") return plain(node.user_id) ? `@${plain(node.user_id)}` : "@";
+      return plain(node.text ?? node.href);
+    };
+    const lines = rows.filter(Array.isArray).map((row) => row.map(lineOf).filter(Boolean).join("")).filter(Boolean);
+    const title = plain(localised?.title);
+    return [title, ...lines].filter(Boolean).join("\n");
+  }
+  if (msgType === "audio") return plain(body.text);
+  const fileName = plain(body.file_name) || plain(body.fileName);
+  const label = KIND_LABELS[msgType] ?? msgType;
+  return fileName ? `\uFF08${label}\uFF1A${fileName}\uFF09` : `\uFF08${label}\uFF09`;
+}
+function senderLabel(item) {
+  const sender = item?.sender ?? {};
+  return String(sender.name ?? sender.id ?? sender.sender_id?.open_id ?? "").trim() || "\u672A\u77E5\u53D1\u9001\u8005";
+}
+function timeLabel(item) {
+  const ms = Number.parseInt(String(item?.create_time ?? ""), 10);
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return "";
+  const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1e3);
+  return shifted.toISOString().replace("Z", "+08:00");
+}
+function buildChildrenMap(items, rootId) {
+  const map = /* @__PURE__ */ new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item?.message_id) continue;
+    if (item.message_id === rootId && !item.upper_message_id) continue;
+    const parentId = item.upper_message_id ?? rootId;
+    const bucket = map.get(parentId);
+    if (bucket) bucket.push(item);
+    else map.set(parentId, [item]);
+  }
+  for (const bucket of map.values()) {
+    bucket.sort((a, b) => Number.parseInt(String(a?.create_time ?? "0"), 10) - Number.parseInt(String(b?.create_time ?? "0"), 10));
+  }
+  return map;
+}
+function formatSubTree(parentId, map, { depth, state }) {
+  const children = map.get(parentId);
+  if (!children || children.length === 0) return "<forwarded_messages/>";
+  const parts = [];
+  for (const child of children) {
+    if (state.count >= MAX_FORWARD_ITEMS) {
+      state.truncated = true;
+      break;
+    }
+    state.count += 1;
+    const rendered = renderItem(child, map, { depth, state });
+    if (rendered) parts.push(rendered);
+  }
+  if (parts.length === 0) return "<forwarded_messages/>";
+  const body = parts.join("\n");
+  const footer = state.truncated ? "\n... (truncated)" : "";
+  return `${FORWARD_TAG_OPEN}
+${body}${footer}
+${FORWARD_TAG_CLOSE}`;
+}
+function renderItem(item, map, { depth, state }) {
+  let content;
+  if (item.msg_type === "merge_forward") {
+    content = depth >= MAX_FORWARD_DEPTH || !item.message_id ? "<forwarded_messages/>" : formatSubTree(item.message_id, map, { depth: depth + 1, state });
+  } else {
+    content = itemText(item);
+  }
+  if (!content) return "";
+  const time = timeLabel(item);
+  const head = time ? `[${time}] ${senderLabel(item)}:` : `${senderLabel(item)}:`;
+  return `${head}
+${indentLines(clip(content, MAX_FORWARD_ITEM_TEXT), "    ")}`;
+}
+function forwardedMessagesBlock({ messageId, items, reason = null } = {}) {
+  if (reason) {
+    return `${FORWARD_TAG_OPEN}
+\uFF08\u5408\u5E76\u8F6C\u53D1\u7684\u6D88\u606F\u5185\u5BB9\u4E0D\u53EF\u7528\uFF1A${clip(reason, 200)}\uFF09
+${FORWARD_TAG_CLOSE}`;
+  }
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    return `${FORWARD_TAG_OPEN}
+\uFF08\u5408\u5E76\u8F6C\u53D1\u7684\u6D88\u606F\u6CA1\u6709\u53EF\u8BFB\u5185\u5BB9\uFF09
+${FORWARD_TAG_CLOSE}`;
+  }
+  const map = buildChildrenMap(list, messageId);
+  const state = { count: 0, truncated: false };
+  const block = formatSubTree(messageId, map, { depth: 1, state });
+  return state.count === 0 ? `${FORWARD_TAG_OPEN}
+\uFF08\u5408\u5E76\u8F6C\u53D1\u7684\u6D88\u606F\u6CA1\u6709\u53EF\u8BFB\u5185\u5BB9\uFF09
+${FORWARD_TAG_CLOSE}` : block;
+}
+function forwardedMessagesText(forward) {
+  const block = forwardedMessagesBlock(forward);
+  if (!block) return "";
+  return block.split(FORWARD_TAG_OPEN).join("").split(FORWARD_TAG_CLOSE).join("").trim();
+}
+function enhanceForwardedMessages(content, forward) {
+  const block = forwardedMessagesBlock(forward);
+  if (!block) return content;
+  try {
+    if (typeof content === "string") return content ? `${block}
+
+${content}` : block;
+    if (Array.isArray(content)) return [{ type: "text", text: block }, ...content];
+    return content;
+  } catch {
+    return content;
+  }
+}
+
 // packages/dsh-chat/shared/reply-reference.mjs
 var REPLY_TAG_OPEN = "<dsh_im_reply>";
 var REPLY_TAG_CLOSE = "</dsh_im_reply>";
 var MAX_QUOTE_TEXT = 1e3;
-var KIND_LABELS = Object.freeze({
+var KIND_LABELS2 = Object.freeze({
   image: "\u56FE\u7247",
   file: "\u6587\u4EF6",
   audio: "\u8BED\u97F3",
   media: "\u89C6\u9891",
   sticker: "\u8868\u60C5",
   post: "\u5BCC\u6587\u672C",
+  merge_forward: "\u5408\u5E76\u8F6C\u53D1\u7684\u6D88\u606F",
   interactive: "\u5361\u7247",
   system: "\u7CFB\u7EDF\u6D88\u606F",
   share_chat: "\u7FA4\u540D\u7247",
@@ -562,11 +723,11 @@ var KIND_LABELS = Object.freeze({
   todo: "\u4EFB\u52A1",
   calendar: "\u65E5\u7A0B"
 });
-function safeText(value) {
+function safeText2(value) {
   return String(value ?? "").split(REPLY_TAG_OPEN).join("\uFF1Cdsh_im_reply\uFF1E").split(REPLY_TAG_CLOSE).join("\uFF1C/dsh_im_reply\uFF1E").trim();
 }
-function clip(value, max = MAX_QUOTE_TEXT) {
-  const text = safeText(value);
+function clip2(value, max = MAX_QUOTE_TEXT) {
+  const text = safeText2(value);
   return text.length > max ? `${text.slice(0, max)}\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : text;
 }
 function replyReferenceBlock(reply) {
@@ -578,18 +739,18 @@ function replyReferenceBlock(reply) {
   const head = from ? `\u7528\u6237\u5F15\u7528\u4E86\u4E00\u6761\u6D88\u606F\uFF08${from}\uFF09\uFF1A` : "\u7528\u6237\u5F15\u7528\u4E86\u4E00\u6761\u6D88\u606F\uFF1A";
   if (reply.reason) {
     lines.push(head);
-    lines.push(`\uFF08\u5F15\u7528\u5185\u5BB9\u4E0D\u53EF\u7528\uFF1A${clip(reply.reason, 200)}\uFF09`);
+    lines.push(`\uFF08\u5F15\u7528\u5185\u5BB9\u4E0D\u53EF\u7528\uFF1A${clip2(reply.reason, 200)}\uFF09`);
   } else {
     const kind = typeof reply.kind === "string" && reply.kind ? reply.kind : "text";
-    const label = KIND_LABELS[kind] ?? null;
+    const label = KIND_LABELS2[kind] ?? null;
     lines.push(head);
     const body = [];
-    if (typeof reply.text === "string" && reply.text.trim()) body.push(clip(reply.text));
+    if (typeof reply.text === "string" && reply.text.trim()) body.push(clip2(reply.text));
     if (label || reply.fileName) {
-      const name2 = reply.fileName ? `\uFF1A${clip(reply.fileName, 200)}` : "";
-      body.push(label ? `\uFF08\u88AB\u5F15\u7528\u7684\u662F${label}${name2}\uFF09` : `\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip(kind, 40)}${name2}\uFF09`);
+      const name2 = reply.fileName ? `\uFF1A${clip2(reply.fileName, 200)}` : "";
+      body.push(label ? `\uFF08\u88AB\u5F15\u7528\u7684\u662F${label}${name2}\uFF09` : `\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip2(kind, 40)}${name2}\uFF09`);
     } else if (kind !== "text") {
-      body.push(`\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip(kind, 40)}\uFF09`);
+      body.push(`\uFF08\u88AB\u5F15\u7528\u7684\u6D88\u606F\u7C7B\u578B\uFF1A${clip2(kind, 40)}\uFF09`);
     }
     if (body.length === 0) body.push("\uFF08\u8FD9\u6761\u6D88\u606F\u6CA1\u6709\u53EF\u8BFB\u7684\u6B63\u6587\uFF09");
     lines.push(...body);
@@ -1241,7 +1402,7 @@ function line(text) {
 }
 var OWNER_ONLY_COMMANDS = /* @__PURE__ */ new Set(["allow", "deny", "diag", "retitle"]);
 var MAX_HISTORY_CHARS = 160;
-function clip2(text) {
+function clip3(text) {
   const value = String(text ?? "").replace(/\s+/gu, " ").trim();
   return value.length > MAX_HISTORY_CHARS ? `${value.slice(0, MAX_HISTORY_CHARS)}\u2026` : value;
 }
@@ -1387,7 +1548,7 @@ function findModel(rows, token) {
   if (!provider || !model) return null;
   return rows.find((row) => row.provider === provider && row.model === model) ?? null;
 }
-function registerBuiltinCommands(registry, { hubVersion = "0.0.1", listCommands = null } = {}) {
+function registerBuiltinCommands(registry, { hubVersion = HUB_VERSION, listCommands = null } = {}) {
   registry.register({
     name: "help",
     aliases: ["h"],
@@ -1666,9 +1827,9 @@ ${result.text}` : ""}`;
       for (const message of messages) {
         if (message.role === "user") {
           index += 1;
-          lines.push(`${index}. \u4F60\uFF1A${line(clip2(message.text))}`);
+          lines.push(`${index}. \u4F60\uFF1A${line(clip3(message.text))}`);
         } else {
-          lines.push(`   bot\uFF1A${line(clip2(message.text))}`);
+          lines.push(`   bot\uFF1A${line(clip3(message.text))}`);
         }
       }
       return [`\u6700\u8FD1 ${index} \u8F6E\uFF08\u6700\u591A\u56DE\u770B 20 \u8F6E\uFF09\uFF1A`, ...lines].join("\n");
@@ -2422,7 +2583,7 @@ function stamp() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
 var MAX_FIELD_CHARS = 2e3;
-function clip3(text) {
+function clip4(text) {
   return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}\u2026` : text;
 }
 function httpErrorSummary(value) {
@@ -2444,9 +2605,9 @@ function oneLine(value) {
     return `${value.name}: ${value.message}${value.code ? `\uFF08code ${value.code}\uFF09` : ""}`;
   }
   if (typeof value !== "object") return String(value);
-  if (Array.isArray(value)) return clip3(value.map(oneLine).filter((part) => part !== "").join(" "));
+  if (Array.isArray(value)) return clip4(value.map(oneLine).filter((part) => part !== "").join(" "));
   const http = httpErrorSummary(value);
-  if (http) return clip3(http);
+  if (http) return clip4(http);
   try {
     const seen = /* @__PURE__ */ new WeakSet();
     const text = JSON.stringify(value, (key, item) => {
@@ -2457,7 +2618,7 @@ function oneLine(value) {
       return item;
     });
     if (typeof text !== "string") return String(value);
-    return clip3(text);
+    return clip4(text);
   } catch {
     return String(value);
   }
@@ -5170,6 +5331,14 @@ function apply(ctx, config = {}) {
        * 拼装（标签、限长、安全转义、读不到时的标记）由 hub 实现一次、所有渠道复用。
        */
       replyReference: Object.freeze({ enhanceReplyReference }),
+      /**
+       * 合并转发：渠道把外壳 id 与查回来的原始条目交给 hub，展开（建树、限深限条、
+       * 标签渲染）由 hub 实现一次、所有渠道复用。
+       */
+      forwardedMessages: Object.freeze({
+        enhanceForwardedMessages,
+        forwardedMessagesText
+      }),
       /** 访问策略：渠道用它判定放行与命令权限（属主绕过由渠道传入 isOwner）。 */
       accessPolicy: Object.freeze({ ...access_policy_exports }),
       /** 机器人命令：渠道把入站文本交进来即可，命令实现只在 hub 一份。 */
@@ -5630,6 +5799,11 @@ function apply(ctx, config = {}) {
     }),
     /** 引用回复的拼装函数（服务面同样暴露一份，渠道按需取用）。 */
     replyReference: Object.freeze({ enhanceReplyReference }),
+    /** 合并转发的展开函数（服务面同样暴露一份，渠道按需取用）。 */
+    forwardedMessages: Object.freeze({
+      enhanceForwardedMessages,
+      forwardedMessagesText
+    }),
     guidance: Object.freeze({
       publish: (sessionId, text) => guidanceForBridge.publish(sessionId, text),
       forget: (sessionId) => guidanceForBridge.forget(sessionId)

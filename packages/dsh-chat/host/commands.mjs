@@ -12,7 +12,7 @@ import * as accessPolicy from '../shared/access-policy.mjs';
 
 import { botModelForSelection, describeBotModel, normalizeBotModel } from './bot-model.mjs';
 import { chatKeyLabel } from './session-keys.mjs';
-import { CONTRACT_VERSION } from '../shared/contract.mjs';
+import { CONTRACT_VERSION, HUB_VERSION } from '../shared/contract.mjs';
 
 /** 命令名前缀。 */
 const PREFIX = '/';
@@ -248,8 +248,11 @@ function findModel(rows, token) {
  *
  * @param registry - 命令注册表。
  * @param options - { hubVersion }。
+ *
+ * `hubVersion` 的默认值直接取契约里的常量：写死一个字面量就会出现"改了一处、漏了另一处"，
+ * 而 `/version` 报的是这个值（真机上曾因此显示过过期的版本号）。
  */
-export function registerBuiltinCommands(registry, { hubVersion = '0.0.1', listCommands = null } = {}) {
+export function registerBuiltinCommands(registry, { hubVersion = HUB_VERSION, listCommands = null } = {}) {
   registry.register({
     name: 'help',
     aliases: ['h'],

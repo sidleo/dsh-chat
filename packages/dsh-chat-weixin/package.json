@@ -17,6 +17,9 @@
     "cordis.patch.yml",
     "package.json"
   ],
+  "engines": {
+    "dsh": ">=0.1.5-rc.2"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -28,12 +31,6 @@
         "@deepseek-ai/dsh-client-locale"
       ],
       "platform": "web"
-    },
-    "compatibility": {
-      "dsh": "0.1.5-rc.2",
-      "profiles": [
-        "web"
-      ]
     }
   },
   "publishConfig": {

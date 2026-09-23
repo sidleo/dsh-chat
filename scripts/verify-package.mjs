@@ -110,6 +110,15 @@ for (const [name, { dir, manifest }] of manifests) {
   check(typeof patchRel === 'string', `${name}: package.json 缺少 dsh.bundle.patch`);
   check(manifest.dsh?.client?.platform === 'web', `${name}: dsh.client.platform 必须是 'web'`);
   check(Array.isArray(manifest.dsh?.client?.inject), `${name}: dsh.client.inject 必须是数组`);
+  /**
+   * DSH 的兼容性声明在 `engines.dsh`（SemVer range）。
+   * `dsh.compatibility` 是**旧字段**，当前 DSH 的 manifest schema 里没有它——
+   * 写了不报错、但也不生效，只会让人以为"声明过了"。
+   */
+  check(typeof manifest.engines?.dsh === 'string' && manifest.engines.dsh.trim() !== '',
+    `${name}: package.json 缺少 engines.dsh（DSH 兼容版本范围，如 ">=0.1.5-rc.2"）`);
+  check(manifest.dsh?.compatibility === undefined,
+    `${name}: dsh.compatibility 是旧字段（DSH 已改读 engines.dsh），请勿再写`);
 
   if (typeof patchRel === 'string') {
     const patchPath = join(dir, patchRel);
@@ -199,9 +208,10 @@ if (!existsSync(join(root, LARK_CLI_ENTRY))) {
 // 注意用**目录**而不是包名拼路径：作用域包名里带 `/`，拼出来不是一个目录。
 const hubDir = manifests.get(HUB)?.dir ?? join(packagesDir, 'dsh-chat');
 const contractFile = join(hubDir, 'shared/contract.mjs');
+let contractText;
 if (existsSync(contractFile)) {
-  const text = await readFile(contractFile, 'utf8');
-  check(/CONTRACT_VERSION\s*=\s*1\b/.test(text), 'CONTRACT_VERSION 应为 1');
+  contractText = await readFile(contractFile, 'utf8');
+  check(/CONTRACT_VERSION\s*=\s*1\b/.test(contractText), 'CONTRACT_VERSION 应为 1');
 } else {
   failures.push(`找不到 ${HUB} 的 shared/contract.mjs`);
 }
@@ -218,6 +228,18 @@ for (const [name, { dir, manifest }] of manifests) {
   if (declared !== undefined) {
     check(declared === manifest.version,
       `${name}: CHANNEL_VERSION=${declared} 与 package.json 的 ${manifest.version} 不一致`);
+  }
+}
+
+// hub 声明的 HUB_VERSION 必须与自己的 package.json 一致（与渠道的 CHANNEL_VERSION 同一条口径）：
+// `/version` 与设置页的「版本与更新」面板直接显示这个常量，漂移了就会报出过期的版本号。
+{
+  const hubManifest = manifests.get(HUB);
+  const declared = /const HUB_VERSION = '([^']+)'/.exec(contractText)?.[1];
+  check(declared !== undefined, `${HUB}: shared/contract.mjs 需声明 HUB_VERSION（/version 要用）`);
+  if (declared !== undefined && hubManifest) {
+    check(declared === hubManifest.manifest.version,
+      `${HUB}: HUB_VERSION=${declared} 与 package.json 的 ${hubManifest.manifest.version} 不一致`);
   }
 }
 

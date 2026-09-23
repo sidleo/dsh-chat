@@ -148,7 +148,9 @@ function authenticatedHeaders(token) {
 }
 
 function baseInfo() {
-  return { channel_version: PROTOCOL_VERSION, bot_agent: 'dsh-chat/0.0.1' };
+  // bot_agent 只是给平台看的自称，**不带版本号**：写死一个版本就会随发版过期，
+  // 而它对协议没有任何作用（真正的版本在 CHANNEL_VERSION，由版本面板展示）。
+  return { channel_version: PROTOCOL_VERSION, bot_agent: 'dsh-chat' };
 }
 
 async function requestJson(fetchImpl, {
