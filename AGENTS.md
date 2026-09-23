@@ -235,6 +235,11 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   `width: 100%` 的下拉框上、或打在操作块上（内容再宽也不缩），把同排按钮挤出容器、整页横向滚动。
   守门失败会指出是哪个元素伸出去的，**并且覆盖整张渠道卡与 hub 页头**——"只测共享组件"曾经
   漏掉 hub 页头在 320px 下溢出 15px 这种问题。
+- **测试偶发 `ENOTEMPTY` / `rmdir` 红**：`json-store` 的写盘队列是串行的，但 **`flush()` 没有接到 dispose**
+  （`plugin.mjs` 的 dispose 只 `disposeAll()` 注册表与 rpc）——所以 dispose 之后仍可能有排队中的写入落盘，
+  测试紧接着 `rm -r` 就会撞上（`host-contract` 的"每机器人设置可重复读写"红过多次）。
+  现在这类清理一律 `await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })`；
+  根治要让 dispose 等到 `flush()`，属于独立改动（还没做）。
 - **改完 host / 卡片逻辑，先跑 `npm run rehearsal`**：它在几秒内把主要用户路径走一遍并逐条 ✅/❌，
   不需要凭据也不联网（真实 hub + 真实飞书卡片构建器 + 脚本化假 DSH 网关）。
   **它不替代真机**：Lark 长连接、真实平台回调、真机卡片渲染只能重启后验。

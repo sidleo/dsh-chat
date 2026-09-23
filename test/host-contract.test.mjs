@@ -183,7 +183,9 @@ async function bootstrap({ withSystemPrompt = false } = {}) {
     },
     async cleanup() {
       harness.disposeAll();
-      await rm(dataDir, { recursive: true, force: true });
+      // 带重试：`json-store` 的写盘队列**没接到 dispose**（`flush()` 有但没人调），
+      // dispose 之后仍可能有排队中的写入落盘 → `rm` 会偶发撞 `ENOTEMPTY`（这个坑真红过）。
+      await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     },
   };
 }
@@ -494,7 +496,7 @@ test('每机器人设置可重复读写（同一目录再次加载保持数据�
   await service.ready();
   assert.equal(service.bots.read('fixture', 'bot_9').workspace, '/tmp/ws');
   second.disposeAll();
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 test('数据目录不存在时首次写入会自行创建（含嵌套路径）', async () => {
