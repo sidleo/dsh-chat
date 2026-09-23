@@ -126529,11 +126529,6 @@ import { stat } from "node:fs/promises";
 
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
 var MAX_ROWS = 48;
-var INVISIBLE_TITLE = "\u200B";
-function headerTitle(title) {
-  const text = String(title ?? "").slice(0, 100);
-  return text === "" ? INVISIBLE_TITLE : text;
-}
 var MAX_CARD_CONTENT = 12e3;
 var MAX_PANEL_TITLE = 46;
 var MAX_THINK_CHARS = 120;
@@ -126715,15 +126710,20 @@ function askRow({ header, question, answer } = {}) {
   const value = firstLine(answer) || "\uFF08\u7A7A\uFF09";
   return `\u63D0\u95EE \xB7 ${clamp(title, 40)} \u2192 ${clamp(value, 60)}`;
 }
+function cardHeader(header) {
+  if (header === null || header === void 0) return {};
+  const title = String(header.title ?? "").slice(0, 100);
+  if (title === "") return {};
+  return { header: { template: header.template ?? "blue", title: { tag: "plain_text", content: title } } };
+}
 function renderStepCard({
-  title,
+  header,
   panelItems = [],
   answer = "",
   panelTitle = "",
   currentQuestion = [],
   currentApproval = [],
-  todos = null,
-  template = "blue"
+  todos = null
 }) {
   const budget = { left: MAX_CARD_CONTENT };
   const clampBudget = (text) => {
@@ -126811,25 +126811,16 @@ function renderStepCard({
   return {
     schema: "2.0",
     config: { update_multi: true, width_mode: "default" },
-    /**
-     * `header.title` 在 Card 2.0 里是**必填**，所以它一直在；只是**内容可以为空**——
-     * 结束时不留任何文案（完成/失败/用时都不写），状态只由 `template` 颜色表达。
-     */
-    header: {
-      template,
-      title: { tag: "plain_text", content: headerTitle(title) }
-    },
+    /** `header: null` ＝ 不要卡片头（没有颜色、也没有标题），真机要求"成功不带颜色不含标题"。 */
+    ...cardHeader(header),
     body: { direction: "vertical", elements }
   };
 }
-function renderAnswerCard({ title, answer, template = "green" } = {}) {
+function renderAnswerCard({ header = null, answer } = {}) {
   return {
     schema: "2.0",
     config: { update_multi: true, width_mode: "default" },
-    header: {
-      template,
-      title: { tag: "plain_text", content: headerTitle(title) }
-    },
+    ...cardHeader(header),
     body: {
       direction: "vertical",
       elements: [{ tag: "markdown", content: String(answer ?? "") }]
@@ -126875,15 +126866,19 @@ function createTurnPresenter({
     lastFailure = `${what}\uFF1A${error?.message ?? error}`;
     logger.warn?.(`[dsh-chat-feishu] ${lastFailure}`);
   }
-  function currentTitle() {
-    if (currentApproval.length > 0) return "\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u6388\u6743\uFF09";
+  function headerFor() {
+    if (currentApproval.length > 0) return { title: "\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u6388\u6743\uFF09", template: "blue" };
     if (currentQuestion.length > 0 && questionProgress) {
-      return `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${questionProgress.index}/${questionProgress.total} \u9898\uFF09`;
+      return {
+        title: `\u2753 \u7B49\u4F60\u786E\u8BA4\uFF08\u7B2C ${questionProgress.index}/${questionProgress.total} \u9898\uFF09`,
+        template: "blue"
+      };
     }
     if (state === "running") {
-      return `\u6DF1\u5EA6\u6C42\u7D22\u4E2D\uFF0C\u7528\u65F6${formatLiveDuration(Date.now() - startedAt)}`;
+      return { title: `\u6DF1\u5EA6\u6C42\u7D22\u4E2D\uFF0C\u7528\u65F6${formatLiveDuration(Date.now() - startedAt)}`, template: "blue" };
     }
-    return "";
+    if (state === "failed") return { title: "\u5904\u7406\u5931\u8D25", template: "orange" };
+    return null;
   }
   function panelTitle() {
     const count = entries.length;
@@ -126932,14 +126927,13 @@ function createTurnPresenter({
   }
   function cardPayload(answer) {
     return renderStepCard({
-      title: currentTitle(),
+      header: headerFor(),
       panelItems: panelItems(),
       answer,
       panelTitle: panelTitle(),
       currentQuestion,
       currentApproval,
-      todos: todos ? { ...todos, expanded: state === "running" } : null,
-      template: state === "done" ? "green" : state === "failed" ? "orange" : "blue"
+      todos: todos ? { ...todos, expanded: state === "running" } : null
     });
   }
   async function ensureCard() {
@@ -127067,11 +127061,7 @@ function createTurnPresenter({
     try {
       await gateway.replyCard({
         messageId,
-        card: renderAnswerCard({
-          title: currentTitle(),
-          answer: body,
-          template: state === "failed" ? "orange" : "green"
-        }),
+        card: renderAnswerCard({ header: headerFor(), answer: body }),
         replyInThread
       });
       return true;

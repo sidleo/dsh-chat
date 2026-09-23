@@ -11,7 +11,8 @@
  * - **卡片头**＝桌面的整轮控件：运行中 `深度求索中，用时 X`；**结束之后一个字都不写**
  *   （完成 / 失败 / 中断都不写状态词，**也不显示已用时**）——完成与否只由 `template` 颜色表达
  *   （绿＝正常结束、橙＝失败或中断），失败原因在正文里。⚠️ Card 2.0 的 `header.title` 是**必填**，
- *   而空串会让飞书**连整条配色头一起不画**——「不写字」要传零宽空格，见 `INVISIBLE_TITLE`。
+ *   而且**空串标题会让飞书连整条配色头一起不画**、**完全不传 title 也画不出颜色**——
+ *   所以「不要颜色」就整块 header 都不给（`headerFor()` 返回 null）。
  * - **折叠面板标题**＝桌面的组头：没结束时显示最新一项（一眼看到在干什么），
  *   结束后显示按类别拼的摘要（`执行了命令并已调用工具`，前 3 类、超过 3 类结尾加「等」、
  *   **不带计数**；对齐 `chat/step-process.ts` 的 `processTitle`）。
@@ -42,25 +43,15 @@
 const MAX_ROWS = 48;
 
 /**
- * "不写字"的标题：一个**零宽空格**（U+200B）。
+ * 卡片头怎么画，由**有没有标题**决定（真机实测，别凭文档猜）：
  *
- * Card 2.0 的 `header.title` 是必填（见 `~/.agents/skills/lark-im/references/card/components/header.md`），
- * 而且真机实测：把 `content` 传成**空串**，飞书**连整条配色头一起不画**了
- * （用户反馈"我只是让你不要显示耗时，但头部的颜色没了"）——所以"结束时不写字"要留一个
- * 看不见但非空的字符。选 U+200B 而不是 U+FEFF：`String.trim()` 会吃掉 U+FEFF，U+200B 不会。
- */
-export const INVISIBLE_TITLE = '\u200b';
-
-/**
- * 卡片头的标题文案：想"不写字"时用零宽字符兜底（空串会让飞书连配色头一起省掉）。
+ * - 头部**要有颜色**，就必须给一个**有内容的** `title`——`content` 传空串时飞书会
+ *   连整条配色头一起不画（"我只是让你不要显示耗时，但头部的颜色没了"）；
+ * - 反过来说，**完全不传 `title` 也画不出颜色**（实测发卡 `header:{template:"green"}`：
+ *   服务端 `ok=true` 收下，客户端渲染成纯白没色条）；文档写 `title` 必填，但平台并不拒收。
  *
- * @param title - 想写的文案（空串／null＝不写字）。
- * @returns 非空的 `plain_text` 文案。
+ * 所以"不要颜色"的唯一干净做法是**整块 `header` 都别给**——调用方传 `header: null`。
  */
-function headerTitle(title) {
-  const text = String(title ?? '').slice(0, 100);
-  return text === '' ? INVISIBLE_TITLE : text;
-}
 
 /** 卡片正文长度上限，避免超出飞书卡片限制。 */
 const MAX_CARD_CONTENT = 12_000;
@@ -385,15 +376,27 @@ export function askRow({ header, question, answer } = {}) {
  *   `currentQuestion` / `currentApproval` 是**还没回答/处理**的交互元素（控件必须留在面板外）。
  * @returns 飞书交互卡片对象。
  */
+/**
+ * 组装卡片头：`header` 为空就整块不给（＝没有颜色、没有标题）。
+ *
+ * @param header - `{ title, template }` 或 null。
+ * @returns 展开进卡片对象的字段。
+ */
+function cardHeader(header) {
+  if (header === null || header === undefined) return {};
+  const title = String(header.title ?? '').slice(0, 100);
+  if (title === '') return {};
+  return { header: { template: header.template ?? 'blue', title: { tag: 'plain_text', content: title } } };
+}
+
 export function renderStepCard({
-  title,
+  header,
   panelItems = [],
   answer = '',
   panelTitle = '',
   currentQuestion = [],
   currentApproval = [],
   todos = null,
-  template = 'blue',
 }) {
   const budget = { left: MAX_CARD_CONTENT };
   const clampBudget = (text) => {
@@ -491,14 +494,8 @@ export function renderStepCard({
   return {
     schema: '2.0',
     config: { update_multi: true, width_mode: 'default' },
-    /**
-     * `header.title` 在 Card 2.0 里是**必填**，所以它一直在；只是**内容可以为空**——
-     * 结束时不留任何文案（完成/失败/用时都不写），状态只由 `template` 颜色表达。
-     */
-    header: {
-      template,
-      title: { tag: 'plain_text', content: headerTitle(title) },
-    },
+    /** `header: null` ＝ 不要卡片头（没有颜色、也没有标题），真机要求"成功不带颜色不含标题"。 */
+    ...cardHeader(header),
     body: { direction: 'vertical', elements },
   };
 }
@@ -508,20 +505,17 @@ export function renderStepCard({
  *
  * 为什么不用过程卡：过程卡的头是「深度求索中，用时 X」、正文按 `· ` 逐行排过程——
  * 关掉过程时它是空的，只剩答案，用户看到的会是一张"什么都没有"的卡。
- * 这里给一张干净的卡：同一套**配色**（结束＝绿、失败＝橙；标题不写字，见 `currentTitle` 与 `INVISIBLE_TITLE`），
+ * 这里给一张干净的卡：正常结束**不要卡片头**（没颜色也没标题），失败才要橙色 + `处理失败`（见 `headerFor`），
  * 正文只有答案的 markdown——**格式（表格、代码块、链接）因此得以保留**，这正是要卡片的原因。
  *
  * @param options - { title, answer, template }。
  * @returns 飞书交互卡片对象。
  */
-export function renderAnswerCard({ title, answer, template = 'green' } = {}) {
+export function renderAnswerCard({ header = null, answer } = {}) {
   return {
     schema: '2.0',
     config: { update_multi: true, width_mode: 'default' },
-    header: {
-      template,
-      title: { tag: 'plain_text', content: headerTitle(title) },
-    },
+    ...cardHeader(header),
     body: {
       direction: 'vertical',
       elements: [{ tag: 'markdown', content: String(answer ?? '') }],
@@ -610,23 +604,26 @@ export function createTurnPresenter({
    *
    * 对齐桌面 `chat/TurnProcessNodeView.tsx` 的文案，包括「用时 X」里的空格。
    */
-  function currentTitle() {
-    if (currentApproval.length > 0) return '❓ 等你确认（授权）';
+  function headerFor() {
+    if (currentApproval.length > 0) return { title: '❓ 等你确认（授权）', template: 'blue' };
     if (currentQuestion.length > 0 && questionProgress) {
-      return `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`;
+      return {
+        title: `❓ 等你确认（第 ${questionProgress.index}/${questionProgress.total} 题）`,
+        template: 'blue',
+      };
     }
     if (state === 'running') {
       // 桌面口径：`深度求索中，用时{duration}`（**「用时」后面没有空格**）；
       // 时长靠 10 秒慢时钟刷新，见 CLOCK_INTERVAL_MS。
-      return `深度求索中，用时${formatLiveDuration(Date.now() - startedAt)}`;
+      return { title: `深度求索中，用时${formatLiveDuration(Date.now() - startedAt)}`, template: 'blue' };
     }
+    /** 失败＝橙色 + `处理失败`；失败原因在正文里（`本轮运行失败（<reason>）。` 或答案本身）。 */
+    if (state === 'failed') return { title: '处理失败', template: 'orange' };
     /**
-     * 结束（含失败/中断）之后，卡片头**一个字都不写**：
-     * 完成与否只看 `template` 颜色（绿＝正常结束、橙＝失败/中断），不用再单独写
-     * 「已完成 / 未正常完成」，也**不显示已用时**（真机反馈：那行只是噪声）。
-     * 失败原因在正文里（`本轮运行失败（<reason>）。` 或答案本身），信息不丢。
+     * **正常结束＝不要卡片头**（真机要求：成功不带颜色、不含标题）——
+     * 一张干净的白卡，只有过程面板（如果有）和答案。
      */
-    return '';
+    return null;
   }
 
   /**
@@ -700,14 +697,13 @@ export function createTurnPresenter({
 
   function cardPayload(answer) {
     return renderStepCard({
-      title: currentTitle(),
+      header: headerFor(),
       panelItems: panelItems(),
       answer,
       panelTitle: panelTitle(),
       currentQuestion,
       currentApproval,
       todos: todos ? { ...todos, expanded: state === 'running' } : null,
-      template: state === 'done' ? 'green' : state === 'failed' ? 'orange' : 'blue',
     });
   }
 
@@ -888,11 +884,7 @@ export function createTurnPresenter({
     try {
       await gateway.replyCard({
         messageId,
-        card: renderAnswerCard({
-          title: currentTitle(),
-          answer: body,
-          template: state === 'failed' ? 'orange' : 'green',
-        }),
+        card: renderAnswerCard({ header: headerFor(), answer: body }),
         replyInThread,
       });
       return true;
