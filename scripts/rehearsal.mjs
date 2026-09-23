@@ -568,9 +568,13 @@ async function main() {
       const section = harness.promptSections.get('dsh-chat:source-guidance');
       assert.ok(section, '增强提示词段没有注册到 systemPrompt');
       assert.equal(section.order, 400);
-      assert.equal(harness.systemPrompt.assembleFor({ id: 'rehearsal-1' }), '只对这个人说的');
+      const assembled = harness.systemPrompt.assembleFor({ id: 'rehearsal-1' });
+      assert.ok(assembled.includes('只对这个人说的'), '本会话组装到的是它自己的那份提示词');
+      // 交付文件说明是**机制段**，与用户可配置的增强提示词分开、同一条会话判定：
+      // 模型不知道"只有 present 才会真的发文件"时，写了路径也等于没交付（真机 75cffe0f）。
+      assert.ok(assembled.includes('`present`'), '同时要带上「文件要当轮 present」那段说明');
       assert.equal(harness.systemPrompt.assembleFor({ id: '别的会话' }), '',
-        '不是我们的会话不该拿到这段提示词');
+        '不是我们的会话不该拿到任何一段（含交付说明）');
       const prompted = agent.state.prompts.at(-1).content
         .filter((part) => part.type === 'text').map((part) => part.text).join('\n');
       assert.ok(!prompted.includes('<dsh_im_source_guidance>'),

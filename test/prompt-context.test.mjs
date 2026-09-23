@@ -7,8 +7,11 @@ import test from 'node:test';
 
 import { createGuidanceRegistry } from '../packages/dsh-chat/host/guidance.mjs';
 import {
+  DELIVERABLE_ORDER,
+  DELIVERABLE_SECTION,
   SOURCE_GUIDANCE_ORDER,
   SOURCE_GUIDANCE_SECTION,
+  installDeliverableSection,
   installSourceGuidanceSection,
 } from '../packages/dsh-chat/host/prompt-context.mjs';
 
@@ -88,4 +91,48 @@ test('提示词段：服务存在但注册失败（ctx 已销毁等）时返回 
   const ctx = { get: (name) => (name === 'systemPrompt' ? systemPrompt : undefined), effect: (fn) => fn() };
   assert.equal(installSourceGuidanceSection(ctx, guidance, { logger }), false);
   assert.match(warnings.join('\n'), /注册增强提示词段失败/);
+});
+
+/**
+ * 交付文件的机制说明：模型得知道"只有 `present` 才会真的发文件"。
+ *
+ * 真机现场（会话 75cffe0f）：写了 SQL 文件、在答案里给了相对链接，却没调 `present`
+ * → 用户一个文件都没收到。所以这一段必须**只要是我们自己的聊天会话就有**，
+ * 与用户怎么配上下文增强无关（那是另一段、可配置的内容）。
+ */
+test('交付文件说明段：只有我们的聊天会话有，且与增强提示词分开', () => {
+  const systemPrompt = fakeSystemPrompt();
+  const ctx = { get: (name) => (name === 'systemPrompt' ? systemPrompt : undefined), effect: (fn) => fn() };
+  const installed = installDeliverableSection(ctx, {
+    isChatSession: (sessionId) => sessionId === 'session-ours',
+    logger: silentLogger,
+  });
+  assert.equal(installed, true);
+  const section = systemPrompt.sections.get(DELIVERABLE_SECTION);
+  assert.equal(section.order, DELIVERABLE_ORDER);
+  assert.equal(section.order > SOURCE_GUIDANCE_ORDER, true, '排在增强提示词之后');
+  assert.equal(section.text({ agent: { id: 'session-other' } }), '', '不是我们的会话就不出这段');
+  assert.equal(section.text({ agent: {} }), '', '没有会话 id 时也不出');
+
+  const text = section.text({ agent: { id: 'session-ours' } });
+  assert.match(text, /`present`/, '要明说唯一的方式是 present');
+  assert.match(text, /绝对路径/, '路径要给绝对的');
+  assert.match(text, /一个字节都发不出去/, '只说路径/相对链接是发不出去的（真机就是这么丢的）');
+
+  // 判定函数抛错时不影响提示词组装（宁可少一段说明，也不要让组装挂掉）。
+  const brokenPrompt = fakeSystemPrompt();
+  const brokenCtx = {
+    get: (name) => (name === 'systemPrompt' ? brokenPrompt : undefined),
+    effect: (fn) => fn(),
+  };
+  assert.equal(installDeliverableSection(brokenCtx, {
+    isChatSession: () => { throw new Error('boom'); },
+    logger: silentLogger,
+  }), true);
+  assert.equal(brokenPrompt.sections.get(DELIVERABLE_SECTION).text({ agent: { id: 'session-ours' } }), '',
+    '判定函数抛错时这一段为空，而不是把组装带崩');
+});
+
+test('交付文件说明段：没有 systemPrompt 服务时返回 false（调用方只告警）', () => {
+  assert.equal(installDeliverableSection({ get: () => undefined }, { logger: silentLogger }), false);
 });

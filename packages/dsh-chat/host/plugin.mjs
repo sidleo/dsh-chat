@@ -33,7 +33,7 @@ import { readLogTail } from './log-tail.mjs';
 import { normalizeBotModel } from './bot-model.mjs';
 import { createPanelService, readModelCatalog, workspaceCandidates } from './panel.mjs';
 import { createGuidanceRegistry } from './guidance.mjs';
-import { installSourceGuidanceSection } from './prompt-context.mjs';
+import { installDeliverableSection, installSourceGuidanceSection } from './prompt-context.mjs';
 import { createInteractionService } from './interactions.mjs';
 import { createJsonStore } from './json-store.mjs';
 import { channelDataDir, hubDataDir, integrationRoot } from './paths.mjs';
@@ -164,10 +164,39 @@ export function apply(ctx, config = {}) {
     return false;
   }
   ensureGuidanceSection();
+
+  /**
+   * 「交付文件要显式 `present`」那段说明（与增强提示词分开：那是用户内容，这是机制）。
+   *
+   * 真机踩过（会话 75cffe0f）：模型把 SQL 写到磁盘、在答案里写了路径，却没调 `present`
+   * → 插件手里没有交付声明，用户什么文件也没收到。与增强提示词同样的"服务可能晚到"处理：
+   * 每次用之前重试一次、只告警一次。
+   */
+  let deliverableSectionInstalled = false;
+  let deliverableWarned = false;
+  function ensureDeliverableSection() {
+    if (deliverableSectionInstalled) return true;
+    if (installDeliverableSection(ctx, {
+      // 同步判定"这个会话是不是我们的聊天会话"：绑在某个渠道机器人上就是。
+      isChatSession: (sessionId) => sessionStore.locate(sessionId) != null,
+      logger,
+    })) {
+      deliverableSectionInstalled = true;
+      return true;
+    }
+    if (!deliverableWarned) {
+      deliverableWarned = true;
+      logger.warn?.('[dsh-chat] 当前 Host 没有可用的 systemPrompt 服务：'
+        + '「交付文件要显式 present」这条说明注入不了（文件仍能交付，只是模型可能不知道）。');
+    }
+    return false;
+  }
+
   /** 会话桥用的登记表：publish 之前再试一次装段（服务可能晚于本插件就绪）。 */
   const guidanceForBridge = Object.freeze({
     publish(sessionId, text) {
       ensureGuidanceSection();
+      ensureDeliverableSection();
       guidance.publish(sessionId, text);
     },
     get: (sessionId) => guidance.get(sessionId),
@@ -193,6 +222,8 @@ export function apply(ctx, config = {}) {
     ),
   });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
+  // 提示词段是按会话现算的，装上就行；服务不在/晚到时的告警与重试见 ensureDeliverableSection。
+  ensureDeliverableSection();
   /** 人在环交互：agent 的提问/审批送到 IM 里问，答案从 IM 收回来。 */
   const interactions = createInteractionService({ logger });
   /**

@@ -3575,6 +3575,42 @@ function installSourceGuidanceSection(ctx, guidance, { logger = console } = {}) 
   logger.info?.("[dsh-chat] \u589E\u5F3A\u63D0\u793A\u8BCD\u8D70\u7CFB\u7EDF\u63D0\u793A\u8BCD\u6BB5\uFF08\u6309\u4F1A\u8BDD\u751F\u6548\uFF0C\u4E0D\u518D\u62FC\u8FDB\u7528\u6237\u6D88\u606F\uFF09\u3002");
   return true;
 }
+var DELIVERABLE_SECTION = "dsh-chat:deliverables";
+var DELIVERABLE_ORDER = 405;
+function installDeliverableSection(ctx, { isChatSession, logger = console } = {}) {
+  const systemPrompt = typeof ctx?.get === "function" ? ctx.get("systemPrompt") : ctx?.systemPrompt;
+  if (!systemPrompt || typeof systemPrompt.section !== "function") return false;
+  const text = (context) => {
+    const sessionId = sessionIdOf(context);
+    if (!sessionId) return "";
+    let own = false;
+    try {
+      own = isChatSession?.(sessionId) === true;
+    } catch {
+      return "";
+    }
+    if (!own) return "";
+    return [
+      "\u628A\u6587\u4EF6\u4EA4\u7ED9\u7528\u6237\u7684**\u552F\u4E00**\u65B9\u5F0F\u662F\uFF1A\u5728**\u5F53\u8F6E**\u8C03\u7528 `present`\uFF0C\u5728 `files` \u91CC\u7ED9\u51FA\u6587\u4EF6\u7684**\u7EDD\u5BF9\u8DEF\u5F84**\u2014\u2014\u63D2\u4EF6\u4F1A\u628A\u58F0\u660E\u7684\u6587\u4EF6\u4F5C\u4E3A\u9644\u4EF6\u5355\u72EC\u53D1\u5230\u8FD9\u4E2A\u804A\u5929\u91CC\u3002",
+      "\u53EA\u5728\u56DE\u590D\u91CC\u5199\u8DEF\u5F84\u3001\u6216\u5199\u6210 `[\u540D\u5B57](\u76F8\u5BF9\u8DEF\u5F84)` \u8FD9\u79CD\u94FE\u63A5\uFF0C**\u4E00\u4E2A\u5B57\u8282\u90FD\u53D1\u4E0D\u51FA\u53BB**\uFF08\u804A\u5929\u91CC\u7684\u76F8\u5BF9\u94FE\u63A5\u4E5F\u70B9\u4E0D\u5F00\uFF09\u3002",
+      "\u6240\u4EE5\u8FD9\u8F6E\u4EA7\u51FA\u4E86\u7528\u6237\u53EF\u80FD\u8981\u7528\u7684\u6587\u4EF6\uFF08\u62A5\u8868 / SQL / \u56FE\u8868 / \u5BFC\u51FA\u2026\uFF09\u5C31 `present` \u4E00\u4E0B\uFF1B\u4E34\u65F6\u4E2D\u95F4\u6587\u4EF6\u4E0D\u7528\u58F0\u660E\uFF0C\u522B\u5237\u5C4F\u3002"
+    ].join("\n");
+  };
+  const register = () => systemPrompt.section({
+    name: DELIVERABLE_SECTION,
+    order: DELIVERABLE_ORDER,
+    text
+  });
+  try {
+    if (typeof ctx?.effect === "function") ctx.effect(register, "dsh-chat: \u4EA4\u4ED8\u6587\u4EF6\u8BF4\u660E\u6BB5");
+    else register();
+  } catch (error) {
+    logger.warn?.(`[dsh-chat] \u6CE8\u518C\u4EA4\u4ED8\u6587\u4EF6\u8BF4\u660E\u6BB5\u5931\u8D25\uFF1A${error?.message ?? error}`);
+    return false;
+  }
+  logger.info?.("[dsh-chat] \u4EA4\u4ED8\u6587\u4EF6\u8BF4\u660E\u5DF2\u6CE8\u5165\u7CFB\u7EDF\u63D0\u793A\u8BCD\u6BB5\uFF08\u53EA\u6709\u672C\u63D2\u4EF6\u7684\u804A\u5929\u4F1A\u8BDD\u6709\uFF09\u3002");
+  return true;
+}
 
 // packages/dsh-chat/host/interactions.mjs
 var DEFAULT_TIMEOUT_MS = 10 * 6e4;
@@ -5222,9 +5258,28 @@ function apply(ctx, config = {}) {
     return false;
   }
   ensureGuidanceSection();
+  let deliverableSectionInstalled = false;
+  let deliverableWarned = false;
+  function ensureDeliverableSection() {
+    if (deliverableSectionInstalled) return true;
+    if (installDeliverableSection(ctx, {
+      // 同步判定"这个会话是不是我们的聊天会话"：绑在某个渠道机器人上就是。
+      isChatSession: (sessionId) => sessionStore.locate(sessionId) != null,
+      logger
+    })) {
+      deliverableSectionInstalled = true;
+      return true;
+    }
+    if (!deliverableWarned) {
+      deliverableWarned = true;
+      logger.warn?.("[dsh-chat] \u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u7684 systemPrompt \u670D\u52A1\uFF1A\u300C\u4EA4\u4ED8\u6587\u4EF6\u8981\u663E\u5F0F present\u300D\u8FD9\u6761\u8BF4\u660E\u6CE8\u5165\u4E0D\u4E86\uFF08\u6587\u4EF6\u4ECD\u80FD\u4EA4\u4ED8\uFF0C\u53EA\u662F\u6A21\u578B\u53EF\u80FD\u4E0D\u77E5\u9053\uFF09\u3002");
+    }
+    return false;
+  }
   const guidanceForBridge = Object.freeze({
     publish(sessionId, text) {
       ensureGuidanceSection();
+      ensureDeliverableSection();
       guidance.publish(sessionId, text);
     },
     get: (sessionId) => guidance.get(sessionId),
@@ -5240,6 +5295,7 @@ function apply(ctx, config = {}) {
     )
   });
   const sessionStore = createSessionStore({ dataDir: hubDataDir(config.dataDir), logger });
+  ensureDeliverableSection();
   const interactions = createInteractionService({ logger });
   const deferred = createDeferredDelivery({
     dataDir: hubDataDir(config.dataDir),

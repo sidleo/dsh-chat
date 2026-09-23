@@ -97,6 +97,12 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   `Object.assign(record.bot, patch)` 就地改；测试用 `internals.createBridge` 捕获"桥拿到的是哪份对象"
   并断言它就是被改的那份（改回换引用的写法，测试立刻红）。
   **属主是例外**：`bot.owner.set` 不走这条（改完由设置页触发重连），这是有意的。
+- **文件交付只有一条路：当轮 `present`**（hub 的系统提示词段 `dsh-chat:deliverables`，order 405）：
+  真机现场（会话 75cffe0f）——机器人把 SQL 写到磁盘、在答案里写了路径（甚至给了 `[名字](相对路径)` 链接），**却没调 `present`**：插件手里一份交付声明都没有，
+  用户一个文件也没收到，聊天里那个相对链接也点不开。模型不知道"只有 present 才会真的发文件"，
+  所以把机制明说（绝对路径 / 只说路径等于没发 / 临时中间文件不用声明）。
+  ⚠️ 这一段与增强提示词**分开**：那是**用户可配置的内容**（登记表里有值才渲染），
+  这是**机制**——只要会话绑在我们某个聊天上就该有（`sessionStore.locate(sessionId)` 同步判定）。
 - **回复本身也可以「按卡片来写」**（「卡片友好回答」，默认**开**）：答案一直渲染进卡片的 `markdown` 组件，
   所以插件往会话的系统提示词里注入一段写作建议（`dsh-chat-feishu:card-answer`，order 420）：
   数据用标准 MD 表但**一张表最多 5 行**、正文**别用 `#`/`##` 当标题**（卡片文档明确「字号过大显丑」）、
