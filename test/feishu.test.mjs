@@ -2400,6 +2400,52 @@ test('处理完卡片标题不再是"正在处理"', async () => {
   assert.match(failed, /"template":"orange"/);
 });
 
+test('中间叙述进过程面板、不进答案正文（答案只留真答案）', async () => {
+  // ① 呈现层：叙述渲染成「说明 · …」一行，和工具/思考同处一个折叠面板。
+  const cards = [];
+  const gateway = {
+    async replyCard({ card }) { cards.push(card); return { messageId: 'om_p1' }; },
+    async patchCard({ card }) { cards.push(card); return { messageId: 'om_p1' }; },
+  };
+  const presenter = createTurnPresenter({
+    mode: 'streaming_card',
+    gateway,
+    message: { message_id: 'om_1', chat_id: 'oc_1' },
+    chatType: 'direct',
+    bot: { botName: '张三-DSH', groupTopicReply: false },
+    logger: silentLogger,
+  });
+  await presenter.note('我先查一下数据。');
+  await presenter.tool({ name: 'bash', arguments: JSON.stringify({ command: 'ls', description: '看目录' }) });
+  await presenter.finish('昨天销售额 1234 万。', { kind: 'completed' });
+
+  const body = JSON.stringify(cards.at(-1));
+  assert.match(body, /说明 · 我先查一下数据。/, '念叨要进面板（标签是「说明」不是「思考」）');
+  assert.match(body, /工具与思考\(2\)/, '说明与工具一起计数');
+  // 答案正文只有真答案：面板里那份"说明"不能同时出现在答案里。
+  const panel = cards.at(-1).body.elements.find((element) => element.tag === 'collapsible_panel');
+  const answerElement = cards.at(-1).body.elements.find(
+    (element) => element.tag === 'markdown' && element.content.includes('昨天销售额'),
+  );
+  assert.ok(answerElement, '答案要画进卡里');
+  assert.doesNotMatch(answerElement.content, /我先查一下数据/, '念叨不能被塞进答案正文');
+  assert.ok(panel, '过程面板还在（展开能看到念叨）');
+
+  // ② 桥接：飞书桥把 onInterimText 交给 hub（= 声明"我会呈现中间叙述"），
+  //    并把它接到 presenter.note 上——少了这一环，hub 会退回全段拼接。
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({ messageId: 'om_note', messageType: 'text', text: '昨天卖了多少' }));
+    assert.equal(typeof asked?.handlers?.onInterimText, 'function',
+      '飞书桥必须把 onInterimText 传给 hub，否则答案里又会混进念叨');
+    asked.handlers.onInterimText('我先查一下数据。');
+    assert.equal(typeof asked?.handlers?.onTurnEnd, 'function');
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test('面板内容按发生顺序：提问嵌在它出现的位置，不在底部', () => {
   const card = renderStepCard({
     title: '正在处理',

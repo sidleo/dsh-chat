@@ -126528,10 +126528,11 @@ var FEISHU_SCAN_REGISTER_OPTIONS = Object.freeze({
 import { stat } from "node:fs/promises";
 
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
-var MAX_ROWS = 24;
+var MAX_ROWS = 48;
 var MAX_CARD_CONTENT = 12e3;
 var MAX_PANEL_TITLE = 46;
 var MAX_THINK_CHARS = 120;
+var MAX_NOTE_CHARS = 120;
 var MAX_TOOL_SUMMARY = 60;
 var TOOL_VARIANTS = Object.freeze({
   bash: "bash",
@@ -126637,6 +126638,10 @@ function toolRow({ name: name2, arguments: argsRaw } = {}) {
 function thinkRow(text) {
   const line = clamp(firstLine(text), MAX_THINK_CHARS);
   return line ? `\u601D\u8003 \xB7 ${line}` : "";
+}
+function noteRow(text) {
+  const line = clamp(firstLine(text), MAX_NOTE_CHARS);
+  return line ? `\u8BF4\u660E \xB7 ${line}` : "";
 }
 function todoRows(args) {
   const parsed = parseArgs(args);
@@ -127004,6 +127009,19 @@ function createTurnPresenter({
     think(text) {
       const row2 = thinkRow(text);
       putEntry({ kind: "think", text: row2 });
+      return push(row2);
+    },
+    /**
+     * 记录模型"调工具前那句念叨"：同样进折叠面板，占一行。
+     *
+     * 它**不进答案正文**了（hub 侧只把不带工具调用的那段当答案），所以这里是它唯一的去处——
+     * 面板是折叠的，不打扰读答案的人，展开还能看到全过程。
+     *
+     * @param text - 那一段正文。
+     */
+    note(text) {
+      const row2 = noteRow(text);
+      putEntry({ kind: "note", text: row2 });
       return push(row2);
     },
     /**
@@ -128170,6 +128188,16 @@ ${text}`
               if (block?.type !== "reasoning" || typeof block.text !== "string") continue;
               presenter.think(block.text);
             }
+          },
+          /**
+           * 模型调工具前那句念叨：放进过程面板，**不进答案正文**。
+           *
+           * 提供这个 handler 就等于告诉 hub"我会呈现它"——hub 因此把它从答案里摘出去
+           * （见 `sessions.mjs` 的 `turn/end`）。不提供的话 hub 会照旧全段拼接，
+           * 那是"宁可有废话也不丢内容"的兜底。
+           */
+          onInterimText: (text2) => {
+            presenter.note(text2);
           },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;

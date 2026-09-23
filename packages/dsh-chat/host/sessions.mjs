@@ -596,10 +596,13 @@ export function createSessionBridge({
    *   channelId, botId, key, workspacePath, content, sourceGuidance,
    *   mode, signal, channelLabel?, botLabel?, chatLabel?, handlers: {
    *     onTurnStart?, onAssistantMessage?, onToolCall?, onToolResult?,
-   *     onDelta?, onEvent?, onTurnEnd?,
+   *     onDelta?, onEvent?, onTurnEnd?, onInterimText?,
    *   },
    *   turnTimeoutMs?,
    * }。
+   *   `onInterimText`：模型**调工具前那句念叨**。提供它就表示渠道自己能把这些过程叙述呈现出来
+   *   （飞书放进过程面板），于是返回的 `text` 只留真答案；不提供则 `text` 仍是全段拼接，
+   *   一个字节不丢（纯文本渠道没有面板可放，见 `turn/end` 的取舍）。
    * @returns { sessionId, text, reason, aborted }。
    */
   async function ask({
@@ -789,6 +792,15 @@ export function createSessionBridge({
       /** 我们自己主动收摊时为 true：此时事件流中断属于正常，不该报成异常。 */
       let closing = false;
       let currentTurn = null;
+      /**
+       * 本轮的助手正文段：`Map<turn, [{ text, hasToolCall }]>`。
+       *
+       * **为什么记 `hasToolCall`**：模型在调工具前常先念叨一句（"Let me check…"），
+       * 那也是 `assistant/message` 的 text 块。早先把它和真答案一起拼进回复，
+       * 真机表现是"卡片正文一半是过程废话"（一个 19 步的回合里 58% 是念叨）。
+       * 结构事实：**模型一旦产出不带工具调用的段，这一轮就结束了**——所以这种段每轮只有一段、
+       * 且总在最后，它就是真答案；带工具调用的那些段都是过程叙述。
+       */
       const assistantText = new Map();
       const tools = [];
       /**
@@ -912,12 +924,22 @@ export function createSessionBridge({
             case 'assistant/message': {
               const turn = event.data?.turn ?? currentTurn;
               const text = textOfAssistantMessage(event.data?.message);
+              const blocks = event.data?.message?.content;
+              // 这一段是不是"调工具前的念叨"：它自己带了工具调用。
+              const hasToolCall = Array.isArray(blocks)
+                && blocks.some((block) => block?.type === 'tool-call');
               if (text) {
                 const bucket = assistantText.get(turn) ?? [];
-                bucket.push(text);
+                bucket.push({ text, hasToolCall });
                 assistantText.set(turn, bucket);
               }
               handlers.onAssistantMessage?.(event, text);
+              /**
+               * 中间叙述单独交出去：渠道把它放进过程面板（**不进答案正文**）。
+               * 没接这个 handler 的渠道（比如纯文本的微信）什么都不做——
+               * 见下面 `turn/end` 的兜底：那种情况答案仍按"全段拼接"，一个字节都不丢。
+               */
+              if (text && hasToolCall) handlers.onInterimText?.(text, event);
               break;
             }
             case 'tool/call':
@@ -952,19 +974,32 @@ export function createSessionBridge({
               const turn = event.data?.turn ?? currentTurn;
               const texts = assistantText.get(turn) ?? [];
               /**
-               * 一轮里每个 step 各有一条定稿 `assistant/message`：**全部带回**，用空行隔开。
-               *
-               * 曾经只取 `texts.at(-1)`（最后一个 step），真机表现是"多步回答只剩最后一段"——
-               * 前面写在工具调用之前的正文整个丢了（上游 Issue #112 是同一个根因）。
-               * 模型偶尔会把同一段话再说一遍，所以相邻完全相同的段只留一次，不贴两遍。
+               * 一段话拼成正文：空行隔开、相邻完全相同的段只留一次
+               * （模型偶尔会把同一段话再说一遍，不贴两遍）。
                */
-              const merged = [];
-              for (const piece of texts) {
-                const trimmed = String(piece ?? '').trim();
-                if (!trimmed || merged.at(-1) === trimmed) continue;
-                merged.push(trimmed);
-              }
-              const text = merged.join('\n\n').slice(0, MAX_ASSISTANT_TEXT);
+              const joinSegments = (segments) => {
+                const merged = [];
+                for (const segment of segments) {
+                  const trimmed = String(segment?.text ?? '').trim();
+                  if (!trimmed || merged.at(-1) === trimmed) continue;
+                  merged.push(trimmed);
+                }
+                return merged.join('\n\n').slice(0, MAX_ASSISTANT_TEXT);
+              };
+              /**
+               * 真答案 = **不带工具调用**的那些段。
+               *
+               * 结构上模型一产出不带工具调用的段这一轮就结束了，所以它每轮只有一段、且总在最后。
+               * 早先为了修上游 Issue #112（"多 step 回答只剩最后一段"）改成了**全部拼接**，
+               * 于是每步调工具前那句念叨也跟着进了回复——真机上 19 步的回合里 58% 是废话。
+               *
+               * 只在**渠道声明自己会呈现中间叙述**（提供了 `onInterimText`）时才这么取：
+               * 否则（比如纯文本的微信，没有过程面板可放）仍旧全段拼接——
+               * 那条路宁可有废话，也绝不静默丢掉内容。
+               */
+              const finals = texts.filter((segment) => !segment?.hasToolCall);
+              const canDropInterim = typeof handlers.onInterimText === 'function' && finals.length > 0;
+              const text = joinSegments(canDropInterim ? finals : texts);
               handlers.onTurnEnd?.(event, text);
               assistantText.delete(turn);
               if (promptSent) {

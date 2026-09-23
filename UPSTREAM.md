@@ -54,7 +54,7 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 
 | 上游 | 我们 | 说明 |
 |---|---|---|
-| Issue #112「多 step 回答只剩最后一段」 | `sessions.mjs` 的 `turn/end` | 一轮里每个 step 各有一条定稿 `assistant/message`，最终答案改为**全部拼接**（空行分隔、相邻重复去重） |
+| Issue #112「多 step 回答只剩最后一段」 | `sessions.mjs` 的 `turn/end` | 一轮里每个 step 各有一条定稿 `assistant/message`。上游的修法是**全部拼接**，但那把"调工具前的念叨"也拼进了回复（真机 19 步的回合里 58% 是废话）。改为：**不带工具调用的那段才是答案**（每轮只有一段、总在最后），带工具调用的段交给渠道呈现（`handlers.onInterimText` → 飞书过程面板 `说明 · …`）；渠道没接就退回全段拼接，绝不静默丢内容 |
 | Issue #192「模型失效自救」 | `sessions.mjs` 的 `recoverUnavailableModel` | 识别 `session/model-unavailable`，切回可用模型（优先 Host 默认）并重试一次，答案前加一行说明 |
 | 「入站图片在非视觉模型下回退为文件」 | `sessions.ask()` 的图片回退（`imagesAsFiles`） | 拒绝信号与文案沿用上游（`MODEL_DOES_NOT_SUPPORT_IMAGES`），但降级目标改为"本会话的文件"而不是自写工作区文件——复用已验证的 `uploadFile` 通道；转换失败**原样抛**，不静默丢图片 |
 | Issue #106「引用/回复消息」 | `shared/reply-reference.mjs` + 飞书 `getMessageText` | 用户引用一条消息再提问时，被引用正文一起进提示词；读不到只加"引用内容不可用"标记，不丢当前问题 |

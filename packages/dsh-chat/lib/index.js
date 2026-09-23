@@ -4562,12 +4562,15 @@ ${result.text ?? ""}`.trim(),
               case "assistant/message": {
                 const turn = event.data?.turn ?? currentTurn;
                 const text = textOfAssistantMessage(event.data?.message);
+                const blocks = event.data?.message?.content;
+                const hasToolCall = Array.isArray(blocks) && blocks.some((block) => block?.type === "tool-call");
                 if (text) {
                   const bucket = assistantText.get(turn) ?? [];
-                  bucket.push(text);
+                  bucket.push({ text, hasToolCall });
                   assistantText.set(turn, bucket);
                 }
                 handlers.onAssistantMessage?.(event, text);
+                if (text && hasToolCall) handlers.onInterimText?.(text, event);
                 break;
               }
               case "tool/call":
@@ -4599,13 +4602,18 @@ ${result.text ?? ""}`.trim(),
               case "turn/end": {
                 const turn = event.data?.turn ?? currentTurn;
                 const texts = assistantText.get(turn) ?? [];
-                const merged = [];
-                for (const piece of texts) {
-                  const trimmed = String(piece ?? "").trim();
-                  if (!trimmed || merged.at(-1) === trimmed) continue;
-                  merged.push(trimmed);
-                }
-                const text = merged.join("\n\n").slice(0, MAX_ASSISTANT_TEXT);
+                const joinSegments = (segments) => {
+                  const merged = [];
+                  for (const segment of segments) {
+                    const trimmed = String(segment?.text ?? "").trim();
+                    if (!trimmed || merged.at(-1) === trimmed) continue;
+                    merged.push(trimmed);
+                  }
+                  return merged.join("\n\n").slice(0, MAX_ASSISTANT_TEXT);
+                };
+                const finals = texts.filter((segment) => !segment?.hasToolCall);
+                const canDropInterim = typeof handlers.onInterimText === "function" && finals.length > 0;
+                const text = joinSegments(canDropInterim ? finals : texts);
                 handlers.onTurnEnd?.(event, text);
                 assistantText.delete(turn);
                 if (promptSent) {

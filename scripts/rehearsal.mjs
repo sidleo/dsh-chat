@@ -92,7 +92,24 @@ function createFakeAgent() {
         event: {
           type: 'assistant/message',
           seq: 3 + index * 2,
-          data: { turn: 1, step: index + 1, message: { content: [{ type: 'text', text }] } },
+          data: {
+            turn: 1,
+            step: index + 1,
+            message: {
+              /**
+               * 真机上**带工具调用的那一段**，content 里就有 `tool-call` 块
+               * （实测：`[{type:'tool-call'},{type:'tool-call'}]` + 一段 text）。
+               * 这里必须照实造：早先的假 DSH 只给 `text` 块，于是"调工具前的念叨被拼进答案"
+               * 这个真机故障在演练里永远复现不出来——13 条全绿，真机卡片一半是废话。
+               */
+              content: index === 0
+                ? [
+                  { type: 'text', text },
+                  { type: 'tool-call', callId: 'call-1', name: 'bash', arguments: '{"cmd":"ls"}' },
+                ]
+                : [{ type: 'text', text }],
+            },
+          },
         },
       },
       ...(index === 0
@@ -735,7 +752,74 @@ async function main() {
         + 'off 答案=卡片';
     });
 
-    // ⑪ 引用回复：被引用正文进提示词；读不到也不能丢当前问题
+    // ⑪ 中间叙述进过程面板、不进答案正文（真机上卡片一半是废话这条）
+    await step('调工具前的念叨进过程面板，答案正文只留真答案', async () => {
+      const gateway = createFakeLarkGateway();
+      const feishuState = createFeishuStateStore({
+        path: join(dataDir, 'feishu-note-state.json'), logger: silentLogger,
+      });
+      await feishuState.load();
+      const deps = {
+        channelId: 'feishu',
+        dataDir,
+        logger: silentLogger,
+        ready: () => service.ready(),
+        scheduleAfterResponse: (task) => { void task(); },
+        storage: service.bots.storageFor('feishu'),
+        contextEnhancement: service.contextEnhancement,
+        replyReference: service.replyReference,
+        accessPolicy,
+        commands: service.commands,
+        panel: service.panel,
+        sessions: service.sessions,
+        deferred: service.deferred,
+      };
+      // 过程展示**开着**（direct=cards）：这条路的答案正文与过程面板是同一张卡。
+      const bot = {
+        id: 'bot_rehearsal_note',
+        appId: 'cli_rehearsal_note',
+        ownerOpenIds: [OWNER],
+        botName: '演练机器人',
+        stepPushDirect: 'streaming_card',
+        stepPushGroup: 'streaming_card',
+      };
+      const bridge = createFeishuBridge({ bot, deps, gateway, state: feishuState, logger: silentLogger });
+      await service.bots.write('feishu', bot.id, { workspace: '/tmp/rehearsal-ws' });
+
+      // 真机形状：第一段带工具调用（= 调工具前的念叨），第二段才是答案。
+      agent.state.scripts.push(agent.frames(['我先查一下数据。', '昨天销售额 1234 万。']));
+      // `accept()` 收的是**飞书原始事件**（与真实回调同形），不是归一化后的对象。
+      await bridge.accept({
+        sender: { sender_id: { open_id: OWNER } },
+        message: {
+          message_id: 'om_note_1',
+          chat_id: 'oc_rehearsal_note',
+          chat_type: 'p2p',
+          message_type: 'text',
+          content: JSON.stringify({ text: '昨天卖了多少' }),
+        },
+      });
+      await new Promise((resolve) => { setTimeout(resolve, 80); });
+
+      const cards = [...gateway.calls.cards, ...gateway.calls.patched]
+        .map((row) => JSON.stringify(row.card ?? row));
+      const last = cards.at(-1) ?? '';
+      assert.match(last, /说明 · 我先查一下数据。/, '念叨要出现在过程面板里');
+      assert.match(last, /昨天销售额 1234 万。/, '真答案要送到');
+      // 答案元素里不能有念叨——这是这次修的核心。
+      const parsed = JSON.parse(last);
+      const answerElements = (parsed.body?.elements ?? []).filter(
+        (element) => element.tag === 'markdown' && String(element.content).includes('昨天销售额'),
+      );
+      assert.ok(answerElements.length > 0, '答案要以 markdown 元素出现在卡上');
+      for (const element of answerElements) {
+        assert.doesNotMatch(String(element.content), /我先查一下数据/,
+          '念叨被拼进答案正文了（这次就是修这个）');
+      }
+      return '面板里有「说明 ·」、答案正文里没有';
+    });
+
+    // ⑫ 引用回复：被引用正文进提示词；读不到也不能丢当前问题
     await step('引用回复：被引用正文进提示词，读不到只加标记、不丢当前问题', async () => {
       const ok = enhanceReplyReference(
         [{ type: 'text', text: '那昨天呢' }],
@@ -755,7 +839,7 @@ async function main() {
       return `<dsh_im_reply> 标签 + 读不到时的标记都在`;
     });
 
-    // ⑫ /retitle：一次性给历史会话补「渠道 · 聊天 ·」前缀（幂等，且聊天身份可升级）
+    // ⑬ /retitle：一次性给历史会话补「渠道 · 聊天 ·」前缀（幂等，且聊天身份可升级）
     await step('/retitle：历史会话补「渠道 · 聊天 ·」前缀，重复执行不重复加', async () => {
       // 数**增量**：别的步骤（例如飞书桥那条）也会改标题，绝对值会被它们影响。
       const renamedBefore = agent.state.renames.length;
@@ -783,7 +867,7 @@ async function main() {
       return `重命名 ${agent.state.renames.length - renamedBefore} 次，第二次幂等（已有前缀 3 个）`;
     });
 
-    // ⑬ 会话不能共用：别人正在用的会话不出现在候选里，硬切也被拒（并说清是谁占着）
+    // ⑭ 会话不能共用：别人正在用的会话不出现在候选里，硬切也被拒（并说清是谁占着）
     await step('会话共享限制：别人正在用的会话不列、切换被拒且给出可读理由', async () => {
       const otherKey = 'group:oc_shared';
       await service.sessions.bindings.bind('fixture', BOT, otherKey, { sessionId: 'rehearsal-1' });

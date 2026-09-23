@@ -838,6 +838,16 @@ export function createFeishuBridge({
               presenter.think(block.text);
             }
           },
+          /**
+           * 模型调工具前那句念叨：放进过程面板，**不进答案正文**。
+           *
+           * 提供这个 handler 就等于告诉 hub"我会呈现它"——hub 因此把它从答案里摘出去
+           * （见 `sessions.mjs` 的 `turn/end`）。不提供的话 hub 会照旧全段拼接，
+           * 那是"宁可有废话也不丢内容"的兜底。
+           */
+          onInterimText: (text) => {
+            presenter.note(text);
+          },
           onTurnEnd: (turnEvent) => {
             const reason = turnEvent?.data?.reason;
             if (reason?.kind && reason.kind !== 'completed') {

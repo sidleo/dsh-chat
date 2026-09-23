@@ -986,8 +986,77 @@ test('机器人默认模型应用失败不能让会话建不出来（记 warn，
   }
 });
 
+test('调工具前的念叨不进答案：渠道接了就走面板，没接就全拼（绝不静默丢内容）', async () => {
+  /**
+   * 真实的 `assistant/message` 里，**带工具调用的那一段**就是"调工具前的念叨"
+   * （真机实测：content = `[{type:'tool-call'},…]` + 一段 text）。
+   * 结构事实：模型一产出不带工具调用的段，这一轮就结束了——所以那种段只有一段、且总在最后，
+   * 它才是真答案。早先把念叨也当答案拼进回复，真机上 19 步的回合 58% 是废话。
+   */
+  const frames = () => [
+    { type: 'snapshot', cursor: 3, records: [], hasMore: false },
+    { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn: 1 } } },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 5,
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            content: [
+              { type: 'text', text: '我先查一下数据。' },
+              { type: 'tool-call', callId: 'c1', name: 'bash', arguments: '{}' },
+            ],
+          },
+        },
+      },
+    },
+    { type: 'event', event: { type: 'tool/call', seq: 6, data: { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' } } },
+    {
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 7,
+        data: { turn: 1, step: 2, message: { content: [{ type: 'text', text: '昨天销售额 1234 万。' }] } },
+      },
+    },
+    { type: 'event', event: { type: 'turn/end', seq: 8, data: { turn: 1, reason: { kind: 'completed' } } } },
+  ];
+  const askOptions = {
+    channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
+    workspacePath: '/ws', content: [{ type: 'text', text: '昨天卖了多少' }], sourceGuidance: '',
+  };
+
+  // ① 渠道接住了中间叙述（飞书那条路）：答案只剩真答案，念叨单独交出去。
+  const withHook = await makeBridge({ script: [frames()] });
+  try {
+    const interim = [];
+    const result = await withHook.bridge.ask({
+      ...askOptions,
+      handlers: { onInterimText: (text) => interim.push(text) },
+    });
+    assert.equal(result.text, '昨天销售额 1234 万。', '答案只留不带工具调用的那一段');
+    assert.deepEqual(interim, ['我先查一下数据。'], '念叨要单独交给渠道（它放进过程面板）');
+  } finally {
+    await withHook.cleanup();
+  }
+
+  // ② 渠道没接（纯文本的微信，没有面板可放）：维持全段拼接——宁可有废话，也绝不静默丢内容。
+  const noHook = await makeBridge({ script: [frames()] });
+  try {
+    const result = await noHook.bridge.ask(askOptions);
+    assert.equal(result.text, '我先查一下数据。\n\n昨天销售额 1234 万。',
+      '没接 onInterimText 就照旧全拼，一段都不能丢');
+  } finally {
+    await noHook.cleanup();
+  }
+});
+
 test('多 step 的正文都要带回：不是只给最后一个 step（上游 Issue #112 的同一根因）', async () => {
-  // 一轮里：工具调用前写了一段，工具调用后又写了一段，最后还有一段收尾说明。
+  // 一轮里两段**都不带工具调用**（模型把答案分两次说完）：两段都得在，
+  // 相邻完全相同的段只留一次（模型偶尔会把同一段话说两遍）。
   const frames = [
     { type: 'snapshot', cursor: 3, records: [], hasMore: false },
     { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn: 1 } } },
@@ -996,10 +1065,9 @@ test('多 step 的正文都要带回：不是只给最后一个 step（上游 Is
       event: {
         type: 'assistant/message',
         seq: 5,
-        data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '我先查一下数据。' }] } },
+        data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '昨天销售额 1234 万。' }] } },
       },
     },
-    { type: 'event', event: { type: 'tool/call', seq: 6, data: { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' } } },
     {
       type: 'event',
       event: {
@@ -1013,7 +1081,7 @@ test('多 step 的正文都要带回：不是只给最后一个 step（上游 Is
       event: {
         type: 'assistant/message',
         seq: 8,
-        data: { turn: 1, step: 3, message: { content: [{ type: 'text', text: '昨天销售额 1234 万。' }] } },
+        data: { turn: 1, step: 3, message: { content: [{ type: 'text', text: '环比上周 +3%。' }] } },
       },
     },
     { type: 'event', event: { type: 'turn/end', seq: 9, data: { turn: 1, reason: { kind: 'completed' } } } },
@@ -1023,8 +1091,9 @@ test('多 step 的正文都要带回：不是只给最后一个 step（上游 Is
     const result = await app.bridge.ask({
       channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a',
       workspacePath: '/ws', content: [{ type: 'text', text: '昨天卖了多少' }], sourceGuidance: '',
+      handlers: { onInterimText: () => {} },
     });
-    assert.equal(result.text, '我先查一下数据。\n\n昨天销售额 1234 万。',
+    assert.equal(result.text, '昨天销售额 1234 万。\n\n环比上周 +3%。',
       '每一段正文都要在，相邻重复的段只留一次');
     assert.equal(result.reason.kind, 'completed');
   } finally {

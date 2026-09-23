@@ -23,8 +23,15 @@
  * @module dsh-chat-feishu/turn-presenter
  */
 
-/** 折叠面板最多保留的行数（超出丢弃最旧的）。 */
-const MAX_ROWS = 24;
+/**
+ * 折叠面板最多保留的行数（超出丢弃最旧的）。
+ *
+ * 24 是只有工具行时的经验值；现在**中间叙述**也进这个面板（一个 27 次工具调用的回合
+ * 会有 18 条叙述 + 27 条工具 = 45 行），按真机数据：中位 10 行、90 分位 34 行、最大 51 行，
+ * 24 会把 18% 的回合截掉——那正是要留住的东西。48 覆盖到 96% 的回合，
+ * 同时**留出卡片预算**给答案（面板先吃预算，见 `renderStepCard`）。
+ */
+const MAX_ROWS = 48;
 
 /** 卡片正文长度上限，避免超出飞书卡片限制。 */
 const MAX_CARD_CONTENT = 12_000;
@@ -34,6 +41,9 @@ const MAX_PANEL_TITLE = 46;
 
 /** 思考行的长度上限。 */
 const MAX_THINK_CHARS = 120;
+
+/** 中间叙述行的长度上限（它是一句话，不是段落）。 */
+const MAX_NOTE_CHARS = 120;
 
 /** 工具行摘要的长度上限。 */
 const MAX_TOOL_SUMMARY = 60;
@@ -181,6 +191,21 @@ export function toolRow({ name, arguments: argsRaw } = {}) {
 export function thinkRow(text) {
   const line = clamp(firstLine(text), MAX_THINK_CHARS);
   return line ? `思考 · ${line}` : '';
+}
+
+/**
+ * 把模型"调工具前那句念叨"渲染成一行。
+ *
+ * 它原本是答案正文的一部分（每步一段，读者看到的就是"Let me check…"），现在挪进过程面板：
+ * 答案干净了，叙述也还在（展开面板能看到）。标签用「说明」而不是「思考」——
+ * 思考是 reasoning 块（模型的内心独白），这句是**它说给用户的话**，两者不是一回事。
+ *
+ * @param text - 那一段正文。
+ * @returns 一行文本。
+ */
+export function noteRow(text) {
+  const line = clamp(firstLine(text), MAX_NOTE_CHARS);
+  return line ? `说明 · ${line}` : '';
 }
 
 /**
@@ -684,6 +709,20 @@ export function createTurnPresenter({
     think(text) {
       const row = thinkRow(text);
       putEntry({ kind: 'think', text: row });
+      return push(row);
+    },
+
+    /**
+     * 记录模型"调工具前那句念叨"：同样进折叠面板，占一行。
+     *
+     * 它**不进答案正文**了（hub 侧只把不带工具调用的那段当答案），所以这里是它唯一的去处——
+     * 面板是折叠的，不打扰读答案的人，展开还能看到全过程。
+     *
+     * @param text - 那一段正文。
+     */
+    note(text) {
+      const row = noteRow(text);
+      putEntry({ kind: 'note', text: row });
       return push(row);
     },
 
