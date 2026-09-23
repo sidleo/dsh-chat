@@ -143,6 +143,15 @@ try {
     else if (policyDirect.checked !== false) failures.push('配了关闭的「访问策略（本会话） · 私聊」渲染成了勾上');
   }
 
+  // 「卡片友好回答」开关：必须画在机器人卡片上，且反映假数据（false = 不勾）。
+  const answerFrames = results.filter((frame) => frame.cardAnswer != null);
+  if (answerFrames.length === 0) failures.push('没测到「卡片友好回答」开关（机器人卡片里缺了它）');
+  for (const frame of answerFrames) {
+    if (frame.cardAnswer !== false) {
+      failures.push(`${frame.scenario} @${frame.width}px: 「卡片友好回答」显示为勾上，与假数据（false）不符`);
+    }
+  }
+
   // lark-cli 身份：三个分层下拉（全局/私聊/群聊）的当前值必须反映假数据。
   // 假数据里三层各不相同（全局=仅应用、私聊=应用+用户、群聊=仅应用），
   // 所以"漏传某一层"或"永远显示默认值"都会被抓到。

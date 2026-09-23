@@ -554,6 +554,8 @@ function measure() {
         const [scope, value] = String(el.getAttribute('data-lark-scope') ?? '').split(':');
         return [scope, value ?? null];
       }));
+    // 「卡片友好回答」的勾选状态（假数据是 false）：漏传字段会永远显示默认值 → 真机"我关了却没生效"。
+    const cardAnswer = frame.querySelector('[data-card-answer]')?.checked ?? null;
     const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
       .filter((el) => el.getAttribute('aria-label').includes(' · '))
       .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
@@ -581,6 +583,7 @@ function measure() {
       tall,
       widest,
       sectionChecks,
+      cardAnswer,
       larkIdentity,
       dialogs,
       dragResult,
