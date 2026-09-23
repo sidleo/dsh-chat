@@ -65,8 +65,18 @@ const FEISHU_STATUS = {
   groupResponseMode: 'mention',
   groupTopicReply: false,
   stepPush: { direct: 'card', group: 'card' },
-  // 非默认值：默认是 bot-only，这里放"允许用户身份"，守门才能发现"控件没反映假数据"。
-  larkIdentity: { mode: 'user-allowed', userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
+  // 非默认值：默认是"全局仅应用"，这里放一份**分层**配置（各层取值都不同），
+  // 守门才能发现"控件没反映假数据"这种静默失效。
+  larkIdentity: {
+    scopes: {
+      global: { bot: true, user: false },
+      direct: { bot: true, user: true },
+      group: { bot: true, user: false },
+      targets: [{ kind: 'group', id: 'oc_3R', label: '3R部群', bot: true, user: true }],
+    },
+    summary: '全局：仅应用 · 私聊：应用 + 用户 · 群聊：仅应用 · 指定：1 条',
+    userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5',
+  },
   handled: 128,
   lastHandledAt: '2026-09-19T02:21:57.000Z',
   lastError: null,
@@ -139,7 +149,14 @@ const RPC_FIXTURES = {
   }),
   // lark-cli 身份体检（只读）：给一个"profile 在、user 已登录"的真实形态。
   'bot.lark-identity.get': () => ({
-    policy: { mode: 'user-allowed', userOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5' },
+    identity: {
+      global: { bot: true, user: false },
+      direct: { bot: true, user: true },
+      group: { bot: true, user: false },
+      targets: [{ kind: 'group', id: 'oc_3R', label: '3R部群', bot: true, user: true }],
+    },
+    summary: '全局：仅应用 · 私聊：应用 + 用户 · 群聊：仅应用 · 指定：1 条',
+    pinnedUserOpenId: 'ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5',
     profile: {
       found: true,
       name: 'dsh-chat-cli_7b9d1a2c4e6f8035',
@@ -150,7 +167,7 @@ const RPC_FIXTURES = {
       active: false,
       effective: false,
     },
-    identity: {
+    larkCli: {
       bot: { appId: 'cli_7b9d1a2c4e6f8035', identity: 'bot', available: true, tokenStatus: 'ready' },
       user: {
         appId: 'cli_7b9d1a2c4e6f8035',
@@ -528,8 +545,13 @@ function measure() {
         .map((el) => el.dataset.scope),
       total: dialog.querySelectorAll('.dchat-tabPanel').length,
     }));
-    // lark-cli 身份下拉的当前值：必须反映假数据（漏传字段会永远显示默认值）。
-    const larkIdentity = frame.querySelector('[data-lark-identity]')?.getAttribute('data-lark-identity') ?? null;
+    // lark-cli 身份的三个分层下拉（全局/私聊/群聊）当前值：必须反映假数据
+    //（漏传字段会永远显示默认值——"我明明开了却没生效"就是这么来的）。
+    const larkIdentity = Object.fromEntries([...frame.querySelectorAll('[data-lark-scope]')]
+      .map((el) => {
+        const [scope, value] = String(el.getAttribute('data-lark-scope') ?? '').split(':');
+        return [scope, value ?? null];
+      }));
     const sectionChecks = [...frame.querySelectorAll('input[type="checkbox"][aria-label]')]
       .filter((el) => el.getAttribute('aria-label').includes(' · '))
       .map((el) => ({ label: el.getAttribute('aria-label'), checked: el.checked === true }));
