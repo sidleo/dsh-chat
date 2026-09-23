@@ -11,9 +11,10 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { dirname } from 'node:path';
 
 import {
-  createLarkCli, normalizeLarkUserIdentity, profileNameFor,
+  binCandidates, childPath, createLarkCli, normalizeLarkUserIdentity, profileNameFor, runWithBinFallback,
 } from '../packages/dsh-chat-feishu/host/lark-cli.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -359,7 +360,9 @@ test('子进程环境：剔除会切 workspace 的变量，关掉两类提示噪
   }
   assert.equal(env.LARKSUITE_CLI_NO_UPDATE_NOTIFIER, '1');
   assert.equal(env.LARKSUITE_CLI_NO_SKILLS_NOTIFIER, '1');
-  assert.equal(env.PATH, '/usr/bin', '其余环境照旧继承');
+  assert.equal(env.PATH.endsWith('/usr/bin'), true, '其余环境照旧继承（原有 PATH 保留在后面）');
+  assert.equal(env.PATH.startsWith(dirname(process.execPath)), true,
+    'PATH 前面补了宿主 node 目录：lark-cli 的 shebang 要能跑起来');
 });
 
 test('用户身份匹配：钉住的人对得上才放行，对不上就拒绝且不发消息', async () => {
@@ -457,4 +460,64 @@ test('没装 lark-cli：给一句能照做的错误，而不是 ENOENT 原样抛
     assert.equal(error.code, 'feishu/lark-cli-missing');
     return true;
   });
+});
+
+/**
+ * 真机现场：桌面端**从 Finder 启动**时 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，
+ * 而 lark-cli 装在 `~/.local/bin` → 裸名字 spawn 直接 ENOENT → 解析不到 profile。
+ * 所以真实执行器要多走一步"按绝对路径再找一遍"。
+ */
+test('找不到 lark-cli 时按绝对路径兜底（PATH 里能找到就仍以 PATH 为准）', async () => {
+  assert.deepEqual(
+    binCandidates('lark-cli', { HOME: '/Users/x' }),
+    ['lark-cli', '/Users/x/.local/bin/lark-cli', '/Users/x/.hermes/bin/lark-cli',
+      '/Users/x/.bun/bin/lark-cli', '/Users/x/.npm-global/bin/lark-cli', '/Users/x/bin/lark-cli',
+      '/usr/local/bin/lark-cli', '/opt/homebrew/bin/lark-cli'],
+    '裸名字排第一：PATH 里能解析到时行为与以前完全一致',
+  );
+  assert.deepEqual(binCandidates('/opt/homebrew/bin/lark-cli', { HOME: '/Users/x' }),
+    ['/opt/homebrew/bin/lark-cli'], '显式路径不再兜底');
+  assert.deepEqual(binCandidates('lark-cli', {}), ['lark-cli', '/usr/local/bin/lark-cli', '/opt/homebrew/bin/lark-cli'],
+    '没有 HOME 时只留系统目录');
+
+  // 裸名字 ENOENT → 换到 ~/.local/bin 成功，且报回来的就是那条候选。
+  const tries = [];
+  const result = await runWithBinFallback(async ({ bin: used }) => {
+    tries.push(used);
+    if (used === 'lark-cli') {
+      const error = new Error('spawn lark-cli ENOENT');
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return { code: 0, bin: used };
+  }, { bin: 'lark-cli', args: [], env: { HOME: '/Users/x' }, cwd: undefined, input: null });
+  assert.deepEqual(tries, ['lark-cli', '/Users/x/.local/bin/lark-cli']);
+  assert.equal(result.bin, '/Users/x/.local/bin/lark-cli');
+
+  // 非 ENOENT 的错误立刻抛出，不用下一个候选去掩盖。
+  let calls = 0;
+  await assert.rejects(runWithBinFallback(async () => {
+    calls += 1;
+    const error = new Error('EACCES');
+    error.code = 'EACCES';
+    throw error;
+  }, { bin: 'lark-cli', args: [], env: { HOME: '/Users/x' } }), (error) => error.code === 'EACCES');
+  assert.equal(calls, 1);
+
+  // 全部候选都 ENOENT：把最后那个 ENOENT 抛出去，调用方仍能翻成"没装 lark-cli"。
+  await assert.rejects(runWithBinFallback(async () => {
+    const error = new Error('spawn lark-cli ENOENT');
+    error.code = 'ENOENT';
+    throw error;
+  }, { bin: 'lark-cli', args: [], env: { HOME: '/Users/x' } }), (error) => error.code === 'ENOENT');
+});
+
+test('子进程 PATH：宿主的 node 目录与常见安装位排最前（PATH 是极简时也跑得起来）', () => {
+  const path = childPath('/usr/bin:/bin', '/Users/x');
+  // lark-cli 是 `#!/usr/bin/env node` 的脚本：光找到文件不够，shebang 还得找得到 node。
+  assert.equal(path.startsWith(dirname(process.execPath)), true, '宿主自己在用的 node 目录排第一');
+  assert.match(path, /\/Users\/x\/\.local\/bin/, '常见安装位也要在（Finder 启动时 PATH 里没有它们）');
+  assert.equal(path.endsWith('/usr/bin:/bin'), true, '原有 PATH 原样保留在后面');
+  assert.equal(childPath('', '/Users/x').endsWith(':'), false, '不留空条目');
+  assert.equal(childPath(undefined, undefined).includes('undefined'), false, '缺 HOME 时不拼出 undefined');
 });

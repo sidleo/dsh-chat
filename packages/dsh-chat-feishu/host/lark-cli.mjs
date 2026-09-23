@@ -85,6 +85,80 @@ function parseJson(text) {
 }
 
 /**
+ * `PATH` 里找不到 `lark-cli` 时按这些目录再找一遍（相对 `$HOME`），最后两个是常见全局安装位置。
+ *
+ * 真机背景：桌面端**从 Finder 启动**时 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，而 `lark-cli`
+ * 装在 `~/.local/bin` —— 于是插件每次都"解析不到 lark-cli"，profile 解析失败，
+ * 会话环境事实与提示词都拿不到 profile 名（更早的写法还会因此把 bash 一起打挂）。
+ * `PATH` 里能找到时**仍以 PATH 为准**（候选表第一项就是裸名字），不会改变用户在终端里的行为。
+ */
+const BIN_FALLBACK_DIRS = Object.freeze(['.local/bin', '.hermes/bin', '.bun/bin', '.npm-global/bin', 'bin']);
+
+/**
+ * 一个 bin 名的候选顺序：先用 `PATH` 里的名字，再按绝对路径兜底。
+ *
+ * @param bin - 可执行名（含 `/` 时视为绝对/相对路径，原样返回）。
+ * @param env - 取 `HOME` 的环境（缺省 `process.env`）。
+ * @returns 候选列表（至少一项）。
+ */
+export function binCandidates(bin = 'lark-cli', env = process.env) {
+  if (typeof bin !== 'string' || !bin) return ['lark-cli'];
+  if (bin.includes('/')) return [bin];
+  const home = typeof env?.HOME === 'string' && env.HOME ? env.HOME : '';
+  return [
+    bin,
+    ...BIN_FALLBACK_DIRS.map((dir) => (home ? `${home}/${dir}/${bin}` : null)).filter(Boolean),
+    `/usr/local/bin/${bin}`,
+    `/opt/homebrew/bin/${bin}`,
+  ];
+}
+
+/**
+ * 给 lark-cli 子进程拼一份**能跑起来**的 `PATH`。
+ *
+ * 两件事一起解决：`lark-cli` 本身可能不在宿主 `PATH` 里（桌面端从 Finder 启动时只有
+ * `/usr/bin:/bin:/usr/sbin:/sbin`），而它又是 `#!/usr/bin/env node` 的脚本——
+ * **光找到文件不够，shebang 还得找得到 `node`**。所以把「当前进程的 node 目录」
+ * （`process.execPath` 的父目录，即宿主自己在用的那个 node）与几个常见安装位排到最前面，
+ * 原有 `PATH` 原样保留在后面。
+ *
+ * @param current - 子进程原本的 `PATH`（可空）。
+ * @param home - `HOME`（缺省取 `process.env.HOME`）。
+ * @returns 新的 `PATH`。
+ */
+export function childPath(current, home = process.env.HOME) {
+  const nodeDir = typeof process.execPath === 'string' && process.execPath.includes('/')
+    ? process.execPath.slice(0, process.execPath.lastIndexOf('/'))
+    : '';
+  const dirs = typeof home === 'string' && home ? BIN_FALLBACK_DIRS.map((dir) => `${home}/${dir}`) : [];
+  const existing = typeof current === 'string' && current ? current.split(':') : [];
+  return [...new Set([nodeDir, ...dirs, ...existing].filter(Boolean))].join(':');
+}
+
+/**
+ * 跑一条外部命令：`PATH` 里找不到（`ENOENT`）就换下一个候选重试。
+ *
+ * 只对 `ENOENT` 重试——其它错误（权限、参数不对…）原样抛出，避免拿一个失败去掩盖另一个失败。
+ *
+ * @param run - 真正的执行函数 `({ bin, args, env, cwd, input }) => Promise`。
+ * @param options - 同上，`bin` 是**候选里的第一个**。
+ * @returns 执行结果。
+ */
+export async function runWithBinFallback(run, options) {
+  const candidates = binCandidates(options.bin, options.env);
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return await run({ ...options, bin: candidate });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error(`找不到可执行文件：${options.bin}`);
+}
+
+/**
  * 默认执行器：数组形式参数 + 关闭 shell（**没有 shell 注入面**）。
  *
  * @param options - { bin, args, env, cwd, input }。
@@ -171,12 +245,16 @@ export function createLarkCli({
     };
   }
 
-  /** 子进程环境：剔除会切 workspace 的变量，并关掉两类提示（免得 JSON 里混 `_notice`）。 */
+  /**
+   * 子进程环境：剔除会切 workspace 的变量、关掉两类提示（免得 JSON 里混 `_notice`），
+   * 并给 `PATH` 补上"能跑起来"所需的目录。
+   */
   function childEnv() {
     const next = { ...env };
     for (const key of WORKSPACE_ENV_KEYS) delete next[key];
     next.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = '1';
     next.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = '1';
+    next.PATH = childPath(next.PATH, next.HOME);
     return next;
   }
 
@@ -194,7 +272,14 @@ export function createLarkCli({
     const argv = pin ? ['--profile', resolved?.name ?? managedName, ...args] : [...args];
     let result;
     try {
-      result = await runner({ bin, args: argv, env: childEnv(), cwd, input });
+      /**
+       * 用默认执行器（真实 spawn）时按候选路径兜一层：桌面端从 Finder 启动的 `PATH` 不含
+       * `~/.local/bin`，裸名字会 `ENOENT`。注入的 runner（测试）保持原样，行为不变。
+       */
+      const run = runner === defaultRunner
+        ? (options) => runWithBinFallback(runner, options)
+        : runner;
+      result = await run({ bin, args: argv, env: childEnv(), cwd, input });
     } catch (error) {
       if (error?.code === 'ENOENT') {
         throw larkError('feishu/lark-cli-missing', `没找到 lark-cli（${bin}），无法完成这次调用。`, { cause: error });

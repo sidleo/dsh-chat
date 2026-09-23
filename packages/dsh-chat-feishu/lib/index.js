@@ -129166,6 +129166,37 @@ function parseJson(text) {
     return null;
   }
 }
+var BIN_FALLBACK_DIRS = Object.freeze([".local/bin", ".hermes/bin", ".bun/bin", ".npm-global/bin", "bin"]);
+function binCandidates(bin = "lark-cli", env = process.env) {
+  if (typeof bin !== "string" || !bin) return ["lark-cli"];
+  if (bin.includes("/")) return [bin];
+  const home = typeof env?.HOME === "string" && env.HOME ? env.HOME : "";
+  return [
+    bin,
+    ...BIN_FALLBACK_DIRS.map((dir) => home ? `${home}/${dir}/${bin}` : null).filter(Boolean),
+    `/usr/local/bin/${bin}`,
+    `/opt/homebrew/bin/${bin}`
+  ];
+}
+function childPath(current, home = process.env.HOME) {
+  const nodeDir = typeof process.execPath === "string" && process.execPath.includes("/") ? process.execPath.slice(0, process.execPath.lastIndexOf("/")) : "";
+  const dirs = typeof home === "string" && home ? BIN_FALLBACK_DIRS.map((dir) => `${home}/${dir}`) : [];
+  const existing = typeof current === "string" && current ? current.split(":") : [];
+  return [...new Set([nodeDir, ...dirs, ...existing].filter(Boolean))].join(":");
+}
+async function runWithBinFallback(run, options) {
+  const candidates = binCandidates(options.bin, options.env);
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return await run({ ...options, bin: candidate });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error(`\u627E\u4E0D\u5230\u53EF\u6267\u884C\u6587\u4EF6\uFF1A${options.bin}`);
+}
 function defaultRunner({ bin, args, env, cwd, input }) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { env, cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
@@ -129229,13 +129260,15 @@ function createLarkCli({
     for (const key of WORKSPACE_ENV_KEYS) delete next[key];
     next.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1";
     next.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1";
+    next.PATH = childPath(next.PATH, next.HOME);
     return next;
   }
   async function exec(args, { input = null, allowPlainText = false, pin = true } = {}) {
     const argv = pin ? ["--profile", resolved?.name ?? managedName, ...args] : [...args];
     let result;
     try {
-      result = await runner({ bin, args: argv, env: childEnv(), cwd, input });
+      const run = runner === defaultRunner ? (options) => runWithBinFallback(runner, options) : runner;
+      result = await run({ bin, args: argv, env: childEnv(), cwd, input });
     } catch (error) {
       if (error?.code === "ENOENT") {
         throw larkError("feishu/lark-cli-missing", `\u6CA1\u627E\u5230 lark-cli\uFF08${bin}\uFF09\uFF0C\u65E0\u6CD5\u5B8C\u6210\u8FD9\u6B21\u8C03\u7528\u3002`, { cause: error });
@@ -129795,7 +129828,17 @@ function createLarkCliGuard({ locate, policyFor, channelId, logger = console } =
     const owner = await locate(sessionId);
     if (!owner || channelId !== void 0 && owner.channelId !== channelId) return null;
     const policy = await policyFor(owner);
-    if (!policy?.profileName) return null;
+    if (!policy) return null;
+    if (!policy.profileName) {
+      for (const segment of splitCommandSegments(command)) {
+        if (!segmentRunsLarkCli(segment)) continue;
+        if (isLocalCommand(segment)) continue;
+        const reason = '\u672C\u4F1A\u8BDD\u89E3\u6790\u4E0D\u5230\u8FD9\u53F0\u98DE\u4E66\u673A\u5668\u4EBA\u5728 lark-cli \u91CC\u7684 profile\uFF08\u672C\u673A\u6CA1\u88C5 lark-cli\uFF0C\u6216\u62C9\u8D77 dsh \u7684\u73AF\u5883\u91CC PATH \u6CA1\u6709\u5B83\uFF09\uFF0C\u65E0\u6CD5\u6838\u5BF9"\u8FD9\u6761\u547D\u4EE4\u7528\u7684\u662F\u672C\u5E94\u7528\u81EA\u5DF1\u7684\u6388\u6743"\uFF0C\u56E0\u6B64\u62D2\u7EDD\u6267\u884C\u3002\u8BF7\u8BA9 dsh \u5728 PATH \u542B `~/.local/bin` \u7684\u73AF\u5883\u4E0B\u542F\u52A8\uFF0C\u6216\u5148\u7528 `lark-cli profile list` \u81EA\u67E5\uFF1B\u672C\u673A\u81EA\u67E5\u7C7B\u547D\u4EE4\uFF08profile list / whoami / --help\uFF09\u4ECD\u7136\u653E\u884C\u3002';
+        logger.warn?.(`[dsh-chat-feishu] \u62E6\u4E0B\u4E00\u6761 lark-cli \u8C03\u7528\uFF08${owner.botId} / \u4F1A\u8BDD ${sessionId}\uFF09\uFF1A${reason}\uFF5C\u547D\u4EE4\uFF1A${segment.trim().slice(0, 200)}`);
+        return { kind: "deny", reason, botId: owner.botId };
+      }
+      return null;
+    }
     for (const segment of splitCommandSegments(command)) {
       if (!segmentRunsLarkCli(segment)) continue;
       const reason = evaluateLarkSegment({
@@ -132644,14 +132687,24 @@ function installLarkIdentitySection(ctx, ownershipOf) {
     if (!owner) return "";
     const allowUser = owner.scope?.user === true;
     const allowBot = owner.scope?.bot !== false;
+    const profileName = typeof owner.profileName === "string" && owner.profileName ? owner.profileName : null;
+    const identity2 = `\u5FC5\u987B\u663E\u5F0F\u5199\u8EAB\u4EFD\uFF1A\`--as bot\`\uFF08\u4EE3\u8868\u8FD9\u53F0\u5E94\u7528\u81EA\u5DF1\uFF09${allowUser ? "\uFF1B\u8981\u4EE3\u8868\u67D0\u4E2A\u4EBA\u7684\u8EAB\u4EFD\u64CD\u4F5C\u65F6\u624D\u7528 `--as user`\uFF08\u5B9E\u9645\u662F\u8C01\u7531 lark-cli \u91CC\u767B\u5F55\u7684\u90A3\u4E2A\u4EBA\u51B3\u5B9A\uFF09\u3002" : "\uFF1B\u672C\u4F1A\u8BDD\u6CA1\u6709\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF0C`--as user` \u4F1A\u88AB\u62D2\u7EDD\u3002"}${allowBot ? "" : " \u672C\u4F1A\u8BDD\u4E5F\u6CA1\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\uFF0C\u4E24\u79CD\u8EAB\u4EFD\u90FD\u4F1A\u88AB\u62D2\u7EDD\u3002"}`;
+    const bans = "\u4E0D\u8981\u7528 `profile use` / `--use` / `config strict-mode --global` / `auth logout`\u2014\u2014\u5B83\u4EEC\u4F1A\u6539\u8FD9\u53F0\u673A\u5668\u4E0A lark-cli \u7684\u5168\u5C40\u72B6\u6001\uFF0C\u5F71\u54CD\u522B\u4EBA\u7684\u7528\u6CD5\u3002";
+    if (profileName === null) {
+      return [
+        `\u672C\u4F1A\u8BDD\u5C5E\u4E8E\u98DE\u4E66\u673A\u5668\u4EBA\u300C${owner.botName ?? owner.botId}\u300D\uFF0C\u4F46\u8FD9\u4E2A\u4F1A\u8BDD**\u89E3\u6790\u4E0D\u5230\u672C\u673A\u5668\u4EBA\u5728 lark-cli \u91CC\u7684 profile**\uFF08\u8FD9\u53F0\u673A\u5668\u4E0A\u6CA1\u88C5 lark-cli\uFF0C\u6216\u62C9\u8D77 dsh \u7684\u73AF\u5883\u91CC PATH \u6CA1\u6709\u5B83\uFF09\u3002`,
+        '\u56E0\u6B64\u672C\u4F1A\u8BDD**\u4E0D\u8981\u8C03\u7528 lark-cli**\uFF1A\u6CA1\u6709 profile \u5C31\u65E0\u6CD5\u4FDD\u8BC1"\u53EA\u7528\u672C\u5E94\u7528\u81EA\u5DF1\u7684\u6388\u6743"\uFF0C\u95E8\u7981\u4F1A\u62D2\u7EDD\u8FD9\u7C7B\u8C03\u7528\u3002\u5176\u4F59\u5DE5\u5177\uFF08bash / \u6587\u4EF6 / MCP \u7B49\uFF09\u7167\u5E38\u4F7F\u7528\u3002',
+        "\u8981\u6062\u590D\uFF1A\u786E\u8BA4 `lark-cli profile list` \u80FD\u5217\u51FA\u672C\u5E94\u7528\u7684 profile\uFF0C\u5E76\u8BA9 dsh \u5728**PATH \u91CC\u542B `~/.local/bin`** \u7684\u73AF\u5883\u4E0B\u542F\u52A8\uFF08\u4F8B\u5982\u4ECE\u7EC8\u7AEF\u542F\u52A8\uFF0C\u6216\u628A PATH \u5199\u8FDB\u542F\u52A8\u811A\u672C\uFF09\u3002",
+        `\u53E6\u5916\u4E24\u6761\u786C\u89C4\u77E9\u4ECD\u7136\u6709\u6548\uFF1A${identity2}${bans}`
+      ].join("\n");
+    }
     return [
       `\u672C\u4F1A\u8BDD\u5C5E\u4E8E\u98DE\u4E66\u673A\u5668\u4EBA\u300C${owner.botName ?? owner.botId}\u300D\uFF0C\u8FD9\u4E2A\u4F1A\u8BDD\u7684 lark-cli \u8EAB\u4EFD\u7B56\u7565\u662F${allowBot ? "\u300C\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\u300D" : "\u300C\u4E0D\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\u300D"} + ${allowUser ? "\u300C\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D" : "\u300C\u4E0D\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\u300D"}\u3002`,
       "\u5728\u8FD9\u4E2A\u4F1A\u8BDD\u91CC\u8FD0\u884C lark-cli \u7684\u786C\u89C4\u77E9\uFF08\u95E8\u7981\u4F1A\u68C0\u67E5\uFF0C\u8FDD\u53CD\u76F4\u63A5\u62D2\u7EDD\uFF09\uFF1A",
-      `1. \u5FC5\u987B\u5E26 \`--profile ${owner.profileName}\`\u2014\u2014\u8FD9\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684 profile\u3002`,
+      `1. \u5FC5\u987B\u5E26 \`--profile ${profileName}\`\u2014\u2014\u8FD9\u662F\u8FD9\u53F0\u673A\u5668\u4EBA\u81EA\u5DF1\u7684 profile\u3002`,
       '   \u4E0D\u5E26 profile \u65F6 lark-cli \u4F1A\u7528\u8FD9\u53F0\u673A\u5668\u4E0A"\u5F53\u524D\u751F\u6548"\u7684\u90A3\u4EFD\u6388\u6743\uFF0C\u53EF\u80FD\u662F\u522B\u7684\u5E94\u7528\u751A\u81F3\u522B\u4EBA\u7684\u8D26\u53F7\u3002',
-      `2. \u5FC5\u987B\u663E\u5F0F\u5199\u8EAB\u4EFD\uFF1A\`--as bot\`\uFF08\u4EE3\u8868\u8FD9\u53F0\u5E94\u7528\u81EA\u5DF1\uFF09${allowUser ? "\uFF1B\u8981\u4EE3\u8868\u67D0\u4E2A\u4EBA\u7684\u8EAB\u4EFD\u64CD\u4F5C\u65F6\u624D\u7528 `--as user`\uFF08\u5B9E\u9645\u662F\u8C01\u7531 lark-cli \u91CC\u767B\u5F55\u7684\u90A3\u4E2A\u4EBA\u51B3\u5B9A\uFF09\u3002" : "\uFF1B\u672C\u4F1A\u8BDD\u6CA1\u6709\u5141\u8BB8\u7528\u6237\u8EAB\u4EFD\uFF0C`--as user` \u4F1A\u88AB\u62D2\u7EDD\u3002"}${allowBot ? "" : " \u672C\u4F1A\u8BDD\u4E5F\u6CA1\u5141\u8BB8\u5E94\u7528\u8EAB\u4EFD\uFF0C\u4E24\u79CD\u8EAB\u4EFD\u90FD\u4F1A\u88AB\u62D2\u7EDD\u3002"}`,
-      "3. \u4E0D\u8981\u7528 `profile use` / `--use` / `config strict-mode --global` / `auth logout`\u2014\u2014",
-      "   \u5B83\u4EEC\u4F1A\u6539\u8FD9\u53F0\u673A\u5668\u4E0A lark-cli \u7684\u5168\u5C40\u72B6\u6001\uFF0C\u5F71\u54CD\u522B\u4EBA\u7684\u7528\u6CD5\u3002",
+      `2. ${identity2}`,
+      `3. ${bans}`,
       `profile \u540D\u4E5F\u5728\u73AF\u5883\u53D8\u91CF \`DSH_CHAT_LARK_PROFILE\` \u91CC\uFF08\u8EAB\u4EFD\u7B56\u7565\u5728 \`DSH_CHAT_LARK_IDENTITY\`\uFF09\u3002`
     ].join("\n");
   };
@@ -132707,8 +132760,14 @@ function registerShellFacts(ctx, ownershipOf) {
         if (!owner) return {};
         const allowBot = owner.scope?.bot !== false;
         const allowUser = owner.scope?.user === true;
+        const profileName = typeof owner.profileName === "string" && owner.profileName ? owner.profileName : null;
         return {
-          DSH_CHAT_LARK_PROFILE: owner.profileName,
+          /**
+           * 解析不到 profile 时**不返回这个键**（返回 `null` 会让 DSH 的 shell env 直接判错，
+           * 整个 bash 工具都起不来：`bash env contributor "dsh-chat-feishu" returned a non-string value`）。
+           * 缺键只是"模型少一条环境事实"，由提示词段告诉它别用 lark-cli。
+           */
+          ...profileName === null ? {} : { DSH_CHAT_LARK_PROFILE: profileName },
           // 报**本会话**实际生效的那份权限（不是机器人级的全局值）：模型照它写命令才不会被门禁挡。
           DSH_CHAT_LARK_IDENTITY: allowBot && allowUser ? "bot+user" : allowBot ? "bot" : allowUser ? "user" : "none"
         };

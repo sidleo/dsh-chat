@@ -269,6 +269,19 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   `lark-cli whoami --profile <名字> --as user`（看实际身份与 `onBehalfOf`）；
   日志里拦下时是 `拦下一条 lark-cli 调用（<botId> / 会话 <sessionId>）：<原因>｜命令：…`。
   真机现象对照：只用应用身份时消息以**应用名义**发出；用了用户身份才是"以某个人名义"。
+  ⚠️ **解析不到 profile 时，三方都不能把 `null` 交出去**（真机现场：桌面端**从 Finder 启动**，`PATH` 只有
+  `/usr/bin:/bin:/usr/sbin:/sbin` → `lark-cli` 不在里面 → 日志 `解析 lark-cli profile 失败` →
+  `profileName = null`）：① 会话**环境事实**给非字符串会让 DSH 的 shell env 直接判错——
+  `bash env contributor "dsh-chat-feishu" returned a non-string value for "DSH_CHAT_LARK_PROFILE"`
+  → **飞书会话里 bash 全挂**（跑不了 date/SQL/写文件，表现是"机器人干不了活、只会反复问你口径"）；
+  ② 提示词会印出 `必须带 --profile null`。现在：环境事实**不注入这个键**、提示词改成
+  "本会话不要调用 lark-cli + 怎么修"、门禁对**有策略但没 profile** 的场合**失败关闭**
+  （只放 `profile list` / `whoami` / `--help` 这类本机自查命令；**拿不到策略**时仍放行——
+  那分不清该不该管，误拦会把正常用法一起打死）。
+  ✅ 同一类问题的**根因兜底**：`host/lark-cli.mjs` 的 `binCandidates` 在 `PATH` 找不到时按
+  `~/.local/bin`（以及 `~/.hermes/bin`、`/usr/local/bin`、`/opt/homebrew/bin`）再找一遍
+  （`runWithBinFallback`，**PATH 里能找到就仍以 PATH 为准**）——Finder 启动的桌面端因此也能解析到 profile。
+  自查：`lark-cli profile list` 能列出本应用；日志里出现 `解析 lark-cli profile 失败` 就是这条链断了。
 - **用户发了图片，机器人说"不支持图片"**：DSH 的 `session/prompt` 会拿**会话当前模型**的模态
   直接拒掉图片内容块（`session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES`）。
   `sessions.ask()` 认这个拒绝后会把图片**换成同一会话的文件**再试一次（`imagesAsFiles`：

@@ -189,7 +189,32 @@ export function createLarkCliGuard({ locate, policyFor, channelId, logger = cons
     if (!owner || (channelId !== undefined && owner.channelId !== channelId)) return null;
     // 把整个 owner 交出去：策略要按会话键（群/私聊）解析，botId 不够。
     const policy = await policyFor(owner);
-    if (!policy?.profileName) return null;
+    /**
+     * 拿不到策略（不是本渠道的聊天会话 / 机器人已不在配置里）时**维持放行**：
+     * 那种情况分不清"该管"还是"不该管"，误拦会把正常用法一起打死。
+     */
+    if (!policy) return null;
+    /**
+     * 有策略但**解析不到 profile**（本机没装 lark-cli，或拉起 dsh 的环境 PATH 里没有它）时
+     * **必须失败关闭**：没有 profile 就没法核对"这条命令绑的是本应用自己的授权"，
+     * 放行等于回到"用这台机器上当前生效的那份授权说话"——那正是本项目要堵死的事。
+     * 唯一的例外是本机自查类命令（`profile list` / `whoami` / `--help` …）：它们不碰租户 API、
+     * 也不需要身份，留着让模型能自己诊断。
+     */
+    if (!policy.profileName) {
+      for (const segment of splitCommandSegments(command)) {
+        if (!segmentRunsLarkCli(segment)) continue;
+        if (isLocalCommand(segment)) continue;
+        const reason = '本会话解析不到这台飞书机器人在 lark-cli 里的 profile'
+          + '（本机没装 lark-cli，或拉起 dsh 的环境里 PATH 没有它），无法核对"这条命令用的是本应用自己的授权"，'
+          + '因此拒绝执行。请让 dsh 在 PATH 含 `~/.local/bin` 的环境下启动，或先用 `lark-cli profile list` 自查；'
+          + '本机自查类命令（profile list / whoami / --help）仍然放行。';
+        logger.warn?.(`[dsh-chat-feishu] 拦下一条 lark-cli 调用（${owner.botId} / 会话 ${sessionId}）：`
+          + `${reason}｜命令：${segment.trim().slice(0, 200)}`);
+        return { kind: 'deny', reason, botId: owner.botId };
+      }
+      return null;
+    }
     for (const segment of splitCommandSegments(command)) {
       if (!segmentRunsLarkCli(segment)) continue;
       const reason = evaluateLarkSegment({

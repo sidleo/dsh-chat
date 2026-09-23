@@ -226,7 +226,25 @@ test('门禁：策略从运行期读（改完设置立刻生效，不用重启�
   assert.equal(await guard.evaluate(bashCall(command)), null, '设置页一改，下一次调用就按新策略判');
 });
 
-test('门禁：机器人在 lark-cli 里没 profile 名字可用时不动手（避免误拦一切）', async () => {
+test('门禁：拿不到策略时不动手（避免误拦一切）', async () => {
   const guard = createGuard({ policyFor: async () => null });
   assert.equal(await guard.evaluate(bashCall('lark-cli im +messages-send --as user --text x')), null);
+});
+
+/**
+ * 真机现场：拉起 dsh 的环境 PATH 里没有 `~/.local/bin` → 解析 profile 失败 →
+ * 策略是 `{ profileName: null }`。这时**不能放行**（放行 = 用这台机器上当前生效的那份授权说话），
+ * 但本机自查类命令要留着，否则模型连"为什么失败"都查不了。
+ */
+test('门禁：有策略但解析不到 profile 时失败关闭（只放本机自查命令）', async () => {
+  const guard = createGuard({
+    policyFor: async () => ({ allowBot: true, allowUser: true, profileName: null }),
+  });
+  const denied = await guard.evaluate(bashCall('lark-cli im +messages-send --as bot --text x'));
+  assert.equal(denied?.kind, 'deny', '没有 profile 就不能保证"只用本应用自己的授权"');
+  assert.match(denied.reason, /解析不到这台飞书机器人在 lark-cli 里的 profile/);
+  assert.match(denied.reason, /~\/\.local\/bin/, '要给出可行动的修法');
+  assert.equal(await guard.evaluate(bashCall('lark-cli profile list')), null, '本机自查命令仍然放行');
+  assert.equal(await guard.evaluate(bashCall('lark-cli --help')), null);
+  assert.equal(await guard.evaluate(bashCall('echo hi')), null, '不是 lark-cli 的命令不管');
 });

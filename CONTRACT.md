@@ -729,6 +729,15 @@ owner（`{ botId, key }`）而不是 botId，只给 botId 会让 A 群放开的�
 lark-cli 一个 appId 只有一份 profile、一份 profile 只挂一个登录人，实际是谁由 `assertIdentity`
 核对钉住的 `openId`。要做"按发言人切身份"得绕开 lark-cli 的登录态，本契约不提供。
 
+⚠️ **解析不到 profile 时三方都要按"没有授权"处理，但不能交 `null` 出去**：拉起 dsh 的环境 PATH 里
+没有 `~/.local/bin` 时 `lark-cli` 根本找不到，解析结果就是 `profileName = null`。此时：
+① **会话环境事实不注入 `DSH_CHAT_LARK_PROFILE`**（值必须是字符串——给非字符串会让 DSH 的 shell env
+判错，`bash env contributor "dsh-chat-feishu" returned a non-string value`，**整个 bash 工具起不来**，
+表现是"机器人干不了活、只会反复问用户要口径"）；② 提示词段**不印 `--profile null`**，改成
+"本会话不要调用 lark-cli + 怎么修"；③ 门禁对"有策略但没 profile"的场合**失败关闭**，
+只放 `profile list` / `whoami` / `--help` 这类本机自查命令（拿不到策略时仍放行：那分不清该不该管，
+误拦会把正常用法一起打死）。
+
 **可选：`names.resolve({ botId, ids })`** —— 把平台 id 换成人能认出的名字，给设置页的
 「访问策略」白名单用（名单里只存 id，一排 `ou_4f6a8c0e…` 认不出是谁，也没法确认自己加错了人）。
 返回 `{ names: { id: name }, truncated, hint }`：**查不到的 id 不要放进 `names`**（界面退回显示 id），

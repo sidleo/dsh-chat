@@ -139,17 +139,39 @@ export function installLarkIdentitySection(ctx, ownershipOf) {
     // 否则模型会按"全局"猜，而门禁是按会话判的（两边说法不一致比不说更糟）。
     const allowUser = owner.scope?.user === true;
     const allowBot = owner.scope?.bot !== false;
+    const profileName = typeof owner.profileName === 'string' && owner.profileName
+      ? owner.profileName
+      : null;
+    const identity = `必须显式写身份：\`--as bot\`（代表这台应用自己）${allowUser
+      ? '；要代表某个人的身份操作时才用 `--as user`（实际是谁由 lark-cli 里登录的那个人决定）。'
+      : '；本会话没有允许用户身份，`--as user` 会被拒绝。'}${allowBot ? '' : ' 本会话也没允许应用身份，两种身份都会被拒绝。'}`;
+    const bans = '不要用 `profile use` / `--use` / `config strict-mode --global` / `auth logout`——'
+      + '它们会改这台机器上 lark-cli 的全局状态，影响别人的用法。';
+    if (profileName === null) {
+      /**
+       * 解析不到 profile（本机没装 lark-cli，或拉起 dsh 的那个环境 PATH 里没有它）：
+       * **绝不能把字面量 `null` 写进提示词**——模型会照着写 `--profile null`；
+       * 更要紧的是同一份取值还会进环境事实，非字符串会**直接把 bash 打挂**
+       * （`bash env contributor … returned a non-string value`）。所以这里改成"先别用 lark-cli"。
+       */
+      return [
+        `本会话属于飞书机器人「${owner.botName ?? owner.botId}」，但这个会话**解析不到本机器人在 lark-cli 里的 profile**`
+          + '（这台机器上没装 lark-cli，或拉起 dsh 的环境里 PATH 没有它）。',
+        '因此本会话**不要调用 lark-cli**：没有 profile 就无法保证"只用本应用自己的授权"，'
+          + '门禁会拒绝这类调用。其余工具（bash / 文件 / MCP 等）照常使用。',
+        '要恢复：确认 `lark-cli profile list` 能列出本应用的 profile，并让 dsh 在**PATH 里含 `~/.local/bin`** 的环境下启动'
+          + '（例如从终端启动，或把 PATH 写进启动脚本）。',
+        `另外两条硬规矩仍然有效：${identity}${bans}`,
+      ].join('\n');
+    }
     return [
       `本会话属于飞书机器人「${owner.botName ?? owner.botId}」，这个会话的 lark-cli 身份策略是`
         + `${allowBot ? '「允许应用身份」' : '「不允许应用身份」'} + ${allowUser ? '「允许用户身份」' : '「不允许用户身份」'}。`,
       '在这个会话里运行 lark-cli 的硬规矩（门禁会检查，违反直接拒绝）：',
-      `1. 必须带 \`--profile ${owner.profileName}\`——这是这台机器人自己的 profile。`,
+      `1. 必须带 \`--profile ${profileName}\`——这是这台机器人自己的 profile。`,
       '   不带 profile 时 lark-cli 会用这台机器上"当前生效"的那份授权，可能是别的应用甚至别人的账号。',
-      `2. 必须显式写身份：\`--as bot\`（代表这台应用自己）${allowUser
-        ? '；要代表某个人的身份操作时才用 `--as user`（实际是谁由 lark-cli 里登录的那个人决定）。'
-        : '；本会话没有允许用户身份，`--as user` 会被拒绝。'}${allowBot ? '' : ' 本会话也没允许应用身份，两种身份都会被拒绝。'}`,
-      '3. 不要用 `profile use` / `--use` / `config strict-mode --global` / `auth logout`——',
-      '   它们会改这台机器上 lark-cli 的全局状态，影响别人的用法。',
+      `2. ${identity}`,
+      `3. ${bans}`,
       `profile 名也在环境变量 \`DSH_CHAT_LARK_PROFILE\` 里（身份策略在 \`DSH_CHAT_LARK_IDENTITY\`）。`,
     ].join('\n');
   };
@@ -223,8 +245,16 @@ export function registerShellFacts(ctx, ownershipOf) {
         if (!owner) return {};
         const allowBot = owner.scope?.bot !== false;
         const allowUser = owner.scope?.user === true;
+        const profileName = typeof owner.profileName === 'string' && owner.profileName
+          ? owner.profileName
+          : null;
         return {
-          DSH_CHAT_LARK_PROFILE: owner.profileName,
+          /**
+           * 解析不到 profile 时**不返回这个键**（返回 `null` 会让 DSH 的 shell env 直接判错，
+           * 整个 bash 工具都起不来：`bash env contributor "dsh-chat-feishu" returned a non-string value`）。
+           * 缺键只是"模型少一条环境事实"，由提示词段告诉它别用 lark-cli。
+           */
+          ...profileName === null ? {} : { DSH_CHAT_LARK_PROFILE: profileName },
           // 报**本会话**实际生效的那份权限（不是机器人级的全局值）：模型照它写命令才不会被门禁挡。
           DSH_CHAT_LARK_IDENTITY: allowBot && allowUser
             ? 'bot+user'

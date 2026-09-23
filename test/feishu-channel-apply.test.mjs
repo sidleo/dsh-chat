@@ -149,3 +149,34 @@ test('没有 systemPrompt 服务的部署：提示词段装不上也不报错（
   assert.equal(ensure(), false, '装不上时返回 false，而不是抛错拖垮渠道');
   assert.equal(fake.sections.size, 0);
 });
+
+/**
+ * 真机现场：拉起 dsh 的环境 PATH 里没有 `~/.local/bin` → 解析 lark-cli profile 失败 →
+ * `owner.profileName = null`。旧写法把 null 原样交出去，两处一起出事：
+ * ① 会话环境事实返回非字符串 → DSH 的 shell env 直接判错，**整个 bash 工具都起不来**
+ *    （`bash env contributor "dsh-chat-feishu" returned a non-string value for "DSH_CHAT_LARK_PROFILE"`），
+ *    机器人干不了任何活，只能反复问用户要口径；
+ * ② 提示词段印出「必须带 `--profile null`」。
+ */
+test('解析不到 profile 时：环境事实不注入这个键，提示词也不印 null', () => {
+  let ownership = () => ({ ...OWNER, profileName: null });
+
+  const envFake = createFakeCtx();
+  registerShellFacts(envFake.ctx, () => ownership);
+  const contributor = envFake.contributors.get('dsh-chat-feishu');
+  const facts = contributor.resolve({ agent: { session: { header: { id: SESSION } } } });
+  assert.deepEqual(facts, { DSH_CHAT_LARK_IDENTITY: 'bot' },
+    '解析不到 profile 时只能少给一条事实，绝不能给非字符串');
+  assert.equal(Object.values(facts).every((value) => typeof value === 'string'), true,
+    '环境事实里的每个值都必须是字符串（非字符串会把 bash 打挂）');
+  assert.equal('DSH_CHAT_LARK_PROFILE' in facts, false);
+
+  const textFake = createFakeCtx();
+  installLarkIdentitySection(textFake.ctx, () => ownership);
+  const text = textFake.sections.get('dsh-chat-feishu:lark-cli-identity').text({ agent: { id: SESSION } });
+  assert.doesNotMatch(text, /profile null/, '不能印出字面量 null');
+  assert.match(text, /解析不到本机器人在 lark-cli 里的 profile/);
+  assert.match(text, /不要调用 lark-cli/);
+  assert.match(text, /~\/\.local\/bin/, '要给出可行动的修法');
+  assert.match(text, /--as bot/, '身份那两条硬规矩仍然要说');
+});
