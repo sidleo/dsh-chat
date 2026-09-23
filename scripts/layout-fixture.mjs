@@ -65,6 +65,8 @@ const FEISHU_STATUS = {
   groupResponseMode: 'mention',
   groupTopicReply: false,
   stepPush: { direct: 'card', group: 'card' },
+  // 非默认值：守门会替我们盯住「设置页有没有把这个字段画成实际状态」。
+  cardAnswer: false,
   // 非默认值：默认是"全局仅应用"，这里放一份**分层**配置（各层取值都不同），
   // 守门才能发现"控件没反映假数据"这种静默失效。
   larkIdentity: {

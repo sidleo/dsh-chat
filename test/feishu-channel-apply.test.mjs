@@ -11,7 +11,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { apply, installLarkIdentitySection, registerShellFacts } from '../packages/dsh-chat-feishu/host/index.mjs';
+import {
+  apply, installCardAnswerSection, installLarkIdentitySection, registerShellFacts,
+} from '../packages/dsh-chat-feishu/host/index.mjs';
 
 const SESSION = 'session-e6fb1928-946a-4f60-82ed-56a6076eb008';
 const PROFILE = 'cli_a9fa3aebe7f89cef';
@@ -140,6 +142,34 @@ test('身份策略提示词段：只说给聊天会话听，且写明必须带 p
   // 都不允许的场合也要如实说（否则模型会以为能用 bot）。
   ownership = () => ({ ...OWNER, scope: { bot: false, user: false, source: 'target' } });
   assert.match(section.text({ agent: { id: SESSION } }), /两种身份都会被拒绝/);
+});
+
+/**
+ * 「卡片友好回答」：怎么回复由模型自己定，插件只告诉它"回复会渲染进飞书卡片"以及卡片这边
+ * 真正支持的写法（每条限制都对着本地卡片文档核实过）。开关按机器人存、默认开。
+ */
+test('卡片友好回答段：默认注入、关掉后整段消失、拿不到配置时按开', () => {
+  const fake = createFakeCtx();
+  const ownership = (sessionId) => (sessionId === SESSION ? OWNER : null);
+  let bot = { cardAnswer: true };
+  installCardAnswerSection(fake.ctx, { ownershipOf: () => ownership, botOf: () => bot });
+  const section = fake.sections.get('dsh-chat-feishu:card-answer');
+  assert.equal(section.order, 420, '要排在身份策略段（410）之后');
+  assert.equal(section.text({ agent: { id: 'session-other' } }), '', '不是聊天会话就不出这段');
+
+  const on = section.text({ agent: { id: SESSION } });
+  assert.match(on, /飞书卡片/, '要说清答案会被渲染进卡片');
+  assert.match(on, /一张表最多 5 行/, '表格行数上限是平台事实（文档：超出分页）');
+  assert.match(on, /不要用 `#`/, '文档明确要求正文别用大标题');
+  assert.match(on, /交付文件/, '图片/附件要走交付文件那条路');
+  assert.match(on, /不要自己拼卡片 JSON/, '卡片由插件拼，模型只写 markdown');
+
+  bot = { cardAnswer: false };
+  assert.equal(section.text({ agent: { id: SESSION } }), '', '关掉就整段不注入');
+  bot = null;
+  assert.match(section.text({ agent: { id: SESSION } }), /飞书卡片/, '拿不到配置时按开（缺项 = 生效）');
+  bot = { cardAnswer: true };
+  assert.equal(section.text({ agent: {} }), '', '没有会话 id 时不出这段');
 });
 
 test('没有 systemPrompt 服务的部署：提示词段装不上也不报错（门禁照旧生效）', () => {

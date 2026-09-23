@@ -97,6 +97,13 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   `Object.assign(record.bot, patch)` 就地改；测试用 `internals.createBridge` 捕获"桥拿到的是哪份对象"
   并断言它就是被改的那份（改回换引用的写法，测试立刻红）。
   **属主是例外**：`bot.owner.set` 不走这条（改完由设置页触发重连），这是有意的。
+- **回复本身也可以「按卡片来写」**（「卡片友好回答」，默认**开**）：答案一直渲染进卡片的 `markdown` 组件，
+  所以插件往会话的系统提示词里注入一段写作建议（`dsh-chat-feishu:card-answer`，order 420）：
+  数据用标准 MD 表但**一张表最多 5 行**、正文**别用 `#`/`##` 当标题**（卡片文档明确「字号过大显丑」）、
+  图片/附件走「交付文件」而不是嵌正文（卡片内嵌图要飞书 img_key，模型拿不到）。
+  ⚠️ **口径是「让模型自己决定怎么写」，插件不改写答案**——不做表格→组件的自动转换，也不重排段落；
+  关掉开关（设置页「卡片友好回答」/ `bot.card-answer.set`）就整段不注入。
+  每条限制都对着本地卡片文档核实过（`~/.agents/skills/lark-im/references/card/`），别凭印象加规则。
 - **「不显示过程」也要用卡片发答案**（真机要求"只发送最终答案也需要卡片"）：关掉过程**不等于**
   退回纯文本——答案里的表格/代码块/链接发纯文本全被拍平。`off` 模式现在发一张**只装答案的卡**
   （`renderAnswerCard`：正常结束不要卡片头、失败才给橙底 `处理失败`，
@@ -421,6 +428,7 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
 | P9 | lark-cli 身份红线 | ✅ 调 lark-cli 只能用自己的授权：① 插件自己调只走 `host/lark-cli.mjs`（守门：别的包文件不许引入 `node:child_process`），每次注入 `--profile <本应用那一份>` + 显式 `--as`，调用前 `whoami` 核对 `appId`（用户身份再核对钉住的 `openId`），对不上就拒绝、绝不回退到当前生效 profile；② 身份策略是**每机器人**设置（默认 `bot-only`），设置页「lark-cli 身份」可改，**开启用户身份必须二次确认**（不带 `confirm:true` 一个字节都不写），开启时由 lark-cli回答"登录的是谁"并钉住（`larkUserOpenId`）。profile 名不猜——按 appId 从 `lark-cli profile list`读回（见 P10 第 ③ 条） |
 | P10 | 身份策略真的生效（模型自己调的 lark-cli 也管得住） | ✅ 真机上「只用应用身份」形同虚设——模型用 lark-cli 的 skill + bash 直接 `--as user` 发消息，绕过了插件自己的调用入口。现在三件事一起上：① `host/lark-guard.mjs` 接 DSH 的 `tools/pre-execute`，**本渠道聊天会话**里的 lark-cli 必须带本机器人专用 profile + 显式身份，未放开用户身份的场合拒 `--as user`，并禁 `profile use` / `--use` / `--global` / `config bind|remove` / `auth logout`（拒绝时把正确写法告诉模型，并留日志）；② 会话拿到 `DSH_CHAT_LARK_PROFILE` / `DSH_CHAT_LARK_IDENTITY` 环境事实 + 一段系统提示词，先写对再兜底；③ profile 用**本应用那一份**：按 appId 从 `lark-cli profile list` 读回真实名字（真机实测一个 appId 只有一份 profile，想另建会被 lark-cli 拒：`each profile must have a unique app-id`），机器人启动时解析并记住名字（门禁与提示词都报这个名字，报错了模型写什么都不对），拿不到只记日志、不影响启动；**不改**那份 profile 的 `strict-mode` / `default-as`（用户自己也在用它）。注意「只是提到 lark-cli」（`grep -rn lark-cli docs/`、`cat lark-cli.md`）不算调用，不拦 |
 | P11 | 身份策略分场合配置（分层就近覆盖） | ✅ 单一机器人级开关不够用：私聊可以放开、大群不该放开，同一个群也常只信得过某一个人。`host/lark-identity.mjs` 定四层并**就近覆盖**：`targets → 群聊/私聊分类 → global`，每层 `{ bot, user }` 两个开关**各自独立**（可同时允许 / 都不允许 / 继承）。默认**全局仅应用**；旧字段 `larkUserIdentity: 'user-allowed'` 读取时迁移成"全局 应用+用户"，升级零重配。**门禁按 `owner.key` 解析**（`policyFor(owner)` 而非 `policyFor(botId)`）——只给 botId 会让 A 群放开的用户身份泄漏到 B 群，单测钉住了；提示词段与环境事实同样报**本会话**那一份，三处判据一致。命中方式：`kind:'group'` 认群 `chatId`；`kind:'user'` 私聊认 `senderId`、群聊认 **`chatId + senderId` 组合**。⚠️ 已知边界：会话键里没有发言人，所以按会话解析时**群聊的"指定某人"命不中**（要在群聊按人区分需 bridge 把 senderId 带进解析，未做）；设置页的候选只给得出「群」与「私聊的人」——群里的"人"需要"群 id + 人 id"两个值，列表提供不了，得手工写 `targets`。⚠️ 语义边界：`user: true` 只是"**允许**以用户身份调用"，**不是换成发言人本人的授权**（lark-cli 一份 profile 一个登录人）；收窄配置**不清掉**已钉住的 `larkUserOpenId`，否则来回切一次就得重新扫码 |
+| P12 | 卡片友好回答（模型自己决定的卡片化回答） | ✅ 答案本来就渲染进卡片，但模型并不知道卡片这边什么写法好看——所以加一个**按机器人**的开关（默认开，设置页可关）：开着时往会话注入一段写作建议（`dsh-chat-feishu:card-answer`），关掉整段不注入。**插件不改写答案内容**（怎么写由模型自己定），规则全部来自本地卡片文档：表格 ≤5 行/表、正文别用大标题、图片走交付文件、不要自己拼卡片 JSON |
 
 ## 工作方式
 

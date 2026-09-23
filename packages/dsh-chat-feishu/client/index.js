@@ -107,6 +107,9 @@ const zh = {
   '确认移除': '确认移除',
   '取消': '取消',
   '任务过程展示': '任务过程展示',
+  '卡片友好回答': '卡片友好回答',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。':
+    '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。',
   '设置执行过程的呈现方式；私聊与群聊分别生效': '设置执行过程的呈现方式；私聊与群聊分别生效',
   '不显示过程（只发送最终答案）': '不显示过程（只发送最终答案）',
   '适合日常问答：不显示工具调用等中间步骤，最终答案仍用一张卡片回复，表格与代码块保留格式':
@@ -288,6 +291,10 @@ const en = {
   '确认移除': 'Confirm removal',
   '取消': 'Cancel',
   '任务过程展示': 'Task progress display',
+  '卡片友好回答': 'Card-friendly answers',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。':
+    'When on, replies are written for Feishu cards (clearer tables, sections and code blocks); '
+    + 'when off they follow plain-text habits. Takes effect from the next message.',
   '设置执行过程的呈现方式；私聊与群聊分别生效':
     'Choose how the execution is presented; direct and group chats are configured separately',
   '不显示过程（只发送最终答案）': 'Hide the process (final answer only)',
@@ -1006,6 +1013,30 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
     translate: t,
     onSave: settings.savePanelSections,
   }),
+
+  /**
+   * 「卡片友好回答」：一个开关。开着就告诉模型"回复会被渲染进飞书卡片"以及卡片这边能用的
+   * markdown 语法（表格 ≤5 行、别用 `#` 当正文标题…）；**插件不改写答案**，怎么写由模型自己定。
+   */
+  h('div', null,
+    h('label', { className: 'dchat-check' },
+      h('input', {
+        type: 'checkbox',
+        checked: status.cardAnswer !== false,
+        disabled: busy || settings.phase !== 'ready',
+        onChange: async (event) => {
+          const next = event.target.checked;
+          try {
+            await run('bot.card-answer.set', { botId: bot.id, cardAnswer: next });
+            await onChanged?.();
+          } catch {
+            // 错误已经由 run() 落在卡片上的 error 行里并回滚勾选状态；这里只是别抛出去。
+          }
+        },
+      }),
+      h('span', null, t('卡片友好回答'))),
+    h('p', { className: 'dchat-cardDescription' },
+      t('开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。'))),
 
   h(ScopedModeEditor, {
     title: t('任务过程展示'),

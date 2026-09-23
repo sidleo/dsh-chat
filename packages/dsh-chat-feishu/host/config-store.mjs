@@ -10,6 +10,10 @@
  * - `larkUserOpenId`：lark-cli 里**钉住的那个人**——`user` 开关只决定"允不允许以用户身份调用"，
  *   实际是谁由它核对；换人不靠这里（一个 appId 在 lark-cli 里只有一份 profile）。
  *
+ * - `cardAnswer`：**卡片友好回答**（默认开）。开了就把"这台机器人的回复会被渲染进飞书卡片"
+ *   这件事写进会话的系统提示词，让模型自己按卡片能用的 markdown 语法组织答案
+ *   （表格 ≤5 行、别用 `#` 当正文标题…）；关掉则整段不注入。**插件不改写答案内容**。
+ *
  * 取代原来的"全局一份"过程展示：
  * - `stepPushDirect`：私聊过程展示
  * - `stepPushGroup`：群聊过程展示
@@ -115,6 +119,8 @@ export function normalizeBot(value, { legacy = false } = {}) {
       : legacyMode,
     larkIdentity,
     larkUserOpenId,
+    // 卡片友好回答：缺省开（缺项 = 生效，与面板显示项同一条归一化方向）。
+    cardAnswer: value.cardAnswer !== false,
     connectedAt: cleanString(value.connectedAt),
     createdAt: cleanString(value.createdAt) ?? cleanString(value.connectedAt),
   });
@@ -217,6 +223,17 @@ export function createFeishuConfigStore({ path, logger = console } = {}) {
       const direct = normalizeStepPushMode(modes?.direct);
       const group = normalizeStepPushMode(modes?.group);
       return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    },
+
+    /**
+     * 设置「卡片友好回答」（只影响注入会话的那段提示词，不改写答案）。
+     *
+     * @param botId - 机器人 id。
+     * @param enabled - 布尔。
+     * @returns 写入后的机器人配置。
+     */
+    async setCardAnswer(botId, enabled) {
+      return this.saveBot({ id: botId, cardAnswer: enabled === true });
     },
 
     /**

@@ -466,6 +466,16 @@ test('配置迁移：旧的全局 stepPush/stepPushMode 变成私聊/群聊两�
   assert.equal(explicit.stepPushGroup, 'off');
 });
 
+test('配置：卡片友好回答默认开，显式关掉才会关（缺项 = 生效）', () => {
+  const base = { appId: 'cli_x', secretRef: 'DSH_FEISHU_APP_SECRET', ownerOpenIds: ['ou_a'] };
+  assert.equal(normalizeBot({ id: 'bot_a', ...base }).cardAnswer, true, '没这个字段的老配置升级后应当开着');
+  assert.equal(normalizeBot({ id: 'bot_b', ...base, cardAnswer: true }).cardAnswer, true);
+  assert.equal(normalizeBot({ id: 'bot_c', ...base, cardAnswer: false }).cardAnswer, false);
+  // 只有显式 false 才算关：残缺/写错的值按"开"处理（与面板显示项同一条归一化方向）。
+  assert.equal(normalizeBot({ id: 'bot_d', ...base, cardAnswer: 'false' }).cardAnswer, true);
+  assert.equal(normalizeBot({ id: 'bot_e', ...base, cardAnswer: null }).cardAnswer, true);
+});
+
 test('配置存储：读写既有格式、按 id 保存、原子设置两份过程展示', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-cfg-'));
   try {
@@ -1034,6 +1044,23 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     assert.deepEqual(after.value.bots[0].stepPush, { direct: 'off', group: 'streaming_card' });
     const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
     assert.equal(onDisk.bots[0].stepPushGroup, 'streaming_card');
+
+    /**
+     * 「卡片友好回答」：默认开（缺项 = 生效），开关落到运行态与磁盘，且只接受布尔。
+     * 它只影响注入会话的那段提示词（见 installCardAnswerSection），**不改写答案内容**。
+     */
+    assert.equal(status.value.bots[0].cardAnswer, true, '缺省应为开');
+    const cardAnswer = await controller.endpoints['bot.card-answer.set']({ botId: 'bot_ctl', cardAnswer: false });
+    assert.equal(cardAnswer.ok, true);
+    assert.equal(cardAnswer.value.cardAnswer, false);
+    const afterCardAnswer = await controller.endpoints['connection.status']({});
+    assert.equal(afterCardAnswer.value.bots[0].cardAnswer, false, '运行态立即生效（就地改，不重连）');
+    assert.equal(JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')).bots[0].cardAnswer, false);
+    const badCardAnswer = await controller.endpoints['bot.card-answer.set']({ botId: 'bot_ctl', cardAnswer: 'yes' });
+    assert.equal(badCardAnswer.ok, false);
+    assert.equal(badCardAnswer.error.code, 'chat/bad-request');
+    const unknownBot = await controller.endpoints['bot.card-answer.set']({ botId: 'bot_nope', cardAnswer: true });
+    assert.equal(unknownBot.error.code, 'feishu/unknown-bot');
 
     /**
      * 渠道自带的面板字段：hub 的 panel.read/apply 调这两个，卡片上就能改过程展示。

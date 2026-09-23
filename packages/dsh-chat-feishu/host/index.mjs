@@ -50,10 +50,12 @@ export function apply(ctx) {
   let larkGuard = null;
   /** 提示词段的补装入口（真正的安装在本函数末尾；先声明再注册监听，避免顺序上的坑）。 */
   let ensureIdentitySection = () => false;
+  let ensureCardAnswerSection = () => false;
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     // 提示词段要是当初没装上（systemPrompt 服务晚到），这里顺手补一次。
     ensureIdentitySection?.();
+    ensureCardAnswerSection?.();
     if (!larkGuard) return next();
     let decision = null;
     try {
@@ -71,6 +73,12 @@ export function apply(ctx) {
   registerShellFacts(ctx, () => chatOwnership);
 
   ensureIdentitySection = installLarkIdentitySection(ctx, () => chatOwnership);
+  /** 机器人配置查询（卡片友好回答那段按它求值）；渠道实例起来前返回 null。 */
+  let botConfigOf = () => null;
+  ensureCardAnswerSection = installCardAnswerSection(ctx, {
+    ownershipOf: () => chatOwnership,
+    botOf: (botId) => botConfigOf(botId),
+  });
 
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
@@ -87,6 +95,14 @@ export function apply(ctx) {
       });
       chatOwnership = controller.chatOwnership;
       larkGuard = controller.larkGuard;
+      // 同步取值：提示词段是按请求现算的，拿不到就按"开"（见 installCardAnswerSection）。
+      botConfigOf = (botId) => {
+        try {
+          return controller.configStore?.get?.(botId) ?? null;
+        } catch {
+          return null;
+        }
+      };
       return {
         async stop() {
           await controller.stop();
@@ -202,6 +218,94 @@ export function installLarkIdentitySection(ctx, ownershipOf) {
     warned = true;
     ctx.logger?.warn?.('[dsh-chat-feishu] 当前 Host 没有可用的 systemPrompt 服务：'
       + 'lark-cli 身份策略只会以门禁方式生效（模型不会被提前告知）——服务晚到会在下一次工具调用前补装。');
+  }
+  return tryInstall;
+}
+
+/**
+ * 「卡片友好回答」的系统提示词段（`dsh-chat-feishu:card-answer`，order 420）。
+ *
+ * 用户口径：**怎么回复由模型自己决定，不做硬要求**；插件只负责告诉它"你的回复会被渲染进
+ * 飞书卡片"，以及卡片这边真正支持什么、什么写法会难看。所以这里只是一段提示词——
+ * 插件**不改写答案内容**（也不做表格→组件的自动转换），模型自己按需取舍。
+ *
+ * 文案里的每条限制都对着本地卡片文档核实过（`~/.agents/skills/lark-im/references/card/`）：
+ * `markdown` 组件支持标准 MD 表但**每表最多 5 行**（超出分页、单组件 ≤4 表）、
+ * `#`/`##`/`###` 在正文里"字号过大显丑"（文档明确要求用 `**加粗**` 代替）、
+ * 正文图片要飞书 `img_key`（模型拿不到）。
+ *
+ * 开关按**机器人**存（`bot.cardAnswer`，默认开）：关掉就整段不注入。
+ *
+ * @param ctx - host 上下文。
+ * @param deps - { ownershipOf, botOf }：前者返回 `chatOwnership(sessionId)`，
+ *   后者 `(botId) => 机器人配置 | null`（同步取值，段文本必须同步）。
+ * @returns 补装入口（与身份段同一套约定）。
+ */
+export function installCardAnswerSection(ctx, { ownershipOf, botOf } = {}) {
+  let installed = false;
+  let warned = false;
+
+  const text = (context) => {
+    const agent = context?.agent;
+    const sessionId = agent?.id ?? agent?.session?.id;
+    const lookup = ownershipOf?.();
+    if (typeof sessionId !== 'string' || !sessionId || typeof lookup !== 'function') return '';
+    let owner = null;
+    try {
+      owner = lookup(sessionId);
+    } catch {
+      return '';
+    }
+    if (!owner?.botId) return '';
+    // 拿不到配置时按"开"（缺项 = 生效）：宁可多给一段写作建议，也不要静默丢失。
+    const bot = (() => {
+      try {
+        return botOf?.(owner.botId) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    if (bot && bot.cardAnswer === false) return '';
+    return [
+      '你的回复会**原样渲染进飞书卡片**（Card 2.0 的 markdown 组件，不是纯文本聊天消息），'
+        + '按下面这些写会清楚很多（自己判断，不必照搬）：',
+      '1. 先给结论再给依据/明细；重点用 `**加粗**`，**不要用 `#` / `##` / `###` 当正文标题**（字号过大、显丑）。',
+      '2. 数据用标准 Markdown 表格：**一张表最多 5 行数据**（再多会自动分页），行多就拆成多张表；'
+        + '**列数尽量 ≤ 6**（手机端很窄）。',
+      '3. 分节用空行或单独一行的 `---`；列表用 `-` / `1.`（嵌套缩进 4 个空格）；引用用 `>`。',
+      '4. 代码块标语言（```sql / ```python）；很长的 SQL 只给关键片段。',
+      '5. 链接写成 `[文字](https://…)`（必须带 http/https）。',
+      '6. **不要在正文里嵌图片**（卡片里的图片要用飞书 img_key，一般拿不到）：把生成的文件写到磁盘'
+        + '并在答案里说清路径，插件会把它们作为「交付文件」单独发出来。',
+      '7. 不要自己拼卡片 JSON / HTML：卡片样式由插件负责，你只写 Markdown 正文。',
+    ].join('\n');
+  };
+
+  const tryInstall = () => {
+    if (installed) return true;
+    const systemPrompt = typeof ctx.get === 'function' ? ctx.get('systemPrompt') : ctx.systemPrompt;
+    if (!systemPrompt || typeof systemPrompt.section !== 'function') return false;
+    const register = () => systemPrompt.section({
+      name: 'dsh-chat-feishu:card-answer',
+      order: 420,
+      text,
+    });
+    try {
+      if (typeof ctx.effect === 'function') ctx.effect(register, 'dsh-chat-feishu: 卡片友好回答段');
+      else register();
+      installed = true;
+      ctx.logger?.info?.('[dsh-chat-feishu] 已注册「卡片友好回答」提示词段（按机器人开关，默认开）。');
+      return true;
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-chat-feishu] 注册「卡片友好回答」提示词段失败：${error?.message ?? error}`);
+      return false;
+    }
+  };
+
+  if (!tryInstall() && !warned) {
+    warned = true;
+    ctx.logger?.warn?.('[dsh-chat-feishu] 当前 Host 没有可用的 systemPrompt 服务：'
+      + '「卡片友好回答」写不进提示词（功能不丢，只是模型不知道卡片的能力）——服务晚到会在下一次工具调用前补装。');
   }
   return tryInstall;
 }

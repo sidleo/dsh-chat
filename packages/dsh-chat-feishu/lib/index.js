@@ -129586,6 +129586,8 @@ function normalizeBot(value, { legacy = false } = {}) {
     stepPushGroup: hasNewFields ? normalizeStepPushMode(value.stepPushGroup) : legacyMode,
     larkIdentity,
     larkUserOpenId,
+    // 卡片友好回答：缺省开（缺项 = 生效，与面板显示项同一条归一化方向）。
+    cardAnswer: value.cardAnswer !== false,
     connectedAt: cleanString3(value.connectedAt),
     createdAt: cleanString3(value.createdAt) ?? cleanString3(value.connectedAt)
   });
@@ -129672,6 +129674,16 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
       const direct = normalizeStepPushMode(modes?.direct);
       const group = normalizeStepPushMode(modes?.group);
       return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    },
+    /**
+     * 设置「卡片友好回答」（只影响注入会话的那段提示词，不改写答案）。
+     *
+     * @param botId - 机器人 id。
+     * @param enabled - 布尔。
+     * @returns 写入后的机器人配置。
+     */
+    async setCardAnswer(botId, enabled) {
+      return this.saveBot({ id: botId, cardAnswer: enabled === true });
     },
     /**
      * 设置**分层**的 lark-cli 身份策略，以及钉住哪个用户。
@@ -131565,6 +131577,8 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // 卡片友好回答（默认开）：只影响注入会话的那段提示词，见 index.mjs 的 card-answer 段。
+      cardAnswer: bot.cardAnswer !== false,
       // lark-cli 的身份策略（分层；默认全局只用应用身份）；细节（profile / whoami）走 bot.lark-identity.get。
       larkIdentity: Object.freeze({
         scopes: bot.larkIdentity,
@@ -132451,6 +132465,44 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         };
       },
       /**
+       * 开/关「卡片友好回答」。
+       *
+       * 只改一段系统提示词（模型自己按飞书卡片能用的语法组织答案），**不改写答案内容**；
+       * 下一条消息就生效（提示词段是按请求求值的，不必重连）。
+       */
+      "bot.card-answer.set": async (payload) => {
+        if (typeof payload?.botId !== "string" || !payload.botId || typeof payload.cardAnswer !== "boolean") {
+          return {
+            ok: false,
+            error: {
+              code: "chat/bad-request",
+              message: "bot.card-answer.set \u9700\u8981 { botId, cardAnswer: boolean }\u3002",
+              details: {}
+            }
+          };
+        }
+        await configStore.load();
+        if (!configStore.get(payload.botId)) {
+          return {
+            ok: false,
+            error: {
+              code: "feishu/unknown-bot",
+              message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`,
+              details: {}
+            }
+          };
+        }
+        const saved = await configStore.setCardAnswer(payload.botId, payload.cardAnswer);
+        patchRuntime(saved.id, { cardAnswer: saved.cardAnswer });
+        return {
+          ok: true,
+          value: {
+            cardAnswer: saved.cardAnswer,
+            message: saved.cardAnswer ? "\u5DF2\u5F00\u542F\uFF1A\u56DE\u590D\u4F1A\u6309\u98DE\u4E66\u5361\u7247\u7684\u80FD\u529B\u7EC4\u7EC7\uFF08\u4E0B\u4E00\u6761\u6D88\u606F\u751F\u6548\uFF09\u3002" : "\u5DF2\u5173\u95ED\uFF1A\u56DE\u590D\u4E0D\u518D\u6309\u5361\u7247\u80FD\u529B\u7EC4\u7EC7\u3002"
+          }
+        };
+      },
+      /**
        * lark-cli 身份策略的**只读**体检：给设置页看"现在到底会是谁"。
        *
        * 只读：不建 profile、不写任何东西（profile 要等真正调用时才懒建）。
@@ -132612,8 +132664,10 @@ function apply(ctx) {
   let chatOwnership = null;
   let larkGuard = null;
   let ensureIdentitySection = () => false;
+  let ensureCardAnswerSection = () => false;
   ctx.on("tools/pre-execute", async (exec, next) => {
     ensureIdentitySection?.();
+    ensureCardAnswerSection?.();
     if (!larkGuard) return next();
     let decision = null;
     try {
@@ -132626,6 +132680,11 @@ function apply(ctx) {
   });
   registerShellFacts(ctx, () => chatOwnership);
   ensureIdentitySection = installLarkIdentitySection(ctx, () => chatOwnership);
+  let botConfigOf = () => null;
+  ensureCardAnswerSection = installCardAnswerSection(ctx, {
+    ownershipOf: () => chatOwnership,
+    botOf: (botId) => botConfigOf(botId)
+  });
   ctx.effect(() => service.registerChannel({
     id: CHANNEL_ID,
     label: "\u98DE\u4E66",
@@ -132640,6 +132699,13 @@ function apply(ctx) {
       });
       chatOwnership = controller.chatOwnership;
       larkGuard = controller.larkGuard;
+      botConfigOf = (botId) => {
+        try {
+          return controller.configStore?.get?.(botId) ?? null;
+        } catch {
+          return null;
+        }
+      };
       return {
         async stop() {
           await controller.stop();
@@ -132716,6 +132782,66 @@ function installLarkIdentitySection(ctx, ownershipOf) {
   }
   return tryInstall;
 }
+function installCardAnswerSection(ctx, { ownershipOf, botOf } = {}) {
+  let installed = false;
+  let warned = false;
+  const text = (context) => {
+    const agent = context?.agent;
+    const sessionId = agent?.id ?? agent?.session?.id;
+    const lookup = ownershipOf?.();
+    if (typeof sessionId !== "string" || !sessionId || typeof lookup !== "function") return "";
+    let owner = null;
+    try {
+      owner = lookup(sessionId);
+    } catch {
+      return "";
+    }
+    if (!owner?.botId) return "";
+    const bot = (() => {
+      try {
+        return botOf?.(owner.botId) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    if (bot && bot.cardAnswer === false) return "";
+    return [
+      "\u4F60\u7684\u56DE\u590D\u4F1A**\u539F\u6837\u6E32\u67D3\u8FDB\u98DE\u4E66\u5361\u7247**\uFF08Card 2.0 \u7684 markdown \u7EC4\u4EF6\uFF0C\u4E0D\u662F\u7EAF\u6587\u672C\u804A\u5929\u6D88\u606F\uFF09\uFF0C\u6309\u4E0B\u9762\u8FD9\u4E9B\u5199\u4F1A\u6E05\u695A\u5F88\u591A\uFF08\u81EA\u5DF1\u5224\u65AD\uFF0C\u4E0D\u5FC5\u7167\u642C\uFF09\uFF1A",
+      "1. \u5148\u7ED9\u7ED3\u8BBA\u518D\u7ED9\u4F9D\u636E/\u660E\u7EC6\uFF1B\u91CD\u70B9\u7528 `**\u52A0\u7C97**`\uFF0C**\u4E0D\u8981\u7528 `#` / `##` / `###` \u5F53\u6B63\u6587\u6807\u9898**\uFF08\u5B57\u53F7\u8FC7\u5927\u3001\u663E\u4E11\uFF09\u3002",
+      "2. \u6570\u636E\u7528\u6807\u51C6 Markdown \u8868\u683C\uFF1A**\u4E00\u5F20\u8868\u6700\u591A 5 \u884C\u6570\u636E**\uFF08\u518D\u591A\u4F1A\u81EA\u52A8\u5206\u9875\uFF09\uFF0C\u884C\u591A\u5C31\u62C6\u6210\u591A\u5F20\u8868\uFF1B**\u5217\u6570\u5C3D\u91CF \u2264 6**\uFF08\u624B\u673A\u7AEF\u5F88\u7A84\uFF09\u3002",
+      "3. \u5206\u8282\u7528\u7A7A\u884C\u6216\u5355\u72EC\u4E00\u884C\u7684 `---`\uFF1B\u5217\u8868\u7528 `-` / `1.`\uFF08\u5D4C\u5957\u7F29\u8FDB 4 \u4E2A\u7A7A\u683C\uFF09\uFF1B\u5F15\u7528\u7528 `>`\u3002",
+      "4. \u4EE3\u7801\u5757\u6807\u8BED\u8A00\uFF08```sql / ```python\uFF09\uFF1B\u5F88\u957F\u7684 SQL \u53EA\u7ED9\u5173\u952E\u7247\u6BB5\u3002",
+      "5. \u94FE\u63A5\u5199\u6210 `[\u6587\u5B57](https://\u2026)`\uFF08\u5FC5\u987B\u5E26 http/https\uFF09\u3002",
+      "6. **\u4E0D\u8981\u5728\u6B63\u6587\u91CC\u5D4C\u56FE\u7247**\uFF08\u5361\u7247\u91CC\u7684\u56FE\u7247\u8981\u7528\u98DE\u4E66 img_key\uFF0C\u4E00\u822C\u62FF\u4E0D\u5230\uFF09\uFF1A\u628A\u751F\u6210\u7684\u6587\u4EF6\u5199\u5230\u78C1\u76D8\u5E76\u5728\u7B54\u6848\u91CC\u8BF4\u6E05\u8DEF\u5F84\uFF0C\u63D2\u4EF6\u4F1A\u628A\u5B83\u4EEC\u4F5C\u4E3A\u300C\u4EA4\u4ED8\u6587\u4EF6\u300D\u5355\u72EC\u53D1\u51FA\u6765\u3002",
+      "7. \u4E0D\u8981\u81EA\u5DF1\u62FC\u5361\u7247 JSON / HTML\uFF1A\u5361\u7247\u6837\u5F0F\u7531\u63D2\u4EF6\u8D1F\u8D23\uFF0C\u4F60\u53EA\u5199 Markdown \u6B63\u6587\u3002"
+    ].join("\n");
+  };
+  const tryInstall = () => {
+    if (installed) return true;
+    const systemPrompt = typeof ctx.get === "function" ? ctx.get("systemPrompt") : ctx.systemPrompt;
+    if (!systemPrompt || typeof systemPrompt.section !== "function") return false;
+    const register = () => systemPrompt.section({
+      name: "dsh-chat-feishu:card-answer",
+      order: 420,
+      text
+    });
+    try {
+      if (typeof ctx.effect === "function") ctx.effect(register, "dsh-chat-feishu: \u5361\u7247\u53CB\u597D\u56DE\u7B54\u6BB5");
+      else register();
+      installed = true;
+      ctx.logger?.info?.("[dsh-chat-feishu] \u5DF2\u6CE8\u518C\u300C\u5361\u7247\u53CB\u597D\u56DE\u7B54\u300D\u63D0\u793A\u8BCD\u6BB5\uFF08\u6309\u673A\u5668\u4EBA\u5F00\u5173\uFF0C\u9ED8\u8BA4\u5F00\uFF09\u3002");
+      return true;
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-chat-feishu] \u6CE8\u518C\u300C\u5361\u7247\u53CB\u597D\u56DE\u7B54\u300D\u63D0\u793A\u8BCD\u6BB5\u5931\u8D25\uFF1A${error?.message ?? error}`);
+      return false;
+    }
+  };
+  if (!tryInstall() && !warned) {
+    warned = true;
+    ctx.logger?.warn?.("[dsh-chat-feishu] \u5F53\u524D Host \u6CA1\u6709\u53EF\u7528\u7684 systemPrompt \u670D\u52A1\uFF1A\u300C\u5361\u7247\u53CB\u597D\u56DE\u7B54\u300D\u5199\u4E0D\u8FDB\u63D0\u793A\u8BCD\uFF08\u529F\u80FD\u4E0D\u4E22\uFF0C\u53EA\u662F\u6A21\u578B\u4E0D\u77E5\u9053\u5361\u7247\u7684\u80FD\u529B\uFF09\u2014\u2014\u670D\u52A1\u665A\u5230\u4F1A\u5728\u4E0B\u4E00\u6B21\u5DE5\u5177\u8C03\u7528\u524D\u8865\u88C5\u3002");
+  }
+  return tryInstall;
+}
 function registerShellFacts(ctx, ownershipOf) {
   ctx.inject(["shellEnv"], (shellCtx) => {
     shellCtx.shellEnv.register({
@@ -132760,6 +132886,7 @@ function registerShellFacts(ctx, ownershipOf) {
 export {
   apply,
   inject,
+  installCardAnswerSection,
   installLarkIdentitySection,
   name,
   registerShellFacts

@@ -298,6 +298,8 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
       stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // 卡片友好回答（默认开）：只影响注入会话的那段提示词，见 index.mjs 的 card-answer 段。
+      cardAnswer: bot.cardAnswer !== false,
       // lark-cli 的身份策略（分层；默认全局只用应用身份）；细节（profile / whoami）走 bot.lark-identity.get。
       larkIdentity: Object.freeze({
         scopes: bot.larkIdentity,
@@ -1413,6 +1415,49 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         return {
           ok: true,
           value: { stepPush: { direct: saved.stepPushDirect, group: saved.stepPushGroup } },
+        };
+      },
+
+      /**
+       * 开/关「卡片友好回答」。
+       *
+       * 只改一段系统提示词（模型自己按飞书卡片能用的语法组织答案），**不改写答案内容**；
+       * 下一条消息就生效（提示词段是按请求求值的，不必重连）。
+       */
+      'bot.card-answer.set': async (payload) => {
+        if (typeof payload?.botId !== 'string' || !payload.botId
+          || typeof payload.cardAnswer !== 'boolean') {
+          return {
+            ok: false,
+            error: {
+              code: 'chat/bad-request',
+              message: 'bot.card-answer.set 需要 { botId, cardAnswer: boolean }。',
+              details: {},
+            },
+          };
+        }
+        await configStore.load();
+        if (!configStore.get(payload.botId)) {
+          return {
+            ok: false,
+            error: {
+              code: 'feishu/unknown-bot',
+              message: `未找到机器人 ${payload.botId}。`,
+              details: {},
+            },
+          };
+        }
+        const saved = await configStore.setCardAnswer(payload.botId, payload.cardAnswer);
+        // 就地改运行期那份：提示词段读的就是它，换了引用设置会"看起来没生效"。
+        patchRuntime(saved.id, { cardAnswer: saved.cardAnswer });
+        return {
+          ok: true,
+          value: {
+            cardAnswer: saved.cardAnswer,
+            message: saved.cardAnswer
+              ? '已开启：回复会按飞书卡片的能力组织（下一条消息生效）。'
+              : '已关闭：回复不再按卡片能力组织。',
+          },
         };
       },
 
