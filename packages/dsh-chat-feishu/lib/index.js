@@ -126529,6 +126529,11 @@ import { stat } from "node:fs/promises";
 
 // packages/dsh-chat-feishu/host/turn-presenter.mjs
 var MAX_ROWS = 48;
+var INVISIBLE_TITLE = "\u200B";
+function headerTitle(title) {
+  const text = String(title ?? "").slice(0, 100);
+  return text === "" ? INVISIBLE_TITLE : text;
+}
 var MAX_CARD_CONTENT = 12e3;
 var MAX_PANEL_TITLE = 46;
 var MAX_THINK_CHARS = 120;
@@ -126812,7 +126817,7 @@ function renderStepCard({
      */
     header: {
       template,
-      title: { tag: "plain_text", content: String(title ?? "").slice(0, 100) }
+      title: { tag: "plain_text", content: headerTitle(title) }
     },
     body: { direction: "vertical", elements }
   };
@@ -126823,7 +126828,7 @@ function renderAnswerCard({ title, answer, template = "green" } = {}) {
     config: { update_multi: true, width_mode: "default" },
     header: {
       template,
-      title: { tag: "plain_text", content: String(title ?? "").slice(0, 100) }
+      title: { tag: "plain_text", content: headerTitle(title) }
     },
     body: {
       direction: "vertical",

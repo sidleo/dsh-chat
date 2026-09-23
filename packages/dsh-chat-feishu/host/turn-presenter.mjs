@@ -11,7 +11,7 @@
  * - **卡片头**＝桌面的整轮控件：运行中 `深度求索中，用时 X`；**结束之后一个字都不写**
  *   （完成 / 失败 / 中断都不写状态词，**也不显示已用时**）——完成与否只由 `template` 颜色表达
  *   （绿＝正常结束、橙＝失败或中断），失败原因在正文里。⚠️ Card 2.0 的 `header.title` 是**必填**，
- *   所以字段一直在、内容传空串。
+ *   而空串会让飞书**连整条配色头一起不画**——「不写字」要传零宽空格，见 `INVISIBLE_TITLE`。
  * - **折叠面板标题**＝桌面的组头：没结束时显示最新一项（一眼看到在干什么），
  *   结束后显示按类别拼的摘要（`执行了命令并已调用工具`，前 3 类、超过 3 类结尾加「等」、
  *   **不带计数**；对齐 `chat/step-process.ts` 的 `processTitle`）。
@@ -40,6 +40,27 @@
  * 同时**留出卡片预算**给答案（面板先吃预算，见 `renderStepCard`）。
  */
 const MAX_ROWS = 48;
+
+/**
+ * "不写字"的标题：一个**零宽空格**（U+200B）。
+ *
+ * Card 2.0 的 `header.title` 是必填（见 `~/.agents/skills/lark-im/references/card/components/header.md`），
+ * 而且真机实测：把 `content` 传成**空串**，飞书**连整条配色头一起不画**了
+ * （用户反馈"我只是让你不要显示耗时，但头部的颜色没了"）——所以"结束时不写字"要留一个
+ * 看不见但非空的字符。选 U+200B 而不是 U+FEFF：`String.trim()` 会吃掉 U+FEFF，U+200B 不会。
+ */
+export const INVISIBLE_TITLE = '\u200b';
+
+/**
+ * 卡片头的标题文案：想"不写字"时用零宽字符兜底（空串会让飞书连配色头一起省掉）。
+ *
+ * @param title - 想写的文案（空串／null＝不写字）。
+ * @returns 非空的 `plain_text` 文案。
+ */
+function headerTitle(title) {
+  const text = String(title ?? '').slice(0, 100);
+  return text === '' ? INVISIBLE_TITLE : text;
+}
 
 /** 卡片正文长度上限，避免超出飞书卡片限制。 */
 const MAX_CARD_CONTENT = 12_000;
@@ -476,7 +497,7 @@ export function renderStepCard({
      */
     header: {
       template,
-      title: { tag: 'plain_text', content: String(title ?? '').slice(0, 100) },
+      title: { tag: 'plain_text', content: headerTitle(title) },
     },
     body: { direction: 'vertical', elements },
   };
@@ -487,7 +508,7 @@ export function renderStepCard({
  *
  * 为什么不用过程卡：过程卡的头是「深度求索中，用时 X」、正文按 `· ` 逐行排过程——
  * 关掉过程时它是空的，只剩答案，用户看到的会是一张"什么都没有"的卡。
- * 这里给一张干净的卡：同一套**配色**（结束＝绿、失败＝橙；标题留空，见 `currentTitle`），
+ * 这里给一张干净的卡：同一套**配色**（结束＝绿、失败＝橙；标题不写字，见 `currentTitle` 与 `INVISIBLE_TITLE`），
  * 正文只有答案的 markdown——**格式（表格、代码块、链接）因此得以保留**，这正是要卡片的原因。
  *
  * @param options - { title, answer, template }。
@@ -499,7 +520,7 @@ export function renderAnswerCard({ title, answer, template = 'green' } = {}) {
     config: { update_multi: true, width_mode: 'default' },
     header: {
       template,
-      title: { tag: 'plain_text', content: String(title ?? '').slice(0, 100) },
+      title: { tag: 'plain_text', content: headerTitle(title) },
     },
     body: {
       direction: 'vertical',

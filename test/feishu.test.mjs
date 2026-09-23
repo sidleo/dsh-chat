@@ -21,7 +21,7 @@ import { createFeishuConfigStore, normalizeBot } from '../packages/dsh-chat-feis
 import { createFeishuController, deriveFeishuIdentity } from '../packages/dsh-chat-feishu/host/controller.mjs';
 import { createFeishuStateStore } from '../packages/dsh-chat-feishu/host/state-store.mjs';
 import {
-  createTurnPresenter, renderStepCard, thinkRow, todoRows, toolRow,
+  createTurnPresenter, INVISIBLE_TITLE, renderStepCard, thinkRow, todoRows, toolRow,
 } from '../packages/dsh-chat-feishu/host/turn-presenter.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -691,7 +691,8 @@ test('过程展示 off：不产生任何过程消息，最终答案用**卡片**
     const card = app.gateway.calls.cards[0].card;
     assert.equal(card.schema, '2.0');
     assert.match(JSON.stringify(card), /最终答案/);
-    assert.equal(card.header.title.content, '', '结束的卡不写状态词、也不显示已用时');
+    assert.equal(card.header.title.content, INVISIBLE_TITLE, '结束的卡不写状态词、也不显示已用时');
+    assert.equal(card.header.template, 'green', '但要留一个非空标题，否则飞书连配色头一起不画');
     assert.equal(card.header.template, 'green', '完成与否只看配色');
     assert.equal(card.body.elements.length, 1, '答案卡只有正文一块，不带过程面板，也没有分割线');
     assert.equal(card.body.elements[0].tag, 'markdown');
@@ -2382,7 +2383,7 @@ test('卡片头只放运行中那一行；结束之后只有颜色（不写状�
   assert.match(withThink, /"content":"执行了命令"/, '结束后标题＝类别摘要');
 
   const done = cards.at(-1);
-  assert.equal(done.header.title.content, '', '结束之后卡片头不写任何文案（含已用时）');
+  assert.equal(done.header.title.content, INVISIBLE_TITLE, '结束之后卡片头不写任何文案（含已用时）');
   assert.equal(done.header.template, 'green', '完成与否只看配色');
   assert.doesNotMatch(JSON.stringify(done), /深度求索中/);
   assert.doesNotMatch(JSON.stringify(done), /张三-DSH/, '完成状态同样不带机器人名');
@@ -2398,7 +2399,7 @@ test('卡片头只放运行中那一行；结束之后只有颜色（不写状�
   });
   await broken.finish('', { kind: 'timeout' });
   const failed = JSON.stringify(cards.at(-1));
-  assert.equal(cards.at(-1).header.title.content, '');
+  assert.equal(cards.at(-1).header.title.content, INVISIBLE_TITLE);
   assert.doesNotMatch(JSON.stringify(cards.at(-1).header), /未正常完成|处理失败|用时/);
   assert.match(failed, /本轮运行失败（timeout）。/, '失败原因在正文里，信息不丢');
   assert.match(failed, /"template":"orange"/);
@@ -2413,7 +2414,7 @@ test('卡片头只放运行中那一行；结束之后只有颜色（不写状�
     logger: silentLogger,
   });
   await stopped.finish('', { kind: 'aborted' });
-  assert.equal(cards.at(-1).header.title.content, '');
+  assert.equal(cards.at(-1).header.title.content, INVISIBLE_TITLE);
   assert.match(JSON.stringify(cards.at(-1)), /"template":"orange"/);
 });
 
@@ -2421,7 +2422,8 @@ test('没有过程时的答案卡不画分割线（上头没东西，线就是�
   const bare = renderStepCard({ title: '', panelItems: [], answer: '答案正文' });
   assert.deepEqual(bare.body.elements.map((element) => element.tag), ['markdown'],
     '只有答案时不该有 hr');
-  assert.equal(bare.header.title.content, '', 'Card 2.0 的 header.title 必填但可以留空');
+  assert.equal(bare.header.title.content, INVISIBLE_TITLE,
+    'Card 2.0 的 header.title 必填；空串会让飞书连配色头一起不画，所以用零宽字符');
   assert.equal(bare.header.template, 'blue');
 
   const withPanel = renderStepCard({
@@ -2616,7 +2618,7 @@ test('运行中的「深度求索中，用时 X」按 10 秒慢时钟自己走�
   assert.match(JSON.stringify(cards.at(-1).header), /深度求索中，用时10秒/);
 
   await presenter.finish('答案', { kind: 'completed' });
-  assert.equal(cards.at(-1).header.title.content, '', '结束后卡片头留空（不再显示用时）');
+  assert.equal(cards.at(-1).header.title.content, INVISIBLE_TITLE, '结束后卡片头不再显示用时');
 });
 
 test('被飞书限频（99991400）时退避重试，而不是把卡片判死退回纯文本', async () => {
