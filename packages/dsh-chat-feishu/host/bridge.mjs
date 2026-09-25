@@ -792,7 +792,17 @@ export function createFeishuBridge({
       else finalParts = [{ type: 'text', text: enhancedContent }];
       if (replyTo) finalParts = withReply(finalParts);
 
-      const mode = conversationType === 'direct' ? bot.stepPushDirect : bot.stepPushGroup;
+      /**
+       * 取本会话该用的展示方式：**继承的层用全局**。
+       *
+       * 运行时与设置页必须给同一答案——所以都按  判断，
+       * 不靠"值是否恰好等于全局"去猜（用户可能手动把私聊设成与全局相同的值）。
+       */
+      const layerKey = conversationType === 'direct' ? 'direct' : 'group';
+      const inherits = (bot.stepPushInherit ?? []).includes(layerKey);
+      const mode = inherits
+        ? (bot.stepPushGlobal ?? bot.stepPushDirect)
+        : (layerKey === 'direct' ? bot.stepPushDirect : bot.stepPushGroup);
       const presenter = createTurnPresenter({
         mode,
         gateway,

@@ -13,6 +13,8 @@
  * @module dsh-chat/shared/context-enhancement
  */
 
+import { migrateToLayered, resolveScope } from './scoped-config.mjs';
+
 /** 可用于来源块的字段（顺序即界面顺序）。 */
 export const CONTEXT_FIELDS = Object.freeze([
   'channel',
@@ -72,12 +74,13 @@ export const DEFAULT_SCOPE = Object.freeze({
 
 /** 完整默认配置（含指定设置）。 */
 export const DEFAULT_CONTEXT_CONFIG = Object.freeze({
-  group: DEFAULT_SCOPE,
-  direct: DEFAULT_SCOPE,
+  global: DEFAULT_SCOPE,
+  group: null,
+  direct: null,
   targets: Object.freeze([]),
 });
 
-const CONFIG_KEYS = Object.freeze(['group', 'direct', 'targets']);
+const CONFIG_KEYS = Object.freeze(['global', 'group', 'direct', 'targets']);
 const SCOPE_KEYS = Object.freeze(['enabled', 'fields', 'guidance']);
 const TARGET_KEYS = Object.freeze([
   'kind', 'id', 'label', 'enabled', 'fields', 'guidance', 'merge',
@@ -202,7 +205,11 @@ function validateTarget(input) {
 /**
  * 严格校验一份完整配置（保存路径用；调用方提交什么就必须完整提交什么）。
  *
- * @param input - { group, direct, targets }。
+ * **三层**：`global` 是底板，`direct`/`group` 可为 `null`（= 继承全局）或一份自己的值。
+ * `targets`（指定人/指定群）是独立的一维：它们是**比场合层更细**的命中，
+ * 不参与继承——命中了就用它，没命中才落到场合层（见 `resolveContextScope`）。
+ *
+ * @param input - { global, direct, group, targets }。
  * @returns 冻结后的完整配置。
  */
 export function validateContextConfig(input) {
@@ -218,9 +225,14 @@ export function validateContextConfig(input) {
     if (seen.has(key)) throw invalid(`指定设置中「${target.id}」重复，请合并后再保存。`);
     seen.add(key);
   }
+  /** 覆盖层允许为 null（= 继承全局）；全局层必须是一份完整设置。 */
+  const overrideOf = (value, label) => (value === null || value === undefined
+    ? null
+    : validateScope(value, label));
   return Object.freeze({
-    group: validateScope(input.group, '群聊'),
-    direct: validateScope(input.direct, '私聊'),
+    global: validateScope(input.global, '全局'),
+    group: overrideOf(input.group, '群聊'),
+    direct: overrideOf(input.direct, '私聊'),
     targets: Object.freeze(targets),
   });
 }
@@ -228,9 +240,17 @@ export function validateContextConfig(input) {
 /** 旧版（群聊/私聊共用一个开关与一份提示词）配置的迁移。 */
 function migrateLegacyConfig(input) {
   if (!hasExactKeys(input, LEGACY_KEYS)) throw invalid('请提交完整的上下文增强设置。');
+  const shared = { fields: input.fields, guidance: input.guidance };
   return validateContextConfig({
-    group: { enabled: input.groupEnabled, fields: input.fields, guidance: input.guidance },
-    direct: { enabled: input.directEnabled, fields: input.fields, guidance: input.guidance },
+    /**
+     * ⚠️ 这一版**两个开关是分开的**（`groupEnabled` / `directEnabled`），
+     * 所以不能只取一个提成全局——那会把"只开了其中一边"抹平（旧的 directEnabled=false
+     * 会变成"跟群聊一样开着"）。两份都给成覆盖，**各自的实际开关原样保留**。
+     * 全局取群聊那一份（真值方向），但它不参与生效（两层都有覆盖）。
+     */
+    global: { enabled: input.groupEnabled === true, ...shared },
+    group: { enabled: input.groupEnabled === true, ...shared },
+    direct: { enabled: input.directEnabled === true, ...shared },
     targets: [],
   });
 }
@@ -238,29 +258,67 @@ function migrateLegacyConfig(input) {
 /**
  * 容错归一化：损坏或缺失的配置永远不能让机器人起不来。
  *
+ * 老形态（`{group, direct, targets}` 两份平级）在这里一次性迁成三层：
+ * 两份**相同**就提成全局、**不同**就原样保留为覆盖——**每层实际生效的设置不变**。
+ *
  * @param input - 任意历史数据。
  * @returns 一份合法配置。
  */
 export function normalizeContextConfig(input) {
-  try {
-    return validateContextConfig(input);
-  } catch {
+  const parse = (candidate) => {
+    try {
+      return validateContextConfig(candidate);
+    } catch {
+      return null;
+    }
+  };
+  const asLayer = (raw) => parse({
+    global: raw ?? DEFAULT_SCOPE, group: null, direct: null, targets: [],
+  })?.global ?? DEFAULT_SCOPE;
+
+  // 1) 已经是合法的新形态。
+  const already = parse(input);
+  if (already && already.global) return already;
+
+  /**
+   * 2) **最早那版**的共用开关结构（`groupEnabled`/`directEnabled`/`fields`/`guidance`）。
+   *
+   * 必须排在"v2 老形态"之前判：它的键与 v2 不沾边，但 `migrateToLayered` 会把它
+   * 当成"两层都缺失"而产出一份全默认——**旧的 directEnabled=false 会被抹平成"跟群聊一样"**。
+   */
+  if (isPlainObject(input) && hasExactKeys(input, LEGACY_KEYS)) {
     try {
       return migrateLegacyConfig(input);
-    } catch {
-      // 已是 v2 形态但缺 targets（dsh-im 4.x 的数据）时补空列表。
-      try {
-        if (isPlainObject(input)) {
-          return validateContextConfig({ ...input, targets: input.targets ?? [] });
-        }
-      } catch { /* 继续回落默认值 */ }
-      return DEFAULT_CONTEXT_CONFIG;
-    }
+    } catch { /* 落到下面的通用路径 */ }
   }
+
+  // 3) v2 老形态（`{group, direct, targets}` 两份平级，含 dsh-im 4.x 缺 targets 的）。
+  if (isPlainObject(input)) {
+    const layered = migrateToLayered({ ...input, targets: input.targets ?? [] }, {
+      normalizeLayer: asLayer,
+      defaultLayer: () => DEFAULT_SCOPE,
+      pickGlobal: (left) => left,
+      isNewShape: (raw) => isPlainObject(raw) && Object.hasOwn(raw, 'global'),
+    });
+    const built = parse({
+      global: layered.global,
+      group: layered.group,
+      direct: layered.direct,
+      targets: Array.isArray(input.targets) ? input.targets : [],
+    });
+    if (built) return built;
+  }
+
+  return DEFAULT_CONTEXT_CONFIG;
 }
 
 /**
  * 按会话类型与身份挑出本次生效的作用域。
+ *
+ * 命中顺序（就近覆盖）：**指定条目 → 场合层（没单独设置时用全局）**。
+ *
+ * `targets` 那一维**不参与继承**：它比场合更细（"这个人"/"这个群"），
+ * 命中了就用它；没命中才落到场合层。`merge: 'append'` 叠的是**该场合生效的那份**。
  *
  * @param config - 原始配置（内部会归一化）。
  * @param conversationType - 'direct' 或 'group'。
@@ -270,7 +328,8 @@ export function normalizeContextConfig(input) {
 export function resolveContextScope(config, conversationType, identity = {}) {
   if (conversationType !== 'direct' && conversationType !== 'group') return null;
   const normalized = normalizeContextConfig(config);
-  const scope = normalized[conversationType];
+  // 场合层：没单独设置（null）时用全局。
+  const scope = resolveScope(normalized, conversationType) ?? normalized.global;
   const target = normalized.targets.find((candidate) => {
     if (candidate.enabled !== true) return false;
     if (conversationType === 'direct') {
@@ -404,10 +463,15 @@ export function enhanceContent(content, snapshot, sourceFactory, { includeGuidan
  * @returns 中文状态文案。
  */
 export function contextStatusLabel(config) {
-  const { group, direct, targets } = normalizeContextConfig(config);
+  const normalized = normalizeContextConfig(config);
+  const { targets } = normalized;
+  /**
+   * 三层下"开没开"要按**生效值**算：全局开着、私聊继承 → 私聊就是开着的。
+   * 只看 `direct.enabled` 会读到 null，把"继承中"显示成"未开启"（两回事）。
+   */
   const parts = [];
-  if (group.enabled) parts.push('群聊');
-  if (direct.enabled) parts.push('私聊');
+  if (resolveScope(normalized, 'group')?.enabled === true) parts.push('群聊');
+  if (resolveScope(normalized, 'direct')?.enabled === true) parts.push('私聊');
   const active = targets.filter((target) => target.enabled).length;
   if (parts.length === 0 && active === 0) return '未开启';
   const scopeText = parts.length === 0 ? '未开启全局' : `${parts.join('和')}全局`;

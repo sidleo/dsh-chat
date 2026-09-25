@@ -11,6 +11,7 @@ import {
   describeAccessScope,
   evaluateAccess,
   normalizeAccessPolicy,
+  scopeFor,
   validateAccessPolicy,
 } from '../packages/dsh-chat/shared/access-policy.mjs';
 
@@ -21,6 +22,8 @@ const scope = (mode, users = [], { defaultCommands = false, overrides = [] } = {
 });
 
 const policy = (direct, group = direct) => ({ direct, group });
+/** 新形态：一份全局 + 两层覆盖（null = 继承）。保存路径要求三层都在。 */
+const layered = (global, direct = null, group = null) => ({ global, direct, group });
 const user = (id, canExecuteCommands) => ({ id, canExecuteCommands });
 
 test('open 模式：任何人可对话，命令权限取默认或 per-user 覆盖', () => {
@@ -133,9 +136,12 @@ test('没有策略对象时拒绝并给出 no-policy（调用方据此回落"仅
 test('容错归一化：缺字段按保守方向补齐，绝不把机器人锁死', () => {
   // 只有 mode 的残缺策略
   const partial = normalizeAccessPolicy({ direct: { mode: 'open' } });
+  // 老形态（只有 direct）迁移后：direct 是覆盖层，group 继承全局。
   assert.equal(partial.direct.mode, 'open');
   assert.deepEqual(partial.direct.allowlist.users, []);
   assert.equal(partial.direct.open.defaultCanExecuteCommands, false);
+  // 判定仍按 direct 那一层走（迁移不改变实际结果）。
+  assert.equal(scopeFor(partial, 'direct').mode, 'open');
   assert.equal(
     evaluateAccess({ policy: { direct: { mode: 'open' } }, conversationType: 'direct', senderIds: ['u'] }).allowed,
     true,
@@ -143,7 +149,8 @@ test('容错归一化：缺字段按保守方向补齐，绝不把机器人锁�
 
   // 非法 mode → 保守成 allowlist（等于仅属主可用），而不是"所有人都能进"
   const bogus = normalizeAccessPolicy({ direct: { mode: 'everyone' } });
-  assert.equal(bogus.direct.mode, 'allowlist');
+  // 非法 mode 被压成 allowlist；因为两份归一化后相同，会被提成全局（这层就不用覆盖了）。
+  assert.equal(scopeFor(bogus, 'direct').mode, 'allowlist');
   assert.equal(
     evaluateAccess({ policy: { direct: { mode: 'everyone' } }, conversationType: 'direct', senderIds: ['u'] }).allowed,
     false,
@@ -157,27 +164,39 @@ test('容错归一化：缺字段按保守方向补齐，绝不把机器人锁�
       allowlist: { users: [{ id: 'ok', canExecuteCommands: true }, { id: '', canExecuteCommands: true }, null] },
     },
   });
-  assert.deepEqual(mixed.direct.allowlist.users.map((item) => item.id), ['ok']);
+  assert.deepEqual(scopeFor(mixed, 'direct').allowlist.users.map((item) => item.id), ['ok']);
 });
 
 test('严格校验（保存路径）拒绝不完整策略', () => {
   assert.throws(() => validateAccessPolicy({ direct: scope('open') }), /完整的访问策略/);
-  assert.throws(() => validateAccessPolicy(policy(scope('nope'))), /open 或 allowlist/);
-  assert.throws(() => validateAccessPolicy(policy({ mode: 'open' })), /缺少字段/);
-  assert.throws(() => validateAccessPolicy(policy({
+  assert.throws(() => validateAccessPolicy(layered(scope('nope'))), /open 或 allowlist/);
+  assert.throws(() => validateAccessPolicy(layered({ mode: 'open' })), /缺少字段/);
+  assert.throws(() => validateAccessPolicy(layered({
     mode: 'open', open: { defaultCanExecuteCommands: 'yes', commandPermissionOverrides: [] }, allowlist: { users: [] },
   })), /布尔值/);
+  // 覆盖层可以是 null（= 继承全局），但 global 不能缺。
+  assert.equal(validateAccessPolicy(layered(scope('allowlist'))).direct, null);
+  assert.throws(() => validateAccessPolicy({ direct: null, group: null }), /完整的访问策略/);
 });
 
 test('默认策略与描述文案', () => {
   const defaults = defaultAccessPolicy();
-  assert.equal(defaults.direct.mode, 'allowlist');
-  assert.deepEqual(defaults.group.allowlist.users, []);
-  assert.equal(describeAccessScope(defaults, 'direct'), '仅属主可用');
+  // 新形态：一份全局 + 两层继承（开箱行为与旧版一致：哪层都是 allowlist + 空名单）。
+  assert.equal(defaults.global.mode, 'allowlist');
+  assert.equal(defaults.direct, null);
+  assert.equal(defaults.group, null);
+  assert.equal(scopeFor(defaults, 'direct').mode, 'allowlist');
+  assert.deepEqual(scopeFor(defaults, 'group').allowlist.users, []);
+  // 默认是两层都继承全局，所以描述里带上继承说明（用户要能看出这一层是不是自己配的）。
+  assert.equal(describeAccessScope(defaults, 'direct'), '仅属主可用（继承全局）');
+  // 只有 direct 一份老数据 = 两份不同 → direct 是覆盖层，描述不带后缀。
   assert.equal(describeAccessScope(policy(scope('open', [], { defaultCommands: true })), 'direct'),
-    '任何人可用（命令默认允许）');
+    '任何人可用（命令默认允许）（继承全局）');
+  // 两份不一样时 direct 是覆盖层，不该自称继承全局。
+  const mixedScopes = { direct: scope('open'), group: scope('allowlist') };
+  assert.equal(describeAccessScope(mixedScopes, 'direct'), '任何人可用（命令默认不允许）');
   assert.equal(describeAccessScope(policy(scope('allowlist', [user('u1', true), user('u2', false)])), 'group'),
-    '名单内 2 人可用');
+    '名单内 2 人可用（继承全局）');
   assert.equal(describeAccessScope(null, 'direct'), '未设置（仅属主可用）');
 });
 

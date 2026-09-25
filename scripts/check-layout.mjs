@@ -138,9 +138,15 @@ try {
     if (!checks.some((item) => item.checked === false)) {
       failures.push('「控制面板显示项」的勾选状态全是勾上的——渠道卡很可能漏传了 panelSections');
     }
-    const policyDirect = checks.find((item) => item.label === '访问策略（本会话） · 私聊');
-    if (!policyDirect) failures.push('「控制面板显示项」里找不到「访问策略（本会话） · 私聊」');
-    else if (policyDirect.checked !== false) failures.push('配了关闭的「访问策略（本会话） · 私聊」渲染成了勾上');
+    /**
+     * 找的是"哪一层"不重要（场合切换器决定了画全局还是某个场合层），
+     * 重要的是**这一项真的渲染成没勾**——所以按前缀找、不写死层名。
+     */
+    const policyRow = checks.find((item) => item.label.startsWith('访问策略（本会话） · '));
+    if (!policyRow) failures.push('「控制面板显示项」里找不到「访问策略（本会话）」那一行');
+    else if (policyRow.checked !== false) {
+      failures.push(`配了关闭的「${policyRow.label}」渲染成了勾上`);
+    }
   }
 
   // 「卡片友好回答」开关：必须画在机器人卡片上，且反映假数据（false = 不勾）。
@@ -152,36 +158,96 @@ try {
     }
   }
 
-  // lark-cli 身份：三个分层下拉（全局/私聊/群聊）的当前值必须反映假数据。
-  // 假数据里三层各不相同（全局=仅应用、私聊=应用+用户、群聊=仅应用），
-  // 所以"漏传某一层"或"永远显示默认值"都会被抓到。
+  /**
+   * lark-cli 身份：分层下拉的当前值必须反映假数据。
+   *
+   * 假数据里三层各不相同（全局=仅应用、私聊=应用+用户、群聊=仅应用），
+   * 所以"漏传某一层"或"永远显示默认值"都会被抓到。
+   *
+   * ⚠️ 场合切换器上线后**一次只画两层**（全局 + 当前场合）：
+   * 选了"继承上一层"就要求看得见上一层是什么，所以全局层永远在。
+   * 因此这里的期望是"全局必在 + 当前场合那一层必在"，而不是三层都在。
+   * 当前场合取 `data-scope-active`（守门同时也断言了它恰好一个）。
+   */
   const LARK_EXPECTED = { global: 'bot', direct: 'both', group: 'bot' };
   const larkFrames = results.filter((frame) => frame.larkIdentity != null
     && Object.keys(frame.larkIdentity).length > 0);
   if (larkFrames.length === 0) failures.push('没测到「lark-cli 身份」下拉（守门本身失效了）');
   for (const frame of larkFrames) {
     const where = `${frame.scenario} @${frame.width}px`;
-    for (const [scope, expected] of Object.entries(LARK_EXPECTED)) {
-      const actual = frame.larkIdentity[scope];
-      if (actual !== expected) {
-        failures.push(`${where}: 「lark-cli 身份」${scope} 下拉显示的是 ${actual ?? '(缺席)'}，与假数据（${expected}）不符`);
+    // 全局层是唯一必填的一层（其余都可"继承"，但要有得可继承）。
+    if (frame.larkIdentity.global !== LARK_EXPECTED.global) {
+      failures.push(`${where}: 「lark-cli 身份」global 下拉显示的是 `
+        + `${frame.larkIdentity.global ?? '(缺席)'}，与假数据（${LARK_EXPECTED.global}）不符`);
+    }
+    /**
+     * lark-cli 身份**只画当前层**——与页面上其余设置项完全一致。
+     *
+     * 早先这里画的是"全局 + 当前层"两层同屏，真机反馈自相矛盾：
+     * 切到"全局"时卡里冒出"私聊"下拉、切到"私聊"时又冒出"全局"，
+     * 用户以为主体切换器坏了。所以现在钉死：**只有一个下拉，且就是当前层**。
+     */
+    const active = (frame.scopeSwitcher ?? []).find((tab) => tab.active)?.key ?? 'global';
+    const expected = LARK_EXPECTED[active];
+    if (expected && frame.larkIdentity[active] !== expected) {
+      failures.push(`${where}: 当前场合是 ${active}，但「lark-cli 身份」显示的是 `
+        + `${frame.larkIdentity[active] ?? '(缺席)'}，与假数据（${expected}）不符`);
+    }
+    // 另外两层不该同时出现（那正是真机反馈的"主体切了、卡里还是两层"）。
+    const others = ['global', 'direct', 'group'].filter((key) => key !== active);
+    for (const key of others) {
+      if (frame.larkIdentity[key] !== undefined) {
+        failures.push(`${where}: 当前场合是 ${active}，却还画着 ${key} 那一层下拉（层没收敛）`);
       }
     }
   }
 
-  // 上下文增强弹窗的两个页签：每个弹窗只允许可见一个，且必须是选中的那个
-  // （hidden 属性被作者样式 display:flex 盖掉过，真机上两个页签内容一模一样）。
+  /**
+   * 上下文增强弹窗：可见的页签面板**只能有一个**，且必须是当前场合那一个。
+   *
+   * 这里守的是一件真出过事的东西：`hidden` 属性只在 UA 样式里是 `display:none`，
+   * 任何作者样式里的 `display` 都会盖掉它——当初两个页签就是这么变成"内容一模一样"的
+   * （去掉那条 CSS 守门立刻红）。
+   *
+   * ⚠️ 页签数**不再固定为 2**：场合切换器上线后，场合由页头统一选定，
+   * 弹窗里就不再画两个页签（单场合只画一个面板、连 `.dchat-tab` 都没有）。
+   * 所以断言改成"面板数 ∈ {1,2}"，并保留"可见的恰好 1 个"这个真正要守的不变量。
+   */
   const dialogs = results.find((frame) => (frame.dialogs ?? []).length > 0)?.dialogs ?? [];
   if (dialogs.length === 0) {
-    failures.push('没测到上下文增强弹窗的页签（守门本身失效了）');
+    failures.push('没测到上下文增强面板的页签（守门本身失效了）');
   }
   for (const [index, dialog] of dialogs.entries()) {
-    if (dialog.total !== 2) failures.push(`弹窗 ${index + 1} 的页签数不是 2（${dialog.total}）`);
+    if (![1, 2].includes(dialog.total)) {
+      failures.push(`弹窗 ${index + 1} 的页签面板数是 ${dialog.total}（应为 1 或 2）`);
+    }
     if (dialog.visible.length !== 1) {
       failures.push(`弹窗 ${index + 1} 可见的页签有 ${dialog.visible.length} 个（应为 1）：`
         + `${dialog.visible.join('、')}`);
     } else if (dialog.activeScope && dialog.visible[0] !== dialog.activeScope) {
       failures.push(`弹窗 ${index + 1} 可见的是 ${dialog.visible[0]}，但选中的是 ${dialog.activeScope}`);
+    }
+  }
+
+  /**
+   * 场合切换器：分场合的设置项必须**只画当前场合那一份**。
+   *
+   * 这是这次重构的核心不变量——把 4 个分叉项各自的画法（并排两块 / 竖排两个下拉 /
+   * 8×2 勾选表格 / 弹窗页签）收敛成"页头选一次场合"。守它两件事：
+   * ① 切换器反映当前场合（不是永远停在第一项）；② 私聊/群聊两个选项都在（否则切不了）。
+   */
+  const scopeFrames = results.filter((frame) => (frame.scopeSwitcher ?? []).length > 0);
+  if (scopeFrames.length === 0) failures.push('没测到场合切换器（守门本身失效了）');
+  for (const frame of scopeFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const tabs = frame.scopeSwitcher;
+    const active = tabs.filter((tab) => tab.active);
+    if (tabs.length < 2) {
+      failures.push(`${where}: 场合切换器只有 ${tabs.length} 个选项（私聊/群聊都要有）`);
+    }
+    if (active.length !== 1) {
+      failures.push(`${where}: 场合切换器当前选中的有 ${active.length} 个（应为 1）：`
+        + `${tabs.map((tab) => `${tab.label}${tab.active ? '✓' : ''}`).join('、')}`);
     }
   }
 
@@ -211,6 +277,152 @@ try {
     if (!String(frame.emptyHint ?? '').includes('在渠道自己的配置里完成接入后，机器人会出现在这里。')) {
       failures.push(`${frame.scenario} @${frame.width}px: 渠道没给 setup.hint，空态说明不是那句中性兜底`
         + `（实际：${frame.emptyHint || '空'}）`);
+    }
+  }
+
+  /**
+   * 设置页分组：每一项设置都必须**落在某一组里**，且分类导航与分组一一对应。
+   *
+   * 这条守的是"重构最容易被后来者破坏的地方"：机器人设置页是逐轮追加出来的
+   * （10 张卡平铺、实测 3200+px 高，想改一项得盲滚），所以加了分组导航。
+   * 但下次新加一项时若顺手写在 `BotCard` 末尾，它会掉在最后一组外面——
+   * **页面照常渲染、卡片照常显示、单测全绿**，只是没有标题、也没有分类能跳到它。
+   * 所以这里钉两件事：① 不许有"没被分进任何一组"的设置卡；② 分类数与分组数一致。
+   */
+  const groupedFrames = results.filter((frame) => (frame.settingGroups ?? []).length > 0);
+  if (groupedFrames.length === 0) failures.push('没测到设置页分组（守门本身失效了）');
+  for (const frame of groupedFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const groups = frame.settingGroups;
+    if ((frame.ungroupedCards ?? 0) > 0) {
+      failures.push(`${where}: 有 ${frame.ungroupedCards} 张设置卡片没被分进任何一组`
+        + '（新加的设置项要放进 settingGroups 里，否则用户找不到它）');
+    }
+    // 分类导航的个数 = 分组个数，顺序一致（导航按下标跳转，对不上就会跳错组）。
+    if (frame.groupTabs.length !== groups.length) {
+      failures.push(`${where}: 分类导航有 ${frame.groupTabs.length} 个，分组有 ${groups.length} 个，对不上`);
+    }
+    for (const [index, group] of groups.entries()) {
+      if (!group.title) failures.push(`${where}: 第 ${index + 1} 组没有标题`);
+      if (group.items.length === 0) failures.push(`${where}: 分组「${group.title}」里一个设置项都没有`);
+    }
+    // 每一项只能属于一组（同一个 item 出现两次 = 同一张卡被画了两遍）。
+    const allItems = groups.flatMap((group) => group.items);
+    const duplicated = allItems.filter((key, index) => allItems.indexOf(key) !== index);
+    if (duplicated.length > 0) {
+      failures.push(`${where}: 设置项被分进多组：${[...new Set(duplicated)].join('、')}`);
+    }
+  }
+  // 每一组都要有分类按钮，且按钮文案就是组标题（用户点分类要能对上组名）。
+  for (const frame of groupedFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    for (const group of frame.settingGroups) {
+      if (frame.groupTabs.length > 0 && !frame.groupTabs.includes(group.title)) {
+        failures.push(`${where}: 分组「${group.title}」在分类导航里没有对应按钮`);
+      }
+    }
+  }
+
+  /**
+   * 帮助图标：**说明文字必须真的有地方可去，而且默认不许占版面**。
+   *
+   * 这一轮把大量常驻说明收进了问号，并改成**悬浮气泡**（用户要求"不做点击在页面显示"）。
+   * 守门钉三条：
+   * ① 卡片上确实画了问号，且气泡里有文字（挡住"说明被删了"）；
+   * ② **默认不可见**——它必须是气泡，不能退回"常驻展开一段"（那就白改了）；
+   * ③ 聚焦后可见——证明 hover/focus 那条 CSS 规则真的接上了
+   *   （删掉 \`:focus-within\` 规则时这条会红）。
+   */
+  const hintFrames = results.filter((frame) => (frame.helpHints ?? []).length > 0);
+  if (hintFrames.length === 0) failures.push('没测到帮助图标（守门本身失效了）');
+  for (const frame of hintFrames) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    for (const hint of frame.helpHints) {
+      if (!hint.text) {
+        failures.push(`${where}: 有个帮助图标的气泡里没有文字（说明等于被删了）`);
+      }
+      if (hint.visibleBeforeFocus) {
+        failures.push(`${where}: 帮助气泡默认就可见——它必须是"悬浮才显示"，不能常驻展开`);
+      }
+      if (!hint.visibleAfterFocus) {
+        failures.push(`${where}: 聚焦后帮助气泡仍不可见（hover/focus 的 CSS 规则没接上）`);
+      }
+      /**
+       * **宽度**：气泡必须够宽，否则说明会被压成一条竖线。
+       *
+       * 这一条是真机截图逼出来的：把定位基准挂在"说明那一行"上时，
+       * 「上下文增强」那张卡的描述**整句都在气泡里**、那一行只剩一个问号，
+       * 于是基准只有约 100px 宽，气泡被压成又窄又高的竖条。
+       * 早先只断言了"可见"——可见但没法读，等于没做到。
+       */
+      if (hint.visibleAfterFocus && hint.width < 140) {
+        failures.push(`${where}: 帮助气泡只有 ${hint.width}px 宽（说明会被压成竖条）`);
+      }
+    }
+  }
+
+  /**
+   * **渠道页不许出现这个渠道不支持的东西。**
+   *
+   * 真机反馈（用户原话）："微信的配置中存在很多微信不支持的功能"。查下来是三处：
+   * ① 微信的 `/menu` 发的是**文本**命令清单、根本不画卡片（`commands.mjs` 的 `reply` 那条路，
+   *    `panel.sections` 用不上），所以整张「控制面板显示项」在微信上是摆设；
+   * ② 那张卡里「渠道设置（任务过程展示等）」「渠道动作按钮（重连等）」微信更是**没有这两个东西**
+   *    （微信不实现 `panel.fields` / `panel.actions`）；
+   * ③ 访问策略里"属主在「权限与身份」那一组里单独设置"指向一张**微信页上不存在**的卡
+   *    （微信的属主 = 扫码绑定的人，不可改）。
+   *
+   * 这里把"渠道声明"与"页面画了什么"对起来——**声明了没有卡片面板，页面上就不许有那张卡**。
+   * 声明与实现一旦不一致（比如以后有人顺手把卡加回去），这条会红。
+   */
+  for (const frame of results.filter((item) => item.declaredPanel !== undefined)) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const hasPanelCard = (frame.cardTitles ?? []).includes('控制面板显示项');
+    if (frame.declaredPanel === false && hasPanelCard) {
+      failures.push(`${where}: 这个渠道声明了没有卡片面板，却还画着「控制面板显示项」`
+        + '（那张卡的开关一个都不生效）');
+    }
+    if (frame.declaredPanel !== false && !hasPanelCard) {
+      failures.push(`${where}: 这个渠道有卡片面板，却少了「控制面板显示项」`);
+    }
+  }
+
+  /**
+   * **来源字段的勾选框 = 渠道真能提供的那些。**
+   *
+   * 实测两个渠道都**没有实现** `senderName` / `conversationTitle`（schema 里有、没人填），
+   * 微信更是连 `threadId` 都没有、`chatId` 恒等于 `senderId`、`conversationType` 恒为 direct。
+   * 把这些列出来，用户勾了也永远没值——静默无效，正是"配置里一堆用不上的东西"。
+   * 声明了 `sourceFields` 就必须与画出来的一致（多画、少画都红）。
+   */
+  for (const frame of results.filter((item) => Array.isArray(item.declaredFields))) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    const declared = [...frame.declaredFields].sort();
+    const rendered = [...(frame.renderedFields ?? [])].sort();
+    const extra = rendered.filter((key) => !declared.includes(key));
+    const missing = declared.filter((key) => !rendered.includes(key));
+    if (extra.length > 0) {
+      failures.push(`${where}: 来源字段多画了这个渠道提供不了的：${extra.join('、')}`);
+    }
+    if (missing.length > 0) {
+      failures.push(`${where}: 渠道声明能提供的来源字段没画出来：${missing.join('、')}`);
+    }
+  }
+
+  /**
+   * **微信按"只给属主自己用"处理**（用户确认的定位）——所以那两块不许出现在微信页上：
+   * ① 「访问策略」：属主 = 扫码绑定的人，而缺省策略（仅名单内 + 空名单）**恰好就是
+   *    "只有属主能用"**，也就是微信的常态；想加人得填 `from_user_id`（微信不显示这个 id、
+   *    页面也没有选择器），想放开只能选「任何人可用」——在"给我自己用"的渠道上那是挖坑。
+   * ② 「指定用户」：只有一个人在聊，再给他单开一份设置是多余的。
+   * 真要用命令放人，`/allow` / `/deny` 仍然有效（属主在聊天里可用）——去掉的是界面，不是能力。
+   */
+  for (const frame of results.filter((item) => item.scenario === 'weixinCard')) {
+    const where = `${frame.scenario} @${frame.width}px`;
+    for (const forbidden of ['访问策略', '指定用户']) {
+      if ((frame.cardTitles ?? []).includes(forbidden)) {
+        failures.push(`${where}: 微信定位是"只给属主自己用"，不该有「${forbidden}」这张卡`);
+      }
     }
   }
 

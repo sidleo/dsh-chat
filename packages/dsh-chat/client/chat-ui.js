@@ -18,6 +18,9 @@ import { ContextEnhancementEditor } from './context-enhancement.js';
 import { DeliveryTargetsEditor } from './delivery-targets.js';
 import { callChatRpc, callControlRpc, unwrapRpc } from './rpc.js';
 import { ScopedModeEditor } from './scoped-mode-editor.js';
+import { HelpHint } from './help-hint.js';
+import { SCOPE_DEFS, ScopeSwitcher } from './scope-switcher.js';
+import { SettingGroups } from './setting-groups.js';
 import { installChatStyles } from './styles.js';
 
 const h = React.createElement;
@@ -25,11 +28,14 @@ const h = React.createElement;
 /**
  * 通用卡片。
  *
- * @param props - { title, description, actions, children }。
+ * `rest` 透传剩余的 props（如 `data-card`）：调用方要给自己那张卡打标记时不必再包一层，
+ * 标记直接落在卡片的 `section` 上（布局守门要按它区分"头卡"与"设置卡"）。
+ *
+ * @param props - { title, description, actions, children, ...rest }。
  * @returns React 元素。
  */
-export function Panel({ title, description, actions, children }) {
-  return h('section', { className: 'dchat-card' },
+export function Panel({ title, description, actions, children, ...rest }) {
+  return h('section', { className: 'dchat-card', ...rest },
     title || description || actions
       ? h('div', { className: 'dchat-cardHeader' },
         h('div', { className: 'dchat-cardHeading' },
@@ -106,6 +112,12 @@ export function createChatUi({ ctx, translate } = {}) {
       OwnerEditor,
       /** 主动投递目标：清单、候选收编、测试发送（数据经 hub 控制端点）。 */
       DeliveryTargetsEditor,
+      /** 设置页分组导航：把一长条卡片按职能归类 + 点分类跳转（不改卡片实现）。 */
+      SettingGroups,
+      /** 场合切换器：分私聊/群聊的设置项共用同一套交互语言。 */
+      ScopeSwitcher,
+      /** 帮助图标：把"想知道再看"的说明收进问号（常驻说明只留影响判断的那句）。 */
+      HelpHint,
     }),
     hooks: Object.freeze({
       /** 读取/保存 hub 持有的每机器人共享设置。 */
@@ -123,6 +135,8 @@ export function createChatUi({ ctx, translate } = {}) {
       callControlRpc(connection, method, payload, signal)
     ),
     unwrapRpc,
+    /** 场合的规范定义（私聊/群聊），渠道页拿它喂给 ScopeSwitcher。 */
+    SCOPE_DEFS,
     translate: t,
     /** 供渠道页复用的 React 运行时（渠道包只 external react/react-dom，无需各写一份）。 */
     react: React,

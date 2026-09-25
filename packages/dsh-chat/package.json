@@ -1,6 +1,6 @@
 {
   "name": "@sidleo3/dsh-chat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "DSH 聊天机器人管理入口：渠道注册表、共享内核与设置页入口（飞书/微信等渠道各自独立成插件）",
   "keywords": [

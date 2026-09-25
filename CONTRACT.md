@@ -787,17 +787,40 @@ hub 的编辑器 `AccessPolicyEditor` 收不到 `names` 就只显示 id，不会
 | `chatChannels` | hub | `register({ id, order, label, logo, icon, sessionBadge, capabilities })` → disposer；`entries()` / `get(id)` / `subscribe(fn)` / `getSnapshot()`。`icon` = `{ svg }` 或 `{ uri }`：渠道图标（设置页卡片与会话行徽标共用，取值走 `channelIconUri`）；`sessionBadge` = `{ text, color }`：没有图标时的字徽标回退 |
 | `chatUi` | hub | `components` / `hooks` / `installStyles()` / `callChannelRpc` / `callControlRpc` / `unwrapRpc` / `translate` / `react` |
 
-`chatChannels.register` 的 `capabilities` 两项**只影响画不画，不影响功能**：
+`chatChannels.register` 的 `capabilities` **只影响画不画，不影响功能**：
 
 - `note` —— 机器人列表标题下的一句说明（如「仅私聊」）；
 - `setup.label` —— **有**才在机器人列表头部显示通往渠道设置页的入口，名称用它给的
   （如「扫码接入」）。渠道设置页与机器人设置页没区别时**不要给**：那会多出一个点进去
   什么都改不了的空壳入口；
 - `setup.hint` —— 该渠道还没有机器人时用来说明怎么接入（"填凭据"还是"扫码"只有渠道
-  自己说得清）；没给就退回 hub 的一句中性说明。
+  自己说得清）；没给就退回 hub 的一句中性说明；
+- `groups` —— 这个渠道支不支持群聊（微信 `false`）。设置页据此**不画**只有群聊才有的东西，
+  文案里也不该出现"群里…"这种只对一个渠道成立的说法；
+- `sourceFields` —— 上下文增强的**来源字段**里，这个渠道真能给出值的那些
+  （`CONTEXT_FIELDS` 的子集）。**不声明就全列**（向后兼容），但默认全列会带上两个
+  **没有任何渠道实现**的字段（`senderName` / `conversationTitle`）——勾了永远没值。
+  微信只给 `['channel','senderId','botId']`：它的 `chatId` 恒等于 `senderId`、
+  `conversationType` 恒为 `direct`、`threadId` 根本没有。布局守门会把声明与画出来
+  的勾选框对起来（多画、少画都红）。
+- `panel` —— 这个渠道**有没有卡片控制面板**（默认算有）。`false` = `/menu` 只发文本
+  （微信就是：`commands.mjs` 走 `reply` 那条路），此时 `panel.sections` 根本用不上，
+  渠道页**不要挂 `PanelSectionsEditor`**——那张卡的开关一个都不生效。
+  布局守门会把这条声明与页面画了什么对起来：
+  **声明 `panel: false` 却画了「控制面板显示项」（或反之）都会红**。
 
-两项各自独立：只给 `hint`（飞书：凭据写在渠道自己的配置里，没有渠道级表单）、只给
+各项独立：只给 `hint`（飞书：凭据写在渠道自己的配置里，没有渠道级表单）、只给
 `label`（微信：有入口、说明用中性句）都是合法形态。
+
+⚠️ **渠道特有的能力，别只靠"把卡挂上去"表达**。微信页上曾经挂过「控制面板显示项」，
+而它的 `/menu` 是文本、不画卡片——8 个开关全是摆设（其中「渠道设置」「渠道动作按钮」
+微信更是压根没有这两个东西）。判断标准一句话：**这张卡/这个开关，在这个渠道上有没有一条
+真实的代码路径会读它？** 没有就别画。
+
+⚠️ **hub 共享组件的文案不许引用页面结构**（"去某张卡里设置"）：hub 不知道各渠道页上有哪些卡。
+访问策略的帮助里曾写"属主在「权限与身份」那一组里单独设置"，而微信页上**没有属主卡**
+（它的属主 = 扫码绑定的人，不可改），把用户指向了不存在的东西。渠道有特殊语义就通过
+props 传（如 `ownerHint`），没传时用中性说法。
 
 `chatUi.components`：
 - `Panel`、`EmptyState`、`StatusPill` —— 基础块；

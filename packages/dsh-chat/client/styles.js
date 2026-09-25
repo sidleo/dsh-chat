@@ -126,6 +126,8 @@ const CSS = `
   gap: 12px;
 }
 .dchat-card {
+  /* 帮助气泡的定位基准（见 .dchat-helpTip）。 */
+  position: relative;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-1);
@@ -183,6 +185,14 @@ const CSS = `
   border-top: 1px solid var(--dsw-alias-separator-primary);
 }
 .dchat-cardHeader {
+  /*
+   * 帮助气泡的定位基准。
+   *
+   * ⚠️ **必须是这里，不能是说明那一段**：那一行可能只有问号、没有文字
+   * （比如「上下文增强」的描述整句都收进了气泡），此时段落的宽度 = 标题宽度（约 100px），
+   * 气泡就会被压成一条又窄又高的竖条（真机截图反馈过）。卡片头始终占满卡片宽度。
+   */
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -192,7 +202,8 @@ const CSS = `
   flex-wrap: wrap;
 }
 .dchat-cardHeading {
-  /* 长标题靠省略号收，不抢操作的宽度。 */
+  /* 长标题靠省略号收，不抢操作的宽度；但要吃掉剩余宽度，描述行才有整行可用。 */
+  flex: 1 1 auto;
   min-width: 0;
 }
 .dchat-cardTitle {
@@ -202,6 +213,8 @@ const CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ⚠️ 这里**故意不加** position: relative —— 气泡的基准是卡片头（见 .dchat-cardHeader）：
+   说明这一行可能只有问号没有文字，宽度只有标题那么窄，气泡会被压成竖条。 */
 .dchat-cardDescription {
   margin: 0;
   font-size: 12px;
@@ -277,6 +290,230 @@ const CSS = `
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/*
+ * 设置分组：分类导航 + 每组标题 + 组内卡片。
+ *
+ * 为什么要分组：机器人设置页是逐轮追加出来的，实测 3200+px 高、10 张卡片平铺，
+ * 想改一项得盲滚。分组只做"归类 + 跳转"，不改任何卡片的实现。
+ */
+.dchat-groups {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 分类多的时候换行，不把最后一个挤出容器（窄栏下的老问题）。 */
+  flex-wrap: wrap;
+  /* 吸顶：滚到页面下半部时分类还在，随时能跳回去。 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 0;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dchat-groupTab {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  /* 永远单行：中文 min-content 只有一个字，flex 压缩会变成"呈现/方式"这种一字一行。 */
+  white-space: nowrap;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.dchat-groupTab:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dchat-groupTab[aria-current='true'] {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+}
+.dchat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 跳转时标题不要贴在容器最上边（吸顶的分类会盖住它）。 */
+  scroll-margin-top: 44px;
+}
+.dchat-groupHeading {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+/*
+ * 分组标题本身不吸顶，只有顶部的分类条吸顶。
+ * 但"分类条 + 第一组标题"之间要有呼吸感，否则第一组的标题看起来像是分类条的一部分。
+ */
+.dchat-groups + .dchat-group {
+  margin-top: 6px;
+}
+/* 组与组之间留出明显大于组内卡片间距的空隙，边界才看得出来。 */
+.dchat-group + .dchat-group {
+  margin-top: 18px;
+}
+/*
+ * 场合切换器：把"这个设置项分私聊/群聊两份"收敛成一套交互语言。
+ *
+ * 在此之前有 5 个分叉项、5 种画法（并排两块 / 竖排两个下拉 / 8×2 勾选表格 / 弹窗页签 /
+ * 四层下拉），用户得学五套。现在"改哪个场合"在分组顶部问一次，下面所有卡都只画那一份。
+ */
+.dchat-scopeSwitcher {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.dchat-scopeTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  /* 分段控件不换行：它只有两三项，拆行会让"当前选的是哪个"变得难认。 */
+  flex-wrap: nowrap;
+  max-width: 100%;
+}
+.dchat-scopeTab {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  /* 中文 min-content 只有一个字：不锁单行会被压成"私/聊"竖排。 */
+  white-space: nowrap;
+  padding: 4px 14px;
+  cursor: pointer;
+}
+.dchat-scopeTab:hover:not([aria-selected='true']) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dchat-scopeTab[aria-selected='true'] {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+/*
+ * 帮助图标：圆形边框问号 + **悬浮气泡**（不是点开在页面里展开一段）。
+ *
+ * 展开会顶动下面的内容、打断视线；气泡浮在上面看完就走。
+ * 触屏没有 hover，所以 :focus-within（点击/键盘聚焦）也要显示。
+ */
+.dchat-help {
+  display: inline-flex;
+  align-items: center;
+  /* 跟着文字走，不另起一行（否则每张卡都多一行高度）。 */
+  vertical-align: middle;
+  margin-left: 4px;
+}
+.dchat-helpButton {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+}
+.dchat-helpButton:hover:not(:disabled),
+.dchat-helpButton:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-brand-primary);
+}
+/*
+ * 气泡**默认不可见**（用户说的是"不做点击在页面显示"——所以它不是展开的正文）。
+ *
+ * 定位基准是**所在的那个说明段落**（它是 position: relative），气泡 left/right 撑满段落宽度：
+ * 以图标为基准的话，要么被压成一条竖线，要么在 320px 窄栏里撑破容器（守门会量横向溢出）。
+ */
+.dchat-helpTip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  /* 撑满定位基准（卡片头）的宽度：这是"永远有整卡宽可读"的保证。 */
+  left: 0;
+  right: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .12);
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  font-weight: 400;
+}
+.dchat-help:hover .dchat-helpTip,
+.dchat-help:focus-within .dchat-helpTip {
+  display: flex;
+}
+.dchat-helpLine {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  /* 长句正常换行；路径/英文串不撑破容器。 */
+  overflow-wrap: anywhere;
+}
+/* 只给读屏看的内容（气泡对读屏不一定可达，内容不能因此丢掉）。 */
+.dchat-visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dchat-scopeHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+/*
+ * 场合条：页面级的"现在在改哪个场合"。
+ * 与卡片分开一点距离，表明它管的是**下面全部卡片**而不是某一张。
+ */
+.dchat-scopeBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+/* 场合条里的标签不与切换器抢宽度（窄栏下换行而不是把标签压成竖排）。 */
+.dchat-scopeBar > .dchat-scopeLabel {
+  flex: none;
+}
+/* 组的一句话构成：让人不必滚动就知道这一组里有哪几项。 */
+.dchat-groupHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dchat-groupBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .dchat-botList {
   display: flex;
@@ -801,6 +1038,100 @@ const CSS = `
   font-size: 12px;
   padding: 6px 8px;
 }
+/*
+ * 「像下拉、但能手打」的输入框（工作区路径）。
+ *
+ * 为什么不用原生 <input list> + <datalist>：那个下拉箭头由浏览器/系统画，
+ * 边框、圆角、箭头与页面上其它 .dchat-select 都不一样（真机反馈"风格不一致"）。
+ * 这里外壳照抄 .dchat-select 的 token，箭头是自家按钮，观感与下拉完全一致。
+ */
+.dchat-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  /* 与 .dchat-select 同一套外观 token（改这里要一起改，两个控件才长得一样）。 */
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  padding: 6px 8px;
+}
+.dchat-comboInput {
+  flex: 1 1 auto;
+  /* min-width: 0 让长路径在窄栏里收缩，而不是把箭头挤出去（守门会量横向溢出）。 */
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.dchat-comboArrow {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dchat-comboArrow:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+/* 候选列表：绝对定位（不占位、不撑高卡片），浮在外壳下方。 */
+.dchat-comboList {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  /* 与外框的边框对齐（-1px = 外框那 1px 边框）：
+     居中的话两条边框会错开一像素、在圆角处叠出一小块深色。 */
+  left: -1px;
+  right: -1px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .12);
+}
+.dchat-comboOption {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 5px 8px;
+  cursor: pointer;
+  /* 长路径截断显示（完整值在 title 里），否则窄栏下这一行会折成好几行。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dchat-comboOption:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dchat-comboOption[aria-selected='true'] {
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+}
 .dchat-textarea {
   resize: vertical;
   min-height: 72px;
@@ -853,6 +1184,8 @@ const CSS = `
   gap: 12px;
 }
 .dchat-scopeRow {
+  /* 帮助气泡的定位基准（该行里有 HelpHint）。 */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -872,7 +1205,12 @@ const CSS = `
   align-items: center;
   gap: 12px;
 }
-/* 名称占满剩余宽度，两个勾选框固定靠右：窄栏下也不会把名称压成竖排。 */
+/*
+ * 名称占满剩余宽度，勾选框固定宽度：
+ * 单列形态下勾选框在**左**、名称在右（勾选框贴左是为了勾选时眼睛有固定落点）。
+ * 名称要 flex: 1 1 auto 且 min-width: 0：中文的 min-content 只有一个字，
+ * 不设 min-width 会让它在窄栏里被压成"模/型/与/推/理"这种一字一行（这轮渲染时真出现过）。
+ */
 .dchat-panelSectionsName {
   flex: 1 1 auto;
   min-width: 0;
@@ -883,18 +1221,23 @@ const CSS = `
   flex: 1 1 auto;
   min-width: 0;
 }
-.dchat-panelSectionsHead > .dchat-scopeLabel:not(:first-child),
-.dchat-panelSectionsCheck {
-  flex: none;
-  width: 48px;
-  text-align: center;
-}
 .dchat-panelSectionsCheck {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 勾选框本身不缩；缩的是文字。 */
+  cursor: pointer;
 }
 .dchat-panelSectionsCheck input {
   margin: 0;
+  flex: none;
+}
+/* 名称跟在勾选框后面时，仍要能吃掉剩余宽度（单列形态的常规情况）。 */
+.dchat-panelSectionsCheck > .dchat-panelSectionsName {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .dchat-notice {
   margin: 0;

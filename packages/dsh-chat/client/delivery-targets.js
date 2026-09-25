@@ -130,7 +130,9 @@ function TargetRow({
  * @param props - { chatUi, connection, channelId, botId, translate? }。
  * @returns React 元素。
  */
-export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, translate }) {
+export function DeliveryTargetsEditor({
+  chatUi, connection, channelId, botId, translate, groups = true,
+}) {
   const t = translatorOf(translate, chatUi);
   const { Panel } = chatUi.components;
   const [state, setState] = React.useState({ phase: 'loading', targets: [], canSend: false });
@@ -243,7 +245,7 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
 
   return h(Panel, {
     title: t('主动投递'),
-    description: t('让定时任务或 agent 把结果直接发到指定会话。'),
+    description: t('把结果发到指定会话'),
   },
   error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
   notice ? h('p', { className: 'dchat-notice', role: 'status' }, notice) : null,
@@ -290,11 +292,19 @@ export function DeliveryTargetsEditor({ chatUi, connection, channelId, botId, tr
    * 之前只在"一个目标都没有"时显示，于是有 1 个已保存目标、又没有候选时，
    * 整张卡既看不到可添加项、也看不到为什么——用户只能说"没有添加入口"。
    */
+  /**
+   * "怎么让会话出现在这里"要按渠道说：**不支持群聊的渠道（微信）上"在群里 @ 一次机器人"
+   * 是一条走不通的指引**——照着做永远等不到会话出现。`groups` 由渠道给。
+   */
   ready && candidates.length === 0
     ? h('p', { className: 'dchat-cardDescription' },
       saved.length === 0
-        ? t('还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。')
-        : t('没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。'))
+        ? (groups
+          ? t('还没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，会话就会出现在这里，保存后即可主动投递。')
+          : t('还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。'))
+        : (groups
+          ? t('没有可添加的会话：在群里 @ 一次机器人，或与它私聊一次，该会话就会出现在这里。')
+          : t('没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。')))
     : null,
   candidates.length > 0
     ? h('p', { className: 'dchat-cardDescription' },

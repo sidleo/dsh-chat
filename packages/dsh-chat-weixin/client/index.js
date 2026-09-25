@@ -13,6 +13,30 @@ export const name = 'dsh-chat-weixin-client';
 export const inject = ['slots', 'locale', 'connection', 'chatChannels', 'chatUi'];
 
 const CHANNEL_ID = 'weixin';
+
+/**
+ * 微信渠道的能力声明。
+ *
+ * `panel: false` = **没有卡片面板**：微信的 `/menu` 发的是文本命令清单
+ * （`commands.mjs` 的 `reply` 那条路），不画卡片，所以「控制面板显示项」里的
+ * 8 个开关一个都不起作用——那张卡以前挂在微信页上，是纯粹的摆设。
+ *
+ * 这份常量同时被**渠道注册**与**页面**读，避免"注册里声明没有、页面上照样画出来"。
+ */
+const WEIXIN_CAPABILITIES = Object.freeze({
+  groups: false,
+  panel: false,
+  note: '仅私聊',
+  setup: { label: '扫码接入', hint: '点「扫码接入」用手机微信扫码绑定新账号。' },
+  /**
+   * **真能提供的来源字段**（`runtime.mjs` 的 `identity` + sourceFactory 就是这几个）：
+   * - `chatId` 恒等于 `senderId`（私聊）→ 重复，不列；
+   * - `conversationType` 恒为 `direct` → 不会变，不列；
+   * - `senderName` / `conversationTitle` / `threadId` **微信根本没有**。
+   * 列出来只会让用户勾一个永远没值的框（勾了没值 = 静默无效）。
+   */
+  sourceFields: ['channel', 'senderId', 'botId'],
+});
 const PAGE_SLOT = 'chat.channel.page';
 const LOCALE_NAMESPACE = 'dsh-chat-weixin';
 
@@ -67,7 +91,17 @@ const zh = {
   '目录': '目录',
   '显示项': '显示项',
   '控制面板显示项': '控制面板显示项',
-  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。',
+  // 设置页分组导航：页面一长就得有分类，否则想改一项只能盲滚（分组只做归类与跳转）。
+  '设置分类': '设置分类',
+  '正在设置': '正在设置',
+  '设置场合': '设置场合',
+  '只影响私聊会话': '只影响私聊会话',
+  '只影响群聊会话': '只影响群聊会话',
+  '运行环境': '运行环境',
+  '权限与身份': '权限与身份',
+  '呈现方式': '呈现方式',
+  '能力': '能力',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。': '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。',
   '模型与推理等级': '模型与推理等级',
   '会话': '会话',
   'Agent 预设与工作区': 'Agent 预设与工作区',
@@ -76,6 +110,67 @@ const zh = {
   '渠道设置（任务过程展示等）': '渠道设置（任务过程展示等）',
   '渠道动作按钮（重连等）': '渠道动作按钮（重连等）',
   '命令按钮（新会话/状态/诊断…）': '命令按钮（新会话/状态/诊断…）',
+  '全局': '全局',
+  '继承全局': '继承全局',
+  '恢复继承全局': '恢复继承全局',
+  '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。': '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。',
+  '放弃改动': '放弃改动',
+  '已保存。下一条消息生效。': '已保存。下一条消息生效。',
+  '告诉机器人：这条消息从哪来、以及该怎么用它。': '告诉机器人：这条消息从哪来、以及该怎么用它。',
+  '查看帮助': '查看帮助',
+  '机器人跑在哪个目录。只对新建会话生效。': '机器人跑在哪个目录。只对新建会话生效。',
+  '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。': '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。',
+  '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。': '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。',
+  '这个机器人用哪套 Agent 预设。只对新建会话生效。': '这个机器人用哪套 Agent 预设。只对新建会话生效。',
+  '预设决定它的人设与能用哪些工具。': '预设决定它的人设与能用哪些工具。',
+  '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。': '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。',
+  '还没有会话时用它建会话。': '还没有会话时用它建会话。',
+  '选完对「下一条消息新建的会话」生效，已经建好的会话不变。': '选完对「下一条消息新建的会话」生效，已经建好的会话不变。',
+  '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。': '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。',
+  '推理等级是模型自己的能力，换模型会重置。': '推理等级是模型自己的能力，换模型会重置。',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效。': '谁能跟机器人说话、谁能执行命令。改动立即生效。',
+  '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。': '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。',
+  '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。': '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。',
+  '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。': '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。',
+  '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。': '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。',
+  '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。': '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。',
+  '这台机器人调 lark-cli 时能用哪些身份。': '这台机器人调 lark-cli 时能用哪些身份。',
+  '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。': '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。',
+  '两个身份可以同时允许，也可以都不允许。': '两个身份可以同时允许，也可以都不允许。',
+  '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。': '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。',
+  '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。': '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。',
+  '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。': '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。',
+  '只对新建会话生效': '只对新建会话生效',
+  '新会话用它': '新会话用它',
+  '改完会重连一次': '改完会重连一次',
+  '改动立即生效': '改动立即生效',
+  '只影响 /menu 那张卡片': '只影响 /menu 那张卡片',
+  '选择用过的目录': '选择用过的目录',
+  '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。': '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。',
+  '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。': '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。',
+  '「仅名单内可用」+ 空名单时只有属主能说话。': '「仅名单内可用」+ 空名单时只有属主能说话。',
+  '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。': '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。',
+  '下拉里是这台机器人用过的目录，也可以直接手打任意路径。': '下拉里是这台机器人用过的目录，也可以直接手打任意路径。',
+  '还没有指定设置': '还没有指定设置',
+  '影响过程怎么显示，不影响答案': '影响过程怎么显示，不影响答案',
+  '下一条消息生效': '下一条消息生效',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。': '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。',
+  '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。': '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。',
+  '写一句"怎么理解来源"的说明，可点「填入示例」看模板': '写一句"怎么理解来源"的说明，可点「填入示例」看模板',
+  '启用增强': '启用增强',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。': '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。',
+  'profile 已就绪': 'profile 已就绪',
+  'profile 尚未创建': 'profile 尚未创建',
+  '应用身份': '应用身份',
+  '登录人': '登录人',
+  '把结果发到指定会话': '把结果发到指定会话',
+  '帮助': '帮助',
+  '属主不需要进名单：消息与命令都直接放行。': '属主不需要进名单：消息与命令都直接放行。',
+  '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。': '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。',
+  '「任何人可用」表示这个场合里谁都进得来。': '「任何人可用」表示这个场合里谁都进得来。',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。': '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。',
+  '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。': '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。',
+  '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。': '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。',
   '私聊': '私聊',
   '移除': '移除',
   '群聊': '群聊',
@@ -128,9 +223,81 @@ const zh = {
 };
 
 const en = {
+  '放弃改动': 'Discard changes',
+  '已保存。下一条消息生效。': 'Saved. Applies from the next message.',
+  '告诉机器人：这条消息从哪来、以及该怎么用它。': 'Tell the bot where an incoming message came from, and how to use it.',
+  '查看帮助': 'Show help',
+  '机器人跑在哪个目录。只对新建会话生效。': 'Which directory the bot runs in. Applies to new conversations only.',
+  '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。': 'This directory decides which files it can read and write, and which AGENTS.md applies.',
+  '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。': 'Existing conversations are unaffected. To point one at the new directory, use "New session" in that chat.',
+  '这个机器人用哪套 Agent 预设。只对新建会话生效。': 'Which agent preset this bot uses. Applies to new conversations only.',
+  '预设决定它的人设与能用哪些工具。': 'The preset decides its persona and which tools it may use.',
+  '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。': 'Like the workspace, this applies to new conversations only: use "New session" in that chat to pick it up.',
+  '还没有会话时用它建会话。': 'Used when a conversation is created before one exists.',
+  '选完对「下一条消息新建的会话」生效，已经建好的会话不变。': 'Applies to the conversation created by your next message; existing ones are unchanged.',
+  '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。': 'You can still change it per conversation: send /menu in the chat, or use /model.',
+  '推理等级是模型自己的能力，换模型会重置。': 'Reasoning effort belongs to the model; switching models resets it.',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效。': 'Who may talk to the bot and who may run commands. Applies immediately.',
+  '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。': 'The owner always has access and does not need to be on the list — set the owner in the "Access & identity" group.',
+  '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。': '"Allowlist only" with an empty list means only the owner can talk. To let someone in, add their platform id to the list.',
+  '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。': '"Anyone" means everyone in this scope can get in; in a group, any member can just @ the bot.',
+  '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。': 'People on the list can also be granted "may run commands"; without it they can chat but not run / commands.',
+  '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。': 'This controls how the execution process is shown — it does not affect the answer, commands or permissions.',
+  '这台机器人调 lark-cli 时能用哪些身份。': 'Which identities this bot may use when calling lark-cli.',
+  '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。': 'Nearest wins: specific chats/people → group/direct → global. A layer set to "inherit" is unset and follows the layer above.',
+  '两个身份可以同时允许，也可以都不允许。': 'Both identities may be allowed at once, or neither.',
+  '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。': 'Allowing the user identity only permits calling as a user; the actual user is still the signed-in person below — one lark-cli profile holds one signed-in user and never switches per sender.',
+  '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。': 'Sending and receiving messages always goes through the official SDK and is unaffected by these identities.',
+  '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。': 'This setting still has two separate scopes (direct/group) with no global layer yet; the one shown below is direct.',
+  '只对新建会话生效': 'Applies to new conversations only',
+  '新会话用它': 'Used for new conversations',
+  '改完会重连一次': 'Reconnects once after saving',
+  '改动立即生效': 'Applies immediately',
+  '只影响 /menu 那张卡片': 'Affects only the /menu card',
+  '选择用过的目录': 'Pick a directory used before',
+  '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。': 'The owner does not need to be on the list: their messages and commands always pass, bypassing the access policy.',
+  '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。': 'Pick a person from the conversations this bot has had; clearing the list means nobody bypasses the access policy.',
+  '「仅名单内可用」+ 空名单时只有属主能说话。': 'With "Allowlist only" and an empty list, only the owner can talk.',
+  '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。': 'Hidden items are not drawn on the card, but still work (policy and context enhancement remain active).',
+  '下拉里是这台机器人用过的目录，也可以直接手打任意路径。': 'The list shows directories this bot has used before; you can also type any path.',
+  '还没有指定设置': 'Nothing specific configured yet',
+  '影响过程怎么显示，不影响答案': 'Changes how the process is shown, not the answer',
+  '下一条消息生效': 'Applies from the next message',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。': 'When on, replies are organised for Feishu cards (clearer tables, sections and code blocks).',
+  '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。': 'When off they follow plain-text habits — the plugin never rewrites the answer; the model decides how to write it.',
+  '写一句"怎么理解来源"的说明，可点「填入示例」看模板': 'One line on how to read the source; use "Fill with example" for a template',
+  '启用增强': 'Enable enhancement',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。': 'Tell the bot where a message came from and how to use it — e.g. mention who said it and in which chat.',
+  'profile 已就绪': 'profile ready',
+  'profile 尚未创建': 'profile not created yet',
+  '应用身份': 'app identity',
+  '登录人': 'signed-in user',
+  '把结果发到指定会话': 'Send results to a chosen chat',
+  '帮助': 'Help',
+  '属主不需要进名单：消息与命令都直接放行。': 'The owner does not need to be on the list: their messages and commands always pass.',
+  '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。': 'The owner is whoever scanned to bind this account (the WeChat sign-in); their messages and commands always pass.',
+  '「任何人可用」表示这个场合里谁都进得来。': '"Anyone" means everyone in this scope can get in.',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。': 'Tell the bot where a message came from and how to use it — e.g. mention who said it.',
+  '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。': 'No conversations to add yet: chat with the bot once and it will show up here; save it to enable proactive delivery.',
+  '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。': 'No conversations to add: chat with the bot once and it will show up here.',
+  '私聊': 'Direct',
+  '群聊': 'Group',
+  '全局': 'Global',
+  '继承全局': 'Inherits global',
+  '恢复继承全局': 'Revert to inheriting global',
+  '正在设置': 'Configuring',
+  '设置场合': 'Scope',
+  '设置分类': 'Setting groups',
+  '所有会话的默认值': 'Default for all chats',
   '显示项': 'Section',
   '控制面板显示项': 'Control panel sections',
-  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': 'Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).',
+  '只影响私聊会话': 'Affects direct chats only',
+  '只影响群聊会话': 'Affects group chats only',
+  '运行环境': 'Runtime',
+  '权限与身份': 'Access & identity',
+  '呈现方式': 'Presentation',
+  '能力': 'Capabilities',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。': 'Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).',
   '模型与推理等级': 'Model & reasoning',
   '会话': 'Session',
   'Agent 预设与工作区': 'Agent preset & workspace',
@@ -187,9 +354,8 @@ const en = {
   '清空后没有人绕过访问策略': 'After clearing, nobody bypasses the access policy',
   '清空（无属主）': 'Clear (no owner)',
   '目录': 'Directory',
-  '私聊': 'Direct',
+  '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。': 'Currently following the Global layer; changing anything here makes this scope its own settings.',
   '移除': 'Remove',
-  '群聊': 'Group',
   '设为属主': 'Make owner',
   '访问模式': 'Access mode',
   '访问策略': 'Access policy',
@@ -368,8 +534,7 @@ function QrLogin({ chatUi, connection, translate, onDone }) {
 export function AccountCard({ account, chatUi, connection, translate, onChanged }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ContextEnhancementEditor, DeliveryTargetsEditor,
-    WorkspaceEditor, PresetEditor, ModelEditor, AccessPolicyEditor,
-    PanelSectionsEditor } = chatUi.components;
+    WorkspaceEditor, PresetEditor, ModelEditor, SettingGroups } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: account.botId,
   });
@@ -392,9 +557,6 @@ export function AccountCard({ account, chatUi, connection, translate, onChanged 
     agentPreset: settings.record?.agentPreset ?? null,
     // 机器人默认模型（还没有会话时用它）：与工作区/预设同一条口径，只对新建会话生效。
     model: settings.record?.model ?? null,
-    accessPolicy: settings.record?.accessPolicy ?? null,
-    // 控制面板卡片的显示项（null = 全显示）。
-    panelSections: settings.record?.panelSections ?? null,
   };
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -415,6 +577,9 @@ export function AccountCard({ account, chatUi, connection, translate, onChanged 
   };
 
   return h(Panel, {
+    // 这个账号的身份与操作条（名称/状态/重连/移除接入）：**不属于任何设置分组**——
+    // 它不是一项设置，而是"我在配哪个账号"。标记与飞书同义，供布局守门区分头卡与设置卡。
+    'data-card': 'bot-header',
     title: account.botName ?? account.accountIdMasked,
     description: `${account.accountIdMasked} · ${t('仅私聊')}`,
     actions: h('div', { className: 'dchat-actions' },
@@ -457,57 +622,103 @@ export function AccountCard({ account, chatUi, connection, translate, onChanged 
     h('div', { className: 'dchat-listItem' },
       h('span', null, t('已处理消息')),
       h('span', null, String(account.handled ?? 0)))),
-  h(WorkspaceEditor, {
-    value: shared.workspace,
-    options: settings.options?.workspacePaths ?? [],
+  /**
+   * 设置项按**职能**分组（与飞书同一条口径）：页面是逐轮追加出来的，
+   * 平铺的卡片一多就得盲滚。分组只做归类与跳转，每个组件的实现与保存路径一行不改。
+   */
+  h(SettingGroups, {
     translate: t,
-    onSave: settings.saveWorkspace,
-  }),
-
-  h(PresetEditor, {
-    value: shared.agentPreset,
-    options: settings.options?.presets ?? [],
-    translate: t,
-    onSave: settings.saveAgentPreset,
-  }),
-
-  h(ModelEditor, {
-    value: shared.model ?? null,
-    options: settings.options?.models ?? [],
-    hostDefault: settings.options?.hostDefault ?? null,
-    failures: settings.options?.modelFailures ?? [],
-    translate: t,
-    onSave: settings.saveModel,
-  }),
-
-  h(AccessPolicyEditor, {
-    value: shared.accessPolicy,
-    translate: t,
-    onSave: settings.saveAccessPolicy,
-  }),
-
-  h(PanelSectionsEditor, {
-    value: shared.panelSections ?? null,
-    disabled: settings.phase !== 'ready',
-    translate: t,
-    onSave: settings.savePanelSections,
-  }),
-
-  h(ContextEnhancementEditor, {
-    config: settings.record?.contextEnhancement ?? null,
-    disabled: settings.phase !== 'ready',
-    translate: t,
-    onSave: settings.saveContextEnhancement,
-    // 「指定用户」用平台 userId（route.userId），不是投递目标 id。
-    conversations: sessions,
-  }),
-
-  // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
-  h(DeliveryTargetsEditor, {
-    chatUi,
-    connection,
-    channelId: CHANNEL_ID,
-    botId: account.botId,
+    ariaLabel: t('设置分类'),
+    groups: [
+      {
+        key: 'runtime',
+        label: '运行环境',
+        items: [
+          {
+            key: 'workspace',
+            label: '工作区',
+            node: h(WorkspaceEditor, {
+              value: shared.workspace,
+              options: settings.options?.workspacePaths ?? [],
+              translate: t,
+              onSave: settings.saveWorkspace,
+            }),
+          },
+          {
+            key: 'preset',
+            label: 'Agent 预设',
+            node: h(PresetEditor, {
+              value: shared.agentPreset,
+              options: settings.options?.presets ?? [],
+              translate: t,
+              onSave: settings.saveAgentPreset,
+            }),
+          },
+          {
+            key: 'model',
+            label: '默认模型',
+            node: h(ModelEditor, {
+              value: shared.model ?? null,
+              options: settings.options?.models ?? [],
+              hostDefault: settings.options?.hostDefault ?? null,
+              failures: settings.options?.modelFailures ?? [],
+              translate: t,
+              onSave: settings.saveModel,
+            }),
+          },
+        ],
+      },
+      /**
+       * **没有「权限与身份」这一组**（微信就是「只给属主自己用」）。
+       *
+       * 属主 = 扫码绑定这个账号的人，而缺省的访问策略（仅名单内 + 空名单）**恰好等于
+       * "只有属主能用"**——也就是微信的常态，这一屏平时一个字都不用改。
+       *
+       * 那"放开给别人"呢？两条路都不通：
+       * ① 加名单要填 `from_user_id`（收消息看的那个 id），而**微信不显示这个 id**，
+       *    页面也没有选择器（`AccessPolicyEditor` 没有 conversations 参数）——
+       *    留着就是一个"填不进正确值"的输入框；
+       * ② 改成「任何人可用」能选，但那等于**谁能找到这个机器人谁就能触发它**，
+       *    在一个定位成"给我自己用"的渠道上，把这种开关摆在设置页第一屏是给用户挖坑。
+       * 所以整组去掉；真要用命令放人，`/allow` / `/deny` 仍然有效（属主在聊天里可用）。
+       */
+      {
+        key: 'capability',
+        label: '能力',
+        items: [
+          {
+            key: 'context',
+            label: '上下文增强',
+            node: h(ContextEnhancementEditor, {
+              config: settings.record?.contextEnhancement ?? null,
+              scope: 'direct',
+              // 只列微信真能提供的来源字段（其余勾了也没有值）。
+              sourceFields: WEIXIN_CAPABILITIES.sourceFields,
+              // 微信实际上只有属主一个人在聊：「指定用户」那一层没有意义，不画。
+              showTargets: false,
+              disabled: settings.phase !== 'ready',
+              translate: t,
+              onSave: settings.saveContextEnhancement,
+              // 「指定用户」用平台 userId（route.userId），不是投递目标 id。
+              conversations: sessions,
+            }),
+          },
+          {
+            key: 'delivery',
+            label: '主动投递',
+            // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
+            node: h(DeliveryTargetsEditor, {
+              chatUi,
+              connection,
+              channelId: CHANNEL_ID,
+              botId: account.botId,
+              // 微信没有群：空态里"在群里 @ 一次机器人"那条指引走不通，换成"先私聊一次"。
+              groups: WEIXIN_CAPABILITIES.groups,
+            }),
+          },
+        ],
+      },
+    ],
   }));
 }
 
@@ -589,10 +800,14 @@ export function apply(ctx) {
     icon: { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16"><path fill="#07C160" d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>' },
     sessionBadge: { text: '微', color: '#07c160' },
     capabilities: {
-      groups: false,
-      note: t('仅私聊'),
+      groups: WEIXIN_CAPABILITIES.groups,
+      panel: WEIXIN_CAPABILITIES.panel,
+      note: t(WEIXIN_CAPABILITIES.note),
       // 微信的渠道设置页就是「扫码接入」：入口名与空状态说明都由渠道给（hub 不认识这些语义）。
-      setup: { label: t('扫码接入'), hint: t('点「扫码接入」用手机微信扫码绑定新账号。') },
+      setup: {
+        label: t(WEIXIN_CAPABILITIES.setup.label),
+        hint: t(WEIXIN_CAPABILITIES.setup.hint),
+      },
     },
   }), 'dsh-chat-weixin: 渠道元数据');
 

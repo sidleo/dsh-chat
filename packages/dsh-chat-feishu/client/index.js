@@ -20,6 +20,17 @@ const CHANNEL_ID = 'feishu';
  * 也是渠道元数据里的 `capabilities.setup.hint`——两处必须是同一句）。
  */
 const FEISHU_SETUP_HINT = '本机还没有飞书机器人配置：把飞书应用的凭据加进渠道的 config.json 后重启 dsh（旧版 dsh-im 的配置会在启动时自动导入）。';
+/**
+ * 飞书**真能提供的来源字段**（`bridge.mjs` 的 `identity` = senderId/chatId/threadId，
+ * 加上 channel/conversationType/botId）。
+ *
+ * `senderName` / `conversationTitle` **两个渠道都没有实现**（schema 里有、没人填）——
+ * 列出来就是"勾了永远没值"，所以这里显式不列。
+ */
+const FEISHU_SOURCE_FIELDS = Object.freeze([
+  'channel', 'conversationType', 'senderId', 'chatId', 'threadId', 'botId',
+]);
+
 const PAGE_SLOT = 'chat.channel.page';
 const LOCALE_NAMESPACE = 'dsh-chat-feishu';
 
@@ -77,7 +88,7 @@ const zh = {
   '目录': '目录',
   '显示项': '显示项',
   '控制面板显示项': '控制面板显示项',
-  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。': '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。',
   '模型与推理等级': '模型与推理等级',
   '会话': '会话',
   'Agent 预设与工作区': 'Agent 预设与工作区',
@@ -86,6 +97,66 @@ const zh = {
   '渠道设置（任务过程展示等）': '渠道设置（任务过程展示等）',
   '渠道动作按钮（重连等）': '渠道动作按钮（重连等）',
   '命令按钮（新会话/状态/诊断…）': '命令按钮（新会话/状态/诊断…）',
+  '全局': '全局',
+  '继承全局': '继承全局',
+  '恢复继承全局': '恢复继承全局',
+  '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。': '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。',
+  '放弃改动': '放弃改动',
+  '已保存。下一条消息生效。': '已保存。下一条消息生效。',
+  '告诉机器人：这条消息从哪来、以及该怎么用它。': '告诉机器人：这条消息从哪来、以及该怎么用它。',
+  '查看帮助': '查看帮助',
+  '机器人跑在哪个目录。只对新建会话生效。': '机器人跑在哪个目录。只对新建会话生效。',
+  '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。': '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。',
+  '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。': '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。',
+  '这个机器人用哪套 Agent 预设。只对新建会话生效。': '这个机器人用哪套 Agent 预设。只对新建会话生效。',
+  '预设决定它的人设与能用哪些工具。': '预设决定它的人设与能用哪些工具。',
+  '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。': '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。',
+  '还没有会话时用它建会话。': '还没有会话时用它建会话。',
+  '选完对「下一条消息新建的会话」生效，已经建好的会话不变。': '选完对「下一条消息新建的会话」生效，已经建好的会话不变。',
+  '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。': '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。',
+  '推理等级是模型自己的能力，换模型会重置。': '推理等级是模型自己的能力，换模型会重置。',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效。': '谁能跟机器人说话、谁能执行命令。改动立即生效。',
+  '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。': '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。',
+  '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。': '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。',
+  '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。': '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。',
+  '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。': '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。',
+  '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。': '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。',
+  '这台机器人调 lark-cli 时能用哪些身份。': '这台机器人调 lark-cli 时能用哪些身份。',
+  '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。': '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。',
+  '两个身份可以同时允许，也可以都不允许。': '两个身份可以同时允许，也可以都不允许。',
+  '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。': '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。',
+  '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。': '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。',
+  '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。': '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。',
+  '只对新建会话生效': '只对新建会话生效',
+  '新会话用它': '新会话用它',
+  '改完会重连一次': '改完会重连一次',
+  '改动立即生效': '改动立即生效',
+  '只影响 /menu 那张卡片': '只影响 /menu 那张卡片',
+  '选择用过的目录': '选择用过的目录',
+  '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。': '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。',
+  '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。': '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。',
+  '「仅名单内可用」+ 空名单时只有属主能说话。': '「仅名单内可用」+ 空名单时只有属主能说话。',
+  '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。': '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。',
+  '下拉里是这台机器人用过的目录，也可以直接手打任意路径。': '下拉里是这台机器人用过的目录，也可以直接手打任意路径。',
+  '还没有指定设置': '还没有指定设置',
+  '影响过程怎么显示，不影响答案': '影响过程怎么显示，不影响答案',
+  '下一条消息生效': '下一条消息生效',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。': '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。',
+  '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。': '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。',
+  '写一句"怎么理解来源"的说明，可点「填入示例」看模板': '写一句"怎么理解来源"的说明，可点「填入示例」看模板',
+  '启用增强': '启用增强',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。': '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。',
+  'profile 已就绪': 'profile 已就绪',
+  'profile 尚未创建': 'profile 尚未创建',
+  '登录人': '登录人',
+  '把结果发到指定会话': '把结果发到指定会话',
+  '帮助': '帮助',
+  '属主不需要进名单：消息与命令都直接放行。': '属主不需要进名单：消息与命令都直接放行。',
+  '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。': '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。',
+  '「任何人可用」表示这个场合里谁都进得来。': '「任何人可用」表示这个场合里谁都进得来。',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。': '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。',
+  '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。': '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。',
+  '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。': '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。',
   '私聊': '私聊',
   '移除': '移除',
   '群聊': '群聊',
@@ -108,6 +179,18 @@ const zh = {
   '取消': '取消',
   '任务过程展示': '任务过程展示',
   '卡片友好回答': '卡片友好回答',
+  '开启卡片友好回答': '开启卡片友好回答',
+  // 设置页分组导航：页面一长就得有分类，否则想改一项只能盲滚（分组只做归类与跳转）。
+  '设置分类': '设置分类',
+  '正在设置': '正在设置',
+  '设置场合': '设置场合',
+  '只影响私聊会话': '只影响私聊会话',
+  '只影响群聊会话': '只影响群聊会话',
+  '所有会话的默认值': '所有会话的默认值',
+  '运行环境': '运行环境',
+  '权限与身份': '权限与身份',
+  '呈现方式': '呈现方式',
+  '能力': '能力',
   '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。':
     '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。',
   '设置执行过程的呈现方式；私聊与群聊分别生效': '设置执行过程的呈现方式；私聊与群聊分别生效',
@@ -124,7 +207,6 @@ const zh = {
   '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK',
   '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK':
     '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK',
-  '全局': '全局',
   '应用身份': '应用身份',
   '用户身份': '用户身份',
   '继承上一层': '继承上一层',
@@ -206,9 +288,73 @@ const zh = {
 };
 
 const en = {
+  '放弃改动': 'Discard changes',
+  '已保存。下一条消息生效。': 'Saved. Applies from the next message.',
+  '告诉机器人：这条消息从哪来、以及该怎么用它。': 'Tell the bot where an incoming message came from, and how to use it.',
+  '查看帮助': 'Show help',
+  '机器人跑在哪个目录。只对新建会话生效。': 'Which directory the bot runs in. Applies to new conversations only.',
+  '这个目录决定它能读写哪些文件、以及用哪一份 AGENTS.md。': 'This directory decides which files it can read and write, and which AGENTS.md applies.',
+  '已经建好的会话不受影响——想换目录又想让旧会话跟上，就在那个聊天里点「新会话」。': 'Existing conversations are unaffected. To point one at the new directory, use "New session" in that chat.',
+  '这个机器人用哪套 Agent 预设。只对新建会话生效。': 'Which agent preset this bot uses. Applies to new conversations only.',
+  '预设决定它的人设与能用哪些工具。': 'The preset decides its persona and which tools it may use.',
+  '跟工作区一样只对新建会话生效：改完想让某个聊天用上，在那个聊天里点「新会话」。': 'Like the workspace, this applies to new conversations only: use "New session" in that chat to pick it up.',
+  '还没有会话时用它建会话。': 'Used when a conversation is created before one exists.',
+  '选完对「下一条消息新建的会话」生效，已经建好的会话不变。': 'Applies to the conversation created by your next message; existing ones are unchanged.',
+  '会话建好之后还能单独改：在聊天里发 /menu，或用 /model。': 'You can still change it per conversation: send /menu in the chat, or use /model.',
+  '推理等级是模型自己的能力，换模型会重置。': 'Reasoning effort belongs to the model; switching models resets it.',
+  '谁能跟机器人说话、谁能执行命令。改动立即生效。': 'Who may talk to the bot and who may run commands. Applies immediately.',
+  '属主始终可用，不需要进名单——属主在「权限与身份」那一组里单独设置。': 'The owner always has access and does not need to be on the list — set the owner in the "Access & identity" group.',
+  '「仅名单内可用」+ 空名单 = 只有属主能说话。想给某个人开门，把他的平台 id 加进名单。': '"Allowlist only" with an empty list means only the owner can talk. To let someone in, add their platform id to the list.',
+  '「任何人可用」表示这个场合里谁都进得来；群聊下任何成员 @ 它就行。': '"Anyone" means everyone in this scope can get in; in a group, any member can just @ the bot.',
+  '名单里的人可以额外勾「可执行命令」；不勾就只能对话，不能跑 / 开头的命令。': 'People on the list can also be granted "may run commands"; without it they can chat but not run / commands.',
+  '这个下拉控制的是"执行过程怎么展示"——不影响答案本身，也不影响命令与权限。': 'This controls how the execution process is shown — it does not affect the answer, commands or permissions.',
+  '这台机器人调 lark-cli 时能用哪些身份。': 'Which identities this bot may use when calling lark-cli.',
+  '就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。': 'Nearest wins: specific chats/people → group/direct → global. A layer set to "inherit" is unset and follows the layer above.',
+  '两个身份可以同时允许，也可以都不允许。': 'Both identities may be allowed at once, or neither.',
+  '允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。': 'Allowing the user identity only permits calling as a user; the actual user is still the signed-in person below — one lark-cli profile holds one signed-in user and never switches per sender.',
+  '飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。': 'Sending and receiving messages always goes through the official SDK and is unaffected by these identities.',
+  '这一项目前只有私聊/群聊两份（没有全局层）；下面显示的是私聊那一份。': 'This setting still has two separate scopes (direct/group) with no global layer yet; the one shown below is direct.',
+  '只对新建会话生效': 'Applies to new conversations only',
+  '新会话用它': 'Used for new conversations',
+  '改完会重连一次': 'Reconnects once after saving',
+  '改动立即生效': 'Applies immediately',
+  '只影响 /menu 那张卡片': 'Affects only the /menu card',
+  '选择用过的目录': 'Pick a directory used before',
+  '属主不需要进白名单：消息与命令都直接放行，也不看访问策略。': 'The owner does not need to be on the list: their messages and commands always pass, bypassing the access policy.',
+  '从"它聊过的会话"里挑一个人设为属主；清空后没有任何人绕过访问策略。': 'Pick a person from the conversations this bot has had; clearing the list means nobody bypasses the access policy.',
+  '「仅名单内可用」+ 空名单时只有属主能说话。': 'With "Allowlist only" and an empty list, only the owner can talk.',
+  '关掉的项不显示在卡片上，但功能照旧（策略、上下文增强都还在生效）。': 'Hidden items are not drawn on the card, but still work (policy and context enhancement remain active).',
+  '下拉里是这台机器人用过的目录，也可以直接手打任意路径。': 'The list shows directories this bot has used before; you can also type any path.',
+  '还没有指定设置': 'Nothing specific configured yet',
+  '影响过程怎么显示，不影响答案': 'Changes how the process is shown, not the answer',
+  '下一条消息生效': 'Applies from the next message',
+  '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。': 'When on, replies are organised for Feishu cards (clearer tables, sections and code blocks).',
+  '关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。': 'When off they follow plain-text habits — the plugin never rewrites the answer; the model decides how to write it.',
+  '写一句"怎么理解来源"的说明，可点「填入示例」看模板': 'One line on how to read the source; use "Fill with example" for a template',
+  '启用增强': 'Enable enhancement',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁、在哪个群说的。': 'Tell the bot where a message came from and how to use it — e.g. mention who said it and in which chat.',
+  'profile 已就绪': 'profile ready',
+  'profile 尚未创建': 'profile not created yet',
+  '登录人': 'signed-in user',
+  '把结果发到指定会话': 'Send results to a chosen chat',
+  '帮助': 'Help',
+  '属主不需要进名单：消息与命令都直接放行。': 'The owner does not need to be on the list: their messages and commands always pass.',
+  '属主是扫码绑定这个账号的人（微信登录人），消息与命令都直接放行。': 'The owner is whoever scanned to bind this account (the WeChat sign-in); their messages and commands always pass.',
+  '「任何人可用」表示这个场合里谁都进得来。': '"Anyone" means everyone in this scope can get in.',
+  '告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。': 'Tell the bot where a message came from and how to use it — e.g. mention who said it.',
+  '还没有可添加的会话：先和机器人私聊一次，会话就会出现在这里，保存后即可主动投递。': 'No conversations to add yet: chat with the bot once and it will show up here; save it to enable proactive delivery.',
+  '没有可添加的会话：先和机器人私聊一次，该会话就会出现在这里。': 'No conversations to add: chat with the bot once and it will show up here.',
+  '私聊': 'Direct',
+  '群聊': 'Group',
+  '全局': 'Global',
+  '继承全局': 'Inherits global',
+  '恢复继承全局': 'Revert to inheriting global',
+  '正在设置': 'Configuring',
+  '设置场合': 'Scope',
+  '设置分类': 'Setting groups',
   '显示项': 'Section',
   '控制面板显示项': 'Control panel sections',
-  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧（私聊与群聊分别设置）。': 'Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).',
+  '只影响 /menu 发出来的那张卡片：关掉的项不显示，功能照旧。': 'Only affects the card sent by /menu: hidden items are not drawn, everything keeps working (direct and group are configured separately).',
   '模型与推理等级': 'Model & reasoning',
   '会话': 'Session',
   'Agent 预设与工作区': 'Agent preset & workspace',
@@ -269,9 +415,8 @@ const en = {
   '清空后没有人绕过访问策略': 'After clearing, nobody bypasses the access policy',
   '清空（无属主）': 'Clear (no owner)',
   '目录': 'Directory',
-  '私聊': 'Direct',
+  '现在跟随「全局」那一份；在这里改任何一项，就会变成这个场合的单独设置。': 'Currently following the Global layer; changing anything here makes this scope its own settings.',
   '移除': 'Remove',
-  '群聊': 'Group',
   '设为属主': 'Make owner',
   '访问模式': 'Access mode',
   '访问策略': 'Access policy',
@@ -292,6 +437,14 @@ const en = {
   '取消': 'Cancel',
   '任务过程展示': 'Task progress display',
   '卡片友好回答': 'Card-friendly answers',
+  '开启卡片友好回答': 'Enable card-friendly answers',
+  '只影响私聊会话': 'Affects direct chats only',
+  '只影响群聊会话': 'Affects group chats only',
+  '所有会话的默认值': 'Default for all chats',
+  '运行环境': 'Runtime',
+  '权限与身份': 'Access & identity',
+  '呈现方式': 'Presentation',
+  '能力': 'Capabilities',
   '开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。':
     'When on, replies are written for Feishu cards (clearer tables, sections and code blocks); '
     + 'when off they follow plain-text habits. Takes effect from the next message.',
@@ -311,7 +464,6 @@ const en = {
   '这台机器人调 lark-cli 时用哪个身份；飞书渠道的收发仍走官方 SDK': 'Which identity this bot uses when calling lark-cli; message send/receive still goes through the official SDK',
   '按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK':
     'Choose which identities are allowed per context: nearest wins (specific chats/people → group/direct → global); send/receive still goes through the official SDK',
-  '全局': 'Global',
   '应用身份': 'Application identity',
   '用户身份': 'User identity',
   '继承上一层': 'Inherit from above',
@@ -446,11 +598,33 @@ const LARK_IDENTITY_SWITCHES = Object.freeze([
   },
 ]);
 
-/** 分类层在界面上的顺序。 */
+/**
+ * 分类层在界面上的合法取值（私聊 / 群聊）。
+ *
+ * ⚠️ 现在**不直接拿它一次画全部**：场合由页面级切换器选定后，这一项只画
+ * 「全局 + 当前场合」两层（见 `LarkIdentityEditor` 里分层下拉的注释）——
+ * 之所以不一次画全，是因为"继承上一层"的语义要求**看得见上一层**，
+ * 把上一层藏起来用户就没法判断自己会继承到什么。
+ */
 const LARK_IDENTITY_SCOPES = Object.freeze([
   { key: 'direct', label: '私聊' },
   { key: 'group', label: '群聊' },
 ]);
+// 分类层的键（"指定设置"按这两类命中：群 / 人）。
+const LARK_SCOPE_KEYS = LARK_IDENTITY_SCOPES.map((item) => item.key);
+
+/**
+ * 层键 → 界面名称。**含全局层**：页面级场合切换器给的就是这三层之一，
+ * 而 `LARK_IDENTITY_SCOPES` 只含两个**分类层**（"指定设置"按它们分类）。
+ * 两者不是一回事，混用会让 `scope === 'global'` 被误判成"认不出的层"而落回私聊。
+ */
+const LARK_LAYER_LABELS = Object.freeze({
+  global: '全局',
+  direct: '私聊',
+  group: '群聊',
+});
+/** 合法的层键（三层）。 */
+const LARK_LAYER_KEYS = Object.keys(LARK_LAYER_LABELS);
 
 /**
  * 一层的取值只有"继承上一层"或"两个开关的 4 种组合"，共 5 个选项。
@@ -510,9 +684,10 @@ function targetsFromRows(rows) {
  * @param props - { botId, value, conversations, chatUi, connection, translate, onChanged }。
  * @returns React 元素。
  */
-function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, translate, onChanged }) {
+function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, translate, onChanged, scope = 'direct' }) {
   const t = typeof translate === 'function' ? translate : (key) => key;
-  const { Panel } = chatUi.components;
+  // HelpHint 由 hub 经 chatUi 下发（渠道包不许 import hub 包）。
+  const { Panel, HelpHint } = chatUi.components;
   const [probe, setProbe] = React.useState({ phase: 'loading', value: null, error: null });
   const [pending, setPending] = React.useState(null);
   const [notice, setNotice] = React.useState(null);
@@ -564,6 +739,11 @@ function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, t
     }
   };
 
+  /**
+   * 当前层：页面级场合就是这一项要编辑的层（三层都合法）。
+   * 认不出时按私聊（保守：私聊的放开面最小）。
+   */
+  const activeScope = LARK_LAYER_KEYS.includes(scope) ? scope : 'direct';
   const scopes = value ?? { global: { bot: true, user: false }, direct: null, group: null, targets: [] };
   const targets = Array.isArray(scopes.targets) ? scopes.targets : [];
   const info = probe.value;
@@ -631,15 +811,38 @@ function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, t
         value: choice,
         disabled: busy,
         onChange: (event) => chooseScope(key, event.target.value),
-      }, LARK_SCOPE_CHOICES.map((option) => h('option', {
-        key: option.value,
-        value: option.value,
-      }, t(option.label)))));
+      // 全局层上面没有层了，"继承上一层"对它没有意义（选了会落回默认，看着像没生效）。
+      }, LARK_SCOPE_CHOICES
+        .filter((option) => !(key === 'global' && option.value === 'inherit'))
+        .map((option) => h('option', {
+          key: option.value,
+          value: option.value,
+        }, t(option.label)))));
   };
 
   return h(Panel, {
     title: t('lark-cli 身份'),
-    description: t('按场合配置能用哪些身份：就近覆盖（指定群/人 → 群聊/私聊 → 全局）；飞书渠道的收发仍走官方 SDK'),
+    /**
+     * 说明 + 问号**同一行**。
+     *
+     * 早先问号被单独放在一个 div 里，渲染出来就是孤零零一个圆点（真机截图反馈
+     * "这行只有个问号"）——说明文字与它的入口必须挨在一起，用户才知道问的是什么。
+     */
+    description: [
+      t('这台机器人调 lark-cli 时能用哪些身份。'),
+      h(HelpHint, {
+        translate: t,
+        label: t('lark-cli 身份'),
+        help: [
+          t('就近覆盖：指定群/人 → 群聊/私聊 → 全局。选了「继承上一层」的那一层不单独设置，听上层的。'),
+          t('两个身份可以同时允许，也可以都不允许。'),
+          // 两个身份的含义由 LARK_IDENTITY_SWITCHES 提供（单一来源，别在两处各写一份）。
+          ...LARK_IDENTITY_SWITCHES.map((item) => `${t(item.label)}：${t(item.help)}`),
+          t('允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。'),
+          t('飞书渠道自己的收发消息始终走官方 SDK，与这里的身份无关。'),
+        ],
+      }),
+    ],
     actions: h('button', {
       type: 'button',
       className: 'dchat-button',
@@ -647,21 +850,29 @@ function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, t
       onClick: () => { void load(); },
     }, t('重读 lark-cli 状态')),
   },
-    // 全局：唯一必填的一层（其余都可以"继承"）。
-    h('div', { className: 'dchat-scopeGrid' }, scopeRow({ key: 'global', label: '全局', id: `lark-scope-global-${botId}` })),
+    /**
+     * **只画当前那一层**——与页面上其余设置项完全一致。
+     *
+     * 早先这里是"全局 + 当前层"两层同屏（理由是"选了继承要看得见上一层"），
+     * 但真机反馈这**自相矛盾**：切到"全局"时卡里冒出一个"私聊"下拉，
+     * 切到"私聊"时又冒出"全局"——用户以为主体切换器坏了。
+     * 想知道上一层是什么，切到那个层看即可（全页一致的行为）。
+     */
     h('div', { className: 'dchat-scopeGrid' },
-      LARK_IDENTITY_SCOPES.map((scope) => scopeRow({
-        key: scope.key, label: scope.label, id: `lark-scope-${scope.key}-${botId}`,
-      }))),
-    h('p', { className: 'dchat-cardDescription' },
-      t('两个身份可以同时允许。选「继承上一层」表示这一层不单独设置，听上一层的（群聊/私聊继承全局，指定条目自己说了算）。')),
-    h('p', { className: 'dchat-cardDescription' },
-      t('注意：允许用户身份只是「允许以用户身份调用」，实际用的仍是下面「登录人」那一个——lark-cli 一份 profile 只有一个登录人，不会按发言人自动切换。')),
+      scopeRow({
+        key: activeScope,
+        label: LARK_LAYER_LABELS[activeScope],
+        id: `lark-scope-${activeScope}-${botId}`,
+      })),
+    /**
+     * 两段长解释收进问号：它们是"想知道再看"的背景（层怎么覆盖、用户身份的语义边界），
+     * 常驻会让这张卡在整页最长的基础上再长两行——而这两行没有任何可操作的东西。
+     */
 
     // 指定群 / 指定人：按会话列表选，不手填 id。
     h('h4', { className: 'dchat-scopeLabel' }, t('指定群或人')),
     targets.length === 0
-      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置：所有会话都按上面的分类与全局生效。'))
+      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置'))
       : h('div', null, targets.map((target, index) => h('div', {
         key: `${target.kind}:${target.chatId ?? ''}:${target.id}`,
         className: 'dchat-scopeRow',
@@ -707,10 +918,6 @@ function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, t
       ? h('p', { className: 'dchat-cardDescription' }, t('还没有会话可选：这台机器人跟人聊过之后，会话会出现在这里。'))
       : null,
 
-    h('div', { className: 'dchat-scopeGrid' },
-      LARK_IDENTITY_SWITCHES.map((item) => h('p', { key: item.key, className: 'dchat-cardDescription' },
-        `${t(item.label)}：${t(item.help)}`))),
-
     pending ? h('div', { className: 'dchat-warning', role: 'alert' },
       h('p', null, pending.prompt),
       h('div', { className: 'dchat-actions' },
@@ -734,19 +941,27 @@ function LarkIdentityEditor({ botId, value, conversations, chatUi, connection, t
     probe.phase === 'failed'
       ? h('p', { className: 'dchat-error', role: 'alert' }, `${t('读取 lark-cli 状态失败：')}${probe.error}`)
       : null,
+    /**
+     * 体检结果**压成一行小字**：原来是三行「标签 + 值」（profile / 应用身份 / 用户身份），
+     * 值里还带完整 profile 名与 open_id——那是排查用的信息，不是日常要读的。
+     * 现在一行说清"profile 在不在 + 两个身份能不能用 + 登录的是谁"，完整值收进 title。
+     */
     probe.phase === 'ready' && info
-      ? line(t('lark-cli 里的 profile'), info.profile?.found
-        ? `${info.profile.name ?? '?'}（${info.profile.appId ?? '?'}）`
-        : t('lark-cli 里还没有这台机器人的 profile（真正调用时会自动创建）'))
-      : null,
-    probe.phase === 'ready' && info?.larkCli
-      ? line(t('应用身份：'), identityText(info.larkCli.bot, t('不可用')))
-      : null,
-    probe.phase === 'ready' && info?.larkCli
-      ? line(t('用户身份：'), info.larkCli.user?.onBehalfOf?.openId
-        ? `${t('登录人：')}${info.larkCli.user.onBehalfOf.userName ?? ''}`
-          + ` (${info.larkCli.user.onBehalfOf.openId})`
-        : (identityText(info.larkCli.user, t('没有用户登录'))))
+      ? h('p', {
+        className: 'dchat-cardDescription dchat-larkStatus',
+        title: [
+          info.profile?.found ? `${info.profile.name ?? '?'} (${info.profile.appId ?? '?'})` : null,
+          info.larkCli?.user?.onBehalfOf?.openId ?? null,
+        ].filter(Boolean).join(' · '),
+      }, [
+        info.profile?.found ? t('profile 已就绪') : t('profile 尚未创建'),
+        info.larkCli ? `${t('应用身份')} ${identityText(info.larkCli.bot, t('不可用'))}` : null,
+        info.larkCli
+          ? (info.larkCli.user?.onBehalfOf?.openId
+            ? `${t('登录人')} ${info.larkCli.user.onBehalfOf.userName ?? info.larkCli.user.onBehalfOf.openId}`
+            : `${t('用户身份')} ${identityText(info.larkCli.user, t('没有用户登录'))}`)
+          : null,
+      ].filter(Boolean).join(' · '))
       : null,
   );
 }
@@ -756,7 +971,8 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
   const t = typeof translate === 'function' ? translate : (key) => key;
   const { Panel, StatusPill, ScopedModeEditor, ContextEnhancementEditor,
     DeliveryTargetsEditor, WorkspaceEditor, PresetEditor, ModelEditor,
-    AccessPolicyEditor, OwnerEditor, PanelSectionsEditor } = chatUi.components;
+    AccessPolicyEditor, OwnerEditor, PanelSectionsEditor, SettingGroups,
+    ScopeSwitcher } = chatUi.components;
   const settings = chatUi.hooks.useBotSettings({
     connection, channelId: CHANNEL_ID, botId: bot.id,
   });
@@ -878,6 +1094,21 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [confirming, setConfirming] = React.useState(false);
+  /**
+   * **当前场合**（私聊/群聊）：页面级状态，所有分场合的设置项共用它。
+   *
+   * 为什么要有：在这之前 4 个分叉项各画各的（并排两块 / 竖排两个下拉 / 8×2 表格 / 弹窗页签），
+   * 用户的心智模型却是「一个设置项 × 几个场合」，得学四套画法。
+   * 现在在分组顶部选一次，下面所有卡都只画那一份——**改哪个场合从头到尾一致**。
+   *
+   * 只影响"画哪一份"，不改磁盘格式（保存时把改过的那份并回完整对象）。
+   */
+  const [scope, setScope] = React.useState('global');
+  const SCOPE_DEFS = chatUi.SCOPE_DEFS ?? [
+    { key: 'global', label: '全局' },
+    { key: 'direct', label: '私聊' },
+    { key: 'group', label: '群聊' },
+  ];
 
   const run = async (method, payload) => {
     setBusy(true);
@@ -896,7 +1127,221 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
   const tone = status.state === 'running' ? 'success'
     : status.state === 'failed' ? 'error' : 'warning';
 
+  /**
+   * 设置项按**职能**分组：页面是逐轮追加出来的（10 张卡平铺、实测 3200+px 高），
+   * 想改一项得盲滚。分组只做归类与跳转，每个组件的实现与保存路径一行不改。
+   *
+   * 分界线按"改了会影响什么"划，而不是按实现来源：
+   * - 运行环境 · 机器人跑在哪、用哪套人设与模型（只对新会话生效）
+   * - 权限与身份 · 谁能用、以什么身份调外部工具（安全面）
+   * - 呈现方式 · 回复长什么样（纯显示偏好，关掉不影响功能）
+   * - 能力 · 额外功能开关
+   */
+  const settingGroups = [
+    {
+      key: 'runtime',
+      label: '运行环境',
+      items: [
+        {
+          key: 'workspace',
+          label: '工作区',
+          node: h(WorkspaceEditor, {
+            value: shared.workspace,
+            options: settings.options?.workspacePaths ?? [],
+            translate: t,
+            onSave: settings.saveWorkspace,
+          }),
+        },
+        {
+          key: 'preset',
+          label: 'Agent 预设',
+          node: h(PresetEditor, {
+            value: shared.agentPreset,
+            options: settings.options?.presets ?? [],
+            translate: t,
+            onSave: settings.saveAgentPreset,
+          }),
+        },
+        {
+          key: 'model',
+          label: '默认模型',
+          node: h(ModelEditor, {
+            value: shared.model ?? null,
+            options: settings.options?.models ?? [],
+            hostDefault: settings.options?.hostDefault ?? null,
+            failures: settings.options?.modelFailures ?? [],
+            translate: t,
+            onSave: settings.saveModel,
+          }),
+        },
+      ],
+    },
+    {
+      key: 'access',
+      label: '权限与身份',
+      items: [
+        {
+          key: 'owner',
+          label: '属主',
+          node: h(OwnerEditor, {
+            owners: status.ownerOpenIds ?? [],
+            wildcard: status.ownersWildcard === true,
+            // 属主只能是人（私聊会话），群不参与。
+            candidates: sessions.filter((item) => item.kind === 'direct'),
+            translate: t,
+            onSave: saveOwners,
+          }),
+        },
+        {
+          key: 'policy',
+          label: '访问策略',
+          node: h(AccessPolicyEditor, {
+            value: shared.accessPolicy,
+            // 名单里的 id 换成名字（渠道查的）；查不到就只显示 id + 原因。
+            names: policyNames.names,
+            namesHint: policyNames.hint,
+            // 只画当前场合那一份（场合由页头切换器决定）。
+            scope,
+            translate: t,
+            onSave: settings.saveAccessPolicy,
+          }),
+        },
+        {
+          key: 'lark-identity',
+          label: 'lark-cli 身份',
+          node: h(LarkIdentityEditor, {
+            botId: bot.id,
+            // 策略取自机器人状态（分层结构）；老状态里没有时给一份"全局仅应用"的默认。
+            value: status.larkIdentity?.scopes ?? null,
+            conversations: identityTargets,
+            chatUi,
+            connection,
+            // 只画当前场合那一层（外加它继承的全局层）。
+            scope,
+            translate: t,
+            onChanged,
+          }),
+        },
+      ],
+    },
+    {
+      key: 'presentation',
+      label: '呈现方式',
+      items: [
+        {
+          key: 'panel-sections',
+          label: '控制面板显示项',
+          node: h(PanelSectionsEditor, {
+            value: shared.panelSections ?? null,
+            disabled: settings.phase !== 'ready',
+            // 只画当前场合那一份（原来画 8行×2列 对照表格）。
+            scope,
+            translate: t,
+            onSave: settings.savePanelSections,
+          }),
+        },
+        {
+          key: 'step-push',
+          label: '任务过程展示',
+          node: h(ScopedModeEditor, {
+            title: t('任务过程展示'),
+            description: t('影响过程怎么显示，不影响答案'),
+            scopes: [{ key: 'direct', label: '私聊' }, { key: 'group', label: '群聊' }],
+            options: STEP_PUSH_OPTIONS,
+            value: status.stepPush,
+            // 只画当前场合那一个下拉（原来竖排两个）。
+            scope,
+            translate: t,
+            onSave: async (next) => {
+              // 不走 run()：那样失败会同时落到卡片级 error 和编辑器内部，
+              // 同一个错误在这张卡上显示两遍。编辑器自己会回滚并就地提示。
+              const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.step-push.set', {
+                botId: bot.id, stepPush: next,
+              });
+              chatUi.unwrapRpc(result);
+              await onChanged?.();
+            },
+          }),
+        },
+        {
+          key: 'card-answer',
+          label: '卡片友好回答',
+          /**
+           * 「卡片友好回答」：一个开关。开着就告诉模型"回复会被渲染进飞书卡片"以及卡片这边能用的
+           * markdown 语法（表格 ≤5 行、别用 `#` 当正文标题…）；**插件不改写答案**，怎么写由模型自己定。
+           *
+           * 包一层卡片外壳：它原来是页面上一颗**裸勾选框**，与其余 9 张卡的形态都不一致，
+           * 一眼看不出它属于哪一组（重构时统一）。
+           */
+          node: h(Panel, {
+            title: t('卡片友好回答'),
+            description: t('下一条消息生效'),
+            help: [
+              t('开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）。'),
+              t('关掉则按普通文本习惯回答——插件不改写答案内容，怎么写由模型自己决定。'),
+            ],
+          },
+          h('label', { className: 'dchat-check' },
+            h('input', {
+              type: 'checkbox',
+              // 守门用（与 data-lark-scope 同一条路子）：断言这个勾选状态真的反映了保存的配置。
+              'data-card-answer': '1',
+              checked: status.cardAnswer !== false,
+              disabled: busy || settings.phase !== 'ready',
+              onChange: async (event) => {
+                const next = event.target.checked;
+                try {
+                  await run('bot.card-answer.set', { botId: bot.id, cardAnswer: next });
+                  await onChanged?.();
+                } catch {
+                  // 错误已经由 run() 落在卡片上的 error 行里并回滚勾选状态；这里只是别抛出去。
+                }
+              },
+            }),
+            h('span', null, t('开启卡片友好回答')))),
+        },
+      ],
+    },
+    {
+      key: 'capability',
+      label: '能力',
+      items: [
+        {
+          key: 'context',
+          label: '上下文增强',
+          node: h(ContextEnhancementEditor, {
+            config: settings.record?.contextEnhancement ?? null,
+            disabled: settings.phase !== 'ready',
+            translate: t,
+            onSave: settings.saveContextEnhancement,
+            // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
+            conversations: sessions,
+            // 只画当前场合那一组（原来弹窗里画两个页签）。
+            scope,
+            // 只列飞书真能提供的来源字段。
+            sourceFields: FEISHU_SOURCE_FIELDS,
+          }),
+        },
+        {
+          key: 'delivery',
+          label: '主动投递',
+          // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
+          node: h(DeliveryTargetsEditor, {
+            chatUi,
+            connection,
+            channelId: CHANNEL_ID,
+            botId: bot.id,
+          }),
+        },
+      ],
+    },
+  ];
+
   return h(Panel, {
+    // 这台机器人的身份与操作条（名称/状态/重连/移除接入）：**不属于任何设置分组**——
+    // 它不是一项设置，而是"我在配哪台机器人"。打这个标记是给布局守门用：
+    // 守门据此断言"每一张**设置**卡都被分进了某一组"，而头卡不会被误判成漏分组。
+    'data-card': 'bot-header',
     title: bot.name ?? bot.id,
     description: bot.appIdMasked,
     actions: h('div', { className: 'dchat-actions' },
@@ -966,124 +1411,28 @@ export function BotCard({ bot, status, chatUi, connection, translate, onChanged 
       h('span', null, t('已处理消息')),
       h('span', null, String(status.handled ?? 0)))),
 
-  h(WorkspaceEditor, {
-    value: shared.workspace,
-    options: settings.options?.workspacePaths ?? [],
-    translate: t,
-    onSave: settings.saveWorkspace,
-  }),
-
-  h(PresetEditor, {
-    value: shared.agentPreset,
-    options: settings.options?.presets ?? [],
-    translate: t,
-    onSave: settings.saveAgentPreset,
-  }),
-
-  h(ModelEditor, {
-    value: shared.model ?? null,
-    options: settings.options?.models ?? [],
-    hostDefault: settings.options?.hostDefault ?? null,
-    failures: settings.options?.modelFailures ?? [],
-    translate: t,
-    onSave: settings.saveModel,
-  }),
-
-  h(OwnerEditor, {
-    owners: status.ownerOpenIds ?? [],
-    wildcard: status.ownersWildcard === true,
-    // 属主只能是人（私聊会话），群不参与。
-    candidates: sessions.filter((item) => item.kind === 'direct'),
-    translate: t,
-    onSave: saveOwners,
-  }),
-
-  h(AccessPolicyEditor, {
-    value: shared.accessPolicy,
-    // 名单里的 id 换成名字（渠道查的）；查不到就只显示 id + 原因。
-    names: policyNames.names,
-    namesHint: policyNames.hint,
-    translate: t,
-    onSave: settings.saveAccessPolicy,
-  }),
-
-  h(PanelSectionsEditor, {
-    value: shared.panelSections ?? null,
-    disabled: settings.phase !== 'ready',
-    translate: t,
-    onSave: settings.savePanelSections,
-  }),
 
   /**
-   * 「卡片友好回答」：一个开关。开着就告诉模型"回复会被渲染进飞书卡片"以及卡片这边能用的
-   * markdown 语法（表格 ≤5 行、别用 `#` 当正文标题…）；**插件不改写答案**，怎么写由模型自己定。
+   * **场合切换器**：一次选定"现在要改哪个场合"，下面所有分场合的设置项都只画那一份。
+   *
+   * 放在分组之上（页面级），因为它管的是下面全部卡片——而不是每张卡各自问一遍
+   * （那样就是原来的四套画法）。只有一台机器人只有私聊时（未来某渠道）不画它。
    */
-  h('div', null,
-    h('label', { className: 'dchat-check' },
-      h('input', {
-        type: 'checkbox',
-        // 守门用（与 data-lark-scope 同一条路子）：断言这个勾选状态真的反映了保存的配置。
-        'data-card-answer': '1',
-        checked: status.cardAnswer !== false,
-        disabled: busy || settings.phase !== 'ready',
-        onChange: async (event) => {
-          const next = event.target.checked;
-          try {
-            await run('bot.card-answer.set', { botId: bot.id, cardAnswer: next });
-            await onChanged?.();
-          } catch {
-            // 错误已经由 run() 落在卡片上的 error 行里并回滚勾选状态；这里只是别抛出去。
-          }
-        },
-      }),
-      h('span', null, t('卡片友好回答'))),
-    h('p', { className: 'dchat-cardDescription' },
-      t('开着时，回复会按飞书卡片的能力组织（表格、分节、代码块更清楚）；关掉则按普通文本习惯回答。下一条消息生效。'))),
+  h('div', { className: 'dchat-scopeBar' },
+    h('span', { className: 'dchat-scopeLabel' }, t('正在设置')),
+    h(ScopeSwitcher, {
+      scopes: SCOPE_DEFS,
+      value: scope,
+      onChange: setScope,
+      translate: t,
+      ariaLabel: t('设置场合'),
+    })),
 
-  h(ScopedModeEditor, {
-    title: t('任务过程展示'),
-    description: t('设置执行过程的呈现方式；私聊与群聊分别生效'),
-    scopes: [{ key: 'direct', label: '私聊' }, { key: 'group', label: '群聊' }],
-    options: STEP_PUSH_OPTIONS,
-    value: status.stepPush,
+  // 分组渲染：分类导航 + 每组标题 + 组内卡片（子组件实例在上面的 settingGroups 里建好）。
+  h(SettingGroups, {
+    groups: settingGroups,
     translate: t,
-    onSave: async (next) => {
-      // 不走 run()：那样失败会同时落到卡片级 error 和编辑器内部，
-      // 同一个错误在这张卡上显示两遍。编辑器自己会回滚并就地提示。
-      const result = await chatUi.callChannelRpc(connection, CHANNEL_ID, 'bot.step-push.set', {
-        botId: bot.id, stepPush: next,
-      });
-      chatUi.unwrapRpc(result);
-      await onChanged?.();
-    },
-  }),
-
-  h(LarkIdentityEditor, {
-    botId: bot.id,
-    // 策略取自机器人状态（分层结构）；老状态里没有时给一份"全局仅应用"的默认。
-    value: status.larkIdentity?.scopes ?? null,
-    conversations: identityTargets,
-    chatUi,
-    connection,
-    translate: t,
-    onChanged,
-  }),
-
-  h(ContextEnhancementEditor, {
-    config: settings.record?.contextEnhancement ?? null,
-    disabled: settings.phase !== 'ready',
-    translate: t,
-    onSave: settings.saveContextEnhancement,
-    // 「指定用户/指定群」用它做"从会话里选"，而不是让人填 id。
-    conversations: sessions,
-  }),
-
-  // 渠道无关面板：目标清单与测试发送都由 hub 的共享组件负责。
-  h(DeliveryTargetsEditor, {
-    chatUi,
-    connection,
-    channelId: CHANNEL_ID,
-    botId: bot.id,
+    ariaLabel: t('设置分类'),
   }));
 }
 

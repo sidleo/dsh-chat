@@ -187,6 +187,11 @@ const RPC_FIXTURES = {
       workspace: '/Users/zhang3/yh_zhang3/Project/dsh插件/dsh-chat',
       agentPreset: 'standard',
       accessPolicy: {
+        global: {
+          mode: 'allowlist',
+          open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+          allowlist: { users: [] },
+        },
         direct: {
           mode: 'allowlist',
           open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
@@ -316,6 +321,8 @@ channels.register({
   capabilities: {
     note: '支持私聊与群聊',
     setup: { label: '新建机器人接入', hint: '把凭据加进 config.json 后重启 dsh。' },
+    // 与真实飞书一致（见 feishu/client 的 FEISHU_SOURCE_FIELDS）。
+    sourceFields: ['channel', 'conversationType', 'senderId', 'chatId', 'threadId', 'botId'],
   },
 });
 channels.register({
@@ -324,7 +331,16 @@ channels.register({
   label: '微信',
   // 两个渠道各覆盖 `capabilities.setup` 的一种"只给一半"的形态：飞书只给 `hint`
   // （无入口、空列表用 hub 那句中性说明）、微信只给 `label`（有入口、空列表同样退回中性句）。
-  capabilities: { note: '仅私聊', setup: { label: '扫码接入' } },
+  //
+  // `panel: false` **必须与真实微信渠道一致**（微信 /menu 是文本、不画卡片）：
+  // 守门据此断言"声明没有卡片面板的渠道，页面上不许出现「控制面板显示项」"。
+  capabilities: {
+    note: '仅私聊',
+    panel: false,
+    setup: { label: '扫码接入' },
+    // 与真实微信一致：只提供这三个字段（见 weixin/client 的 WEIXIN_CAPABILITIES）。
+    sourceFields: ['channel', 'senderId', 'botId'],
+  },
 });
 
 const feishuCard = () => h(FeishuBotCard, {
@@ -427,6 +443,12 @@ const FRAGMENTS = {
   // 白名单显示名：有名字的显示"名字 + id"，查不到的只显示 id，且把原因写在下面。
   policyNames: () => h(AccessPolicyEditor, {
     value: {
+      // 三层：global 是底板；direct 给一份覆盖（界面按当前场合画哪一层）。
+      global: {
+        mode: 'allowlist',
+        open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+        allowlist: { users: [] },
+      },
       direct: {
         mode: 'allowlist',
         open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
@@ -445,6 +467,8 @@ const FRAGMENTS = {
     },
     names: { ou_2b7e4d1a9c6f3058e2a4b6c8d0f1e3a5: '李四' },
     namesHint: { message: '读不到名单里的名字：飞书应用还没开通通讯录权限。' },
+    // 有名单的是 direct 那一层：显式指定，否则默认画 global（空名单）就测不到名字。
+    scope: 'direct',
     translate: t,
     onSave: async () => {},
   }),
@@ -530,6 +554,22 @@ function measure() {
      * 由守门那边断言一次。
      */
     /** 左栏渠道顺序与"当前默认打开的是哪个"：默认必须是排在最前面的那个。 */
+    /** 这一帧所属渠道声明了什么能力（守门据此核对页面有没有画出"渠道不支持的东西"）。 */
+    const scenarioChannel = frame.dataset.scenario === 'weixinCard' ? 'weixin'
+      : (frame.dataset.scenario === 'feishuCard' ? 'feishu' : null);
+    const declaredPanel = scenarioChannel ? (channels.get?.(scenarioChannel)?.capabilities?.panel) : undefined;
+    /** 这个渠道声明能提供哪些来源字段（守门核对"画出来的就是这些"）。 */
+    const declaredFields = scenarioChannel
+      ? (channels.get?.(scenarioChannel)?.capabilities?.sourceFields ?? null)
+      : null;
+    /** 上下文增强面板里实际画出来的来源字段勾选框。 */
+    const renderedFields = [...new Set([...frame.querySelectorAll('[data-context-field]')]
+      .map((el) => el.getAttribute('data-context-field')))];
+
+
+    /** 这一帧里所有设置卡的标题（守门断言"渠道不支持的那张卡不出现"）。 */
+    const cardTitles = [...frame.querySelectorAll('.dchat-cardTitle')]
+      .map((el) => (el.textContent ?? '').trim());
     const railItems = [...frame.querySelectorAll('.dchat-rail .dchat-channel')];
     const railOrder = railItems.map((el) => (el.querySelector('strong')?.textContent ?? '').trim());
     // 右栏机器人列表头部的按钮文案（用来断言"渠道设置入口按渠道显示"）。
@@ -540,7 +580,9 @@ function measure() {
     const activeChannel = (railItems.find((el) => el.getAttribute('aria-selected') === 'true')
       ?.querySelector('strong')?.textContent ?? '').trim() || null;
     // 每个弹窗各算一份（每个渠道卡各点开过一次；弹窗是 portal，挂在 body 上）。
-    const dialogs = [...document.querySelectorAll('.dchat-dialog')].map((dialog) => ({
+    // 内嵌面板（上下文增强）与旧的弹窗共用同一套页签结构：这里按"含 tabPanel 的容器"量，
+    // 两种形态都能测到（`hidden` 被作者样式盖掉时两个页签会同时可见）。
+    const dialogs = [...document.querySelectorAll('.dchat-dialog, .dchat-contextPanel')].map((dialog) => ({
       activeScope: dialog.querySelector('.dchat-tab[aria-selected="true"]')?.dataset?.scope ?? null,
       visible: [...dialog.querySelectorAll('.dchat-tabPanel')]
         .filter((el) => el.getClientRects().length > 0)
@@ -562,6 +604,91 @@ function measure() {
     // 访问策略白名单行的文字（"名字 + id"）：只显示 id 时认不出是谁（真机反馈）。
     const policyNames = [...frame.querySelectorAll('.dchat-policyEntry')]
       .map((el) => (el.textContent ?? '').trim());
+    /**
+     * 设置页的分组：分类导航的文案、每组标题、以及**每个设置项落在哪一组里**。
+     *
+     * 为什么现在才量：机器人设置页是逐轮追加出来的（10 张卡平铺、实测 3200+px 高），
+     * 于是加了分组导航。但"分组"最容易被后来的提交破坏——新加一项时顺手写在 `BotCard` 末尾，
+     * 它会**掉在最后一组外面**：页面照常渲染、卡片照常在，只是没有标题也没有分类能跳到它。
+     * 所以这里把"条目 → 所属分组"整张表量出来，交给守门断言每一项都有归属、且分组齐全。
+     */
+    const settingGroups = [...frame.querySelectorAll('.dchat-group')].map((group) => ({
+      key: group.dataset.groupKey ?? null,
+      title: (group.querySelector('.dchat-groupHeading')?.textContent ?? '').trim(),
+      items: [...group.querySelectorAll('[data-item-key]')].map((el) => el.dataset.itemKey),
+    }));
+    // 分类导航的按钮文案（顺序 = 分组顺序）。
+    const groupTabs = [...frame.querySelectorAll('.dchat-groupTab')]
+      .map((el) => (el.textContent ?? '').trim());
+    /**
+     * **场合切换器**：分场合的设置项共用的那一套交互语言（私聊/群聊）。
+     *
+     * 这次重构的核心不变量——以前 4 个分叉项各画各的（并排两块 / 竖排两个下拉 /
+     * 8×2 勾选表格 / 弹窗页签）。守门要能量到"当前选的是哪个场合"，
+     * 否则"控件反映的是假数据"这条线在切换器上就断了（`data-scope-active` 是为此打的标记）。
+     */
+    /**
+     * 帮助图标：说明性文字收进问号（整页说明 5000+ 字会把控件挤下去）。
+     * 量两件事：有没有画出来、点开之后说明**真的可见**。
+     */
+    const helpHints = [...frame.querySelectorAll('.dchat-helpButton')].map((el) => {
+      const tip = el.parentElement?.querySelector('.dchat-helpTip') ?? null;
+      const visible = (node) => Boolean(node && node.getClientRects().length > 0);
+      /**
+       * **每次测量都先清焦点再量**，不靠"只探一次"的记忆。
+       *
+       * 为什么：`measure()` 会被跑两遍（立即 + 50ms 兜底），取的是**最后一次**。
+       * 如果第一遍聚焦、第二遍跳过，那么第二遍量到的"聚焦前"其实还带着上一轮的焦点
+       * （气泡可见 → 误报"常驻展开"），而没被聚焦的那个又误报"聚焦后不可见"。
+       * 每轮都"先 blur → 量 before → focus → 量 after" 才与执行次数无关。
+       */
+      document.activeElement?.blur?.();
+      const before = visible(tip);
+      el.focus?.();
+      const rect = tip?.getBoundingClientRect?.() ?? null;
+      return {
+        label: el.getAttribute('aria-label'),
+        text: (tip?.textContent ?? '').trim(),
+        visibleBeforeFocus: before,
+        visibleAfterFocus: visible(tip),
+        /** 气泡宽度：太窄会把说明压成一条竖线（真机截图反馈过）。 */
+        width: rect ? Math.round(rect.width) : 0,
+        // 换行后的行数：竖条形态会得到很大的行数。
+        lines: rect && rect.width > 0
+          ? Math.round(rect.height / 18)
+          : 0,
+      };
+    });
+    const scopeSwitcher = [...frame.querySelectorAll('.dchat-scopeTab')]
+      .map((el) => ({
+        key: el.getAttribute('data-scope'),
+        label: (el.textContent ?? '').trim(),
+        active: el.getAttribute('data-scope-active') === '1',
+      }));
+    /**
+     * 分场合的卡片里**同时出现几套场合控件**。
+     *
+     * 收敛之后，一张卡里不该再出现"私聊…群聊…"两套（那是原来各自的画法）。
+     * 这里数的是每张设置卡里的场合控件数量，交给守门断言 ≤1。
+     */
+    const scopedCards = [...frame.querySelectorAll('.dchat-groupItem')].map((item) => {
+      const title = (item.querySelector('.dchat-cardTitle')?.textContent ?? '').trim();
+      // 一张卡里"提到场合"的控件：下拉/勾选/页签的 aria-label 或表头里出现的私聊/群聊标签。
+      const labels = [...item.querySelectorAll('[aria-label]')]
+        .map((el) => el.getAttribute('aria-label') ?? '')
+        .filter((text) => /私聊|群聊/.test(text));
+      return { title, scopeLabels: labels.length };
+    });
+    /**
+     * 有没有"没被分进任何一组"的**设置**卡片。
+     *
+     * 机器人自己那张头卡（名称 / 状态 / 重连 / 移除接入）**本来就在分组之外**——
+     * 它不是设置项，而是"我在配哪台机器人"，所以它带了 `data-card="bot-header"`，
+     * 这里按标记排除掉。剩下的卡只要不在 `dchat-groupItem` 里，就是漏分组的设置项。
+     */
+    const ungroupedCards = [...frame.querySelectorAll('.dchat-card')]
+      .filter((el) => el.getAttribute('data-card') !== 'bot-header')
+      .filter((el) => !el.closest('.dchat-groupItem')).length;
     // 接入页的边界：卡片标题清单 + 有没有混进"已接入机器人/账号"的痕迹。
     const entryPage = {
       cardTitles: [...frame.querySelectorAll('.dchat-cardTitle')]
@@ -583,6 +710,16 @@ function measure() {
       tall,
       widest,
       sectionChecks,
+      settingGroups,
+      groupTabs,
+      scopeSwitcher,
+      scopedCards,
+      helpHints,
+      declaredPanel,
+      declaredFields,
+      renderedFields,
+      cardTitles,
+      ungroupedCards,
       cardAnswer,
       larkIdentity,
       dialogs,
@@ -615,10 +752,6 @@ async function settle() {
   const clicks = {
     diagnosticsOpen: ['看最后 40 行'],
     deliveryRename: ['重命名'],
-    // 上下文增强弹窗：打开它才能测到"私聊/群聊两个页签只显示一个"（曾因作者样式压过
-    // `[hidden]` 而两个都显示，真机上两个页签内容一模一样）。
-    feishuCard: ['上下文增强'],
-    weixinCard: ['上下文增强'],
     // hub 页头两个入口都展开：诊断面板 + 版本面板都得在窄栏里排得下。
     hubPageOpen: ['诊断', '版本与更新'],
     // 扫码接入：点一次才会出现二维码图片与状态行（那才是会撑破窄栏的东西）。

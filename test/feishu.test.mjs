@@ -1031,7 +1031,9 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     assert.equal(status.value.bots.length, 1);
     assert.equal(status.value.bots[0].state, 'running');
     assert.equal(status.value.bots[0].connected, true);
-    assert.deepEqual(status.value.bots[0].stepPush, { direct: 'post', group: 'off' });
+    assert.deepEqual(
+      { direct: status.value.bots[0].stepPush.direct, group: status.value.bots[0].stepPush.group },
+      { direct: 'post', group: 'off' });
     assert.equal(status.value.bots[0].appIdMasked, 'cli_ctl_****');
     assert.equal(adopted.length, 1, '启动时应接管旧会话绑定');
 
@@ -1039,9 +1041,13 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     const saved = await controller.endpoints['bot.step-push.set']({
       botId: 'bot_ctl', stepPush: { direct: 'off', group: 'streaming_card' },
     });
-    assert.deepEqual(saved.value.stepPush, { direct: 'off', group: 'streaming_card' });
+    assert.deepEqual(
+      { direct: saved.value.stepPush.direct, group: saved.value.stepPush.group },
+      { direct: 'off', group: 'streaming_card' });
     const after = await controller.endpoints['connection.status']({});
-    assert.deepEqual(after.value.bots[0].stepPush, { direct: 'off', group: 'streaming_card' });
+    assert.deepEqual(
+      { direct: after.value.bots[0].stepPush.direct, group: after.value.bots[0].stepPush.group },
+      { direct: 'off', group: 'streaming_card' });
     const onDisk = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
     assert.equal(onDisk.bots[0].stepPushGroup, 'streaming_card');
 
@@ -1084,7 +1090,9 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     assert.equal(applied.value.value, 'post');
     assert.match(applied.value.message, /私聊过程展示已设为/);
     const afterApply = await controller.endpoints['connection.status']({});
-    assert.deepEqual(afterApply.value.bots[0].stepPush, { direct: 'post', group: 'streaming_card' },
+    assert.deepEqual(
+      { direct: afterApply.value.bots[0].stepPush.direct, group: afterApply.value.bots[0].stepPush.group },
+      { direct: 'post', group: 'streaming_card' },
       '改完要立刻生效（运行期那份 bot 对象就地改掉）');
     // 改群聊那份：只动群聊，私聊不受影响。
     const groupApply = await controller.endpoints['panel.apply']({
@@ -1093,14 +1101,17 @@ test('控制器：状态、过程展示保存立即生效、未知机器人可�
     assert.equal(groupApply.ok, true);
     assert.match(groupApply.value.message, /群聊过程展示已设为/);
     const afterGroup = await controller.endpoints['connection.status']({});
-    assert.deepEqual(afterGroup.value.bots[0].stepPush, { direct: 'post', group: 'off' });
+    assert.deepEqual(
+      { direct: afterGroup.value.bots[0].stepPush.direct, group: afterGroup.value.bots[0].stepPush.group },
+      { direct: 'post', group: 'off' });
     // 旧的会话类型字段名仍然认（老卡片/老客户端还在用）。
     const legacy = await controller.endpoints['panel.apply']({
       botId: 'bot_ctl', field: 'stepPush', value: 'streaming_card', conversationType: 'group',
     });
     assert.equal(legacy.ok, true);
+    const legacyStatus = (await controller.endpoints['connection.status']({})).value.bots[0].stepPush;
     assert.deepEqual(
-      (await controller.endpoints['connection.status']({})).value.bots[0].stepPush,
+      { direct: legacyStatus.direct, group: legacyStatus.group },
       { direct: 'post', group: 'streaming_card' },
       'stepPush 按会话类型落到对应那一份',
     );
@@ -1202,7 +1213,9 @@ test('过程展示改完立刻生效：桥持有的那份 bot 必须**就地**�
 
     // 状态页读到的仍是同一份值。
     const status = await controller.endpoints['connection.status']({});
-    assert.deepEqual(status.value.bots[0].stepPush, { direct: 'post', group: 'streaming_card' });
+    assert.deepEqual(
+      { direct: status.value.bots[0].stepPush.direct, group: status.value.bots[0].stepPush.group },
+      { direct: 'post', group: 'streaming_card' });
 
     await controller.stop();
   } finally {
@@ -5712,5 +5725,76 @@ test('lark-cli 门禁：分层策略真的按会话生效（群里指定的人�
     await controller.stop();
   } finally {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+/**
+ * 过程展示的**全局层**：三层结构下"继承"必须真的生效，而且**运行期与设置页答案一致**。
+ *
+ * 这一组守的是分层改造最容易出的两类静默失效：
+ * ① 写值却没把那一层标成"覆盖" → 读回来又被全局盖掉（"设置页改了、群里没变"）；
+ * ② 只改值不改继承关系 → 桥仍按旧的 inherit 取值（同样是"改了没生效"）。
+ */
+test('过程展示三层：继承全局时跟着全局变，单独设置后不再跟', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-feishu-step-'));
+  const path = join(dir, 'config.json');
+  try {
+    await writeFile(path, JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_a', appId: 'cli_step', secretRef: 'DSH_FEISHU_APP_SECRET_A',
+        ownerOpenIds: ['ou_owner'], botName: '分层测试',
+        // 老数据：两份相同 → 迁移后两层都继承全局。
+        stepPushDirect: 'post', stepPushGroup: 'post',
+      }],
+    }), 'utf8');
+
+    const store = createFeishuConfigStore({ path, logger: silentLogger });
+    await store.load();
+    const migrated = store.get('bot_a');
+    assert.equal(migrated.stepPushGlobal, 'post', '两份相同 → 提成全局');
+    assert.deepEqual([...migrated.stepPushInherit], ['direct', 'group'], '两层都继承');
+    assert.equal(migrated.stepPushDirect, 'post', '私聊生效值不变');
+    assert.equal(migrated.stepPushGroup, 'post', '群聊生效值不变');
+
+    // 改全局：两层继承 → 都跟着变。
+    const globalChanged = await store.setStepPush('bot_a', { global: 'off' });
+    assert.equal(globalChanged.stepPushDirect, 'off', '继承层跟着全局变');
+    assert.equal(globalChanged.stepPushGroup, 'off');
+
+    // 单独设私聊：那一层变成覆盖，不再跟全局。
+    const directSet = await store.setStepPush('bot_a', { direct: 'streaming_card' });
+    assert.equal(directSet.stepPushDirect, 'streaming_card');
+    assert.ok(!directSet.stepPushInherit.includes('direct'), '写值必须把该层标成覆盖');
+    assert.ok(directSet.stepPushInherit.includes('group'), '没动的那层仍继承');
+    const afterGlobal = await store.setStepPush('bot_a', { global: 'post' });
+    assert.equal(afterGlobal.stepPushDirect, 'streaming_card', '覆盖层不跟全局变');
+    assert.equal(afterGlobal.stepPushGroup, 'post', '继承层仍跟全局变');
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+test('过程展示三层：两份不同时**保留各自的值**（迁移不改变实际展示）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-feishu-step2-'));
+  const path = join(dir, 'config.json');
+  try {
+    await writeFile(path, JSON.stringify({
+      version: 2,
+      bots: [{
+        id: 'bot_b', appId: 'cli_step2', secretRef: 'DSH_FEISHU_APP_SECRET_B',
+        ownerOpenIds: ['ou_owner'], botName: '差异测试',
+        // 老数据：私聊不显示过程、群聊实时过程卡 —— 迁移后必须一模一样。
+        stepPushDirect: 'off', stepPushGroup: 'streaming_card',
+      }],
+    }), 'utf8');
+    const store = createFeishuConfigStore({ path, logger: silentLogger });
+    await store.load();
+    const bot = store.get('bot_b');
+    assert.equal(bot.stepPushDirect, 'off', '私聊展示方式不能被迁移改掉');
+    assert.equal(bot.stepPushGroup, 'streaming_card', '群聊展示方式不能被迁移改掉');
+    assert.deepEqual([...bot.stepPushInherit], [], '两份不同 → 两层都是覆盖');
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });

@@ -128254,7 +128254,9 @@ ${text}`
       if (Array.isArray(enhancedContent)) finalParts = enhancedContent;
       else finalParts = [{ type: "text", text: enhancedContent }];
       if (replyTo) finalParts = withReply(finalParts);
-      const mode = conversationType === "direct" ? bot.stepPushDirect : bot.stepPushGroup;
+      const layerKey = conversationType === "direct" ? "direct" : "group";
+      const inherits2 = (bot.stepPushInherit ?? []).includes(layerKey);
+      const mode = inherits2 ? bot.stepPushGlobal ?? bot.stepPushDirect : layerKey === "direct" ? bot.stepPushDirect : bot.stepPushGroup;
       const presenter = createTurnPresenter({
         mode,
         gateway,
@@ -129567,6 +129569,11 @@ function normalizeBot(value, { legacy = false } = {}) {
   const hasNewFields = value.stepPushDirect !== void 0 || value.stepPushGroup !== void 0;
   const migrated = normalizeStepPushMode(value.stepPushMode);
   const legacyMode = value.stepPush === true ? migrated : DEFAULT_STEP_PUSH;
+  const directMode = hasNewFields ? normalizeStepPushMode(value.stepPushDirect) : legacyMode;
+  const groupMode = hasNewFields ? normalizeStepPushMode(value.stepPushGroup) : legacyMode;
+  const explicitInherit = Array.isArray(value.stepPushInherit) ? value.stepPushInherit.filter((key) => key === "direct" || key === "group") : null;
+  const stepPushGlobal = value.stepPushGlobal !== void 0 ? normalizeStepPushMode(value.stepPushGlobal) : directMode;
+  const stepPushInherit = explicitInherit ?? (directMode === groupMode ? ["direct", "group"] : []);
   const larkIdentity = normalizeLarkIdentity(
     value.larkIdentity !== void 0 ? value.larkIdentity : value.larkUserIdentity !== void 0 ? { mode: normalizeLarkUserIdentity(value.larkUserIdentity) } : null
   );
@@ -129582,8 +129589,11 @@ function normalizeBot(value, { legacy = false } = {}) {
     groupResponseMode: value.groupResponseMode === "all" ? "all" : "mention",
     groupTopicReply: value.groupTopicReply === true,
     groupMessagePermissionGranted: value.groupMessagePermissionGranted === true,
-    stepPushDirect: hasNewFields ? normalizeStepPushMode(value.stepPushDirect) : legacyMode,
-    stepPushGroup: hasNewFields ? normalizeStepPushMode(value.stepPushGroup) : legacyMode,
+    // 三层：global 是底板；direct/group 若在 stepPushInherit 里 = 继承全局。
+    stepPushGlobal,
+    stepPushInherit: Object.freeze(stepPushInherit),
+    stepPushDirect: stepPushInherit.includes("direct") ? stepPushGlobal : directMode,
+    stepPushGroup: stepPushInherit.includes("group") ? stepPushGlobal : groupMode,
     larkIdentity,
     larkUserOpenId,
     // 卡片友好回答：缺省开（缺项 = 生效，与面板显示项同一条归一化方向）。
@@ -129670,10 +129680,18 @@ function createFeishuConfigStore({ path: path2, logger = console } = {}) {
      * @param modes - { direct, group }，各自为三态之一。
      * @returns 写入后的机器人配置。
      */
-    async setStepPush(botId, modes) {
-      const direct = normalizeStepPushMode(modes?.direct);
-      const group = normalizeStepPushMode(modes?.group);
-      return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    async setStepPush(botId, modes, options = {}) {
+      const current = this.get(botId) ?? {};
+      const explicitInherit = Array.isArray(options.inherit) ? options.inherit : null;
+      const touched = ["direct", "group"].filter((key) => modes?.[key] !== void 0);
+      const inherit = explicitInherit ?? (current.stepPushInherit ?? []).filter((key) => !touched.includes(key));
+      return this.saveBot({
+        id: botId,
+        stepPushGlobal: modes?.global ?? current.stepPushGlobal,
+        stepPushInherit: inherit,
+        stepPushDirect: modes?.direct ?? current.stepPushDirect,
+        stepPushGroup: modes?.group ?? current.stepPushGroup
+      });
     },
     /**
      * 设置「卡片友好回答」（只影响注入会话的那段提示词，不改写答案）。
@@ -131576,7 +131594,14 @@ function createFeishuController({ deps, logger = console, config = {}, internals
       ownerOpenIds: Object.freeze([...bot.ownerOpenIds]),
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
-      stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // 三层：global 是底板；direct/group 可能在 inherit 里（= 继承全局）。
+      stepPush: Object.freeze({
+        global: bot.stepPushGlobal,
+        direct: bot.stepPushDirect,
+        group: bot.stepPushGroup
+      }),
+      // 哪一层是继承（界面据此显示「继承全局」与「恢复继承」按钮）。
+      stepPushInherit: Object.freeze([...bot.stepPushInherit ?? []]),
       // 卡片友好回答（默认开）：只影响注入会话的那段提示词，见 index.mjs 的 card-answer 段。
       cardAnswer: bot.cardAnswer !== false,
       // lark-cli 的身份策略（分层；默认全局只用应用身份）；细节（profile / whoami）走 bot.lark-identity.get。
@@ -132431,7 +132456,11 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         const saved = await configStore.setStepPush(payload.botId, next);
         patchRuntime(payload.botId, {
           stepPushDirect: saved.stepPushDirect,
-          stepPushGroup: saved.stepPushGroup
+          stepPushGroup: saved.stepPushGroup,
+          // ⚠️ 三层一起就地改：只改值不改继承关系的话，桥仍按旧的 inherit 取值
+          // （表现就是「设置页改了、群里没变」——本项目栽过的那类静默失效）。
+          stepPushGlobal: saved.stepPushGlobal,
+          stepPushInherit: [...saved.stepPushInherit ?? []]
         });
         const label = STEP_PUSH_FIELD_OPTIONS.find((item) => item.value === payload.value)?.label ?? payload.value;
         return {
@@ -132457,7 +132486,11 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         const saved = await configStore.setStepPush(payload.botId, modes);
         patchRuntime(payload.botId, {
           stepPushDirect: saved.stepPushDirect,
-          stepPushGroup: saved.stepPushGroup
+          stepPushGroup: saved.stepPushGroup,
+          // ⚠️ 三层一起就地改：只改值不改继承关系的话，桥仍按旧的 inherit 取值
+          // （表现就是「设置页改了、群里没变」——本项目栽过的那类静默失效）。
+          stepPushGlobal: saved.stepPushGlobal,
+          stepPushInherit: [...saved.stepPushInherit ?? []]
         });
         return {
           ok: true,
@@ -132648,7 +132681,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.1.0";
+var CHANNEL_VERSION = "0.2.0";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;

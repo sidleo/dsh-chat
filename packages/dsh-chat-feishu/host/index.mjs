@@ -15,7 +15,7 @@
 import { createFeishuController } from './controller.mjs';
 
 /** 渠道包版本：设置页的「版本与更新」面板用它，`npm run check` 会与 package.json 对账。 */
-const CHANNEL_VERSION = '0.1.0';
+const CHANNEL_VERSION = '0.2.0';
 
 export const name = 'dsh-chat-feishu-host';
 

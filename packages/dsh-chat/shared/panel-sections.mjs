@@ -14,6 +14,8 @@
  * @module dsh-chat/shared/panel-sections
  */
 
+import { migrateToLayered, resolveScope } from './scoped-config.mjs';
+
 /** 可关闭的显示项（顺序即设置页顺序；标签由 client 侧按 key 翻译）。 */
 export const PANEL_SECTIONS = Object.freeze([
   'model',
@@ -29,27 +31,32 @@ export const PANEL_SECTIONS = Object.freeze([
 /** 两个作用域：私聊与群聊各一份。 */
 export const PANEL_SCOPES = Object.freeze(['direct', 'group']);
 
+/** 三层：全局 + 两个可继承的场合层。 */
+export const PANEL_LAYERS = Object.freeze(['global', 'direct', 'group']);
+
 function allOn() {
   return Object.fromEntries(PANEL_SECTIONS.map((id) => [id, true]));
 }
 
 /**
- * 默认值：全部显示（与加这个配置之前的行为一致）。
+ * 默认值：全局全部显示，两层都继承（与加这个配置之前的行为一致）。
  *
- * @returns `{ direct, group }`。
+ * @returns `{ global, direct, group }`（后两层为 null = 继承）。
  */
 export function defaultPanelSections() {
-  return Object.freeze({ direct: Object.freeze(allOn()), group: Object.freeze(allOn()) });
+  return Object.freeze({ global: Object.freeze(allOn()), direct: null, group: null });
 }
 
 /**
  * 容错归一化：只认已知的显示项，缺的与写错的都按"显示"补齐。
  *
+ * 老数据（`{direct, group}` 两份平级）在这里一次性迁成`{global, direct, group}`：
+ * 两份相同就提成全局、不同就原样保留为覆盖——**每一层实际生效的显示项不变**。
+ *
  * @param input - 任意历史数据。
- * @returns `{ direct, group }`（每项都是布尔）。
+ * @returns `{ global, direct, group }`（global 是完整一份，后两层 null = 继承）。
  */
 export function normalizePanelSections(input) {
-  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const scopeOf = (value) => {
     const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     // 缺项与写错的都按"显示"补齐（只有明确 false 才关）。
@@ -57,11 +64,17 @@ export function normalizePanelSections(input) {
       PANEL_SECTIONS.map((id) => [id, raw[id] !== false]),
     );
   };
-  return { direct: scopeOf(source.direct), group: scopeOf(source.group) };
+  return migrateToLayered(input, {
+    normalizeLayer: scopeOf,
+    defaultLayer: allOn,
+    // 两份不同时拿谁当全局：显示项没有"保守"概念，取前者即可
+    // （两份都会原样保留为覆盖，所以挑错不改变任何人的实际显示）。
+    pickGlobal: (left) => left,
+  });
 }
 
 /**
- * 取某个会话类型该显示哪些项。
+ * 取某个会话类型该显示哪些项（该层为"继承"时自动用全局）。
  *
  * 认不出会话类型（渠道没给、会话键也不合约定）时返回**全部显示**：宁可多显示，
  * 也不要因为"不知道这是私聊还是群聊"把用户的设置项全藏起来。
@@ -72,5 +85,5 @@ export function normalizePanelSections(input) {
  */
 export function sectionsFor(record, conversationType) {
   if (conversationType !== 'direct' && conversationType !== 'group') return allOn();
-  return normalizePanelSections(record?.panelSections)[conversationType];
+  return resolveScope(normalizePanelSections(record?.panelSections), conversationType) ?? allOn();
 }

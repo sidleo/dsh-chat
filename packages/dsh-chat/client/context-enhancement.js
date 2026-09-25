@@ -1,16 +1,19 @@
 /**
  * 上下文增强编辑器（渠道页共用的共享组件）。
  *
- * 两级设置：
- * - 全局：私聊 / 群聊 各自的启用开关、来源字段、增强提示词；
- * - 指定设置：指定用户（只在私聊命中）/ 指定群（只在群聊命中），
- *   各自可独立填提示词并选择"叠加全局提示词"或"只用自己的提示词"。
+ * 分层：
+ * - 全局：底板（启用开关、来源字段、增强提示词）；私聊/群聊默认继承它、可单独覆盖；
+ * - 指定设置：指定用户（只在私聊命中）/ 指定群（只在群聊命中），**比层更细**，
+ *   命中就用它、没命中才落到层；可选用"叠加所在层提示词"。
+ *
+ * 形态是**直接铺在设置页上的卡片**（原来是"入口 + 弹窗"，是页面上唯一的另类形态）。
  *
  * @module dsh-chat/client/context-enhancement
  */
 
 import * as React from 'react';
-import { createPortal } from 'react-dom';
+
+import { HelpHint } from './help-hint.js';
 
 import {
   CONTEXT_FIELDS,
@@ -46,10 +49,17 @@ const FIELD_HELP = Object.freeze({
 });
 
 const SCOPE_TEXT = Object.freeze({
+  global: Object.freeze({
+    title: '全局',
+    targetTitle: '指定用户',
+    targetHint: '命中了才用它',
+    idPlaceholder: 'ou_xxx（发送者标识）',
+    idLabel: '用户标识',
+  }),
   direct: Object.freeze({
     title: '私聊',
     targetTitle: '指定用户',
-    targetHint: '只在该用户与机器人的私聊中生效（按发送者标识匹配）。',
+    targetHint: '只对这个人生效（按发送者标识匹配）。',
     idPlaceholder: 'ou_xxx（发送者标识）',
     idLabel: '用户标识',
   }),
@@ -66,10 +76,15 @@ function t_of(translate) {
   return typeof translate === 'function' ? translate : (key) => key;
 }
 
-function FieldPicker({ scopeKey, scope, disabled, onChange, t }) {
-  return h('div', { className: 'dchat-contextFields' }, CONTEXT_FIELDS.map((field) => {
+function FieldPicker({ scopeKey, scope, disabled, onChange, t, offered = CONTEXT_FIELDS }) {
+  return h('div', { className: 'dchat-contextFields' }, offered.map((field) => {
     const inputId = `dchat-field-${scopeKey}-${field}`;
-    return h('div', { key: field, className: 'dchat-contextField' },
+    return h('div', {
+      key: field,
+      className: 'dchat-contextField',
+      // 守门按这个属性核对"画出来的字段 = 渠道声明能提供的那些"。
+      'data-context-field': field,
+    },
       h('input', {
         id: inputId,
         type: 'checkbox',
@@ -79,9 +94,17 @@ function FieldPicker({ scopeKey, scope, disabled, onChange, t }) {
           ? [...scope.fields, field]
           : scope.fields.filter((value) => value !== field)),
       }),
-      h('label', { htmlFor: inputId, title: FIELD_HELP[field] ? t(FIELD_HELP[field]) : '' },
-        h('span', null, t(FIELD_LABELS[field])),
-        h('code', null, field)));
+      /**
+       * 常驻只留中文名：英文键名（`conversationType` 这种）排在每个标签后面，
+       * 一行里八组"中文+英文"会把这块撑得很长。键名收进 title——
+       * 真要写提示词引用字段时，光标停一下就能看到。
+       */
+      h('label', {
+        htmlFor: inputId,
+        title: [t(FIELD_LABELS[field]), field, FIELD_HELP[field] ? t(FIELD_HELP[field]) : null]
+          .filter(Boolean).join(' · '),
+      },
+      h('span', null, t(FIELD_LABELS[field]))));
   }));
 }
 
@@ -99,28 +122,30 @@ function GuidanceEditor({ idPrefix, value, example, disabled, onChange, t }) {
           type: 'button', className: 'dchat-button', disabled,
           onClick: () => onChange(''),
         }, t('清空')))),
-    h('p', { className: 'dchat-cardDescription' },
-      t('告诉模型如何使用来源字段。只填正文，插件会自动包成来源增强块。')),
+    // 这句是"怎么写"的说明 → 收进问号（下面就是输入框，用户知道要写什么）。
+
     h('textarea', {
       id,
       className: 'dchat-textarea',
       rows: 4,
       value,
-      placeholder: example,
+      // 占位符只给一句短提示；完整模板在「填入示例」里（一整段铺在框里太占视线）。
+      placeholder: t('写一句"怎么理解来源"的说明，可点「填入示例」看模板'),
       maxLength: GUIDANCE_MAX_LENGTH,
       disabled,
       onChange: (event) => onChange(event.target.value),
     }));
 }
 
-function GlobalScopePanel({ kind, scope, disabled, onChange, t }) {
+function GlobalScopePanel({ kind, scope, disabled, onChange, t, offered }) {
   const text = SCOPE_TEXT[kind];
   const example = kind === 'group' ? GROUP_GUIDANCE_EXAMPLE : DIRECT_GUIDANCE_EXAMPLE;
   const switchId = `dchat-enable-${kind}`;
   return h('div', { className: 'dchat-contextGlobal' },
     h('div', { className: 'dchat-contextSwitchRow' },
       h('label', { htmlFor: switchId, className: 'dchat-contextSwitchLabel' },
-        `启用${text.title}全局增强`),
+        // 层名已经在页头场合切换器上写着，这里不重复一遍（'启用全局全局增强'很别扭）。
+        t('启用增强')),
       h('input', {
         id: switchId,
         type: 'checkbox',
@@ -134,6 +159,7 @@ function GlobalScopePanel({ kind, scope, disabled, onChange, t }) {
       scopeKey: `${kind}-global`,
       scope,
       disabled,
+      offered,
       onChange: (fields) => onChange({ ...scope, fields }),
       t,
     }),
@@ -152,7 +178,7 @@ function targetKindOf(scope) {
   return scope === 'direct' ? 'user' : 'group';
 }
 
-function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conversations }) {
+function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conversations, offered }) {
   const text = SCOPE_TEXT[scope];
   const prefix = `dchat-target-${scope}-${index}`;
   return h('li', { className: 'dchat-targetRow' },
@@ -214,6 +240,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conv
       scopeKey: `${prefix}`,
       scope: target,
       disabled,
+      offered,
       onChange: (fields) => onChange({ ...target, fields }),
       t,
     }),
@@ -238,7 +265,7 @@ function TargetRow({ scope, target, index, disabled, onChange, onRemove, t, conv
       t('叠加全局提示词（不勾选则只使用上面的专属提示词）')));
 }
 
-function TargetPanel({ scope, targets, disabled, onChange, t, conversations }) {
+function TargetPanel({ scope, targets, disabled, onChange, t, conversations, offered }) {
   const kind = targetKindOf(scope);
   const text = SCOPE_TEXT[scope];
   const rows = targets
@@ -270,7 +297,7 @@ function TargetPanel({ scope, targets, disabled, onChange, t, conversations }) {
         onClick: add,
       }, t('新增'))),
     rows.length === 0
-      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置。'))
+      ? h('p', { className: 'dchat-cardDescription' }, t('还没有指定设置'))
       : h('ul', { className: 'dchat-targetList' }, rows.map(({ target, index }) => h(TargetRow, {
         key: index,
         scope,
@@ -280,24 +307,60 @@ function TargetPanel({ scope, targets, disabled, onChange, t, conversations }) {
         onChange: (next) => replace(index, next),
         onRemove: () => remove(index),
         t,
+        offered,
         // 只给这一类作用域挑：私聊给"人"，群聊给"群"。
         conversations: (conversations ?? []).filter((item) => (
           kind === 'group' ? item.kind === 'group' : item.kind === 'direct')),
       }))));;
 }
 
-function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose, conversations }) {
+/**
+ * 上下文增强的**内嵌面板**（原来是一个"入口 + 弹窗"，是页面上唯一的另类形态）。
+ *
+ * 为什么改成内嵌：另外 9 项设置都是直接铺在页面上的，只有这一项要点进弹窗——
+ * 用户得先猜"这个入口点开是什么"，而且弹窗里的改动与页面其余部分的"改了即存"不一致。
+ * 现在与其它设置同形态：**直接画出来**，内容多就靠分组与场合切换器管。
+ *
+ * 保存仍是**显式按钮**（与工作区同一条理由）：这里有一段多行提示词，
+ * 打到一半就提交会存进半句话。列表类操作（增删指定设置）也一并走这个按钮，
+ * 不会出现"删了一条却要另点一次保存"。
+ *
+ * @param props - { config, disabled, translate, onSave, conversations, scope }。
+ * @returns React 元素。
+ */
+function ContextEnhancementPanel({
+  config, disabled, translate, onSave, conversations, scope = null, sourceFields = null,
+  showTargets = true,
+}) {
   const t = t_of(translate);
   const [draft, setDraft] = React.useState(() => normalizeContextConfig(config));
-  const [activeScope, setActiveScope] = React.useState('direct');
+  const [activeScope, setActiveScope] = React.useState('global');
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const dialogRef = React.useRef(null);
-  const titleId = React.useId();
+  const [notice, setNotice] = React.useState(null);
 
-  React.useEffect(() => {
-    dialogRef.current?.focus?.();
-  }, []);
+  /**
+   * 画哪些场合：页面级场合给了就**只画那一个**（"改哪个场合"已经在页头问过一次）。
+   * 没给则保留两个页签的旧形态（渠道页还没接场合切换器时不会少东西）。
+   */
+  /** 页面级场合给了就只画那一层（'global' / 'direct' / 'group'）；没给就画三层。 */
+  /**
+   * **只列这个渠道真能提供的来源字段。**
+   *
+   * 不这么做的话，勾选框里会混进"永远不会有值"的项：实测**两个渠道都不提供**
+   * `senderName` / `conversationTitle`（schema 里有、但没有任何地方填它），
+   * 微信更是连 `threadId` 都没有、`chatId` 恒等于 `senderId`、`conversationType` 恒为 direct。
+   * 勾了没值 = 静默无效，正是"配置里有一堆用不上的东西"。
+   *
+   * 没声明就照旧全列（向后兼容，老渠道不传这个也不会少东西）。
+   */
+  const offered = Array.isArray(sourceFields) && sourceFields.length > 0
+    ? CONTEXT_FIELDS.filter((field) => sourceFields.includes(field))
+    : CONTEXT_FIELDS;
+  const LAYERS = ['global', 'direct', 'group'];
+  const scopedKinds = LAYERS.includes(scope) ? [scope] : LAYERS;
+  /** 实际展开的那一个：单场合时以页面选定的为准，否则听弹窗内的页签。 */
+  const shownKind = scopedKinds.length === 1 ? scopedKinds[0] : activeScope;
 
   const busy = disabled || saving;
 
@@ -305,10 +368,10 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     if (busy) return;
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
-      const next = validateContextConfig(draft);
-      await onSave(next);
-      onClose();
+      await onSave(validateContextConfig(draft));
+      setNotice(t('已保存。下一条消息生效。'));
     } catch (cause) {
       setError(cause?.message ?? t('保存失败，请重试。'));
     } finally {
@@ -316,120 +379,119 @@ function ContextEnhancementDialog({ config, disabled, translate, onSave, onClose
     }
   };
 
-  const content = h('div', {
-    className: 'dchat-backdrop',
-    onMouseDown: (event) => {
-      if (event.target === event.currentTarget && !saving) onClose();
-    },
-  }, h('section', {
-    ref: dialogRef,
-    className: 'dchat-dialog',
-    role: 'dialog',
-    'aria-modal': 'true',
-    'aria-labelledby': titleId,
-    tabIndex: -1,
-    onKeyDown: (event) => {
-      if (event.key === 'Escape' && !saving) {
-        event.preventDefault();
-        onClose();
-      }
-    },
-  },
-  h('header', { className: 'dchat-dialogHeader' },
-    h('h3', { id: titleId, className: 'dchat-cardTitle' }, t('上下文增强')),
-    h('button', {
-      type: 'button',
-      className: 'dchat-button',
-      disabled: saving,
-      'aria-label': t('关闭'),
-      onClick: onClose,
-    }, t('关闭'))),
-  h('p', { className: 'dchat-cardDescription' },
-    t('来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。')),
-  h('div', { className: 'dchat-tabs', role: 'tablist', 'aria-label': t('上下文增强范围') },
-    ['direct', 'group'].map((kind) => h('button', {
-      key: kind,
-      type: 'button',
-      role: 'tab',
-      className: 'dchat-tab',
-      'aria-selected': activeScope === kind,
-      'data-scope': kind,
-      onClick: () => setActiveScope(kind),
-    }, t(SCOPE_TEXT[kind].title)))),
-  ['direct', 'group'].map((kind) => h('div', {
-    key: kind,
-    role: 'tabpanel',
-    className: 'dchat-tabPanel',
-    hidden: activeScope !== kind,
-    'data-scope': kind,
-  },
-  h(GlobalScopePanel, {
-    kind,
-    scope: draft[kind],
-    disabled: busy,
-    t,
-    onChange: (scope) => setDraft((current) => ({ ...current, [kind]: scope })),
-  }),
-  h(TargetPanel, {
-    scope: kind,
-    targets: draft.targets,
-    disabled: busy,
-    t,
-    conversations,
-    onChange: (targets) => setDraft((current) => ({ ...current, targets })),
-  }))),
-  error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
-  h('footer', { className: 'dchat-dialogFooter' },
-    h('button', {
-      type: 'button', className: 'dchat-button', disabled: saving, onClick: onClose,
-    }, t('取消')),
-    h('button', {
-      type: 'button',
-      className: 'dchat-button dchat-buttonPrimary',
-      disabled: busy,
-      onClick: () => {
-        void save();
-      },
-    }, saving ? t('保存中…') : t('保存')))));
+  /** 外部值变了（别的标签页/卡片改过）就重新取一次，但仍然只在用户点保存时写回。 */
+  const dirty = JSON.stringify(draft) !== JSON.stringify(normalizeContextConfig(config));
+  const reset = () => {
+    setDraft(normalizeContextConfig(config));
+    setError(null);
+    setNotice(null);
+  };
 
-  return globalThis.document?.body ? createPortal(content, globalThis.document.body) : content;
+  /** 面板外壳：与其它设置卡同形态（Portal / 遮罩 / 关闭键都不需要了）。 */
+  return h('section', { className: 'dchat-card dchat-contextPanel' },
+    h('div', { className: 'dchat-cardHeader' },
+      h('div', { className: 'dchat-cardHeading' },
+        h('h3', { className: 'dchat-cardTitle' }, t('上下文增强')),
+        h('p', { className: 'dchat-cardDescription' },
+          h(HelpHint, {
+            translate: t,
+            label: t('上下文增强'),
+            help: [
+              t('告诉机器人：这条消息从哪来、以及该怎么用它——比如让它在回答里带上发言人是谁。'),
+              t('来源字段只在当前消息已提供时才会发送，不会额外查询平台接口。'),
+            ],
+          })),
+      ),
+      h('div', { className: 'dchat-actions' },
+        saving ? h('span', { className: 'dchat-status' }, t('保存中…')) : null,
+        // 「放弃改动」只在真的改过时出现——没改时它是个点了没反应的按钮。
+        dirty && !saving
+          ? h('button', {
+            type: 'button', className: 'dchat-button', disabled: busy, onClick: reset,
+          }, t('放弃改动'))
+          : null,
+        h('button', {
+          type: 'button',
+          className: 'dchat-button dchat-buttonPrimary',
+          disabled: busy || !dirty,
+          onClick: () => { void save(); },
+        }, saving ? t('保存中…') : t('保存'))),
+    ),
+    // 来源字段的说明在标题的问号里（只说一次，不逐项重复；每个字段自己的解释在 title 里）。
+    // 单层时不画页签：层由页头统一选定，面板里再问一遍是同一件事的第二种问法。
+    scopedKinds.length > 1
+      ? h('div', { className: 'dchat-tabs', role: 'tablist', 'aria-label': t('上下文增强范围') },
+        scopedKinds.map((kind) => h('button', {
+          key: kind,
+          type: 'button',
+          role: 'tab',
+          className: 'dchat-tab',
+          'aria-selected': activeScope === kind,
+          'data-scope': kind,
+          onClick: () => setActiveScope(kind),
+        }, t(SCOPE_TEXT[kind].title))))
+      : null,
+    scopedKinds.map((kind) => h('div', {
+      key: kind,
+      role: 'tabpanel',
+      className: 'dchat-tabPanel',
+      hidden: shownKind !== kind,
+      'data-scope': kind,
+    },
+    h(GlobalScopePanel, {
+      kind,
+      offered,
+      // 继承层（null）时展示"全局那一份"——用户看到的就是实际生效的内容。
+      scope: draft[kind] ?? draft.global,
+      disabled: busy,
+      t,
+      /**
+       * 写回：从"继承"改起时**建立覆盖**（以当前生效的那份为底板）。
+       * 直接把 null 展开会丢掉字段，用户下次打开就是一份空设置。
+       */
+      onChange: (scopeValue) => setDraft((current) => ({
+        ...current,
+        [kind]: kind === 'global' ? scopeValue : { ...(current[kind] ?? current.global), ...scopeValue },
+      })),
+    }),
+    /**
+     * 「指定用户 / 指定群」：**比场合更细的一层**（"只有这个人"）。
+     * 只有一种会话、且实际上只有属主一个人在用的渠道（微信）上它没有意义——
+     * 那唯一的那个人本来就是全部，再给他单开一份设置是多余的。
+     */
+    showTargets
+      ? h(TargetPanel, {
+        scope: kind,
+        targets: draft.targets,
+        offered,
+        disabled: busy,
+        t,
+        conversations,
+        onChange: (targets) => setDraft((current) => ({ ...current, targets })),
+      })
+      : null)),
+    error ? h('p', { className: 'dchat-error', role: 'alert' }, error) : null,
+    notice ? h('p', { className: 'dchat-notice', role: 'status' }, notice) : null);
 }
 
 /**
- * 上下文增强入口 + 弹窗。
+ * 上下文增强（**直接铺在设置页上**，不再是"入口 + 弹窗"）。
  *
- * @param props - { config, disabled, translate, onSave }。
+ * @param props - { config, disabled, translate, onSave, conversations, scope }。
+ *   `scope` 是**页面级的层**（`'global'` / `'direct'` / `'group'`，可能为 null = 让用户自己切）。
+ *   给了它就**只画那一层**——"改哪个层"由页面顶部统一问一次。
  * @returns React 元素。
  */
 export function ContextEnhancementEditor({
-  config, disabled = false, translate, onSave, conversations = [],
+  config, disabled = false, translate, onSave, conversations = [], scope = null,
+  sourceFields = null, showTargets = true,
 }) {
-  const t = t_of(translate);
-  const [open, setOpen] = React.useState(false);
-  const status = contextStatusLabel(config);
   /**
-   * 「指定用户/指定群」的 id 必须是**平台 id**（`ou_…` / `oc_…`），因为它是拿消息里的
-   * `senderId` / `chatId` 去匹配的。**由渠道**把会话映射成平台 id 后传进来
+   * 「指定用户/指定群」的 id 必须是**平台 id**（`ou_…` / `oc_…`）：拿消息里的
+   * `senderId` / `chatId` 去匹配。**由渠道**把会话映射成平台 id 后传进来
    * （`route` 的字段名是平台概念，hub 不认识）；没传就只留手填输入框。
    */
-  return h(React.Fragment, null,
-    h('button', {
-      type: 'button',
-      className: 'dchat-entry',
-      disabled,
-      'aria-haspopup': 'dialog',
-      'aria-expanded': open,
-      onClick: () => setOpen(true),
-    },
-    h('span', { className: 'dchat-entryLabel' }, t('上下文增强')),
-    h('span', { className: 'dchat-entryStatus', 'data-active': status !== '未开启' }, t(status)),
-    h('span', { className: 'dchat-entryArrow', 'aria-hidden': 'true' }, '›')),
-    open ? h(ContextEnhancementDialog, {
-      config,
-      disabled,
-      translate: t,
-      onSave,
-      conversations,
-      onClose: () => setOpen(false),
-    }) : null);
+  return h(ContextEnhancementPanel, {
+    config, disabled, translate, onSave, conversations, scope, sourceFields, showTargets,
+  });
 }

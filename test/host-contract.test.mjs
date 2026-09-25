@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { scopeFor } from '../packages/dsh-chat/shared/access-policy.mjs';
 import { apply as applyFixture } from '../packages/dsh-chat-fixture/host/index.mjs';
 import { apply as applyHub } from '../packages/dsh-chat/host/plugin.mjs';
 
@@ -326,7 +327,9 @@ test('hub 控制端点：上下文增强读写落盘', async () => {
   const app = await bootstrap();
   try {
     const config = {
-      group: { enabled: false, fields: ['senderId'], guidance: '' },
+      // 保存路径要求三层完整（global 必填，覆盖层可为 null = 继承）。
+      global: { enabled: false, fields: ['senderId'], guidance: '' },
+      group: null,
       direct: { enabled: true, fields: ['senderId'], guidance: '私聊全局' },
       targets: [{
         kind: 'user',
@@ -954,6 +957,12 @@ test('机器人设置：工作区校验、Agent 预设对账、访问策略用�
     assert.equal(badPolicy.result.ok, false);
 
     const policy = {
+      // 保存路径要求三层完整（global 必填，覆盖层可为 null = 继承）。
+      global: {
+        mode: 'allowlist',
+        open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+        allowlist: { users: [] },
+      },
       direct: {
         mode: 'allowlist',
         open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
@@ -969,6 +978,7 @@ test('机器人设置：工作区校验、Agent 预设对账、访问策略用�
       channelId: 'fixture', botId: 'bot_1', policy,
     });
     assert.equal(okPolicy.result.ok, true);
+    // 层结构：两份不同（direct=allowlist、group=open）→ 两份都保留为覆盖层。
     assert.equal(okPolicy.result.value.accessPolicy.direct.allowlist.users[0].id, 'ou_alice');
 
     // Agent 预设：这台 Host 没装 agentPresets 服务时不做对账（不该把设置页卡死）。
@@ -987,6 +997,8 @@ test('机器人设置：工作区校验、Agent 预设对账、访问策略用�
     assert.equal(options.result.value.current.agentPreset, 'some-preset');
     assert.deepEqual(options.result.value.current.accessPolicy.direct.allowlist.users,
       [{ id: 'ou_alice', canExecuteCommands: true }]);
+    // 生效值也必须一致（设置页与运行期读的是同一套回落逻辑）。
+    assert.equal(scopeFor(options.result.value.current.accessPolicy, 'direct').mode, 'allowlist');
     assert.ok(Array.isArray(options.result.value.workspacePaths));
     assert.ok(Array.isArray(options.result.value.presets));
   } finally {
@@ -1002,8 +1014,9 @@ test('bot.access-policy.open-scope：只放宽指定那一份，另一份与名�
       channelId: 'fixture', botId: 'bot_new', conversationType: 'direct',
     });
     assert.equal(opened.result.ok, true);
-    assert.equal(opened.result.value.accessPolicy.direct.mode, 'open');
-    assert.equal(opened.result.value.accessPolicy.group.mode, 'allowlist',
+    // 放宽私聊 = 给 direct 建一份覆盖；group 仍继承全局（保守默认 = allowlist）。
+    assert.equal(scopeFor(opened.result.value.accessPolicy, 'direct').mode, 'open');
+    assert.equal(scopeFor(opened.result.value.accessPolicy, 'group').mode, 'allowlist',
       '只放宽私聊，群聊必须保持保守默认');
 
     // 已有策略：放宽私聊不许把群聊的名单/开关冲掉。
@@ -1011,6 +1024,12 @@ test('bot.access-policy.open-scope：只放宽指定那一份，另一份与名�
       channelId: 'fixture',
       botId: 'bot_new',
       policy: {
+        // 保存路径要求三层完整：global 必填，两层给覆盖（null = 继承）。
+        global: {
+          mode: 'allowlist',
+          open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+          allowlist: { users: [] },
+        },
         direct: {
           mode: 'allowlist',
           open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] },
@@ -1027,10 +1046,10 @@ test('bot.access-policy.open-scope：只放宽指定那一份，另一份与名�
       channelId: 'fixture', botId: 'bot_new', conversationType: 'group',
     });
     assert.equal(again.result.ok, true);
-    assert.equal(again.result.value.accessPolicy.group.mode, 'open');
-    assert.deepEqual(again.result.value.accessPolicy.group.allowlist.users,
+    assert.equal(scopeFor(again.result.value.accessPolicy, 'group').mode, 'open');
+    assert.deepEqual(scopeFor(again.result.value.accessPolicy, 'group').allowlist.users,
       [{ id: 'ou_bob', canExecuteCommands: true }], '放宽模式不该动名单');
-    assert.deepEqual(again.result.value.accessPolicy.direct.allowlist.users,
+    assert.deepEqual(scopeFor(again.result.value.accessPolicy, 'direct').allowlist.users,
       [{ id: 'ou_alice', canExecuteCommands: true }], '另一个作用域原样保留');
 
     // 非法输入：缺 conversationType、写了不认识的作用域、缺 botId。

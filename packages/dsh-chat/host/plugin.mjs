@@ -17,6 +17,7 @@ import {
   CONTRACT_VERSION, CONTROL_CHANNEL_ID, HOST_SERVICE, HUB_VERSION,
 } from '../shared/contract.mjs';
 import * as accessPolicy from '../shared/access-policy.mjs';
+import { writeScope } from '../shared/scoped-config.mjs';
 import * as contextEnhancement from '../shared/context-enhancement.mjs';
 import {
   enhanceForwardedMessages as enhanceForwardedMessagesFn,
@@ -668,10 +669,18 @@ export function apply(ctx, config = {}) {
         await settings.ready();
         const current = settings.read(payload.channelId, payload.botId)?.accessPolicy ?? null;
         const base = current ?? accessPolicy.defaultAccessPolicy();
-        const next = {
-          ...base,
-          [payload.conversationType]: { ...base[payload.conversationType], mode: 'open' },
-        };
+        /**
+         * 以**当前生效的那份**为底板建成覆盖。
+         *
+         * ⚠️ 这一层原来是"继承全局"时 `base[key]` 是 `null`，直接展开它会造出一份空作用域
+         * （名单与命令权限全丢——"放宽私聊"顺手把群聊名单清掉那种事）。
+         * `scopeFor` 给的就是用户看到的那份生效值：改模式时名单原样跟过去。
+         */
+        const next = writeScope(
+          base,
+          payload.conversationType,
+          { ...accessPolicy.scopeFor(base, payload.conversationType), mode: 'open' },
+        );
         const saved = await settings.write(payload.channelId, payload.botId, {
           accessPolicy: accessPolicy.validateAccessPolicy(next),
         });

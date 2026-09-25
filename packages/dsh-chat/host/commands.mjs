@@ -9,6 +9,7 @@
  */
 
 import * as accessPolicy from '../shared/access-policy.mjs';
+import { writeScope } from '../shared/scoped-config.mjs';
 
 import { botModelForSelection, describeBotModel, normalizeBotModel } from './bot-model.mjs';
 import { chatKeyLabel } from './session-keys.mjs';
@@ -274,23 +275,26 @@ export function registerBuiltinCommands(registry, { hubVersion = HUB_VERSION, li
       ?? accessPolicy.defaultAccessPolicy();
   }
 
-  /** 改一个作用域的名单；返回**完整**策略（保存路径要求两段都在）。 */
+  /**
+   * 改一个作用域的名单；返回**完整**策略（保存路径要求三层都在）。
+   *
+   * ⚠️ 改的是**本会话类型那一层**：原来若为"继承全局"，这里以**当前生效的那份**为底板
+   * 建成一份覆盖——用户看到的名单就是继承来的那份，他增删的也是它。
+   * 用 `writeScope` 保证"只动这一层"（直接展开对象在层结构下容易多键或丢键）。
+   */
   function withAllowlist(context, mutate) {
     const policy = currentPolicy(context);
     const key = scopeKeyOf(context);
-    const scope = policy[key];
-    return {
-      ...policy,
-      [key]: {
-        ...scope,
-        allowlist: { users: mutate(scope.allowlist.users) },
-        open: {
-          ...scope.open,
-          // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
-          commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides),
-        },
+    const scope = accessPolicy.scopeFor(policy, key);
+    return writeScope(policy, key, {
+      ...scope,
+      allowlist: { users: mutate(scope.allowlist.users) },
+      open: {
+        ...scope.open,
+        // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
+        commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides),
       },
-    };
+    });
   }
 
   registry.register({

@@ -35,8 +35,9 @@ const target = (overrides = {}) => ({
 });
 
 const config = (overrides = {}) => ({
-  group: scope(),
-  direct: scope(),
+  global: scope(),
+  group: null,
+  direct: null,
   targets: [],
   ...overrides,
 });
@@ -74,30 +75,46 @@ test('validateContextConfig 归一化字段顺序并保留完整结构', () => {
   }));
   assert.deepEqual(result.group.fields, ['channel', 'botId']);
   assert.equal(result.group.guidance, '');
+  // 没给的两层是"继承全局"（null）。
+  assert.equal(result.direct, null);
+  assert.equal(result.global.enabled, false);
   assert.deepEqual(result.targets[0].fields, ['senderId', 'senderName']);
   assert.equal(result.targets[0].label, '爱丽丝');
   assert.ok(Object.isFrozen(result) && Object.isFrozen(result.targets[0]));
 });
 
 test('normalizeContextConfig 迁移旧结构且永不抛错', () => {
-  // dsh-im 4.x：有 group/direct 但没有 targets。
+  // dsh-im 4.x：有 group/direct 但没有 targets，且两份**不同**。
+  // 迁移铁律：两份不同 → 保留为覆盖，**每层生效值不变**。
   const migrated = normalizeContextConfig({
     group: scope({ enabled: true, guidance: '群' }),
     direct: scope(),
   });
   assert.deepEqual(migrated.targets, []);
-  assert.equal(migrated.group.enabled, true);
+  assert.equal(resolveContextScope(migrated, 'group', {})?.guidance, '群', '群聊生效值不变');
+  assert.equal(resolveContextScope(migrated, 'direct', {}), null, '私聊仍是关着的');
 
-  // 更早的共用开关结构。
+  // 两份**相同** → 提成全局，两层继承（以后改全局两层都变）。
+  const same = normalizeContextConfig({
+    group: scope({ enabled: true, guidance: '共用' }),
+    direct: scope({ enabled: true, guidance: '共用' }),
+  });
+  assert.equal(same.group, null, '两份相同 → 群聊继承');
+  assert.equal(same.direct, null, '两份相同 → 私聊继承');
+  assert.equal(same.global.guidance, '共用');
+  assert.equal(resolveContextScope(same, 'direct', {})?.guidance, '共用');
+
+  // 更早的共用开关结构（一个开关管两边）→ 提成全局，两层继承。
   const legacy = normalizeContextConfig({
     groupEnabled: true,
     directEnabled: false,
     fields: ['senderId'],
     guidance: '共用',
   });
-  assert.equal(legacy.group.enabled, true);
-  assert.equal(legacy.direct.enabled, false);
-  assert.equal(legacy.direct.guidance, '共用');
+  // 这一版两个开关是分开的 → 迁移成两层覆盖，**各自的开关原样保留**
+  // （只取一个提成全局会把"只开了一边"抹平）。
+  assert.equal(resolveContextScope(legacy, 'group', {})?.guidance, '共用');
+  assert.equal(resolveContextScope(legacy, 'direct', {}), null, '旧的 directEnabled=false 仍是不开');
 
   // 完全损坏。
   assert.equal(normalizeContextConfig(null), DEFAULT_CONTEXT_CONFIG);

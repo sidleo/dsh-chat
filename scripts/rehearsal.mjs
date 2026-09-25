@@ -504,8 +504,9 @@ async function main() {
       });
       assert.match(done.message, /任何人可用/);
       const saved = service.bots.read('fixture', BOT).accessPolicy;
-      assert.equal(saved.group.mode, 'open');
-      assert.equal(saved.direct.mode, 'allowlist', '另一份补默认值，策略永远是成对的');
+      // 层结构：改 group 是给它建覆盖；direct 仍继承全局（保守默认）。
+      assert.equal(accessPolicy.scopeFor(saved, 'group').mode, 'open');
+      assert.equal(accessPolicy.scopeFor(saved, 'direct').mode, 'allowlist', '另一份没动，仍是保守默认');
       // 放宽之后：不在名单里的陌生人也能对话（真实策略引擎判定）；私聊那份仍是 allowlist。
       const groupGate = evaluateAccess({
         policy: saved, conversationType: 'group', senderIds: ['ou_stranger'], isOwner: false,
@@ -728,8 +729,9 @@ async function main() {
       });
       assert.match(confirmed.toast.content, /任何人可用|已生效/);
       for (const task of paints.splice(0)) await task();
-      assert.equal(service.bots.read('feishu', bot.id).accessPolicy?.direct?.mode, 'open',
-        '确认后才真的落盘');
+      assert.equal(
+        accessPolicy.scopeFor(service.bots.read('feishu', bot.id).accessPolicy, 'direct').mode,
+        'open', '确认后才真的落盘');
 
       /**
        * 「不显示过程」（这台机器人就是 off）：**答案仍要走卡片**——表格/代码块/链接

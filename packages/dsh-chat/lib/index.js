@@ -16,7 +16,7 @@ import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
-var HUB_VERSION = "0.1.0";
+var HUB_VERSION = "0.2.0";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";
@@ -79,8 +79,75 @@ __export(access_policy_exports, {
   hasWildcardOwner: () => hasWildcardOwner,
   isOwnerId: () => isOwnerId,
   normalizeAccessPolicy: () => normalizeAccessPolicy,
+  scopeFor: () => scopeFor,
   validateAccessPolicy: () => validateAccessPolicy
 });
+
+// packages/dsh-chat/shared/scoped-config.mjs
+var LAYER_KEYS = Object.freeze(["global", "direct", "group"]);
+var OVERRIDE_KEYS = Object.freeze(["direct", "group"]);
+function isPlainObject2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function sameLayer(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+function migrateToLayered(input, options) {
+  const {
+    keys = OVERRIDE_KEYS,
+    normalizeLayer,
+    defaultLayer,
+    pickGlobal,
+    isNewShape = (raw) => isPlainObject2(raw) && Object.hasOwn(raw, "global")
+  } = options;
+  const source = isPlainObject2(input) ? input : {};
+  if (isNewShape(source)) {
+    const global2 = normalizeLayer(source.global ?? defaultLayer());
+    const overrides = {};
+    for (const key of keys) {
+      overrides[key] = source[key] === null || source[key] === void 0 ? null : normalizeLayer(source[key]);
+    }
+    return { global: global2, ...overrides };
+  }
+  const layers = {};
+  for (const key of keys) {
+    layers[key] = normalizeLayer(source[key] ?? defaultLayer());
+  }
+  const values = keys.map((key) => layers[key]);
+  const identical = values.every((value) => sameLayer(value, values[0]));
+  if (identical) {
+    const overrides = {};
+    for (const key of keys) overrides[key] = null;
+    return { global: values[0], ...overrides };
+  }
+  let global = values[0];
+  for (const value of values.slice(1)) global = pickGlobal(global, value);
+  return { global, ...layers };
+}
+function resolveScope(config, layerKey) {
+  const source = isPlainObject2(config) ? config : {};
+  if (layerKey === "global" || !OVERRIDE_KEYS.includes(layerKey)) return source.global ?? null;
+  return source[layerKey] ?? source.global ?? null;
+}
+function isInherited(config, layerKey) {
+  if (!OVERRIDE_KEYS.includes(layerKey)) return false;
+  const source = isPlainObject2(config) ? config : {};
+  return source[layerKey] === null || source[layerKey] === void 0;
+}
+function writeScope(config, layerKey, next) {
+  const source = isPlainObject2(config) ? config : {};
+  if (layerKey === "global") return { ...source, global: next };
+  if (!OVERRIDE_KEYS.includes(layerKey)) return { ...source };
+  return { ...source, [layerKey]: next };
+}
+
+// packages/dsh-chat/shared/access-policy.mjs
 var ACCESS_POLICY_MODES = Object.freeze(["open", "allowlist"]);
 var ACCESS_CONVERSATION_TYPES = Object.freeze(["direct", "group"]);
 var USER_ID_MAX_LENGTH = 256;
@@ -99,13 +166,13 @@ function invalid(message) {
   error.code = "access-policy-invalid";
   return error;
 }
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 function hasExactKeys(input, keys) {
-  return isPlainObject2(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+  return isPlainObject3(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
 }
 function normalizeUserId(value) {
   if (typeof value === "number" && Number.isFinite(value)) value = String(value);
@@ -152,18 +219,38 @@ function isOwnerId(ownerIds, senderId) {
   return ownerIds.some((id) => id !== OWNER_WILDCARD && id === senderId);
 }
 function validateAccessPolicy(input) {
-  if (!hasExactKeys(input, ["direct", "group"])) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u8BBF\u95EE\u7B56\u7565\u3002");
+  if (!hasExactKeys(input, ["global", "direct", "group"])) throw invalid("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u8BBF\u95EE\u7B56\u7565\u3002");
+  const overrideOf = (value) => value === null || value === void 0 ? null : validateScope(value);
   return Object.freeze({
-    direct: validateScope(input.direct),
-    group: validateScope(input.group)
+    global: validateScope(input.global),
+    direct: overrideOf(input.direct),
+    group: overrideOf(input.group)
   });
 }
+function emptyScope() {
+  return {
+    mode: "allowlist",
+    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+    allowlist: { users: [] }
+  };
+}
+function moreConservative(left, right) {
+  const rank = (scope) => scope.mode === "allowlist" ? 0 : 1;
+  if (rank(left) !== rank(right)) return rank(left) < rank(right) ? left : right;
+  if (left.mode === "allowlist") {
+    const size = (scope) => scope.allowlist.users.length;
+    return size(left) <= size(right) ? left : right;
+  }
+  const canRun = (scope) => scope.open.defaultCanExecuteCommands === true;
+  if (canRun(left) !== canRun(right)) return canRun(left) ? right : left;
+  return left;
+}
 function normalizeAccessPolicy(input) {
-  if (!isPlainObject2(input)) return null;
+  if (!isPlainObject3(input)) return null;
   const scopeOf = (value) => {
-    const source = isPlainObject2(value) ? value : {};
-    const open2 = isPlainObject2(source.open) ? source.open : {};
-    const allowlist = isPlainObject2(source.allowlist) ? source.allowlist : {};
+    const source = isPlainObject3(value) ? value : {};
+    const open2 = isPlainObject3(source.open) ? source.open : {};
+    const allowlist = isPlainObject3(source.allowlist) ? source.allowlist : {};
     const usersOf = (value2) => Array.isArray(value2) ? value2.map((user) => {
       try {
         return validateUser(user);
@@ -180,18 +267,23 @@ function normalizeAccessPolicy(input) {
       allowlist: { users: usersOf(allowlist.users) }
     };
   };
+  const layered = migrateToLayered(input, {
+    normalizeLayer: scopeOf,
+    defaultLayer: emptyScope,
+    pickGlobal: moreConservative
+  });
   return Object.freeze({
-    direct: Object.freeze(scopeOf(input.direct)),
-    group: Object.freeze(scopeOf(input.group))
+    global: Object.freeze(layered.global),
+    direct: layered.direct === null ? null : Object.freeze(layered.direct),
+    group: layered.group === null ? null : Object.freeze(layered.group)
   });
 }
 function defaultAccessPolicy() {
-  const scope = () => ({
-    mode: "allowlist",
-    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
-    allowlist: { users: [] }
-  });
-  return validateAccessPolicy({ direct: scope(), group: scope() });
+  return validateAccessPolicy({ global: emptyScope(), direct: null, group: null });
+}
+function scopeFor(policy, conversationType) {
+  const normalized = normalizeAccessPolicy(policy) ?? defaultAccessPolicy();
+  return resolveScope(normalized, conversationType) ?? emptyScope();
 }
 function evaluateAccess({
   policy,
@@ -214,7 +306,7 @@ function evaluateAccess({
     }
   }).filter(Boolean);
   if (candidates.length === 0) return { allowed: false, reason: ACCESS_RESULTS.NOT_LISTED };
-  const scope = normalized[conversationType];
+  const scope = scopeFor(normalized, conversationType);
   const users = scope.mode === "open" ? scope.open.commandPermissionOverrides : scope.allowlist.users;
   const matched = users.filter((user) => candidates.includes(user.id));
   if (scope.mode === "allowlist" && matched.length === 0) {
@@ -232,12 +324,14 @@ function evaluateAccess({
 function describeAccessScope(policy, conversationType) {
   const normalized = normalizeAccessPolicy(policy);
   if (!normalized) return "\u672A\u8BBE\u7F6E\uFF08\u4EC5\u5C5E\u4E3B\u53EF\u7528\uFF09";
-  const scope = normalized[conversationType];
+  const scope = scopeFor(normalized, conversationType);
+  const inherited = isInherited(normalized, conversationType) ? "\uFF08\u7EE7\u627F\u5168\u5C40\uFF09" : "";
   if (scope.mode === "open") {
-    return `\u4EFB\u4F55\u4EBA\u53EF\u7528\uFF08\u547D\u4EE4\u9ED8\u8BA4${scope.open.defaultCanExecuteCommands ? "\u5141\u8BB8" : "\u4E0D\u5141\u8BB8"}\uFF09`;
+    return `\u4EFB\u4F55\u4EBA\u53EF\u7528\uFF08\u547D\u4EE4\u9ED8\u8BA4${scope.open.defaultCanExecuteCommands ? "\u5141\u8BB8" : "\u4E0D\u5141\u8BB8"}\uFF09${inherited}`;
   }
   const count = scope.allowlist.users.length;
-  return count === 0 ? "\u4EC5\u5C5E\u4E3B\u53EF\u7528" : `\u540D\u5355\u5185 ${count} \u4EBA\u53EF\u7528`;
+  const text = count === 0 ? "\u4EC5\u5C5E\u4E3B\u53EF\u7528" : `\u540D\u5355\u5185 ${count} \u4EBA\u53EF\u7528`;
+  return `${text}${inherited}`;
 }
 
 // packages/dsh-chat/shared/context-enhancement.mjs
@@ -297,11 +391,12 @@ var DEFAULT_SCOPE = Object.freeze({
   guidance: ""
 });
 var DEFAULT_CONTEXT_CONFIG = Object.freeze({
-  group: DEFAULT_SCOPE,
-  direct: DEFAULT_SCOPE,
+  global: DEFAULT_SCOPE,
+  group: null,
+  direct: null,
   targets: Object.freeze([])
 });
-var CONFIG_KEYS = Object.freeze(["group", "direct", "targets"]);
+var CONFIG_KEYS = Object.freeze(["global", "group", "direct", "targets"]);
 var SCOPE_KEYS = Object.freeze(["enabled", "fields", "guidance"]);
 var TARGET_KEYS = Object.freeze([
   "kind",
@@ -331,13 +426,13 @@ function invalid2(message) {
   error.code = "context-enhancement-invalid";
   return error;
 }
-function isPlainObject3(value) {
+function isPlainObject4(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 function hasExactKeys2(input, keys) {
-  return isPlainObject3(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
+  return isPlainObject4(input) && Reflect.ownKeys(input).length === keys.length && keys.every((key) => Object.hasOwn(input, key));
 }
 function offlineText(value, maxLength) {
   return typeof value === "string" ? value.replace(CONTROL_CHARACTERS2, "").slice(0, maxLength) : "";
@@ -411,41 +506,73 @@ function validateContextConfig(input) {
     if (seen.has(key)) throw invalid2(`\u6307\u5B9A\u8BBE\u7F6E\u4E2D\u300C${target.id}\u300D\u91CD\u590D\uFF0C\u8BF7\u5408\u5E76\u540E\u518D\u4FDD\u5B58\u3002`);
     seen.add(key);
   }
+  const overrideOf = (value, label) => value === null || value === void 0 ? null : validateScope2(value, label);
   return Object.freeze({
-    group: validateScope2(input.group, "\u7FA4\u804A"),
-    direct: validateScope2(input.direct, "\u79C1\u804A"),
+    global: validateScope2(input.global, "\u5168\u5C40"),
+    group: overrideOf(input.group, "\u7FA4\u804A"),
+    direct: overrideOf(input.direct, "\u79C1\u804A"),
     targets: Object.freeze(targets)
   });
 }
 function migrateLegacyConfig(input) {
   if (!hasExactKeys2(input, LEGACY_KEYS)) throw invalid2("\u8BF7\u63D0\u4EA4\u5B8C\u6574\u7684\u4E0A\u4E0B\u6587\u589E\u5F3A\u8BBE\u7F6E\u3002");
+  const shared = { fields: input.fields, guidance: input.guidance };
   return validateContextConfig({
-    group: { enabled: input.groupEnabled, fields: input.fields, guidance: input.guidance },
-    direct: { enabled: input.directEnabled, fields: input.fields, guidance: input.guidance },
+    /**
+     * ⚠️ 这一版**两个开关是分开的**（`groupEnabled` / `directEnabled`），
+     * 所以不能只取一个提成全局——那会把"只开了其中一边"抹平（旧的 directEnabled=false
+     * 会变成"跟群聊一样开着"）。两份都给成覆盖，**各自的实际开关原样保留**。
+     * 全局取群聊那一份（真值方向），但它不参与生效（两层都有覆盖）。
+     */
+    global: { enabled: input.groupEnabled === true, ...shared },
+    group: { enabled: input.groupEnabled === true, ...shared },
+    direct: { enabled: input.directEnabled === true, ...shared },
     targets: []
   });
 }
 function normalizeContextConfig(input) {
-  try {
-    return validateContextConfig(input);
-  } catch {
+  const parse = (candidate) => {
+    try {
+      return validateContextConfig(candidate);
+    } catch {
+      return null;
+    }
+  };
+  const asLayer = (raw) => parse({
+    global: raw ?? DEFAULT_SCOPE,
+    group: null,
+    direct: null,
+    targets: []
+  })?.global ?? DEFAULT_SCOPE;
+  const already = parse(input);
+  if (already && already.global) return already;
+  if (isPlainObject4(input) && hasExactKeys2(input, LEGACY_KEYS)) {
     try {
       return migrateLegacyConfig(input);
     } catch {
-      try {
-        if (isPlainObject3(input)) {
-          return validateContextConfig({ ...input, targets: input.targets ?? [] });
-        }
-      } catch {
-      }
-      return DEFAULT_CONTEXT_CONFIG;
     }
   }
+  if (isPlainObject4(input)) {
+    const layered = migrateToLayered({ ...input, targets: input.targets ?? [] }, {
+      normalizeLayer: asLayer,
+      defaultLayer: () => DEFAULT_SCOPE,
+      pickGlobal: (left) => left,
+      isNewShape: (raw) => isPlainObject4(raw) && Object.hasOwn(raw, "global")
+    });
+    const built = parse({
+      global: layered.global,
+      group: layered.group,
+      direct: layered.direct,
+      targets: Array.isArray(input.targets) ? input.targets : []
+    });
+    if (built) return built;
+  }
+  return DEFAULT_CONTEXT_CONFIG;
 }
 function resolveContextScope(config, conversationType, identity = {}) {
   if (conversationType !== "direct" && conversationType !== "group") return null;
   const normalized = normalizeContextConfig(config);
-  const scope = normalized[conversationType];
+  const scope = resolveScope(normalized, conversationType) ?? normalized.global;
   const target = normalized.targets.find((candidate) => {
     if (candidate.enabled !== true) return false;
     if (conversationType === "direct") {
@@ -533,10 +660,11 @@ function enhanceContent(content, snapshot, sourceFactory, { includeGuidance = tr
   }
 }
 function contextStatusLabel(config) {
-  const { group, direct, targets } = normalizeContextConfig(config);
+  const normalized = normalizeContextConfig(config);
+  const { targets } = normalized;
   const parts = [];
-  if (group.enabled) parts.push("\u7FA4\u804A");
-  if (direct.enabled) parts.push("\u79C1\u804A");
+  if (resolveScope(normalized, "group")?.enabled === true) parts.push("\u7FA4\u804A");
+  if (resolveScope(normalized, "direct")?.enabled === true) parts.push("\u79C1\u804A");
   const active = targets.filter((target) => target.enabled).length;
   if (parts.length === 0 && active === 0) return "\u672A\u5F00\u542F";
   const scopeText = parts.length === 0 ? "\u672A\u5F00\u542F\u5168\u5C40" : `${parts.join("\u548C")}\u5168\u5C40`;
@@ -789,22 +917,28 @@ var PANEL_SECTIONS = Object.freeze([
   "commands"
 ]);
 var PANEL_SCOPES = Object.freeze(["direct", "group"]);
+var PANEL_LAYERS = Object.freeze(["global", "direct", "group"]);
 function allOn() {
   return Object.fromEntries(PANEL_SECTIONS.map((id) => [id, true]));
 }
 function normalizePanelSections(input) {
-  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
   const scopeOf = (value) => {
     const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     return Object.fromEntries(
       PANEL_SECTIONS.map((id) => [id, raw[id] !== false])
     );
   };
-  return { direct: scopeOf(source.direct), group: scopeOf(source.group) };
+  return migrateToLayered(input, {
+    normalizeLayer: scopeOf,
+    defaultLayer: allOn,
+    // 两份不同时拿谁当全局：显示项没有"保守"概念，取前者即可
+    // （两份都会原样保留为覆盖，所以挑错不改变任何人的实际显示）。
+    pickGlobal: (left) => left
+  });
 }
 function sectionsFor(record, conversationType) {
   if (conversationType !== "direct" && conversationType !== "group") return allOn();
-  return normalizePanelSections(record?.panelSections)[conversationType];
+  return resolveScope(normalizePanelSections(record?.panelSections), conversationType) ?? allOn();
 }
 
 // packages/dsh-chat/host/json-store.mjs
@@ -942,25 +1076,25 @@ var LEGACY_SOURCES = Object.freeze({
   accessPolicies: "accessPolicy",
   deliveryTargets: "deliveryTargets"
 });
-function isPlainObject4(value) {
+function isPlainObject5(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function cloneRecord(record) {
   return {
     ...EMPTY_RECORD,
-    ...isPlainObject4(record) ? record : {}
+    ...isPlainObject5(record) ? record : {}
   };
 }
 function normalizeDocument(value) {
-  const source = isPlainObject4(value) && value.version === DOCUMENT_VERSION ? value : {};
-  const imports = isPlainObject4(source.imports) ? { ...source.imports } : {};
+  const source = isPlainObject5(value) && value.version === DOCUMENT_VERSION ? value : {};
+  const imports = isPlainObject5(source.imports) ? { ...source.imports } : {};
   const channels = {};
-  if (isPlainObject4(source.channels)) {
+  if (isPlainObject5(source.channels)) {
     for (const [channelId, bots] of Object.entries(source.channels)) {
-      if (!isPlainObject4(bots)) continue;
+      if (!isPlainObject5(bots)) continue;
       const entries = {};
       for (const [botId, record] of Object.entries(bots)) {
-        if (!isPlainObject4(record)) continue;
+        if (!isPlainObject5(record)) continue;
         entries[botId] = cloneRecord(record);
       }
       channels[channelId] = entries;
@@ -996,7 +1130,7 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
     async write(channelId, botId, patch) {
       if (typeof channelId !== "string" || !channelId) throw new TypeError("channelId \u5FC5\u586B\u3002");
       if (typeof botId !== "string" || !botId) throw new TypeError("botId \u5FC5\u586B\u3002");
-      if (!isPlainObject4(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+      if (!isPlainObject5(patch)) throw new TypeError("patch \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
       const unknown = Object.keys(patch).filter((key) => !RECORD_KEYS.includes(key));
       if (unknown.length > 0) throw new TypeError(`\u672A\u77E5\u7684\u8BBE\u7F6E\u5B57\u6BB5\uFF1A${unknown.join("\u3001")}`);
       const withContext = Object.hasOwn(patch, "contextEnhancement") && patch.contextEnhancement !== null ? { ...patch, contextEnhancement: normalizeContextConfig(patch.contextEnhancement) } : patch;
@@ -1059,7 +1193,7 @@ function createBotSettingsStore({ dataDir, logger = console } = {}) {
       const perBot = /* @__PURE__ */ new Map();
       for (const [legacyKey, recordKey] of Object.entries(LEGACY_SOURCES)) {
         const table = legacy?.[legacyKey];
-        if (!isPlainObject4(table)) continue;
+        if (!isPlainObject5(table)) continue;
         for (const [botId, value] of Object.entries(table)) {
           if (value === null || value === void 0) continue;
           const entry = perBot.get(botId) ?? {};
@@ -1567,19 +1701,16 @@ function registerBuiltinCommands(registry, { hubVersion = HUB_VERSION, listComma
   function withAllowlist(context, mutate) {
     const policy = currentPolicy(context);
     const key = scopeKeyOf(context);
-    const scope = policy[key];
-    return {
-      ...policy,
-      [key]: {
-        ...scope,
-        allowlist: { users: mutate(scope.allowlist.users) },
-        open: {
-          ...scope.open,
-          // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
-          commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides)
-        }
+    const scope = scopeFor(policy, key);
+    return writeScope(policy, key, {
+      ...scope,
+      allowlist: { users: mutate(scope.allowlist.users) },
+      open: {
+        ...scope.open,
+        // 名单变动时同步清掉 open 里的例外，避免"已移除却还能执行命令"。
+        commandPermissionOverrides: mutate(scope.open.commandPermissionOverrides)
       }
-    };
+    });
   }
   registry.register({
     name: "menu",
@@ -2302,7 +2433,7 @@ var ROUTE_MAX_KEYS = 8;
 var ROUTE_VALUE_MAX = 256;
 var CONTROL_CHARACTERS3 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 var CONTROL_CHARACTER_TEST2 = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
-function isPlainObject5(value) {
+function isPlainObject6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function deliveryError(code, message) {
@@ -2311,7 +2442,7 @@ function deliveryError(code, message) {
   return error;
 }
 function normalizeRoute(route) {
-  if (!isPlainObject5(route)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u7684 route \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+  if (!isPlainObject6(route)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u7684 route \u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
   const keys = Object.keys(route);
   if (keys.length === 0 || keys.length > ROUTE_MAX_KEYS) {
     throw deliveryError("chat/bad-target", `\u6295\u9012\u76EE\u6807\u7684 route \u9700\u8981 1\u2013${ROUTE_MAX_KEYS} \u4E2A\u5B57\u6BB5\u3002`);
@@ -2330,7 +2461,7 @@ function normalizeRoute(route) {
   return Object.freeze(normalized);
 }
 function normalizeTarget(input) {
-  if (!isPlainObject5(input)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
+  if (!isPlainObject6(input)) throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807\u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
   const { id, name: name2, kind, route, renamed } = input;
   if (typeof id !== "string" || !TARGET_ID.test(id)) {
     throw deliveryError("chat/bad-target", "\u6295\u9012\u76EE\u6807 id \u53EA\u80FD\u662F 1\u201364 \u4F4D\u5B57\u6BCD/\u6570\u5B57/\u4E0B\u5212\u7EBF/\u8FDE\u5B57\u7B26\u3002");
@@ -2381,7 +2512,7 @@ function routeKey(target) {
   return `${target.kind}\0${route}`;
 }
 function normalizeStoredTargets(value) {
-  if (!isPlainObject5(value)) return {};
+  if (!isPlainObject6(value)) return {};
   const targets = {};
   for (const [id, target] of Object.entries(value)) {
     try {
@@ -2798,7 +2929,7 @@ function contextPanelState({ record, key, isOwner }) {
   const target = conversationTarget(key);
   if (!target) return null;
   const config = normalizeContextConfig(record.contextEnhancement);
-  const scope = target.kind === "group" ? config.group : config.direct;
+  const scope = resolveScope(config, target.kind) ?? config.global;
   const kindLabel = target.kind === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
   const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
   const options = [
@@ -2825,7 +2956,7 @@ function policyPanelState({ record, conversationType, isOwner }) {
   if (isOwner !== true) return null;
   if (conversationType !== "direct" && conversationType !== "group") return null;
   const stored = normalizeAccessPolicy(record.accessPolicy);
-  const scope = (stored ?? defaultAccessPolicy())[conversationType];
+  const scope = scopeFor(stored ?? defaultAccessPolicy(), conversationType);
   const kindLabel = conversationType === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
   return {
     // `stored === null` = 从没设过（口径是"仅属主可用"）：如实显示成未设置，不冒充某种模式。
@@ -2913,7 +3044,7 @@ function createPanelService({
     }
     const base = normalizeAccessPolicy(record.accessPolicy) ?? defaultAccessPolicy();
     const kindLabel = conversationType === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
-    const before = base[conversationType].mode;
+    const before = scopeFor(base, conversationType).mode;
     if (value === "open" && confirm !== true) {
       return {
         field,
@@ -2927,10 +3058,11 @@ function createPanelService({
     if (before === value) {
       return { field, value, message: `${kindLabel}\u7684\u8BBF\u95EE\u7B56\u7565\u672C\u6765\u5C31\u662F\u300C${value === "open" ? "\u4EFB\u4F55\u4EBA\u53EF\u7528" : "\u4EC5\u540D\u5355\u5185\u53EF\u7528"}\u300D\uFF0C\u6CA1\u6709\u6539\u52A8\u3002` };
     }
-    const next = validateAccessPolicy({
-      ...base,
-      [conversationType]: { ...base[conversationType], mode: value }
-    });
+    const effective = scopeFor(base, conversationType);
+    const next = validateAccessPolicy(writeScope(base, conversationType, {
+      ...effective,
+      mode: value
+    }));
     const saved = await settings.write(channelId, botId, { accessPolicy: next });
     return {
       field,
@@ -2944,7 +3076,7 @@ function createPanelService({
       throw panelError("chat/bad-request", "\u8BA4\u4E0D\u51FA\u8FD9\u4E2A\u4F1A\u8BDD\u7684\u5E73\u53F0 id\uFF0C\u6CA1\u6CD5\u7ED9\u5B83\u5355\u72EC\u8BBE\u4E0A\u4E0B\u6587\u589E\u5F3A\u3002");
     }
     const config = normalizeContextConfig(record.contextEnhancement);
-    const scope = target.kind === "group" ? config.group : config.direct;
+    const scope = resolveScope(config, target.kind) ?? config.global;
     const kindLabel = target.kind === "group" ? "\u672C\u7FA4" : "\u672C\u79C1\u804A";
     const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
     const copyOf = (source2, extra) => ({
@@ -3847,18 +3979,18 @@ function integrationRoot(configured) {
 // packages/dsh-chat/host/session-store.mjs
 import { join as join5 } from "node:path";
 var DOCUMENT_VERSION2 = 1;
-function isPlainObject6(value) {
+function isPlainObject7(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeDocument2(value) {
-  const source = isPlainObject6(value) && value.version === DOCUMENT_VERSION2 ? value : {};
+  const source = isPlainObject7(value) && value.version === DOCUMENT_VERSION2 ? value : {};
   const channels = {};
-  if (isPlainObject6(source.channels)) {
+  if (isPlainObject7(source.channels)) {
     for (const [channelId, bots] of Object.entries(source.channels)) {
-      if (!isPlainObject6(bots)) continue;
+      if (!isPlainObject7(bots)) continue;
       const accounts = {};
       for (const [botId, keys] of Object.entries(bots)) {
-        if (!isPlainObject6(keys)) continue;
+        if (!isPlainObject7(keys)) continue;
         const entries = {};
         for (const [key, entry] of Object.entries(keys)) {
           const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
@@ -3959,7 +4091,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
      * @returns 实际接管的条数。
      */
     async adopt(channelId, botId, entries) {
-      if (!isPlainObject6(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
+      if (!isPlainObject7(entries)) throw new TypeError("adopt \u9700\u8981 { key: sessionId } \u5F62\u5F0F\u3002");
       let adopted = 0;
       await store.update((current) => {
         const accounts = current.channels[channelId] ?? {};
@@ -3970,7 +4102,7 @@ function createSessionStore({ dataDir, logger = console } = {}) {
           if (typeof sessionId !== "string" || !sessionId) continue;
           keys[key] = {
             sessionId,
-            workspacePath: isPlainObject6(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
+            workspacePath: isPlainObject7(value) && typeof value.workspacePath === "string" ? value.workspacePath : null,
             boundAt: (/* @__PURE__ */ new Date()).toISOString()
           };
           adopted += 1;
@@ -5683,10 +5815,11 @@ function apply(ctx, config = {}) {
         await settings.ready();
         const current = settings.read(payload.channelId, payload.botId)?.accessPolicy ?? null;
         const base = current ?? defaultAccessPolicy();
-        const next = {
-          ...base,
-          [payload.conversationType]: { ...base[payload.conversationType], mode: "open" }
-        };
+        const next = writeScope(
+          base,
+          payload.conversationType,
+          { ...scopeFor(base, payload.conversationType), mode: "open" }
+        );
         const saved = await settings.write(payload.channelId, payload.botId, {
           accessPolicy: validateAccessPolicy(next)
         });

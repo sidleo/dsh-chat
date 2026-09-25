@@ -14,6 +14,8 @@
  * @module dsh-chat/shared/access-policy
  */
 
+import { isInherited, migrateToLayered, resolveScope } from './scoped-config.mjs';
+
 export const ACCESS_POLICY_MODES = Object.freeze(['open', 'allowlist']);
 export const ACCESS_CONVERSATION_TYPES = Object.freeze(['direct', 'group']);
 
@@ -121,15 +123,54 @@ export function isOwnerId(ownerIds, senderId) {
 /**
  * 严格校验一份完整策略（保存路径用）。
  *
- * @param input - `{ direct, group }`。
+ * @param input - `{ global, direct, group }`（`direct`/`group` 可为 null = 继承全局）。
  * @returns 冻结后的策略。
  */
 export function validateAccessPolicy(input) {
-  if (!hasExactKeys(input, ['direct', 'group'])) throw invalid('请提交完整的访问策略。');
+  if (!hasExactKeys(input, ['global', 'direct', 'group'])) throw invalid('请提交完整的访问策略。');
+  // 覆盖层允许为 null（= 继承全局）；global 必须是一份完整作用域。
+  const overrideOf = (value) => (value === null || value === undefined ? null : validateScope(value));
   return Object.freeze({
-    direct: validateScope(input.direct),
-    group: validateScope(input.group),
+    global: validateScope(input.global),
+    direct: overrideOf(input.direct),
+    group: overrideOf(input.group),
   });
+}
+
+/** 一份"全默认"的作用域（保守方向：仅名单内、不许命令）。 */
+function emptyScope() {
+  return {
+    mode: 'allowlist',
+    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
+    allowlist: { users: [] },
+  };
+}
+
+/**
+ * 全局层的"更保守"选择：两份不同时，拿谁当全局。
+ *
+ * 口径与 `evaluateAccess` 的放行条件对齐——**谁更不容易放行谁更保守**：
+ * - `allowlist` 比 `open` 保守（前者要名单、后者谁都进得来）；
+ * - 同为 `allowlist`：名单**更小**的更保守；
+ * - 同为 `open`：`defaultCanExecuteCommands` 为 false 的更保守。
+ *
+ * ⚠️ 这是**迁移时**挑一份当全局的启发式：两份**都会原样保留为覆盖**，
+ * 所以挑错也不改变任何人的实际判定（见 `scoped-config.mjs` 的迁移说明）。
+ *
+ * @param left - 归一化后的一份作用域。
+ * @param right - 另一份。
+ * @returns 更保守的那一份。
+ */
+function moreConservative(left, right) {
+  const rank = (scope) => (scope.mode === 'allowlist' ? 0 : 1);
+  if (rank(left) !== rank(right)) return rank(left) < rank(right) ? left : right;
+  if (left.mode === 'allowlist') {
+    const size = (scope) => scope.allowlist.users.length;
+    return size(left) <= size(right) ? left : right;
+  }
+  const canRun = (scope) => scope.open.defaultCanExecuteCommands === true;
+  if (canRun(left) !== canRun(right)) return canRun(left) ? right : left;
+  return left;
 }
 
 /**
@@ -141,6 +182,9 @@ export function validateAccessPolicy(input) {
  * - 缺失的名单 → 空名单（配合属主绕过，等价于"仅属主可用"）；
  * - 无法识别的条目直接丢弃。
  * 只有"压根没有策略对象"才返回 null（调用方回落"仅属主"）。
+ *
+ * 老数据（`{direct, group}` 两份平级）在这里**一次性迁成新形态**；迁移规则保证
+ * **每一层实际生效的判定不变**（两份相同就提成全局、不同就保留为覆盖）。
  *
  * @param input - 任意历史数据。
  * @returns 合法策略或 null。
@@ -169,24 +213,44 @@ export function normalizeAccessPolicy(input) {
       allowlist: { users: usersOf(allowlist.users) },
     };
   };
+  const layered = migrateToLayered(input, {
+    normalizeLayer: scopeOf,
+    defaultLayer: emptyScope,
+    pickGlobal: moreConservative,
+  });
   return Object.freeze({
-    direct: Object.freeze(scopeOf(input.direct)),
-    group: Object.freeze(scopeOf(input.group)),
+    global: Object.freeze(layered.global),
+    direct: layered.direct === null ? null : Object.freeze(layered.direct),
+    group: layered.group === null ? null : Object.freeze(layered.group),
   });
 }
 
 /**
- * 默认策略：私聊/群聊都只允许名单内用户，且默认不允许命令。
+ * 默认策略：全局"仅名单内 + 不许命令"，私聊/群聊都继承它。
+ *
+ * 加全局层之前是"私聊、群聊各一份相同的默认值"；现在是"一份全局 + 两层继承"。
+ * **开箱行为完全一样**（哪一层都是 allowlist + 空名单 = 仅属主可用），
+ * 但用户改一次全局就两层都跟着变。
  *
  * @returns 冻结的默认策略。
  */
 export function defaultAccessPolicy() {
-  const scope = () => ({
-    mode: 'allowlist',
-    open: { defaultCanExecuteCommands: false, commandPermissionOverrides: [] },
-    allowlist: { users: [] },
-  });
-  return validateAccessPolicy({ direct: scope(), group: scope() });
+  return validateAccessPolicy({ global: emptyScope(), direct: null, group: null });
+}
+
+/**
+ * 取某个会话类型**实际生效**的作用域（覆盖层继承全局）。
+ *
+ * 运行期与设置页都必须走这里：各写一份回落逻辑早晚会漂移成
+ * "设置页显示的是 A、运行时拦的是 B"——那是安全面上最难查的形态。
+ *
+ * @param policy - 策略（老/新形态都接，内部归一化）。
+ * @param conversationType - 'direct' | 'group'。
+ * @returns 生效的作用域。
+ */
+export function scopeFor(policy, conversationType) {
+  const normalized = normalizeAccessPolicy(policy) ?? defaultAccessPolicy();
+  return resolveScope(normalized, conversationType) ?? emptyScope();
 }
 
 /**
@@ -222,7 +286,8 @@ export function evaluateAccess({
     .filter(Boolean);
   if (candidates.length === 0) return { allowed: false, reason: ACCESS_RESULTS.NOT_LISTED };
 
-  const scope = normalized[conversationType];
+  // 生效的那一层：私聊/群聊没单独设置时自动用全局（`scopeFor` 里做了回落）。
+  const scope = scopeFor(normalized, conversationType);
   const users = scope.mode === 'open' ? scope.open.commandPermissionOverrides : scope.allowlist.users;
   const matched = users.filter((user) => candidates.includes(user.id));
 
@@ -253,11 +318,13 @@ export function evaluateAccess({
 export function describeAccessScope(policy, conversationType) {
   const normalized = normalizeAccessPolicy(policy);
   if (!normalized) return '未设置（仅属主可用）';
-  const scope = normalized[conversationType];
+  const scope = scopeFor(normalized, conversationType);
+  const inherited = isInherited(normalized, conversationType) ? '（继承全局）' : '';
   if (scope.mode === 'open') {
-    return `任何人可用（命令默认${scope.open.defaultCanExecuteCommands ? '允许' : '不允许'}）`;
+    return `任何人可用（命令默认${scope.open.defaultCanExecuteCommands ? '允许' : '不允许'}）${inherited}`;
   }
   const count = scope.allowlist.users.length;
   // 名单为空 + allowlist 模式下，只有属主能对话（属主由调用方绕过）。
-  return count === 0 ? '仅属主可用' : `名单内 ${count} 人可用`;
+  const text = count === 0 ? '仅属主可用' : `名单内 ${count} 人可用`;
+  return `${text}${inherited}`;
 }

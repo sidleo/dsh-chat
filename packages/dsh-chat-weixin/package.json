@@ -1,6 +1,6 @@
 {
   "name": "@sidleo3/dsh-chat-weixin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "dsh-chat 微信渠道插件（iLink 扫码登录、长轮询、私聊收发）",
   "license": "MIT",

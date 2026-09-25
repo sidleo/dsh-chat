@@ -297,7 +297,14 @@ export function createFeishuController({ deps, logger = console, config = {}, in
       ownerOpenIds: Object.freeze([...bot.ownerOpenIds]),
       groupResponseMode: bot.groupResponseMode,
       groupTopicReply: bot.groupTopicReply,
-      stepPush: Object.freeze({ direct: bot.stepPushDirect, group: bot.stepPushGroup }),
+      // 三层：global 是底板；direct/group 可能在 inherit 里（= 继承全局）。
+      stepPush: Object.freeze({
+        global: bot.stepPushGlobal,
+        direct: bot.stepPushDirect,
+        group: bot.stepPushGroup,
+      }),
+      // 哪一层是继承（界面据此显示「继承全局」与「恢复继承」按钮）。
+      stepPushInherit: Object.freeze([...(bot.stepPushInherit ?? [])]),
       // 卡片友好回答（默认开）：只影响注入会话的那段提示词，见 index.mjs 的 card-answer 段。
       cardAnswer: bot.cardAnswer !== false,
       // lark-cli 的身份策略（分层；默认全局只用应用身份）；细节（profile / whoami）走 bot.lark-identity.get。
@@ -1381,6 +1388,10 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         patchRuntime(payload.botId, {
           stepPushDirect: saved.stepPushDirect,
           stepPushGroup: saved.stepPushGroup,
+          // ⚠️ 三层一起就地改：只改值不改继承关系的话，桥仍按旧的 inherit 取值
+          // （表现就是「设置页改了、群里没变」——本项目栽过的那类静默失效）。
+          stepPushGlobal: saved.stepPushGlobal,
+          stepPushInherit: [...(saved.stepPushInherit ?? [])],
         });
         const label = STEP_PUSH_FIELD_OPTIONS.find((item) => item.value === payload.value)?.label ?? payload.value;
         return {
@@ -1411,6 +1422,10 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         patchRuntime(payload.botId, {
           stepPushDirect: saved.stepPushDirect,
           stepPushGroup: saved.stepPushGroup,
+          // ⚠️ 三层一起就地改：只改值不改继承关系的话，桥仍按旧的 inherit 取值
+          // （表现就是「设置页改了、群里没变」——本项目栽过的那类静默失效）。
+          stepPushGlobal: saved.stepPushGlobal,
+          stepPushInherit: [...(saved.stepPushInherit ?? [])],
         });
         return {
           ok: true,

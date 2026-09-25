@@ -18,8 +18,9 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 
 import {
-  defaultAccessPolicy, describeAccessScope, normalizeAccessPolicy, validateAccessPolicy,
+  defaultAccessPolicy, describeAccessScope, normalizeAccessPolicy, scopeFor, validateAccessPolicy,
 } from '../shared/access-policy.mjs';
+import { resolveScope, writeScope } from '../shared/scoped-config.mjs';
 import { normalizeContextConfig, TARGET_LIMIT } from '../shared/context-enhancement.mjs';
 import { sectionsFor } from '../shared/panel-sections.mjs';
 import { botModelForSelection, normalizeBotModel } from './bot-model.mjs';
@@ -153,7 +154,11 @@ function contextPanelState({ record, key, isOwner }) {
   const target = conversationTarget(key);
   if (!target) return null;
   const config = normalizeContextConfig(record.contextEnhancement);
-  const scope = target.kind === 'group' ? config.group : config.direct;
+  /**
+   * 场合层可能**继承全局**（`null`）——所以取**生效值**再问它开没开。
+   * 直接读 `config.group.enabled` 会在继承时读到 null 而崩（"继承中"被当成"未配置"）。
+   */
+  const scope = resolveScope(config, target.kind) ?? config.global;
   const kindLabel = target.kind === 'group' ? '群聊' : '私聊';
   const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
   const options = [
@@ -192,7 +197,8 @@ function policyPanelState({ record, conversationType, isOwner }) {
   if (isOwner !== true) return null;
   if (conversationType !== 'direct' && conversationType !== 'group') return null;
   const stored = normalizeAccessPolicy(record.accessPolicy);
-  const scope = (stored ?? defaultAccessPolicy())[conversationType];
+  // 生效值走 `scopeFor`：私聊/群聊没单独设置时回落全局（回落逻辑只有这一份实现）。
+  const scope = scopeFor(stored ?? defaultAccessPolicy(), conversationType);
   const kindLabel = conversationType === 'group' ? '群聊' : '私聊';
   return {
     // `stored === null` = 从没设过（口径是"仅属主可用"）：如实显示成未设置，不冒充某种模式。
@@ -311,7 +317,8 @@ export function createPanelService({
     }
     const base = normalizeAccessPolicy(record.accessPolicy) ?? defaultAccessPolicy();
     const kindLabel = conversationType === 'group' ? '群聊' : '私聊';
-    const before = base[conversationType].mode;
+    // 改之前"实际生效"的模式（可能是从全局继承来的）。
+    const before = scopeFor(base, conversationType).mode;
     if (value === 'open' && confirm !== true) {
       return {
         field,
@@ -327,11 +334,18 @@ export function createPanelService({
       return { field, value, message: `${kindLabel}的访问策略本来就是「${
         value === 'open' ? '任何人可用' : '仅名单内可用'}」，没有改动。` };
     }
-    // 只改这一个会话类型的 mode，名单与命令权限照旧（用严格校验产出合法策略）。
-    const next = validateAccessPolicy({
-      ...base,
-      [conversationType]: { ...base[conversationType], mode: value },
-    });
+    /**
+     * 只改这一个会话类型：**把它变成覆盖层**（原来是"继承全局"的话，就以当前生效的那份为底板）。
+     *
+     * 为什么以"生效值"为底板而不是重写一份默认：用户看到的是继承来的那份，
+     * 他改模式时心里想的也是"把**现在这样**改成 open"——名单必须跟着过去，
+     * 否则"继承全局 + 名单里有 3 个人"改成 open 会连带把名单清空（那是另一件事）。
+     */
+    const effective = scopeFor(base, conversationType);
+    const next = validateAccessPolicy(writeScope(base, conversationType, {
+      ...effective,
+      mode: value,
+    }));
     const saved = await settings.write(channelId, botId, { accessPolicy: next });
     return {
       field,
@@ -353,7 +367,8 @@ export function createPanelService({
       throw panelError('chat/bad-request', '认不出这个会话的平台 id，没法给它单独设上下文增强。');
     }
     const config = normalizeContextConfig(record.contextEnhancement);
-    const scope = target.kind === 'group' ? config.group : config.direct;
+    // 复制起点用**生效值**：场合层可能继承全局（null），要复制的是用户实际看到的那份。
+    const scope = resolveScope(config, target.kind) ?? config.global;
     const kindLabel = target.kind === 'group' ? '本群' : '本私聊';
     const own = config.targets.find((item) => item.kind === target.kind && item.id === target.id) ?? null;
     /** 复制出来的那一条：`label` 留空（备注名由用户在设置页起），`enabled` 明确打开。 */

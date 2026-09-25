@@ -80,10 +80,29 @@ export function normalizeBot(value, { legacy = false } = {}) {
   if (!appId || ownerOpenIds.length === 0 || !id || !secretRef) return null;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(secretRef)) return null;
 
-  // 过程展示：新字段优先，否则从旧的全局字段迁移。
+  /**
+   * 过程展示：现在是**三层**（全局 + 私聊/群聊，后两层可继承）。
+   *
+   * 老数据只有 `stepPushDirect` / `stepPushGroup` 两份平级，按"尽量保留现有差异"迁移：
+   * - 两份相同 → 提成全局，两层都继承（以后改全局两层都变）；
+   * - 两份不同 → 全局取**私聊那一份**，两份**原样保留为覆盖**（实际展示方式一个都不变）。
+   *
+   * `stepPushInherit` 显式记着哪一层是继承——**不靠"值恰好等于全局"去猜**：
+   * 用户完全可能手动把私聊设成与全局相同的值，那不是继承（改全局时它不该跟着动）。
+   */
   const hasNewFields = value.stepPushDirect !== undefined || value.stepPushGroup !== undefined;
   const migrated = normalizeStepPushMode(value.stepPushMode);
   const legacyMode = value.stepPush === true ? migrated : DEFAULT_STEP_PUSH;
+  const directMode = hasNewFields ? normalizeStepPushMode(value.stepPushDirect) : legacyMode;
+  const groupMode = hasNewFields ? normalizeStepPushMode(value.stepPushGroup) : legacyMode;
+  const explicitInherit = Array.isArray(value.stepPushInherit)
+    ? value.stepPushInherit.filter((key) => key === 'direct' || key === 'group')
+    : null;
+  const stepPushGlobal = value.stepPushGlobal !== undefined
+    ? normalizeStepPushMode(value.stepPushGlobal)
+    : directMode;
+  const stepPushInherit = explicitInherit
+    ?? (directMode === groupMode ? ['direct', 'group'] : []);
 
   /**
    * 身份策略：**分层**配置优先；没有就按旧字段迁移。
@@ -111,12 +130,11 @@ export function normalizeBot(value, { legacy = false } = {}) {
     groupResponseMode: value.groupResponseMode === 'all' ? 'all' : 'mention',
     groupTopicReply: value.groupTopicReply === true,
     groupMessagePermissionGranted: value.groupMessagePermissionGranted === true,
-    stepPushDirect: hasNewFields
-      ? normalizeStepPushMode(value.stepPushDirect)
-      : legacyMode,
-    stepPushGroup: hasNewFields
-      ? normalizeStepPushMode(value.stepPushGroup)
-      : legacyMode,
+    // 三层：global 是底板；direct/group 若在 stepPushInherit 里 = 继承全局。
+    stepPushGlobal,
+    stepPushInherit: Object.freeze(stepPushInherit),
+    stepPushDirect: stepPushInherit.includes('direct') ? stepPushGlobal : directMode,
+    stepPushGroup: stepPushInherit.includes('group') ? stepPushGlobal : groupMode,
     larkIdentity,
     larkUserOpenId,
     // 卡片友好回答：缺省开（缺项 = 生效，与面板显示项同一条归一化方向）。
@@ -219,10 +237,25 @@ export function createFeishuConfigStore({ path, logger = console } = {}) {
      * @param modes - { direct, group }，各自为三态之一。
      * @returns 写入后的机器人配置。
      */
-    async setStepPush(botId, modes) {
-      const direct = normalizeStepPushMode(modes?.direct);
-      const group = normalizeStepPushMode(modes?.group);
-      return this.saveBot({ id: botId, stepPushDirect: direct, stepPushGroup: group });
+    async setStepPush(botId, modes, options = {}) {
+      const current = this.get(botId) ?? {};
+      const explicitInherit = Array.isArray(options.inherit) ? options.inherit : null;
+      /**
+       * ⚠️ 写值时必须把这两层标成**覆盖**（从 `stepPushInherit` 里去掉）。
+       *
+       * 只写值、inherit 仍记着"继承"的话，读回来又会被全局覆盖掉——
+       * 表现为"设置页改了、群里没变"，正是本项目栽过的那类静默失效。
+       */
+      const touched = ['direct', 'group'].filter((key) => modes?.[key] !== undefined);
+      const inherit = explicitInherit
+        ?? (current.stepPushInherit ?? []).filter((key) => !touched.includes(key));
+      return this.saveBot({
+        id: botId,
+        stepPushGlobal: modes?.global ?? current.stepPushGlobal,
+        stepPushInherit: inherit,
+        stepPushDirect: modes?.direct ?? current.stepPushDirect,
+        stepPushGroup: modes?.group ?? current.stepPushGroup,
+      });
     },
 
     /**

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { scopeFor } from '../packages/dsh-chat/shared/access-policy.mjs';
 import { createPanelService, workspaceCandidates } from '../packages/dsh-chat/host/panel.mjs';
 import { chatKeyLabel } from '../packages/dsh-chat/host/session-keys.mjs';
 
@@ -797,8 +798,9 @@ test('访问策略下拉：放宽到"任何人可用"必须先确认一次；只
     channelId: 'feishu', botId: 'bot_1', key: 'group:oc_g', field: 'policy', value: 'open',
     isOwner: true, conversationType: 'group', confirm: true,
   });
-  assert.equal(fresh.state.accessPolicy.group.mode, 'open');
-  assert.equal(fresh.state.accessPolicy.direct.mode, 'allowlist', '另一份补上默认值（策略必须成对完整）');
+  assert.equal(scopeFor(fresh.state.accessPolicy, 'group').mode, 'open');
+  // 层结构：global 是底板，direct 可以继承它——断言生效值（原来断言的是扁平字段）。
+  assert.equal(scopeFor(fresh.state.accessPolicy, 'direct').mode, 'allowlist', '另一份的生效值保持保守默认');
 
   // ⑥ 门禁与非法值。
   await assert.rejects(

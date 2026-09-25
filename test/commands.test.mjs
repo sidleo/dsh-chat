@@ -544,7 +544,9 @@ test('访问策略自助：/whoami 说明判定，/allow 与 /deny 只有属主�
   assert.match(added.reply, /已把 ou_alice 加入私聊名单/);
   const patch = calls.writes.at(-1).patch.accessPolicy;
   assert.deepEqual(patch.direct.allowlist.users, [{ id: 'ou_alice', canExecuteCommands: false }]);
-  assert.equal(patch.group.mode, 'allowlist', '另一个作用域也要在（保存路径要求完整策略）');
+  // 层结构：global 必在（保存路径要求完整策略）；group 可以继承它。
+  assert.equal(patch.global.mode, 'allowlist', '全局层要在（保存路径要求完整策略）');
+  assert.equal(accessPolicy.scopeFor(patch, 'group').mode, 'allowlist', '另一个作用域的生效值与原来一致');
 
   // 带 --commands：允许执行命令。
   await registry.handle(context('/allow ou_bob --commands', { isOwner: true }));
