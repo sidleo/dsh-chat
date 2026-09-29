@@ -16,7 +16,7 @@ import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
-var HUB_VERSION = "0.2.1";
+var HUB_VERSION = "0.2.2";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";

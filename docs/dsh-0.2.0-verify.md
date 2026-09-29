@@ -9,8 +9,9 @@
 > 其中"反向验证"与"新单测是否真会红"两项另有一份**独立**证据（来自对抗性审查角色），已注明来源。
 > 凡是只有单方证据的，都写明了。
 
-验收对象：工作树即最终产物（未提交）。三个发布包版本 `0.2.1`。
-验收时间：2026-09-29 01:0x（Asia/Shanghai）　运行 DSH：`0.2.0-rc.1`（桌面端）
+验收对象：工作树即最终产物。三个发布包版本 `0.2.1`（首轮验收），随后**同一棵树**以 `0.2.2`
+重新发布（原因见 §6），并在 0.2.2 上**重跑了全部四条门禁**（结果同 §1）。
+验收时间：2026-09-29 01:0x（0.2.1）／09:2x（0.2.2 重跑，Asia/Shanghai）　运行 DSH：`0.2.0-rc.1`（桌面端）
 
 ---
 
@@ -99,3 +100,28 @@
    `session-badges.js` 那个 DOM hack 的**正规插槽**，真机看一眼会话行徽标即可判定。
 4. `docs/dsh-0.2.0-review.md` 里 S1–S9 建议级问题未修。
 5. 微信渠道**无**同类会话 id 取法路径（reviewer 已 grep 确认零命中），故未改动。
+
+---
+
+## 6. 发布记录：为什么 npm 上是 `0.2.2` 而不是 `0.2.1`
+
+第一次发布（`0.2.1`）时 registry 对 **`@sidleo3/dsh-chat`（hub）** 返回了
+`Your package is being processed and may take a few minutes to become available.`，
+之后该版本**始终没有上线**（packument 无 0.2.1、tarball 404），但**重发被拒**：
+
+```
+409 Conflict - PUT https://registry.npmjs.org/@sidleo3%2fdsh-chat
+Cannot publish over previously staged version "0.2.1".
+```
+
+- 同一批次的 `@sidleo3/dsh-chat-feishu@0.2.1` 与 `@sidleo3/dsh-chat-weixin@0.2.1`
+  **正常上线**（只是传播花了约 5–8 分钟）——所以不是账号或网络问题，是 hub 那一条记录卡住了。
+- 那条暂存记录**无法从 CLI 管理**：`~/ .npmrc` 里那个 `npm_…` token 查
+  `GET /-/stage`、`GET /-/stage?package=@sidleo3/dsh-chat`（带/不带 URL 编码）**都是 `total: 0`**；
+  npm 11.11 与 `npx npm@12`（`stage list/list --json`）结论一致；npm 12 的 publish 路径同样 409。
+  本机 npm 11.11 的代码里**根本没有** staging 支持 → 那句 "being processed" 是**服务端**给的。
+- **处置**：三个包统一升到 **`0.2.2`** 重新发布（绕开那条孤儿记录），`latest` 三个包一致为 `0.2.2`。
+  升版后**重跑了全部四条门禁**（§1 那四条），结果一致（`check:dsh` 第 10 步自报 `hubVersion=0.2.2`）。
+- **遗留**：npm 上 `0.2.1` 只有两个渠道包、没有 hub。要清理那条 hub 的 0.2.1 暂存记录，
+  需要账号侧操作（npmjs.com 的包页面 / npm support）——CLI 用现有 token 够不着。
+  在那之前，**装插件请用 `0.2.2`**（三个包都有）。
