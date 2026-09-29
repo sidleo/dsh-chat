@@ -16,7 +16,7 @@ import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
-var HUB_VERSION = "0.2.0";
+var HUB_VERSION = "0.2.1";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";
@@ -1303,7 +1303,8 @@ function createRpcCarrier(ctx, { logger = console } = {}) {
     const release = () => {
       if (!releases.delete(path)) return;
       try {
-        dispose?.();
+        Promise.resolve(dispose?.()).catch(() => {
+        });
       } catch {
       }
     };
@@ -3682,7 +3683,7 @@ var SOURCE_GUIDANCE_SECTION = "dsh-chat:source-guidance";
 var SOURCE_GUIDANCE_ORDER = 400;
 function sessionIdOf(context) {
   const agent = context?.agent;
-  const id = agent?.id ?? agent?.session?.id;
+  const id = agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
   return typeof id === "string" && id ? id : null;
 }
 function installSourceGuidanceSection(ctx, guidance, { logger = console } = {}) {
@@ -3725,7 +3726,19 @@ function installDeliverableSection(ctx, { isChatSession, logger = console } = {}
     return [
       "\u628A\u6587\u4EF6\u4EA4\u7ED9\u7528\u6237\u7684**\u552F\u4E00**\u65B9\u5F0F\u662F\uFF1A\u5728**\u5F53\u8F6E**\u8C03\u7528 `present`\uFF0C\u5728 `files` \u91CC\u7ED9\u51FA\u6587\u4EF6\u7684**\u7EDD\u5BF9\u8DEF\u5F84**\u2014\u2014\u63D2\u4EF6\u4F1A\u628A\u58F0\u660E\u7684\u6587\u4EF6\u4F5C\u4E3A\u9644\u4EF6\u5355\u72EC\u53D1\u5230\u8FD9\u4E2A\u804A\u5929\u91CC\u3002",
       "\u53EA\u5728\u56DE\u590D\u91CC\u5199\u8DEF\u5F84\u3001\u6216\u5199\u6210 `[\u540D\u5B57](\u76F8\u5BF9\u8DEF\u5F84)` \u8FD9\u79CD\u94FE\u63A5\uFF0C**\u4E00\u4E2A\u5B57\u8282\u90FD\u53D1\u4E0D\u51FA\u53BB**\uFF08\u804A\u5929\u91CC\u7684\u76F8\u5BF9\u94FE\u63A5\u4E5F\u70B9\u4E0D\u5F00\uFF09\u3002",
-      "\u6240\u4EE5\u8FD9\u8F6E\u4EA7\u51FA\u4E86\u7528\u6237\u53EF\u80FD\u8981\u7528\u7684\u6587\u4EF6\uFF08\u62A5\u8868 / SQL / \u56FE\u8868 / \u5BFC\u51FA\u2026\uFF09\u5C31 `present` \u4E00\u4E0B\uFF1B\u4E34\u65F6\u4E2D\u95F4\u6587\u4EF6\u4E0D\u7528\u58F0\u660E\uFF0C\u522B\u5237\u5C4F\u3002"
+      /**
+       * ⚠️ **别把"脚本 / SQL"列进可交付清单**（真机事故）。
+       *
+       * 早先这句写的是「报表 / SQL / 图表 / 导出…就 present 一下」——**直接把 SQL 点了名**。
+       * 日志里它照着做过：发过 `前天销售额_20260922.sql`、`yhq.py` 到群里。
+       * 而群聊的上下文增强规则要求"过程脚本与 SQL 文件不交"，两段提示词当场**互相矛盾**，
+       * 模型听哪一份都有可能。这里只列**用户要用的成品**，并显式说明脚本类默认不交，
+       * 让机制说明与用户规则**方向一致**（谁先谁后都不至于打架）。
+       * 例外的口子留给"用户明确要"——那种情况下交出脚本是对的。
+       */
+      "\u6240\u4EE5\u8FD9\u8F6E\u4EA7\u51FA\u4E86\u7528\u6237\u53EF\u80FD\u8981\u7528\u7684**\u6210\u54C1**\uFF08\u62A5\u8868 / \u56FE\u8868 / Excel / \u5BFC\u51FA\u6570\u636E\u2026\uFF09\u5C31 `present` \u4E00\u4E0B\u3002",
+      "**\u811A\u672C\u7C7B\u4E0D\u7B97\u6210\u54C1**\uFF1A\u8FC7\u7A0B\u7528\u7684 `.sql` / `.py` / `.sh`\u3001\u4E34\u65F6 JSON\u3001\u65E5\u5FD7\u3001\u4E2D\u95F4\u6570\u636E\u9ED8\u8BA4**\u4E0D\u8981** `present`\uFF0C\u53EA\u5728\u7528\u6237\u660E\u786E\u8981\u811A\u672C\u65F6\u624D\u4EA4\uFF08\u90A3\u65F6\u8FDE\u540C\u5185\u5BB9\u4E00\u8D77\u5148\u81EA\u67E5\uFF1A\u4E0D\u5F97\u542B\u672C\u673A\u8DEF\u5F84\u3001\u51ED\u636E\u6216\u5185\u90E8\u4FE1\u606F\uFF09\u3002",
+      "\u4E34\u65F6\u4E2D\u95F4\u6587\u4EF6\u4E0D\u7528\u58F0\u660E\uFF0C\u522B\u5237\u5C4F\u3002"
     ].join("\n");
   };
   const register = () => systemPrompt.section({
@@ -4137,6 +4150,9 @@ var MAX_ASSISTANT_TEXT = 2e5;
 var STREAM_CLOSE_GRACE_MS = 1e3;
 var TURN_IDLE_TIMEOUT_MS = 15 * 6e4;
 var TURN_TOTAL_TIMEOUT_MS = 2 * 60 * 6e4;
+function sessionIdOfAgent(agent) {
+  return agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
+}
 function sessionError(error, fallbackCode = "chat/session-failed") {
   const code = typeof error?.code === "string" ? error.code : fallbackCode;
   const wrapped = new Error(typeof error?.message === "string" && error.message ? error.message : "\u4F1A\u8BDD\u64CD\u4F5C\u5931\u8D25\u3002");
@@ -4874,14 +4890,14 @@ ${result.text ?? ""}`.trim(),
     }
     const locateFor = (request) => {
       if (typeof interactions?.handle !== "function") return null;
-      const sessionId = request?.agent?.session?.id;
+      const sessionId = sessionIdOfAgent(request?.agent);
       const located = store?.locate?.(sessionId);
       if (!located) return null;
       return interactions.has?.(located.channelId) ? located : null;
     };
     const offApproval = ctx.on("approval/request", async (request, next) => {
       const target = locateFor(request);
-      logger.info?.(`[dsh-chat] \u6536\u5230\u5BA1\u6279\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${request?.agent?.session?.id ?? "\u672A\u77E5"} \u5DE5\u5177=${request?.toolName ?? "?"} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
+      logger.info?.(`[dsh-chat] \u6536\u5230\u5BA1\u6279\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${sessionIdOfAgent(request?.agent) ?? "\u672A\u77E5"} \u5DE5\u5177=${request?.toolName ?? "?"} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
       if (!target) return next();
       try {
         const outcome = await interactions.handle({
@@ -4899,7 +4915,7 @@ ${result.text ?? ""}`.trim(),
     }, { prepend: true });
     const offQuestions = ctx.on("user-questions/request", async (request, next) => {
       const target = locateFor(request);
-      logger.info?.(`[dsh-chat] \u6536\u5230\u63D0\u95EE\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${request?.agent?.session?.id ?? "\u672A\u77E5"} \u95EE\u9898\u6570=${request?.questions?.length ?? 0} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
+      logger.info?.(`[dsh-chat] \u6536\u5230\u63D0\u95EE\u8BF7\u6C42\uFF1A\u4F1A\u8BDD=${sessionIdOfAgent(request?.agent) ?? "\u672A\u77E5"} \u95EE\u9898\u6570=${request?.questions?.length ?? 0} \u8BA4\u9886=${target ? "\u662F" : "\u5426"}`);
       if (!target) return next();
       try {
         const answers = await interactions.handle({

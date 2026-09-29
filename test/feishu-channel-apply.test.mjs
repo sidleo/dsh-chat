@@ -210,3 +210,48 @@ test('解析不到 profile 时：环境事实不注入这个键，提示词也�
   assert.match(text, /~\/\.local\/bin/, '要给出可行动的修法');
   assert.match(text, /--as bot/, '身份那两条硬规矩仍然要说');
 });
+
+/**
+ * 会话 id 的取法：本文件三处（会话环境事实 / 身份提示词段 / 卡片友好回答段）必须一致。
+ *
+ * DSH 0.2.0 里面向插件的 `Agent` 接口只声明 `{ readonly id: SessionId }`，`.session` 是运行时
+ * 内部实现带着的。三处取不到 id 都是**静默少给东西**：模型拿不到 profile 与身份策略，
+ * 照旧乱用 lark-cli（门禁那边同一份 id 也拿不到）。所以 `agent.id` 与旧形态都得认。
+ */
+test('会话 id 取法：agent.id（0.2.0 形态）与 agent.session.header.id 都认，三处一致', () => {
+  const ownership = (sessionId) => (sessionId === SESSION ? OWNER : null);
+
+  const envFake = createFakeCtx();
+  registerShellFacts(envFake.ctx, () => ownership);
+  const contributor = envFake.contributors.get('dsh-chat-feishu');
+
+  const textFake = createFakeCtx();
+  installLarkIdentitySection(textFake.ctx, () => ownership);
+  const identity = textFake.sections.get('dsh-chat-feishu:lark-cli-identity');
+
+  const cardFake = createFakeCtx();
+  installCardAnswerSection(cardFake.ctx, {
+    ownershipOf: () => ownership,
+    botOf: () => ({ cardAnswer: true }),
+  });
+  const card = cardFake.sections.get('dsh-chat-feishu:card-answer');
+
+  for (const [label, agent] of [
+    ['agent.id（0.2.0 的接口形态）', { id: SESSION }],
+    ['agent.session.header.id（旧形态）', { session: { header: { id: SESSION } } }],
+    ['agent.session.id', { session: { id: SESSION } }],
+  ]) {
+    assert.deepEqual(contributor.resolve({ agent }), {
+      DSH_CHAT_LARK_PROFILE: PROFILE,
+      DSH_CHAT_LARK_IDENTITY: 'bot',
+    }, `${label}：会话环境事实`);
+    assert.match(identity.text({ agent }), new RegExp(PROFILE), `${label}：身份策略提示词段`);
+    assert.match(card.text({ agent }), /飞书卡片/, `${label}：卡片友好回答段`);
+  }
+
+  // 反方向：不是本渠道的会话照旧什么都不给（别把取法放宽成"谁的都算"）。
+  assert.deepEqual(contributor.resolve({ agent: { id: 'session-other' } }), {});
+  assert.deepEqual(contributor.resolve({ agent: { session: { header: { id: 'session-other' } } } }), {});
+  assert.equal(identity.text({ agent: {} }), '');
+  assert.equal(card.text({ agent: {} }), '');
+});

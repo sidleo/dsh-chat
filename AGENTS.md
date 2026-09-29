@@ -65,8 +65,27 @@ npm run check        # build + test + 打包自检（含"渠道不得 import hub
 npm run check:layout # 只跑布局守门：真实组件在 549/360/320px 下渲染，断言不溢出、不逐字竖排
 npm run rehearsal    # 离线端到端演练：真实 hub + 真实飞书卡片 + 脚本化假 DSH（不联网、不用凭据）；
                      # 逐条打印 ✅/❌，失败退出码 1；改完 host/卡片先跑它，再重启 DSH 做真机验证
+npm run check:dsh    # 真机兼容门禁：在**本机装着的 DSH** 上真启动一次（临时 DSH_HOME + 临时 profile，
+                     # 不碰 ~/.dsh、不联网、不用凭据）：装包预检 → 合成树 → 起 web → hub.log 就绪 →
+                     # 客户端插件图含本插件 → 设置页那条 RPC 线路真的通。本机没装 dsh 时跳过（退出码 0）。
+                     # 它**不在** `npm run check` 里（check 要快、无副作用）：动 manifest / 注入 / 接线 /
+                     # 升级 DSH 之后单独跑它。
 DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额外检查双绑
 ```
+
+**DSH 版本兼容（2026-09 核实，DSH 0.2.0-rc.1）**：0.1.5-rc.2 → 0.2.0-rc.1 **没有破坏性改动**，
+本插件在 0.1.x 与 0.2.x 上都能跑，所以 `engines.dsh` 保持 `>=0.1.5-rc.2`、**故意不声明 DSH
+peerDependencies**（声明了会把 0.1.x 用户挡在安装门外）。两点依据，别再凭印象改：
+① DSH 的安装/启动预检（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`）**只读
+`peerDependencies` 里的 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`，完全不看 `engines.dsh`**；
+市场侧（dshmarket）的判定按口径也用 `semver.satisfies(v, range, { includePrerelease: true })`
+（**本机没装市场包，这句未能就地复核**；上面那半句是用 DSH 自带的 semver 7.8.5 实跑过的）。
+② 0.2.0 里面向插件的 `Agent` 接口**只声明 `{ readonly id }`**（`.session` 移到了内部的
+`runtime-types` 增量声明里，运行时仍带 `this.session`）——**取会话 id 一律先读 `agent.id`，
+再退回 `agent.session?.header?.id`**：`lark-guard` 拿不到 sessionId 就 `return null`（放行），
+所以取法写错 = **安全门禁静默失效**。
+逐项证据见 `docs/dsh-0.2.0-compat.md`，验证记录见 `docs/dsh-0.2.0-verify.md`、
+对抗性审查见 `docs/dsh-0.2.0-review.md`。
 
 ## 上线与排查
 
@@ -106,6 +125,12 @@ DSH_CHAT_PROFILE_MANIFEST=~/.dsh/profiles/web/package.json npm run check   # 额
   所以把机制明说（绝对路径 / 只说路径等于没发 / 临时中间文件不用声明）。
   ⚠️ 这一段与增强提示词**分开**：那是**用户可配置的内容**（登记表里有值才渲染），
   这是**机制**——只要会话绑在我们某个聊天上就该有（`sessionStore.locate(sessionId)` 同步判定）。
+  ⚠️ **这一段正文里明确写了「脚本类不算成品」**（过程用的 `.sql` / `.py` / `.sh`、临时 JSON、日志、
+  中间数据默认**不要** present，只在用户明确要脚本时才交）——起因是它早先点名了 SQL，
+  而群聊的上下文增强规则要求"过程脚本与 SQL 文件不交"，两段提示词当场互相矛盾
+  （真机日志里确实发过 `前天销售额_20260922.sql`、`yhq.py` 到群里）。
+  改这段正文时**必须同时改 `test/prompt-context.test.mjs` 里钉住它的断言**，并且**不要**把
+  "报表/图表/Excel/导出数据"这些**成品**又写回脚本类里去——两份提示词方向必须一致。
 - **回复本身也可以「按卡片来写」**（「卡片友好回答」，默认**开**）：答案一直渲染进卡片的 `markdown` 组件，
   所以插件往会话的系统提示词里注入一段写作建议（`dsh-chat-feishu:card-answer`，order 420）：
   数据用标准 MD 表但**一张表最多 5 行**、正文**别用 `#`/`##` 当标题**（卡片文档明确「字号过大显丑」）、

@@ -62,6 +62,14 @@ test('提示词段：按 agent 求值，只对我们登记过的会话有内容'
   assert.equal(systemPrompt.assembleFor({ id: 'session-im' }), '在这个群里说话短一点');
   assert.equal(systemPrompt.assembleFor({ session: { id: 'session-im' } }),
     '在这个群里说话短一点', 'agent.session.id 的形态也认');
+  /**
+   * `agent.session.header.id`：旧取法用的形态，必须继续认。0.2.0 里面向插件的 `Agent` 接口
+   * 只声明 `{ readonly id: SessionId }`（`.session` 是运行时内部实现带着的），所以新取法是
+   * `agent.id` 优先、再退回这一形态——**两边都得能取到**：取不到就是静默失效
+   * （段恒为空串，而设置页里那段增强提示词明明写着）。
+   */
+  assert.equal(systemPrompt.assembleFor({ session: { header: { id: 'session-im' } } }),
+    '在这个群里说话短一点', 'agent.session.header.id 的形态也认');
 
   // 关闭增强：登记清空 → 段跟着变空（所以"关掉"是立刻生效的）。
   guidance.publish('session-im', '');
@@ -113,11 +121,26 @@ test('交付文件说明段：只有我们的聊天会话有，且与增强提�
   assert.equal(section.order > SOURCE_GUIDANCE_ORDER, true, '排在增强提示词之后');
   assert.equal(section.text({ agent: { id: 'session-other' } }), '', '不是我们的会话就不出这段');
   assert.equal(section.text({ agent: {} }), '', '没有会话 id 时也不出');
+  // 旧形态（`agent.session.header.id`）同样要认得——取不到 id 就等于"这段说明静默消失"。
+  assert.match(section.text({ agent: { session: { header: { id: 'session-ours' } } } }),
+    /`present`/, 'agent.session.header.id 的形态也认');
 
   const text = section.text({ agent: { id: 'session-ours' } });
   assert.match(text, /`present`/, '要明说唯一的方式是 present');
   assert.match(text, /绝对路径/, '路径要给绝对的');
   assert.match(text, /一个字节都发不出去/, '只说路径/相对链接是发不出去的（真机就是这么丢的）');
+
+  /**
+   * ⚠️ **不许把"脚本 / SQL"列成可交付的东西**（真机事故）。
+   *
+   * 这句原本写的是「报表 / SQL / 图表 / 导出…就 present 一下」——**直接把 SQL 点了名**，
+   * 于是它真的把 `xxx.sql`、`yhq.py` 发进了群。而群聊的上下文增强规则要求"过程脚本不交"，
+   * 两段系统提示词当场互相矛盾。这条钉住：机制说明只能列**用户要用的成品**。
+   */
+  assert.equal(/SQL/.test(text.split('**脚本类不算成品**')[0]), false,
+    '可交付清单里不能出现 SQL（它属于过程脚本，不是成品）');
+  assert.match(text, /脚本类不算成品/, '要显式说明脚本类默认不交');
+  assert.match(text, /用户明确要/, '留一个"用户明确要才交"的例外口子');
 
   // 判定函数抛错时不影响提示词组装（宁可少一段说明，也不要让组装挂掉）。
   const brokenPrompt = fakeSystemPrompt();

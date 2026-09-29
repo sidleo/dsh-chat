@@ -814,8 +814,16 @@ const CSS = `
   font-size: 12px;
   color: var(--dsw-alias-state-warn-primary);
 }
+/* 主按钮（保存 / 发送）。
+ *
+ * ⚠️ 背景**不能**用 --dsw-alias-brand-primary：那是**前景语义**的品牌色，
+ * 深色主题下取值 #f9fafb（近白），配上这里的 color:#fff 就是**白底白字**——
+ * 真机上按钮只剩一块白色空白矩形，文字完全看不见（用户报的就是这个）。
+ * 与 .dchat-buttonDangerSolid 同一条口径：实底按钮用**状态语义**的底色
+ * （state-business-primary，深色 #7aaaff，与 DSH 自己的主按钮同色）。
+ * .dchat-buttonPrimary 是页面上唯一把 brand 色当背景用的地方，其余都是边框/文字。 */
 .dchat-buttonPrimary {
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   border-color: transparent;
   color: #fff;
 }

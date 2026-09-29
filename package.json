@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-workspace",
-  "version": "0.0.5",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "DSH 聊天机器人插件工作区：dsh-chat 管理入口 + 各聊天软件渠道插件",
@@ -9,6 +9,7 @@
     "test": "node --test test/*.test.mjs",
     "check": "npm run build && npm test && node scripts/verify-package.mjs && npm run check:layout",
     "check:layout": "node scripts/check-layout.mjs",
+    "check:dsh": "node scripts/check-dsh-compat.mjs",
     "rehearsal": "npm run build && node scripts/rehearsal.mjs"
   },
   "devDependencies": {

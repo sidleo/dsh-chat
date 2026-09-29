@@ -73,6 +73,57 @@ IM ↔ DSH 桥接需要哪些能力、数据放在哪里、边界怎么划"。
 | ~~「入站图片在非视觉模型下回退为文件」~~ | **已对齐**（P5⁺⁺）：不查模型目录，改用 Host 自己的拒绝信号——`session/prompt` 抛 `session/attachment-invalid` + `details.reason = MODEL_DOES_NOT_SUPPORT_IMAGES` 时，`sessions.ask()` 把图片块上传成同一会话的文件（`{type:'file',receiptId}`）重试一次，并补一段模型侧说明（"不要假设自己能直接看到图片内容"）。上游是自己写工作区文件，我们复用已有的 `uploadFile` 通道 |
 | `session-reply-recovery`（流中断后从历史补回答案） | 我们的失败路径已经有界（`stream-ended` 会如实返回空并留日志），要从历史补回就必须可靠区分"这一轮"与"上一轮"，判错会把上一轮答案当成本轮结果——风险大于收益 |
 
+## DSH 版本兼容：`engines.dsh: ">=0.1.5-rc.2"`（**0.1.5-rc.2 起，已在 0.2.0-rc.1 复核**）
+
+本插件在 DSH 0.1.x 与 0.2.x 上都能跑，所以 **`engines.dsh` 保持 `>=0.1.5-rc.2` 不动**，
+并且**故意不声明 DSH 的 `peerDependencies`**。三条依据（别凭印象改）：
+
+1. **DSH 的安装/启动预检根本不读 `engines`**：`@deepseek-ai/dsh-app-boot` 的
+   `evaluatePluginCompatibility(manifest, exemptions, runtimeVersion)` **只遍历 `peerDependencies`**，
+   而且只挑 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 这两个前缀（其余键 `continue` 跳过）；
+   清单里**没有 `peerDependencies` 字段时它直接返回 `undefined`**（= 没有兼容性问题）。
+   所以 `engines.dsh` 是**声明性**的，不参与安装/启动判定。
+2. **版本比较本身实测为真**：`semver.satisfies('0.2.0-rc.1', '>=0.1.5-rc.2', { includePrerelease: true })`
+   → `true`（用 DSH 自带那份 semver 7.8.5 跑的）。`includePrerelease: true` 是关键——预发布版本
+   默认不参与区间比较，带上它才成立；同一份源码里 `evaluatePluginCompatibility` 用的也是这个选项。
+   市场侧（dshmarket）判同一个 range 用的是同一条 semver 规则（本机没装市场包，这一条按既定口径
+   记录，未能就地复核；上面两句是真跑过的）。
+3. **声明 `peerDependencies` 反而有害**：一旦写了 `@deepseek-ai/dsh`，上面那个预检就会拿**本机运行
+   版本**去比它——写 `>=0.2.0-rc.1` 会把 0.1.x 用户直接挡在安装门外，写 `>=0.1.5-rc.2` 又只是把
+   `engines.dsh` 抄一遍、多一处要同步的地方。插件两边都工作，所以不写。
+
+### 0.2.0-rc.1 上复核过的契约事实（逐项对着装好的包读的）
+
+复核对象：`~/.local/lib/node_modules/@deepseek-ai/dsh`（0.2.0-rc.1）及其 `node_modules/@deepseek-ai/*`
+（`dsh-agent` / `dsh-system-prompt` / `dsh-api-gateway` / `dsh-client-connection` / `dsh-app-boot`）。
+本仓库依赖的这几条**都没变**：
+
+| 契约 | 0.2.0-rc.1 的实测形状 | 我们依赖它的地方 |
+|---|---|---|
+| `InvokeRemoteRequest` | `{ namespace, method, args, uplink?, peer?, signal? }`（`dsh-api-gateway/lib/types/types.d.ts`） | `host/sessions.mjs` 的 `gateway.invoke` / `gateway.stream` |
+| `PromptSection.text` | 仍是 `string \| ((context: AssembleContext) => string)`；`AssembleContext = { scope?, signal? }` 加上 `dsh-agent` 扩出来的 `agent` | 三段系统提示词段（hub 的增强段/交付说明段、飞书的身份段/卡片友好回答段） |
+| `assembleContextFor(agent, signal)` | 运行时仍返回 `{ agent, scope: agent, …(signal === undefined ? {} : { signal }) }`（`dsh-agent/lib/index.js`）——所以段文本里 `context.agent` 一定有值 | 段文本按 agent 求值（"这个会话有没有增强提示词"就靠它） |
+| `HostConnectionRpc` / `ConnectionFetchRoute` | 形状不变：`register({ path, methods, requestBody, fetch })` → 返回异步 disposer（`dsh-client-connection/lib/types/rpc.d.ts`） | `host/rpc.mjs` 的 `connection.fetch.register` |
+| 客户端 RPC 线路 | `connection.rpc.call(channel, endpoint, payload, signal)`：POST 到 `<channel>/<endpoint>`（去掉开头 `/`），请求体 `{ type:'client-request', rpcId, method: endpoint, payload }`，响应 `{ type:'server-response', rpcId, result }`（`dsh-client-connection/lib/client.js`） | `client/rpc.js`、设置页的每一次调用 |
+| `Agent`（面向插件的接口） | `dsh-agent/lib/types/types.d.ts` 里**只声明 `{ readonly id: SessionId }`**；`options` / `session` / `inbox` / `status` / `ctx` 来自 `lib/types/runtime-types.d.ts` 里 `declare module './types.ts'` 的增量（内部运行时面，不是插件该依赖的公开面） | 从组装上下文/工具执行上下文里取会话 id |
+
+⚠️ **最后一条是安全面**：会话 id 一律**先读 `agent.id`，再退回
+`agent.session?.header?.id ?? agent.session?.id`**——hub 的 `host/prompt-context.mjs`、飞书
+`host/index.mjs` 的三处（身份段 / 卡片友好回答段 / 会话环境事实）与 `host/lark-guard.mjs`。
+`lark-guard` 拿不到 sessionId 就是 `return null` = **放行**，所以读法写错 = "只用应用身份"
+那个开关静默失效（真机现场：设置页写着 bot-only，模型照样以用户身份把消息发了出去，
+日志里一个字都没有）。三种形态由单测钉住：`test/lark-guard.test.mjs`、
+`test/feishu-channel-apply.test.mjs`、`test/prompt-context.test.mjs`。
+
+### 这套结论怎么自动复核
+
+`npm run check:dsh`（`scripts/check-dsh-compat.mjs`）把它变成一次**真启动**：临时 `DSH_HOME`
+＋临时 profile → 装本仓库的 hub 包（**装得上** = 安装前兼容性预检通过）→ 合成树里有它且没被
+`disabled` → 起 `dsh web` → hub 日志出现「hub 已就绪（契约 v1）」→ index 的客户端插件图里有
+`@sidleo3/dsh-chat` → 用设置页一模一样的信封格式打一次 hub 路由，并顺手对账运行期自报的
+`hubVersion` 与本仓库 `package.json`（不一致 = `HUB_VERSION` 漂了，或 `lib/` 是旧构建）。
+不联网、不碰 `~/.dsh`、不用凭据；升级 DSH 之后跑它，几秒钟就能知道"还兼不兼容"。
+
 ## 行为比对流程
 
 同一批机器人凭据与同一批数据目录可以同时被两边读取（但**不能同时运行**）。

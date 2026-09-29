@@ -2,8 +2,8 @@
  * 会话桥：绑定、创建、prompt、follow 流式回合、取消、审批回传。
  *
  * 假 gateway 严格按 DSH 0.1.5-rc.2 的 wire 契约实现（`request` 包装、
- * `session/list` 用 `_request`、follow 用 stream），因此这些测试同时固定住了
- * "我们调用得对不对"这件事。
+ * `session/list` 用 `_request`、follow 用 stream），**已在 0.2.0-rc.1 复核过这几条没变**
+ * （见 UPSTREAM.md），因此这些测试同时固定住了"我们调用得对不对"这件事。
  */
 
 import assert from 'node:assert/strict';
@@ -669,6 +669,65 @@ test('审批与提问只接管自己名下的会话，其余 next() 让给浏览
 
     dispose();
     assert.equal(listeners.size, 0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+/**
+ * 会话 id 的取法（审批/提问中继这一条链）。
+ *
+ * 为什么单独钉：这条链上取不到 sessionId **不报错、不留异常**——`locateFor` 认不出会话 →
+ * `认领=否` → 审批/提问被丢给浏览器 UI，而 IM 那头的用户看到的是"机器人不问了、卡住不动"
+ * （本项目最忌讳的静默失效形态）。DSH 0.2.0 里面向插件的 `Agent` 接口只声明
+ * `{ readonly id: SessionId }`，`.session` 只是运行时内部实现带着的，所以三种形态都得认。
+ */
+test('审批/提问中继：agent 只有 .id（0.2.0 形态）也认得出本会话并认领到 IM', async () => {
+  const app = await makeBridge();
+  try {
+    const listeners = new Map();
+    const seen = [];
+    const interactions = {
+      has: () => true,
+      handle: async ({ kind }) => {
+        seen.push(kind);
+        return kind === 'approval' ? 'allowed-once' : { answers: [] };
+      },
+    };
+    createSessionBridge({
+      ctx: {
+        typertGateway: app.gateway,
+        on: (name, handler) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+      logger: silentLogger,
+      store: app.store,
+      guidance: { publish() {} },
+      interactions,
+    }).installInteractionRelays();
+    await app.store.bind('feishu', 'bot_1', 'p2p:ou_a', { sessionId: 'session-bound' });
+
+    const approval = listeners.get('approval/request');
+    const questions = listeners.get('user-questions/request');
+    for (const [label, agent] of [
+      ['agent.id（0.2.0 的接口形态）', { id: 'session-bound' }],
+      ['agent.session.header.id（旧形态）', { session: { header: { id: 'session-bound' } } }],
+      ['agent.session.id', { session: { id: 'session-bound' } }],
+    ]) {
+      assert.equal(await approval({ agent, toolName: 'bash' }, () => 'fallthrough'), 'allowed-once',
+        `${label}：审批必须认领到 IM，而不是让给浏览器 UI`);
+      assert.deepEqual(await questions({ agent, questions: [] }, () => 'fallthrough'), { answers: [] },
+        `${label}：提问必须认领到 IM`);
+    }
+    assert.deepEqual(seen, ['approval', 'question', 'approval', 'question', 'approval', 'question']);
+
+    // 反方向：不是我们名下的会话照旧让给浏览器 UI（别把取法放宽成"谁的都认领"）。
+    assert.equal(await approval({ agent: { id: 'session-other' }, toolName: 'bash' }, () => 'fallthrough'),
+      'fallthrough');
+    assert.equal(await approval({ agent: { session: { header: { id: 'session-other' } } } }, () => 'fallthrough'),
+      'fallthrough');
   } finally {
     await app.cleanup();
   }

@@ -1,10 +1,11 @@
 /**
  * 会话桥（host 侧）：把一次 IM 消息变成一次 DSH 会话回合。
  *
- * 契约依据（DSH 0.1.5-rc.2 实测源码，见 UPSTREAM.md）：
+ * 契约依据（DSH 0.1.5-rc.2 起、**已在 0.2.0-rc.1 复核**，逐项证据见 UPSTREAM.md）：
  * - `gateway.invoke({ namespace, method, args, signal })` 走一元方法，返回原始业务值，
  *   失败抛 `RemoteError`（读 `error.code`）；args 的键名必须与描述符 wire 完全一致，
  *   因此绝大多数方法都要包一层 `request`，且 `session/list` 的 wire 是 `_request`；
+ *   0.2.0-rc.1 里 `InvokeRemoteRequest` 仍是 `{ namespace, method, args, uplink?, peer?, signal? }`；
  * - `session/follow`、`session/control`、`workspace/follow` 是 **stream** 方法，
  *   必须用 `gateway.stream()`；
  * - 一轮结束 = `turn/end` 事件；最终答案是**该轮所有 `assistant/message` 的 text 块按顺序拼接**
@@ -40,6 +41,25 @@ const TURN_IDLE_TIMEOUT_MS = 15 * 60_000;
 
 /** 绝对上限（默认 2 小时）：防死循环，正常任务碰不到。 */
 const TURN_TOTAL_TIMEOUT_MS = 2 * 60 * 60_000;
+
+/**
+ * 从事件里的 agent 取会话 id（审批/提问中继共用）。
+ *
+ * ⚠️ **先读 `agent.id`，再退回 `agent.session…`**：DSH 0.2.0 里面向插件的 `Agent` 接口只声明
+ * `{ readonly id: SessionId }`（`@deepseek-ai/dsh-agent` 的 `types.d.ts`），`.session` 只是运行时
+ * 内部实现带着的那个（见 UPSTREAM.md 的兼容记录）。
+ *
+ * 为什么这两处也值得单独拎出来：拿不到 sessionId → `locateFor` 认不出会话 → `认领=否` →
+ * 审批/提问被丢给浏览器 UI，而 IM 那头的用户看到的是"机器人不问了、卡住不动"——
+ * 正是本项目最忌讳的**静默失效**（日志里还没有任何异常）。取法必须与
+ * `prompt-context.mjs` / 飞书那三处、以及 `lark-guard.mjs` 保持一致，否则下次又会漂一处。
+ *
+ * @param agent - 事件里的 `request.agent`。
+ * @returns 会话 id；取不到时 undefined。
+ */
+function sessionIdOfAgent(agent) {
+  return agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
+}
 
 /** 把 DSH 的 RemoteError 折成带 code 的普通错误，便于渠道判断。 */
 function sessionError(error, fallbackCode = 'chat/session-failed') {
@@ -1113,7 +1133,7 @@ export function createSessionBridge({
      */
     const locateFor = (request) => {
       if (typeof interactions?.handle !== 'function') return null;
-      const sessionId = request?.agent?.session?.id;
+      const sessionId = sessionIdOfAgent(request?.agent);
       const located = store?.locate?.(sessionId);
       if (!located) return null;
       return interactions.has?.(located.channelId) ? located : null;
@@ -1125,7 +1145,7 @@ export function createSessionBridge({
     // "回传失败"，问题只出现在网页里。
     const offApproval = ctx.on('approval/request', async (request, next) => {
       const target = locateFor(request);
-      logger.info?.(`[dsh-chat] 收到审批请求：会话=${request?.agent?.session?.id ?? '未知'}`
+      logger.info?.(`[dsh-chat] 收到审批请求：会话=${sessionIdOfAgent(request?.agent) ?? '未知'}`
         + ` 工具=${request?.toolName ?? '?'} 认领=${target ? '是' : '否'}`);
       if (!target) return next();
       try {
@@ -1145,7 +1165,7 @@ export function createSessionBridge({
 
     const offQuestions = ctx.on('user-questions/request', async (request, next) => {
       const target = locateFor(request);
-      logger.info?.(`[dsh-chat] 收到提问请求：会话=${request?.agent?.session?.id ?? '未知'}`
+      logger.info?.(`[dsh-chat] 收到提问请求：会话=${sessionIdOfAgent(request?.agent) ?? '未知'}`
         + ` 问题数=${request?.questions?.length ?? 0} 认领=${target ? '是' : '否'}`);
       if (!target) return next();
       try {

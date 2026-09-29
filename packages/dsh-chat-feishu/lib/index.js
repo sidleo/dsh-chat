@@ -129835,7 +129835,7 @@ function createLarkCliGuard({ locate, policyFor, channelId, logger = console } =
     const args = exec?.arguments;
     const command = typeof args?.command === "string" ? args.command : typeof args?.script === "string" ? args.script : null;
     if (!command || !segmentRunsLarkCli(command)) return null;
-    const sessionId = exec?.agent?.session?.header?.id;
+    const sessionId = exec?.agent?.id ?? exec?.agent?.session?.header?.id ?? exec?.agent?.session?.id;
     if (typeof sessionId !== "string" || !sessionId) return null;
     const owner = await locate(sessionId);
     if (!owner || channelId !== void 0 && owner.channelId !== channelId) return null;
@@ -132681,11 +132681,14 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.2.0";
+var CHANNEL_VERSION = "0.2.1";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;
 var CHANNEL_ID = "feishu";
+function sessionIdOf(agent) {
+  return agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
+}
 function apply(ctx) {
   const service = ctx.dshChat;
   const actual = service?.contractVersion;
@@ -132754,8 +132757,7 @@ function installLarkIdentitySection(ctx, ownershipOf) {
   let installed = false;
   let warned = false;
   const text = (context) => {
-    const agent = context?.agent;
-    const sessionId = agent?.id ?? agent?.session?.id;
+    const sessionId = sessionIdOf(context?.agent);
     const lookup = ownershipOf();
     if (typeof sessionId !== "string" || !sessionId || typeof lookup !== "function") return "";
     let owner = null;
@@ -132819,8 +132821,7 @@ function installCardAnswerSection(ctx, { ownershipOf, botOf } = {}) {
   let installed = false;
   let warned = false;
   const text = (context) => {
-    const agent = context?.agent;
-    const sessionId = agent?.id ?? agent?.session?.id;
+    const sessionId = sessionIdOf(context?.agent);
     const lookup = ownershipOf?.();
     if (typeof sessionId !== "string" || !sessionId || typeof lookup !== "function") return "";
     let owner = null;
@@ -132888,7 +132889,7 @@ function registerShellFacts(ctx, ownershipOf) {
         }
       },
       resolve: (execution) => {
-        const sessionId = execution?.agent?.session?.header?.id;
+        const sessionId = sessionIdOf(execution?.agent);
         const lookup = ownershipOf();
         if (!sessionId || typeof lookup !== "function") return {};
         let owner = null;

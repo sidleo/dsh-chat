@@ -232,6 +232,40 @@ test('门禁：拿不到策略时不动手（避免误拦一切）', async () =>
 });
 
 /**
+ * 会话 id 的取法（**安全面**）。
+ *
+ * DSH 0.2.0 里面向插件的 `Agent` 接口只声明 `{ readonly id: SessionId }`——`.session` 只是运行时
+ * 内部实现带着的（见 UPSTREAM.md 的兼容记录）。而门禁**拿不到 sessionId 就是 `return null` = 放行**：
+ * 取法一漂，"只用应用身份"那个开关就静默失效（真机故障现场：设置页写着 bot-only，
+ * 模型照样以用户身份把消息发了出去，日志里一个字都没有）。所以三种形态都得认。
+ */
+test('门禁：会话 id 三种形态都认（agent.id 优先，退回 session.header.id / session.id）', async () => {
+  const guard = createGuard({ allowBot: true, allowUser: false });
+  const command = `lark-cli --profile ${PROFILE} im +messages-send --as user --text x`;
+  const evaluate = (agent) => guard.evaluate({ name: 'bash', arguments: { command }, agent });
+
+  for (const [label, agent] of [
+    ['agent.id（0.2.0 的接口形态）', { id: SESSION }],
+    ['agent.session.header.id（旧形态）', { session: { header: { id: SESSION } } }],
+    ['agent.session.id', { session: { id: SESSION } }],
+  ]) {
+    const decision = await evaluate(agent);
+    assert.equal(decision?.kind, 'deny', `${label}：必须参与判定（拿不到 id = 放行 = 门禁静默失效）`);
+    assert.match(decision.reason, /没有允许用户身份/);
+  }
+
+  // 反方向：别因为改了取法就把门禁放宽（不是本渠道/认不出的会话照旧不管）。
+  assert.equal(await evaluate({ id: 'session-other' }), null);
+  assert.equal(await evaluate({}), null);
+
+  // 合规命令在三种形态下同样放行（挡的是身份用法，不是命令本身）。
+  const ok = `lark-cli --profile ${PROFILE} im +messages-send --as bot --text x`;
+  for (const agent of [{ id: SESSION }, { session: { header: { id: SESSION } } }]) {
+    assert.equal(await guard.evaluate({ name: 'bash', arguments: { command: ok }, agent }), null);
+  }
+});
+
+/**
  * 真机现场：拉起 dsh 的环境 PATH 里没有 `~/.local/bin` → 解析 profile 失败 →
  * 策略是 `{ profileName: null }`。这时**不能放行**（放行 = 用这台机器上当前生效的那份授权说话），
  * 但本机自查类命令要留着，否则模型连"为什么失败"都查不了。

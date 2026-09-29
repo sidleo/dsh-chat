@@ -15,7 +15,7 @@
 import { createFeishuController } from './controller.mjs';
 
 /** 渠道包版本：设置页的「版本与更新」面板用它，`npm run check` 会与 package.json 对账。 */
-const CHANNEL_VERSION = '0.2.0';
+const CHANNEL_VERSION = '0.2.1';
 
 export const name = 'dsh-chat-feishu-host';
 
@@ -26,6 +26,22 @@ export const inject = ['dshChat'];
 const EXPECTED_CONTRACT = 1;
 
 const CHANNEL_ID = 'feishu';
+
+/**
+ * 取一次"组装 / 执行"上下文里的会话 id（本文件三处共用）。
+ *
+ * ⚠️ **先读 `agent.id`，再退回 `agent.session…`**：DSH 0.2.0 里面向插件的 `Agent` 接口只声明
+ * `{ readonly id: SessionId }`（`@deepseek-ai/dsh-agent` 的 `types.d.ts`），`.session` 只是运行时
+ * 内部实现带着的那个（见 UPSTREAM.md 的兼容记录）。读法一漂，这个会话在本渠道就认不出来——
+ * 两段提示词与一组环境事实会**静默消失**（模型照旧乱用 lark-cli），而门禁那边同一份 id 也拿不到。
+ * 三处（身份段 / 卡片友好回答段 / 会话环境事实）必须用同一份取法。
+ *
+ * @param agent - `AssembleContext.agent` 或 shellEnv contributor 的 `execution.agent`。
+ * @returns 会话 id；取不到时 undefined。
+ */
+function sessionIdOf(agent) {
+  return agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
+}
 
 /**
  * Cordis host 插件入口。
@@ -139,8 +155,7 @@ export function installLarkIdentitySection(ctx, ownershipOf) {
    * 必须**同步**：`dsh-system-prompt` 的 `text` 类型就是 `string | ((ctx) => string)`。
    */
   const text = (context) => {
-    const agent = context?.agent;
-    const sessionId = agent?.id ?? agent?.session?.id;
+    const sessionId = sessionIdOf(context?.agent);
     const lookup = ownershipOf();
     if (typeof sessionId !== 'string' || !sessionId || typeof lookup !== 'function') return '';
     let owner = null;
@@ -246,8 +261,7 @@ export function installCardAnswerSection(ctx, { ownershipOf, botOf } = {}) {
   let warned = false;
 
   const text = (context) => {
-    const agent = context?.agent;
-    const sessionId = agent?.id ?? agent?.session?.id;
+    const sessionId = sessionIdOf(context?.agent);
     const lookup = ownershipOf?.();
     if (typeof sessionId !== 'string' || !sessionId || typeof lookup !== 'function') return '';
     let owner = null;
@@ -337,7 +351,7 @@ export function registerShellFacts(ctx, ownershipOf) {
         },
       },
       resolve: (execution) => {
-        const sessionId = execution?.agent?.session?.header?.id;
+        const sessionId = sessionIdOf(execution?.agent);
         const lookup = ownershipOf();
         if (!sessionId || typeof lookup !== 'function') return {};
         let owner = null;

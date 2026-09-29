@@ -199,7 +199,25 @@ const RPC_FIXTURES = {
         },
         group: { mode: 'open', open: { defaultCanExecuteCommands: true, commandPermissionOverrides: [] }, allowlist: { users: [] } },
       },
-      contextEnhancement: null,
+      /**
+       * ⚠️ **这里必须是"有值"的配置，不能是 `null`。**
+       *
+       * 曾经是 `null`，于是面板落在默认值上（未开启 + 空提示词），
+       * 恰好和"配置晚到时页面不跟着刷新"那个 bug 的表现**一模一样**——
+       * 守门全绿却漏掉了真机事故。给成非默认值才能钉住
+       * "面板显示的就是服务端那份配置"。群聊开着、全局关着，
+       * 正好覆盖"两层值不同"（只比较全局会误判）。
+       */
+      contextEnhancement: {
+        global: { enabled: false, fields: ['senderId'], guidance: '' },
+        group: {
+          enabled: true,
+          fields: ['senderId', 'chatId'],
+          guidance: 'FAKE-GUIDANCE 群聊提示词（假数据）：面板必须把它显示出来。',
+        },
+        direct: null,
+        targets: [],
+      },
       // 显示项：群聊关掉"访问策略"（渲染出来的勾选框要反映它）。
       panelSections: { direct: { policy: false }, group: { policy: false, commands: true } },
     },
@@ -508,6 +526,32 @@ flushSync(() => root.render(h(React.Fragment, null,
     style: { width: `${frame.width}px` },
   }, h(FRAGMENTS[frame.name]))))));
 
+/**
+ * 读上下文增强面板**当前显示的值**：每个可见层的启用开关 + 提示词正文 + 勾上的来源字段。
+ *
+ * 守的是真机事故（会话「飞书配置页面是否需要重构」）：设置是**异步**读来的，
+ * 面板先以 `config = null` 挂载，`useState` 的初值只算一次，
+ * 于是"配置晚到"时页面**永远显示默认值**（未开启 + 空提示词）——
+ * 用户改完 `bots.json` 回设置页一看是空的，以为没配上。
+ *
+ * @param root - 要量的元素（一帧）。
+ * @returns 每个可见层一条 { scope, enabled, guidance, fields }。
+ */
+function collectContextValues(root) {
+  return [...root.querySelectorAll('.dchat-contextPanel')].flatMap((panel) => (
+    [...panel.querySelectorAll('.dchat-tabPanel')]
+      .filter((el) => el.getClientRects().length > 0)
+      .map((el) => ({
+        scope: el.dataset.scope,
+        enabled: el.querySelector('input[type="checkbox"]')?.checked === true,
+        guidance: el.querySelector('textarea')?.value ?? '',
+        fields: [...el.querySelectorAll('input[type="checkbox"]')]
+          .slice(1).filter((cb) => cb.checked)
+          .map((cb) => cb.getAttribute('aria-label') ?? cb.id),
+      }))
+  ));
+}
+
 /** 等 React 的异步 effect（投递列表要等一次 RPC 桩）落地再量。 */
 function measure() {
   const results = [];
@@ -589,6 +633,32 @@ function measure() {
         .map((el) => el.dataset.scope),
       total: dialog.querySelectorAll('.dchat-tabPanel').length,
     }));
+    /**
+     * 上下文增强面板**当前显示的值**：每个可见层的启用开关 + 提示词正文。
+     *
+     * 守的是真机事故（会话「飞书配置页面是否需要重构」）：设置是**异步**读来的，
+     * 面板先以 `config = null` 挂载，`useState` 的初值只算一次，
+     * 于是"配置晚到"时页面**永远显示默认值**（未开启 + 空提示词）——
+     * 用户改完 `bots.json` 回设置页一看是空的，以为没配上。
+     * 这里把"显示出来的值"与假数据逐字对比，才钉得住根因。
+     */
+    const contextValues = collectContextValues(frame);
+    /**
+     * 实底按钮的配色（背景 + 文字）：守"深色主题下白底白字看不见"。
+     *
+     * 真机事故：`.dchat-buttonPrimary` 用 `--dsw-alias-brand-primary` 当**背景**，
+     * 那是**前景语义**的颜色，深色主题下取到 `#f9fafb`（近白），配上 `color:#fff`
+     * 就是白底白字——按钮只剩一块空白矩形，用户根本找不到「保存」。
+     */
+    const solidButtons = [...frame.querySelectorAll('.dchat-buttonPrimary, .dchat-buttonDangerSolid')]
+      .map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          text: (el.textContent ?? '').trim(),
+          color: style.color,
+          background: style.backgroundColor,
+        };
+      });
     // lark-cli 身份的三个分层下拉（全局/私聊/群聊）当前值：必须反映假数据
     //（漏传字段会永远显示默认值——"我明明开了却没生效"就是这么来的）。
     const larkIdentity = Object.fromEntries([...frame.querySelectorAll('[data-lark-scope]')]
@@ -723,6 +793,8 @@ function measure() {
       cardAnswer,
       larkIdentity,
       dialogs,
+      contextValues,
+      solidButtons,
       dragResult,
       railOrder,
       activeChannel,
@@ -736,7 +808,14 @@ function measure() {
   document.getElementById('dsh-layout-result')?.remove();
   const pre = document.createElement('pre');
   pre.id = 'dsh-layout-result';
-  pre.textContent = JSON.stringify(results);
+  /**
+   * `contextByScope` 是**切到「群聊」那一帧**量到的值（见 `settle` 里的说明），
+   * 它不属于任何一帧，所以跟帧数组并列带出去。
+   *
+   * ⚠️ **不能挂在数组上**（`results.__x = …`）：`JSON.stringify` 只序列化**索引属性**，
+   * 挂在数组上的自定义属性会被静默丢掉——守门那边拿到 undefined，还以为是"没测到"。
+   */
+  pre.textContent = JSON.stringify({ frames: results, contextByScope: contextValuesByScope });
   document.body.appendChild(pre);
   document.title = 'LAYOUT-DONE';
 }
@@ -746,6 +825,9 @@ function measure() {
  * 取**最后一次**测量结果（异步 effect 之后的那次）。
  */
 let measured = 0;
+/** 场合切到「群聊」只做一次；另存那一帧量到的值，供上下文增强那条守门比对。 */
+let scopeSwitched = false;
+const contextValuesByScope = [];
 async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
   // 展开态（日志尾部 / 改名输入框）都由按钮控制：点一次再量，否则这些帧等于没测。
@@ -769,6 +851,39 @@ async function settle() {
     }
   }
   await simulateDrag();
+  /**
+   * **切到「群聊」量一次上下文增强面板，再切回「全局」。**
+   *
+   * 为什么必须切：页面默认停在「全局」，而"面板跟不跟得上服务端配置"这个真机事故
+   * 只有在**有值的那一层**才看得出来——假数据里群聊才是开着且带提示词的，
+   * 全局那份恰好等于默认值，量它等于没测。
+   *
+   * 为什么量完要切回去：这个页面**每个分叉项只画当前场合那一层**，
+   * 切走后 `global` 那层就没了——而 lark-cli 身份那条既有守门要求
+   * "切到哪个场合就只画那一层 + 全局那层必须在"。留着不切回会让那条守门误报。
+   * 汇总到 `contextValuesByScope` 里交给守门，两条不变量互不干扰。
+   */
+  if (!scopeSwitched) {
+    scopeSwitched = true;
+    const switchScope = (label) => {
+      for (const frame of document.querySelectorAll('[data-scenario="feishuCard"]')) {
+        for (const tab of frame.querySelectorAll('.dchat-scopeTab')) {
+          if ((tab.textContent ?? '').includes(label)
+            && tab.getAttribute('data-scope-active') !== '1') {
+            tab.click();
+          }
+        }
+      }
+    };
+    switchScope('群聊');
+    await Promise.resolve();
+    measure();
+    measured += 1;
+    for (const frame of document.querySelectorAll('[data-scenario="feishuCard"]')) {
+      contextValuesByScope.push(...collectContextValues(frame));
+    }
+    switchScope('全局');
+  }
   for (let index = 0; index < 5; index += 1) await Promise.resolve();
   measure();
   measured += 1;
@@ -776,7 +891,6 @@ async function settle() {
 
 /**
  * 拖动排序：模拟一次真实的 HTML5 拖放（dragstart → dragover → drop）。
- *
  * 为什么要在这儿做：拖动是纯前端的交互，单测只能覆盖排序函数，覆盖不到"事件接对了没"。
  * 只跑一次（两轮 settle 各拖一次会把顺序换回去，等于没测）。
  * 记录拖动前后的顺序，交给守门断言"顺序真的变了"。

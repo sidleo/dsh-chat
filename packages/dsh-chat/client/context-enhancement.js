@@ -340,6 +340,39 @@ function ContextEnhancementPanel({
   const [notice, setNotice] = React.useState(null);
 
   /**
+   * **`config` 晚到时要跟上**（真机事故：改了 `bots.json`、页面上却永远是空的）。
+   *
+   * 这一页的设置是**异步**读来的：`useBotSettings` 初始 `record: null`，
+   * 面板先以 `config = null` 挂载、`draft` 就落在默认值上；等 `bot.settings.get`
+   * 回来，`config` 变成真值、组件重渲染——但 `useState` 的初值**只算一次**，
+   * 没有这一段的话 `draft` 永远是默认值：页面显示"未开启 + 空提示词"，
+   * 与实际配置无关，**用户以为没配上**。
+   *
+   * 不覆盖正在编辑的内容：只有 **`config` 真的换了**才重取。判据是它的序列化值
+   * （对象每次渲染都是新引用，直接比引用会每帧都重置）。用户改的是 `draft`、
+   * `config` 没动，所以打到一半的提示词不会被冲掉。
+   */
+  const configKey = JSON.stringify(normalizeContextConfig(config));
+  const syncedKeyRef = React.useRef(configKey);
+  if (syncedKeyRef.current !== configKey) {
+    syncedKeyRef.current = configKey;
+    /**
+     * 用"渲染期更新 state"这一官方允许的写法（同 `getDerivedStateFromProps`），
+     * 而不是 `useEffect`：异步值到位后，effect 要多走一帧才把内容画对，
+     * 那一帧里用户可能已经点了「保存」——保存的会是旧默认值。渲染期同步则不会有这一帧。
+     *
+     * **保存成功后的回灌不动提示**：`onSave` 成功后服务端会把新值回灌成新的 `config`，
+     * 这一刻草稿与它恰好相等（也就是"没有未保存改动"），据此区分"自己刚存下去的回声"
+     * 与"外部改的"——后者才需要清掉已经对不上内容的提示。
+     */
+    if (JSON.stringify(draft) !== configKey) {
+      setError(null);
+      setNotice(null);
+    }
+    setDraft(JSON.parse(configKey));
+  }
+
+  /**
    * 画哪些场合：页面级场合给了就**只画那一个**（"改哪个场合"已经在页头问过一次）。
    * 没给则保留两个页签的旧形态（渠道页还没接场合切换器时不会少东西）。
    */
@@ -380,9 +413,10 @@ function ContextEnhancementPanel({
   };
 
   /** 外部值变了（别的标签页/卡片改过）就重新取一次，但仍然只在用户点保存时写回。 */
-  const dirty = JSON.stringify(draft) !== JSON.stringify(normalizeContextConfig(config));
+  const dirty = JSON.stringify(draft) !== configKey;
   const reset = () => {
-    setDraft(normalizeContextConfig(config));
+    // `configKey` 没变、`syncedKeyRef` 也没变，所以这次重置不会被上面的同步逻辑立刻回滚。
+    setDraft(JSON.parse(configKey));
     setError(null);
     setNotice(null);
   };

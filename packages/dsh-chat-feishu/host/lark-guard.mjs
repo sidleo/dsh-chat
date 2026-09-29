@@ -183,7 +183,16 @@ export function createLarkCliGuard({ locate, policyFor, channelId, logger = cons
       ? args.command
       : typeof args?.script === 'string' ? args.script : null;
     if (!command || !segmentRunsLarkCli(command)) return null;
-    const sessionId = exec?.agent?.session?.header?.id;
+    /**
+     * ⚠️ **这一行是本文件最不能出错的地方**：从 agent 取会话 id 时先读 `agent.id`，再退回
+     * `agent.session…`。DSH 0.2.0 里面向插件的 `Agent` 接口只声明 `{ readonly id: SessionId }`
+     * （`@deepseek-ai/dsh-agent` 的 `types.d.ts`），`.session` 只是运行时内部实现带着的那个。
+     * 而下面那行 `if (!sessionId) return null` 是**放行**——取法一漂，门禁就静默失效
+     * （设置页写着"只用应用身份"，模型照样能用用户身份发消息），且日志里一个字都不会有。
+     */
+    const sessionId = exec?.agent?.id
+      ?? exec?.agent?.session?.header?.id
+      ?? exec?.agent?.session?.id;
     if (typeof sessionId !== 'string' || !sessionId) return null;
     const owner = await locate(sessionId);
     if (!owner || (channelId !== undefined && owner.channelId !== channelId)) return null;

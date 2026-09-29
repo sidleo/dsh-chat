@@ -62,22 +62,58 @@ try {
     logLevel: 'warning',
   });
 
-  const html = `<!doctype html><html><head><meta charset="utf-8">
-<style>
-:root{
---dsw-font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
---dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#f2f3f5;
+  /**
+   * 两套主题各渲一遍。
+   *
+   * ⚠️ **深色那套是必须的**：组件里大量用 `--dsw-alias-*` token，而**同一个 token
+   * 在两套主题下的取值完全不同**（`--dsw-alias-brand-primary` 浅色是蓝、深色是近白 `#f9fafb`）。
+   * 之前只渲浅色、且把 token 随手给成蓝色，于是"把前景色当背景用"这类错误
+   * 在测试页里完全看不出来——真机上按钮白底白字、守门却是绿的。
+   * 取值照真实主题（浅色 `#3370ff` / 深色 `#f9fafb`、business 深色 `#7aaaff`）。
+   */
+  const THEMES = [
+    {
+      id: 'light',
+      vars: `--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#f2f3f5;
 --dsw-alias-border-l1:#e5e6eb;--dsw-alias-border-l2:#dee0e3;--dsw-alias-border-l3:#d0d3d6;
 --dsw-alias-label-primary:#1f2329;--dsw-alias-label-secondary:#646a73;--dsw-alias-label-tertiary:#8f959e;
---dsw-alias-brand-primary:#3370ff;--dsw-alias-link:#3370ff;
+--dsw-alias-brand-primary:#3370ff;--dsw-alias-state-business-primary:#3370ff;--dsw-alias-link:#3370ff;
 --dsw-alias-interactive-bg-hover:rgba(31,35,41,.08);
 --dsw-alias-state-success-primary:#34c724;--dsw-alias-state-warn-primary:#ff8800;
 --dsw-alias-state-error-primary:#f54a45;--dsw-alias-separator-primary:#e5e6eb;
---dsw-alias-markdown-code-block:#f2f3f5;
+--dsw-alias-markdown-code-block:#f2f3f5;`,
+      body: '#fff',
+    },
+    {
+      id: 'dark',
+      vars: `--dsw-alias-bg-layer-1:#232324;--dsw-alias-bg-layer-2:#2b2b2d;
+--dsw-alias-border-l1:#3a3a3d;--dsw-alias-border-l2:#43454a;--dsw-alias-border-l3:#545557;
+--dsw-alias-label-primary:#f9fafb;--dsw-alias-label-secondary:#cfd3d6;--dsw-alias-label-tertiary:#81858c;
+--dsw-alias-brand-primary:#f9fafb;--dsw-alias-state-business-primary:#7aaaff;--dsw-alias-link:#7aaaff;
+--dsw-alias-interactive-bg-hover:#ffffff14;
+--dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f7ad31;
+--dsw-alias-state-error-primary:#f25a5a;--dsw-alias-separator-primary:#3a3a3d;
+--dsw-alias-markdown-code-block:#232324;`,
+      body: '#151517',
+    },
+  ];
+
+  /**
+   * 渲一遍并把页面里的测量结果读回来。
+   *
+   * @param theme - `THEMES` 里的一项。
+   * @returns 测量结果数组（含挂在数组上的 `__contextByScope`）。
+   */
+  const renderTheme = (theme) => {
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<style>
+:root{
+--dsw-font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+${theme.vars}
 --dsw-font-markdown-code-block-small:ui-monospace,SFMono-Regular,monospace;
 }
 *{box-sizing:border-box}
-body{margin:0;background:#fff;font-family:var(--dsw-font-family);color:var(--dsw-alias-label-primary)}
+body{margin:0;background:${theme.body};font-family:var(--dsw-font-family);color:var(--dsw-alias-label-primary)}
 .frame{padding:14px 18px}
 </style></head><body><div id="root"></div>
 <script>
@@ -92,26 +128,32 @@ try {
 } catch (error) { /* file:// 下可能不可用：那就不预置，守门只验默认顺序自洽 */ }
 </script>
 <script src="./layout.js"></script></body></html>`;
-  const htmlPath = join(workDir, 'layout.html');
-  writeFileSync(htmlPath, html);
+    const htmlPath = join(workDir, `layout-${theme.id}.html`);
+    writeFileSync(htmlPath, html);
 
-  const dom = execFileSync(chrome, [
-    '--headless',
-    '--disable-gpu',
-    '--hide-scrollbars',
-    '--virtual-time-budget=8000',
-    '--dump-dom',
-    `file://${htmlPath}`,
-  ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+    const dom = execFileSync(chrome, [
+      '--headless',
+      '--disable-gpu',
+      '--hide-scrollbars',
+      '--virtual-time-budget=8000',
+      '--dump-dom',
+      `file://${htmlPath}`,
+    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
 
-  const matched = /<pre id="dsh-layout-result">([\s\S]*?)<\/pre>/.exec(dom);
-  if (!matched) {
-    const error = /<pre id="dsh-layout-error">([\s\S]*?)<\/pre>/.exec(dom)?.[1];
-    console.error('布局守门失败：页面没有产出测量结果。');
-    if (error) console.error(`  页面报错：${error.slice(0, 600)}`);
-    process.exit(1);
-  }
-  const results = JSON.parse(matched[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+    const matched = /<pre id="dsh-layout-result">([\s\S]*?)<\/pre>/.exec(dom);
+    if (!matched) {
+      const error = /<pre id="dsh-layout-error">([\s\S]*?)<\/pre>/.exec(dom)?.[1];
+      console.error(`布局守门失败（${theme.id} 主题）：页面没有产出测量结果。`);
+      if (error) console.error(`  页面报错：${error.slice(0, 600)}`);
+      process.exit(1);
+    }
+    return JSON.parse(matched[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  };
+
+  /** 页面回传的是 `{ frames, contextByScope }`——见 fixture 里"不能挂在数组上"那条说明。 */
+  const { frames: results, contextByScope: allContextValues } = renderTheme(THEMES[0]);
+  const { frames: darkResults } = renderTheme(THEMES[1]);
 
   const failures = [];
   if (results.length === 0) failures.push('没有测到任何帧（测试本身失效了）');
@@ -226,6 +268,100 @@ try {
         + `${dialog.visible.join('、')}`);
     } else if (dialog.activeScope && dialog.visible[0] !== dialog.activeScope) {
       failures.push(`弹窗 ${index + 1} 可见的是 ${dialog.visible[0]}，但选中的是 ${dialog.activeScope}`);
+    }
+  }
+
+  /**
+   * **上下文增强面板显示的值必须等于服务端那份配置**。
+   *
+   * 守真机事故（会话「飞书配置页面是否需要重构」）：设置是**异步**读来的，
+   * 面板先以 `config = null` 挂载；`useState` 的初值只算一次，于是配置晚到后面板
+   * **永远显示默认值**（未开启 + 空提示词），用户改完 `bots.json` 回到设置页看到一片空白，
+   * 以为没配上——而磁盘上其实是对的。
+   *
+   * 假数据里**群聊那份是开着且带提示词的**（全局恰好落在默认值上，单看它测不出来），
+   * fixture 会把场合切到「群聊」，所以这里断言的是"有值那一层真的显示了服务端的值"。
+   * 去掉面板里的同步逻辑，这条立刻红。
+   */
+  if ((allContextValues ?? []).length === 0) {
+    failures.push('没测到上下文增强面板的值（守门本身失效了）');
+  }
+  const groupShown = (allContextValues ?? []).filter((item) => item.scope === 'group');
+  if (groupShown.length === 0) {
+    failures.push('没测到上下文增强「群聊」层（假数据里它是开着且带提示词的，必须能显示出来）');
+  }
+  for (const shown of groupShown) {
+    if (shown.enabled !== true) {
+      failures.push('上下文增强「群聊」层配置里是开启的，面板却显示未开启（面板没跟上服务端配置）');
+    }
+    if (!shown.guidance.includes('FAKE-GUIDANCE')) {
+      failures.push('上下文增强「群聊」层的提示词在配置里有，面板却没显示出来'
+        + `（显示成 ${JSON.stringify(shown.guidance.slice(0, 40))}）`);
+    }
+  }
+
+  /**
+   * **实底按钮不能白底白字**（深色主题下曾经完全看不见）。
+   *
+   * 真机事故：`.dchat-buttonPrimary` 把 `--dsw-alias-brand-primary` 当**背景**用，
+   * 那是前景语义的颜色（深色下 `#f9fafb` 近白），配上写死的 `color:#fff`
+   * 就是白底白字——「保存」只剩一块空白矩形，用户找不到按钮。
+   * 实测故障时是 **1.05:1**（几乎完全相同）；修好后与 DSH 自己的主按钮同色（2.33:1）。
+   *
+   * ⚠️ **阈值取 2:1，不取 WCAG 的 4.5:1**：宿主自己的主按钮（白字 on `#7aaaff`）
+   * 就是 2.33:1，插件跟它保持一致；按 4.5 判会把"与宿主相同的既定设计"判成错，
+   * 逼着插件自创一套配色。这条要守的是**"文字和底色撞在一起"**这种事故，
+   * 不是替宿主做无障碍审计。
+   */
+  const MIN_BUTTON_CONTRAST = 2;
+  const relativeLuminance = (color) => {
+    const parts = String(color).match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    if (!parts || parts.length < 3) return null;
+    const [r, g, b] = parts.map((value) => {
+      const channel = value / 255;
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const buttonFrames = results.filter((frame) => (frame.solidButtons ?? []).length > 0);
+  if (buttonFrames.length === 0) {
+    failures.push('没测到任何实底按钮（守门本身失效了）');
+  }
+  for (const frame of buttonFrames) {
+    for (const button of frame.solidButtons) {
+      const front = relativeLuminance(button.color);
+      const back = relativeLuminance(button.background);
+      if (front === null || back === null) continue;
+      const ratio = (Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05);
+      // 4.5:1 是 WCAG AA 正文标准；按钮文字更小，标准只该更严，不该更松。
+      if (ratio < MIN_BUTTON_CONTRAST) {
+        failures.push(`实底按钮「${button.text}」文字与底色对比度只有 ${ratio.toFixed(2)}:1`
+          + `（${button.color} on ${button.background}），低于 ${MIN_BUTTON_CONTRAST}:1 —— 文字和底色撞在一起，看不见`);
+      }
+    }
+  }
+
+  /**
+   * **同一批按钮在深色主题下也要能看清**。
+   *
+   * 真机事故就出在深色：`.dchat-buttonPrimary` 用前景语义的 `--dsw-alias-brand-primary`
+   * 当背景，浅色主题下它是蓝的（看着没事），**深色主题下变成 `#f9fafb`（近白）**，
+   * 配上 `color:#fff` 就是白底白字。只渲浅色的话这个 bug 永远测不出来。
+   */
+  const darkButtonFrames = darkResults.filter((frame) => (frame.solidButtons ?? []).length > 0);
+  if (darkButtonFrames.length === 0) {
+    failures.push('深色主题下没测到任何实底按钮（守门本身失效了）');
+  }
+  for (const frame of darkButtonFrames) {
+    for (const button of frame.solidButtons) {
+      const front = relativeLuminance(button.color);
+      const back = relativeLuminance(button.background);
+      if (front === null || back === null) continue;
+      const ratio = (Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05);
+      if (ratio < MIN_BUTTON_CONTRAST) {
+        failures.push(`深色主题：实底按钮「${button.text}」对比度只有 ${ratio.toFixed(2)}:1`
+          + `（${button.color} on ${button.background}），低于 ${MIN_BUTTON_CONTRAST}:1 —— 深色下按钮会看不见`);
+      }
     }
   }
 

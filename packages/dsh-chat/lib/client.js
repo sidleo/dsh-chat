@@ -1847,6 +1847,16 @@ function ContextEnhancementPanel({
   const [saving, setSaving] = React4.useState(false);
   const [error, setError] = React4.useState(null);
   const [notice, setNotice] = React4.useState(null);
+  const configKey = JSON.stringify(normalizeContextConfig(config));
+  const syncedKeyRef = React4.useRef(configKey);
+  if (syncedKeyRef.current !== configKey) {
+    syncedKeyRef.current = configKey;
+    if (JSON.stringify(draft) !== configKey) {
+      setError(null);
+      setNotice(null);
+    }
+    setDraft(JSON.parse(configKey));
+  }
   const offered = Array.isArray(sourceFields) && sourceFields.length > 0 ? CONTEXT_FIELDS.filter((field) => sourceFields.includes(field)) : CONTEXT_FIELDS;
   const LAYERS = ["global", "direct", "group"];
   const scopedKinds = LAYERS.includes(scope) ? [scope] : LAYERS;
@@ -1866,9 +1876,9 @@ function ContextEnhancementPanel({
       setSaving(false);
     }
   };
-  const dirty = JSON.stringify(draft) !== JSON.stringify(normalizeContextConfig(config));
+  const dirty = JSON.stringify(draft) !== configKey;
   const reset = () => {
-    setDraft(normalizeContextConfig(config));
+    setDraft(JSON.parse(configKey));
     setError(null);
     setNotice(null);
   };
@@ -3364,8 +3374,16 @@ var CSS = `
   font-size: 12px;
   color: var(--dsw-alias-state-warn-primary);
 }
+/* \u4E3B\u6309\u94AE\uFF08\u4FDD\u5B58 / \u53D1\u9001\uFF09\u3002
+ *
+ * \u26A0\uFE0F \u80CC\u666F**\u4E0D\u80FD**\u7528 --dsw-alias-brand-primary\uFF1A\u90A3\u662F**\u524D\u666F\u8BED\u4E49**\u7684\u54C1\u724C\u8272\uFF0C
+ * \u6DF1\u8272\u4E3B\u9898\u4E0B\u53D6\u503C #f9fafb\uFF08\u8FD1\u767D\uFF09\uFF0C\u914D\u4E0A\u8FD9\u91CC\u7684 color:#fff \u5C31\u662F**\u767D\u5E95\u767D\u5B57**\u2014\u2014
+ * \u771F\u673A\u4E0A\u6309\u94AE\u53EA\u5269\u4E00\u5757\u767D\u8272\u7A7A\u767D\u77E9\u5F62\uFF0C\u6587\u5B57\u5B8C\u5168\u770B\u4E0D\u89C1\uFF08\u7528\u6237\u62A5\u7684\u5C31\u662F\u8FD9\u4E2A\uFF09\u3002
+ * \u4E0E .dchat-buttonDangerSolid \u540C\u4E00\u6761\u53E3\u5F84\uFF1A\u5B9E\u5E95\u6309\u94AE\u7528**\u72B6\u6001\u8BED\u4E49**\u7684\u5E95\u8272
+ * \uFF08state-business-primary\uFF0C\u6DF1\u8272 #7aaaff\uFF0C\u4E0E DSH \u81EA\u5DF1\u7684\u4E3B\u6309\u94AE\u540C\u8272\uFF09\u3002
+ * .dchat-buttonPrimary \u662F\u9875\u9762\u4E0A\u552F\u4E00\u628A brand \u8272\u5F53\u80CC\u666F\u7528\u7684\u5730\u65B9\uFF0C\u5176\u4F59\u90FD\u662F\u8FB9\u6846/\u6587\u5B57\u3002 */
 .dchat-buttonPrimary {
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   border-color: transparent;
   color: #fff;
 }

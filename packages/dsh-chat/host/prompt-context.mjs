@@ -28,12 +28,17 @@ export const SOURCE_GUIDANCE_ORDER = 400;
  *
  * `AssembleContext.agent` 由 `dsh-agent` 扩展提供；诊断类组装可能没有 agent。
  *
+ * ⚠️ **先读 `agent.id`，再退回 `agent.session…`**：DSH 0.2.0 里面向插件的 `Agent` 接口只声明
+ * `{ readonly id: SessionId }`（`@deepseek-ai/dsh-agent` 的 `types.d.ts`），`.session` 只是运行时
+ * 内部实现带着的那个（见 UPSTREAM.md 的兼容记录）。读法一漂，"这个会话有没有增强提示词"
+ * 就永远判不出来——段恒为空串，而设置页里那段提示词明明写着（静默失效）。
+ *
  * @param context - 组装上下文 `{ agent? }`。
  * @returns 会话 id 或 null。
  */
 function sessionIdOf(context) {
   const agent = context?.agent;
-  const id = agent?.id ?? agent?.session?.id;
+  const id = agent?.id ?? agent?.session?.header?.id ?? agent?.session?.id;
   return typeof id === 'string' && id ? id : null;
 }
 
@@ -108,8 +113,20 @@ export function installDeliverableSection(ctx, { isChatSession, logger = console
       '把文件交给用户的**唯一**方式是：在**当轮**调用 `present`，在 `files` 里给出文件的**绝对路径**——'
         + '插件会把声明的文件作为附件单独发到这个聊天里。',
       '只在回复里写路径、或写成 `[名字](相对路径)` 这种链接，**一个字节都发不出去**（聊天里的相对链接也点不开）。',
-      '所以这轮产出了用户可能要用的文件（报表 / SQL / 图表 / 导出…）就 `present` 一下；'
-        + '临时中间文件不用声明，别刷屏。',
+      /**
+       * ⚠️ **别把"脚本 / SQL"列进可交付清单**（真机事故）。
+       *
+       * 早先这句写的是「报表 / SQL / 图表 / 导出…就 present 一下」——**直接把 SQL 点了名**。
+       * 日志里它照着做过：发过 `前天销售额_20260922.sql`、`yhq.py` 到群里。
+       * 而群聊的上下文增强规则要求"过程脚本与 SQL 文件不交"，两段提示词当场**互相矛盾**，
+       * 模型听哪一份都有可能。这里只列**用户要用的成品**，并显式说明脚本类默认不交，
+       * 让机制说明与用户规则**方向一致**（谁先谁后都不至于打架）。
+       * 例外的口子留给"用户明确要"——那种情况下交出脚本是对的。
+       */
+      '所以这轮产出了用户可能要用的**成品**（报表 / 图表 / Excel / 导出数据…）就 `present` 一下。',
+      '**脚本类不算成品**：过程用的 `.sql` / `.py` / `.sh`、临时 JSON、日志、中间数据默认**不要** `present`，'
+        + '只在用户明确要脚本时才交（那时连同内容一起先自查：不得含本机路径、凭据或内部信息）。',
+      '临时中间文件不用声明，别刷屏。',
     ].join('\n');
   };
   const register = () => systemPrompt.section({

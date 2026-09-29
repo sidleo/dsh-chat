@@ -123,8 +123,14 @@ export function createRpcCarrier(ctx, { logger = console } = {}) {
 
     const release = () => {
       if (!releases.delete(path)) return;
+      /**
+       * `ConnectionFetchRoute` 的 disposer 类型是 `() => Promise<void>`，但实现返回的是
+       * Cordis effect 的**同步** disposer。两者都要接得住：`Promise.resolve(...)` 会**同步**
+       * 调用它并顺手兜住返回值，`.catch` 则挡住"将来换成真异步 + reject"时的
+       * unhandled rejection（同步 try/catch 抓不到异步拒绝）。
+       */
       try {
-        dispose?.();
+        Promise.resolve(dispose?.()).catch(() => {});
       } catch {
         // 已经释放过就算了。
       }
