@@ -129872,7 +129872,15 @@ function createLarkCliGuard({ locate, policyFor, channelId, logger = console } =
 // packages/dsh-chat-feishu/host/lark-gateway.mjs
 import { createReadStream } from "node:fs";
 import { stat as stat2 } from "node:fs/promises";
-var DEFAULT_CONNECT_TIMEOUT_MS = 15e3;
+var DEFAULT_CONNECT_TIMEOUT_MS = 15e4;
+var MIN_CONNECT_TIMEOUT_MS = 1e3;
+var MAX_CONNECT_TIMEOUT_MS = 9e5;
+function resolveConnectTimeoutMs(raw) {
+  if (raw === void 0 || raw === null || raw === "") return DEFAULT_CONNECT_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_CONNECT_TIMEOUT_MS;
+  return Math.min(MAX_CONNECT_TIMEOUT_MS, Math.max(MIN_CONNECT_TIMEOUT_MS, parsed));
+}
 var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 function isImagePath(path2) {
   const name2 = String(path2).toLowerCase();
@@ -130064,12 +130072,15 @@ function createLarkGateway({
   domain = "feishu",
   sdk,
   logger = console,
-  connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+  connectTimeoutMs,
   loggerLevel = process.env.DSH_CHAT_FEISHU_SDK_LOG || "info",
   maxResourceBytes = DEFAULT_MAX_RESOURCE_BYTES
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 @larksuiteoapi/node-sdk\u3002");
   if (!appId || !appSecret) throw new TypeError("\u98DE\u4E66\u7F51\u5173\u9700\u8981 appId \u4E0E appSecret\u3002");
+  const connectTimeout = resolveConnectTimeoutMs(
+    connectTimeoutMs ?? process.env.DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS
+  );
   const cardSchemas = /* @__PURE__ */ new Map();
   const CARD_SCHEMA_MEMORY = 200;
   function rememberCardSchema(messageId, card) {
@@ -130360,7 +130371,6 @@ function createLarkGateway({
         onError: (error) => {
           connected = false;
           lastError = error?.message ?? String(error);
-          settleFail(new Error(`\u98DE\u4E66\u957F\u8FDE\u63A5\u5931\u8D25\uFF1A${lastError}`));
         },
         onReconnecting: () => {
           connected = false;
@@ -130368,6 +130378,7 @@ function createLarkGateway({
         onReconnected: () => {
           connected = true;
           lastError = null;
+          settleReady();
         }
       });
       wsClient = instance;
@@ -130378,19 +130389,23 @@ function createLarkGateway({
       };
       const timer = setTimeout(() => {
         closeQuietly(instance);
-        const error = new Error(`\u98DE\u4E66\u957F\u8FDE\u63A5\u5728 ${connectTimeoutMs}ms \u5185\u672A\u5C31\u7EEA\u3002`);
+        const detail = lastError ? `\u6700\u8FD1\u4E00\u6B21\u9519\u8BEF\uFF1A${lastError}` : "\u8FD9\u6BB5\u65F6\u95F4\u5185\u6CA1\u6709\u6536\u5230\u4EFB\u4F55\u6210\u529F\u63E1\u624B\u7684\u4FE1\u53F7\u3002";
+        const error = new Error(
+          `\u98DE\u4E66\u957F\u8FDE\u63A5\u5728 ${connectTimeout}ms \u5185\u672A\u5C31\u7EEA\uFF08${detail}\uFF09\uFF1B\u82E5\u7F51\u7EDC\u8F83\u6162\u53EF\u8C03\u5927 DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS\u3002`
+        );
         error.code = "feishu/connect-timeout";
         settleFail(error);
-      }, connectTimeoutMs);
+      }, connectTimeout);
       const onAbort = () => {
         closeQuietly(instance);
         settleFail(aborted());
       };
       signal?.addEventListener?.("abort", onAbort, { once: true });
       try {
-        const started = Promise.resolve().then(() => instance.start({ eventDispatcher: dispatcher }));
-        void started.catch((error) => settleFail(error));
-        await Promise.race([ready, started.then(() => ready)]);
+        void instance.start({ eventDispatcher: dispatcher }).catch((error) => {
+          settleFail(error);
+        });
+        await ready;
         if (signal?.aborted) throw aborted();
       } catch (error) {
         connected = false;
@@ -131495,7 +131510,9 @@ function createFeishuController({ deps, logger = console, config = {}, internals
         domain: bot.domain,
         sdk,
         logger,
-        connectTimeoutMs: config.connectTimeoutMs
+        // 只在真的配了的时候才传：写死的 `undefined` 会把网关那层的
+        // "环境变量 → 默认值"链路整个顶掉（网关的默认参数只在实参缺省时才生效）。
+        ...config.connectTimeoutMs === void 0 ? {} : { connectTimeoutMs: config.connectTimeoutMs }
       });
       const state = createFeishuStateStore({
         path: join(dataDir, "bots", bot.id, "state.json"),
@@ -132681,7 +132698,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.2.2";
+var CHANNEL_VERSION = "0.2.3";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;

@@ -433,6 +433,12 @@ peerDependencies**（声明了会把 0.1.x 用户挡在安装门外）。两点�
   **念叨进面板不进答案**（真机那条"卡片一半是废话"）→ 引用回复（拼装 + 读不到）→
   `/retitle`（幂等回填）→ 会话共享限制（别的聊天在用的会话不列、硬切被拒）。
 - **隔离调试**：`config.channelDataDirs` 可把渠道数据目录指到临时目录，避免用真实凭据建长连接；覆盖时**不做**旧设置导入。
+- **机器人显示「启动失败：飞书长连接在 Nms 内未就绪」**：先看 `logs/feishu.log` 里那句话**前面几行**的底层错误——
+  `getaddrinfo ENOTFOUND open.feishu.cn`（DNS 抖动）、`connect ETIMEDOUT`（网络不通）、`timeout of 15000ms exceeded`
+  各是不同的病，别看结论一句话就开始改配置。
+  这条报错的含义是"这段等待期内首握手没成功"，**不等于网络坏了**：SDK 自带 `autoReconnect` 且退避间隔 120s
+  （+ 最多 30s 抖动），所以启动等待上限（`DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS`，默认 150s）必须长于一个退避周期，
+  否则正常的自愈重试会被误判成失败。健康网络下首握手实测约 0.6s——真怀疑网络就直接量一次握手耗时，别猜。
 - **飞书卡片按钮没反应**：按"事件到没到"分三步查——
   ① 重启时带 `DSH_CHAT_FEISHU_SDK_LOG=debug`（SDK 日志会进 `logs/feishu.log`），点一次按钮后看日志：
   出现 `收到卡片回调` = 事件到了（查路由/解析）；只有 SDK 的 `receive message … type: event` 而没有它 = 到了但不是卡片回调；

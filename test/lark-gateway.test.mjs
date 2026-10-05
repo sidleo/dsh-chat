@@ -13,7 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { createLarkGateway } from '../packages/dsh-chat-feishu/host/lark-gateway.mjs';
+import {
+  createLarkGateway,
+  resolveConnectTimeoutMs,
+} from '../packages/dsh-chat-feishu/host/lark-gateway.mjs';
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -422,4 +425,99 @@ test('网关：读合并转发的原始条目（扁平数组，子消息靠 uppe
     () => makeGateway(createFakeSdk()).getMessageItems({ messageId: '' }),
     (error) => error instanceof TypeError,
   );
+});
+
+/**
+ * 启动等待的判据：等的是**首个成功握手信号**，不是"第一次尝试的结果"。
+ *
+ * 真机现场（`~/.dsh/integrations/dsh-chat/logs/feishu.log`，2026-10-05）：
+ *   ENOTFOUND open.feishu.cn → SDK 自己 `reconnect` → 3 秒后 ws client ready
+ * 而旧实现抢在第 3 秒之前用 15s 计时器判了「启动失败」，把这台本来会自愈的机器人掐了。
+ * 下面这组用例把"抖动必须自愈"与"真失败必须报错"两条都钉死。
+ */
+
+/** 可编排的假 WSClient：由用例决定 onReady / onError 何时、以什么顺序触发。 */
+function createScriptedSdk(script) {
+  const created = [];
+  function WSClient(options) {
+    created.push(options);
+    return {
+      start() {
+        return Promise.resolve().then(() => script(options, created.length));
+      },
+    };
+  }
+  return {
+    Client: function Client() { return { im: { v1: {} } }; },
+    WSClient,
+    EventDispatcher: function EventDispatcher() { return { register: () => ({}) }; },
+    Domain: { Lark: 'lark' },
+    LoggerLevel: { info: 3 },
+    __created: created,
+  };
+}
+
+test('瞬时抖动必须自愈：先 onError 再 onReconnected，connect() 要以成功收尾', async () => {
+  const sdk = createScriptedSdk((options) => {
+    // 模拟 SDK 的重连过程：第一次握手失败 → 自己重试 → 成功。
+    options.onError(new Error('getaddrinfo ENOTFOUND open.feishu.cn'));
+    options.onReconnecting?.();
+    options.onReconnected?.();
+  });
+  const gateway = createLarkGateway({
+    appId: 'cli_x', appSecret: 'secret', sdk, logger: silentLogger,
+  });
+
+  await gateway.connect({}); // 旧实现会在这里抛「长连接失败」并把连接掐掉
+  assert.equal(gateway.isConnected(), true, '自愈之后必须算作已连接');
+  assert.equal(gateway.lastError(), null, '连上之后不该再留着上一次的错误');
+});
+
+test('终态失败（start 直接抛错）仍要如实报出去，不能假装连上', async () => {
+  const sdk = createScriptedSdk(() => { throw new Error('凭据形状不对'); });
+  const gateway = createLarkGateway({
+    appId: 'cli_x', appSecret: 'secret', sdk, logger: silentLogger,
+  });
+
+  await assert.rejects(() => gateway.connect({}), /凭据形状不对/);
+  assert.equal(gateway.isConnected(), false);
+});
+
+test('等待上限到点要报失败，并把最近一次底层错误带进消息里', async () => {
+  // 一直不成功：既没有 onReady，也没有 onReconnected。
+  const sdk = createScriptedSdk((options) => {
+    options.onError(new Error('getaddrinfo ENOTFOUND open.feishu.cn'));
+  });
+  const gateway = createLarkGateway({
+    // 传 60 会被下限钳到 1s（见上面的参数用例），这里正好顺带证明下限真的生效。
+    appId: 'cli_x', appSecret: 'secret', sdk, logger: silentLogger, connectTimeoutMs: 60,
+  });
+
+  await assert.rejects(
+    () => gateway.connect({}),
+    (error) => {
+      assert.equal(error.code, 'feishu/connect-timeout');
+      // "失败必须可见"：光说"未就绪"没法让人判断是网络还是配置。
+      assert.match(error.message, /ENOTFOUND/);
+      assert.match(error.message, /DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS/);
+      return true;
+    },
+  );
+  assert.equal(gateway.isConnected(), false);
+});
+
+test('超时参数：不传走默认，非法值被忽略，越界值被钳制', () => {
+  const cases = [
+    { raw: undefined, expect: 150_000 },
+    { raw: null, expect: 150_000 },
+    { raw: '', expect: 150_000 },
+    { raw: 'abc', expect: 150_000 },
+    { raw: '1500', expect: 1_500 },
+    { raw: 2_500, expect: 2_500 },
+    { raw: '1', expect: 1_000 },          // 低于下限 → 钳到 1s
+    { raw: '99999999', expect: 900_000 }, // 高于上限 → 钳到 15min
+  ];
+  for (const { raw, expect } of cases) {
+    assert.equal(resolveConnectTimeoutMs(raw), expect, `raw=${String(raw)}`);
+  }
 });

@@ -8,6 +8,12 @@
  *    失败就丢弃旧 WSClient、另起一个新的。
  * 2. 所有 `im.v1.*` 调用统一做 `code !== 0` 判定，否则飞书会用 HTTP 200 返回业务失败。
  *
+ * 关于"就绪"的判据：`connect()` 等的是**首个成功握手信号**（`onReady` 或 `onReconnected`），
+ * 而不是"第一次尝试的结果"。SDK 自带 `autoReconnect`，一次 DNS 抖动或 Wi-Fi 刚起来
+ * 导致的 `connect failed` 是会被它自己修好的；抢在那之前判失败，只会把本可自愈的连接杀掉。
+ * 只有 `start()` 直接抛错、或等待上限（`DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS`，默认 150s）到点，
+ * 才算真的起不来。
+ *
  * @module dsh-chat-feishu/lark-gateway
  */
 
@@ -16,7 +22,30 @@ import { stat } from 'node:fs/promises';
 
 import { askRow } from './turn-presenter.mjs';
 
-const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+/**
+ * 等待上限的兜底与钳制范围。
+ *
+ * 这个值只是**兜底**（防止真的永不返回），不是"连接质量"的判据：SDK 自己带
+ * `autoReconnect`，瞬时 DNS 抖动（`getaddrinfo ENOTFOUND`）、Wi-Fi 刚起来、代理切节点
+ * 都属于"过一会儿自己会好"的情形。判得太早就会把本可自愈的连接掐死，用户看到的是
+ * "启动失败"，而真实原因只是一次瞬时抖动。
+ *
+ * 默认值取 **150s** 是量出来的，不是拍的：SDK 的 `reconnectInterval` 是 120s、
+ * 另加最多 30s 的 `reconnectNonce` 抖动（`lib/index.js` 的 `WSConfig` 默认值），
+ * 所以任何短于这个窗口的上限都**必然**会把一次正常的退避重试判成失败——旧值 15s
+ * 连一次重试都等不到，真机上就是这么误杀的。健康网络下首握手实测约 0.6s。
+ */
+const DEFAULT_CONNECT_TIMEOUT_MS = 150_000;
+const MIN_CONNECT_TIMEOUT_MS = 1_000;
+const MAX_CONNECT_TIMEOUT_MS = 900_000;
+
+/** 允许用环境变量放宽等待上限（部署级参数，与 `DSH_CHAT_FEISHU_SDK_LOG` 同一条做法）。 */
+export function resolveConnectTimeoutMs(raw) {
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_CONNECT_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_CONNECT_TIMEOUT_MS;
+  return Math.min(MAX_CONNECT_TIMEOUT_MS, Math.max(MIN_CONNECT_TIMEOUT_MS, parsed));
+}
 
 /** 按扩展名判断是不是图片（图片走图片气泡/正文内嵌，其余走附件区）。 */
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
@@ -288,6 +317,7 @@ function readableApiError(error) {
  *   appId, appSecret, domain, sdk, logger,
  *   connectTimeoutMs?, loggerLevel?,
  * }。
+ *   `connectTimeoutMs` 不传时读 `DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS`，再退到默认值。
  *   `sdk` 可注入（测试用假 SDK）。
  * @returns 网关 API。
  */
@@ -297,12 +327,15 @@ export function createLarkGateway({
   domain = 'feishu',
   sdk,
   logger = console,
-  connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+  connectTimeoutMs,
   loggerLevel = process.env.DSH_CHAT_FEISHU_SDK_LOG || 'info',
   maxResourceBytes = DEFAULT_MAX_RESOURCE_BYTES,
 } = {}) {
   if (!sdk?.Client || !sdk?.WSClient) throw new TypeError('飞书网关需要 @larksuiteoapi/node-sdk。');
   if (!appId || !appSecret) throw new TypeError('飞书网关需要 appId 与 appSecret。');
+  const connectTimeout = resolveConnectTimeoutMs(
+    connectTimeoutMs ?? process.env.DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS,
+  );
 
   /**
    * 我们发出去的卡片是什么 schema（messageId → '2.0' | '1.0'）。
@@ -674,7 +707,16 @@ export function createLarkGateway({
         onError: (error) => {
           connected = false;
           lastError = error?.message ?? String(error);
-          settleFail(new Error(`飞书长连接失败：${lastError}`));
+          // ⚠️ **不再在这里判启动失败**。
+          //
+          // 这个回调在"首次握手失败"时也会被触发，但 SDK 自己带 `autoReconnect`：
+          // 一次 DNS 抖动（`getaddrinfo ENOTFOUND open.feishu.cn`）或 Wi-Fi 刚起来
+          // 导致的 `connect failed` 都会走这里，随后 SDK 自己安排重试并最终连上。
+          // 早先这里直接 reject，于是"本来会自愈的抖动"被报成「启动失败」——真机上
+          // 就是这么栽的：日志里 ENOTFOUND 出现 3 秒后连接就恢复了，而用户看到的是红的。
+          //
+          // 判据改成 **SDK 自己放弃**（`terminalError`，见 `reconnectCount` 耗尽或
+          // 不可重试的错误）才算失败，那才是真正的终态。
         },
         onReconnecting: () => {
           connected = false;
@@ -682,6 +724,8 @@ export function createLarkGateway({
         onReconnected: () => {
           connected = true;
           lastError = null;
+          // 自愈成功也算"就绪"：启动等待期内的重试连上了，就不该继续等到超时。
+          settleReady();
         },
       });
       wsClient = instance;
@@ -691,12 +735,21 @@ export function createLarkGateway({
         error.code = 'feishu/aborted';
         return error;
       };
+      /**
+       * 超时是**兜底**，不是判据。到点说明这段时间里首握手一直没成功——失败信息里
+       * 要带上最近一次底层错误（`ENOTFOUND` / `ETIMEDOUT` / 代理…），否则用户只看到
+       * "未就绪"，无从知道是网络还是配置问题（"失败必须可见"）。
+       */
       const timer = setTimeout(() => {
         closeQuietly(instance);
-        const error = new Error(`飞书长连接在 ${connectTimeoutMs}ms 内未就绪。`);
+        const detail = lastError ? `最近一次错误：${lastError}` : '这段时间内没有收到任何成功握手的信号。';
+        const error = new Error(
+          `飞书长连接在 ${connectTimeout}ms 内未就绪（${detail}）`
+          + `；若网络较慢可调大 DSH_CHAT_FEISHU_CONNECT_TIMEOUT_MS。`,
+        );
         error.code = 'feishu/connect-timeout';
         settleFail(error);
-      }, connectTimeoutMs);
+      }, connectTimeout);
       const onAbort = () => {
         closeQuietly(instance);
         settleFail(aborted());
@@ -704,10 +757,16 @@ export function createLarkGateway({
       signal?.addEventListener?.('abort', onAbort, { once: true });
 
       try {
-        const started = Promise.resolve().then(() => instance.start({ eventDispatcher: dispatcher }));
-        // 启动失败也要让 ready 有机会结束，避免悬挂。
-        void started.catch((error) => settleFail(error));
-        await Promise.race([ready, started.then(() => ready)]);
+        /**
+         * 等**首个成功信号**：`onReady`（首连成功）或 `onReconnected`（重试后成功）。
+         * 两者都可能在 SDK 自愈之后才来，所以这里只等"成功"，不等"第一次尝试的结果"。
+         */
+        void instance.start({ eventDispatcher: dispatcher }).catch((error) => {
+          // `start()` 自己抛错（SDK 的使用错误、凭据形状不对…）仍是**终态**：
+          // 这不是"等一下就会好"的网络问题，如实报出去。
+          settleFail(error);
+        });
+        await ready;
         if (signal?.aborted) throw aborted();
       } catch (error) {
         connected = false;

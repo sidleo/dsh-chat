@@ -186,7 +186,9 @@ export function createFeishuController({ deps, logger = console, config = {}, in
         domain: bot.domain,
         sdk,
         logger,
-        connectTimeoutMs: config.connectTimeoutMs,
+        // 只在真的配了的时候才传：写死的 `undefined` 会把网关那层的
+        // "环境变量 → 默认值"链路整个顶掉（网关的默认参数只在实参缺省时才生效）。
+        ...(config.connectTimeoutMs === undefined ? {} : { connectTimeoutMs: config.connectTimeoutMs }),
       });
       const state = createFeishuStateStore({
         path: join(dataDir, 'bots', bot.id, 'state.json'),
