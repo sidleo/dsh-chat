@@ -1,13 +1,15 @@
 /**
  * 会话桥（host 侧）：把一次 IM 消息变成一次 DSH 会话回合。
  *
- * 契约依据（DSH 0.1.5-rc.2 起、**已在 0.2.0-rc.1 复核**，逐项证据见 UPSTREAM.md）：
- * - `gateway.invoke({ namespace, method, args, signal })` 走一元方法，返回原始业务值，
+ * 契约依据（DSH 0.1.5-rc.2 起、**已在 0.2.0-rc.1 / 0.2.1-rc.2 复核**，逐项证据见 UPSTREAM.md）：
+ * - `gateway.invoke({ namespace, method, args, peer, signal })` 走一元方法，返回原始业务值，
  *   失败抛 `RemoteError`（读 `error.code`）；args 的键名必须与描述符 wire 完全一致，
  *   因此绝大多数方法都要包一层 `request`，且 `session/list` 的 wire 是 `_request`；
- *   0.2.0-rc.1 里 `InvokeRemoteRequest` 仍是 `{ namespace, method, args, uplink?, peer?, signal? }`；
+ * - ⚠️ **`peer` 从 0.2.1-rc.2 起是必需的**：0.2.0 由 gateway 自己兜底 `request.peer ?? this.operatorPeer()`，
+ *   0.2.1 删了这条兜底并在 `remoteRequest()` 里直接 `assertPeerLive(peer, …)`——不传 peer 就等于
+ *   `TypeError: Cannot read properties of undefined (reading 'signal')`。见下面 `operatorPeer()`；
  * - `session/follow`、`session/control`、`workspace/follow` 是 **stream** 方法，
- *   必须用 `gateway.stream()`；
+ *   必须用 `gateway.stream()`（同样要带 peer）；
  * - 一轮结束 = `turn/end` 事件；最终答案是**该轮所有 `assistant/message` 的 text 块按顺序拼接**
  *   （工具调用前后各有一段正文是常态，只取最后一段会丢内容——上游 Issue #112 同一根因）；
  * - 工具过程 = `tool/call` / `tool/result` 事件；
@@ -232,6 +234,45 @@ export function createSessionBridge({
   if (typeof gateway?.invoke !== 'function') {
     throw new TypeError('会话桥需要 context 的 typertGateway.invoke（请在 inject 中声明）。');
   }
+  /**
+   * 本 Host 的"operator Peer"：DSH 0.2.1-rc.2 起，`gateway.invoke/stream` **必须**带 `peer`。
+   *
+   * 0.2.0-rc.2 的 `prepareInvocation` 会替调用方补一个 `request.peer ?? this.operatorPeer()`
+   * （`operatorPeer()` 取 `connection.operator`）；0.2.1-rc.2 把这条兜底**删了**，
+   * 改成在 `remoteRequest()` 里先 `assertPeerLive(peer, …)` → `peer.signal.aborted`。
+   * 所以插件原来那种"只传 { namespace, method, args, signal }"的进程内调用会直接在
+   * **属性读取**上炸：`TypeError: Cannot read properties of undefined (reading 'signal')`
+   * ——真机表现是"飞书发消息报错：处理失败：Cannot read properties of undefined (reading 'signal')"。
+   *
+   * 修法：自己把 peer 递进去。取的是 Connection 自己那个 owner 身份 Peer：
+   * 0.2.1 叫 `connection.browserPeer`（0.2.0 叫 `connection.operator`）——**两个都认**，
+   * 这样同一份产物在 0.1.x / 0.2.0 / 0.2.1 上都能跑。
+   * 拿不到（Connection 没挂、或形状不对）就**不传**：那说明这台 Host 还是老口径，
+   * 交给它自己的兜底，绝不因此把调用打死。
+   */
+  function operatorPeer() {
+    const connection = ctx?.connection;
+    if (!connection) return undefined;
+    for (const candidate of [connection.browserPeer, connection.operator]) {
+      // 0.2.1 的 Peer 一定带 signal（`assertPeerLive` 读它）与 principal；
+      // 0.2.0 的 OperatorPeer **没有** signal——传过去反而会在 `.aborted` 上炸，所以不认。
+      if (candidate && candidate.signal && candidate.principal) return candidate;
+    }
+    return undefined;
+  }
+  /**
+   * 组装一次 Remote 调用的请求体。
+   *
+   * peer 是按调用现取的（不是建桥时缓存）：重连/换浏览器之后会换一个新的 Peer，
+   * 缓存住那个旧的 = 拿着已经 dispose 的 Peer 说话，`assertPeerLive` 会判 `gateway/peer-disposed`。
+   */
+  function remoteRequest(namespace, method, args = {}, signal) {
+    const request = { namespace, method, args };
+    const peer = operatorPeer();
+    if (peer) request.peer = peer;
+    if (signal !== undefined) request.signal = signal;
+    return request;
+  }
   /** @type {Map<string, AbortController>} 会话键 → 当前回合的中断控制器。 */
   const activeTurns = new Map();
   /**
@@ -339,10 +380,8 @@ export function createSessionBridge({
    * @returns 原始业务值。
    */
   async function invoke(namespace, method, args = {}, signal) {
-    const request = { namespace, method, args };
-    if (signal !== undefined) request.signal = signal;
     try {
-      return await gateway.invoke(request);
+      return await gateway.invoke(remoteRequest(namespace, method, args, signal));
     } catch (error) {
       throw sessionError(error, 'chat/gateway-failed');
     }
@@ -359,10 +398,8 @@ export function createSessionBridge({
       error.code = 'chat/stream-unavailable';
       throw error;
     }
-    const request = { namespace, method, args };
-    if (signal !== undefined) request.signal = signal;
     try {
-      return await gateway.stream(request);
+      return await gateway.stream(remoteRequest(namespace, method, args, signal));
     } catch (error) {
       throw sessionError(error, 'chat/gateway-stream-failed');
     }

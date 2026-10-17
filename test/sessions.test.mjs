@@ -1517,3 +1517,109 @@ test('没有图片的普通回合遇到附件错误也不会去上传文件', as
     await app.cleanup();
   }
 });
+
+/**
+ * DSH 0.2.1-rc.2 起的 `typertGateway`：**每次调用都必须带一个活的 peer**。
+ *
+ * 0.2.0-rc.2 的 `prepareInvocation` 会兜底 `request.peer ?? this.operatorPeer()`；
+ * 0.2.1-rc.2 删了这条兜底，改成在 `remoteRequest()` 里先 `assertPeerLive(peer, …)`
+ * （读 `peer.signal.aborted`）——于是插件原来那种不传 peer 的进程内调用直接在**属性读取**上炸：
+ * `TypeError: Cannot read properties of undefined (reading 'signal')`。
+ * 真机现场就是飞书收到消息后回一句「处理失败：Cannot read properties of undefined (reading 'signal')」。
+ *
+ * 这里照 0.2.1-rc.2 的判定原样复刻（含它读 `peer.signal` / `peer.principal` 两处），
+ * 任何一处不传 peer 就抛同样的 TypeError。
+ */
+function createStrictPeerGateway({ script = [], includeBrowserPeer = true, includeLegacyOperator = false, throwOnPeer = null } = {}) {
+  const peer = { id: 'peer-op', principal: { kind: 'owner' }, interactions: 'answer', signal: new AbortController().signal };
+  const legacyOperator = { id: 'operator-op' }; // 0.2.0 的 OperatorPeer：**没有** signal
+  const connection = {};
+  if (includeBrowserPeer) connection.browserPeer = peer;
+  if (includeLegacyOperator) connection.operator = legacyOperator;
+
+  const seen = [];
+  /** 0.2.1 的 `assertPeerLive`：peer 为 undefined 时抛的正是属性读取错误。 */
+  function assertPeerLive(value) {
+    if (value === throwOnPeer) throw new TypeError("Cannot read properties of undefined (reading 'signal')");
+    if (value.signal.aborted) throw new Error('gateway/peer-disposed');
+  }
+
+  const base = createFakeGateway({ script, repeatScript: true });
+  return {
+    connection,
+    seen,
+    /** 转发给假 gateway，但先按 0.2.1 的口径校验 peer。 */
+    async invoke(request) {
+      seen.push({ kind: 'invoke', ...request });
+      assertPeerLive(request.peer);
+      if (request.peer.principal?.kind !== 'owner') throw new Error('gateway/invocation-unavailable');
+      return base.invoke(request);
+    },
+    async stream(request) {
+      seen.push({ kind: 'stream', ...request });
+      assertPeerLive(request.peer);
+      return base.stream(request);
+    },
+  };
+}
+
+test('DSH 0.2.1：gateway 调用必须带 connection.browserPeer，否则就是 reading \'signal\' 崩', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-peer-'));
+  const store = createSessionStore({ dataDir, logger: silentLogger });
+  const gateway = createStrictPeerGateway({ script: [turnFrames({ text: '带 peer 的答案' })] });
+  try {
+    const bridge = createSessionBridge({
+      ctx: { typertGateway: gateway, connection: gateway.connection },
+      logger: silentLogger,
+      store,
+    });
+    const result = await bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [{ type: 'text', text: '在吗' }],
+      sourceGuidance: '',
+    });
+    assert.equal(result.text, '带 peer 的答案');
+    // 一元调用与流调用都必须带上它——漏一个就还是会崩。
+    const invokes = gateway.seen.filter((row) => row.kind === 'invoke');
+    const streams = gateway.seen.filter((row) => row.kind === 'stream');
+    assert.ok(invokes.length > 0 && streams.length > 0, '两种调用都应该发生过');
+    for (const row of [...invokes, ...streams]) {
+      assert.equal(row.peer, gateway.connection.browserPeer, `${row.kind} ${row.namespace}/${row.method} 必须带 peer`);
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('DSH 0.2.1：0.2.0 的 connection.operator（没有 signal）不会被当成 peer 递过去', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-peer-legacy-'));
+  const store = createSessionStore({ dataDir, logger: silentLogger });
+  const seen = [];
+  // 老 Host：只有 0.2.0 的 connection.operator，且它**没有** signal。
+  // 拿它当 peer 递过去会在 `peer.signal.aborted` 上炸成 reading 'aborted'，
+  // 所以桥必须认出来、**不传**（交给老 Host 自己的兜底）。
+  const inner = createFakeGateway({ script: [turnFrames({ text: '旧字段不进请求' })], repeatScript: true });
+  const gateway = {
+    async invoke(request) { seen.push({ kind: 'invoke', ...request }); return inner.invoke(request); },
+    async stream(request) { seen.push({ kind: 'stream', ...request }); return inner.stream(request); },
+  };
+  try {
+    const bridge = createSessionBridge({
+      ctx: { typertGateway: gateway, connection: { operator: { id: 'operator-op' } } },
+      logger: silentLogger,
+      store,
+    });
+    const result = await bridge.ask({
+      channelId: 'feishu', botId: 'bot_1', key: 'p2p:ou_a', workspacePath: '/ws',
+      content: [{ type: 'text', text: '在吗' }],
+      sourceGuidance: '',
+    });
+    assert.equal(result.text, '旧字段不进请求');
+    assert.ok(seen.length > 0, '应该真的调过 gateway');
+    for (const row of seen) {
+      assert.equal(row.peer, undefined, `${row.kind} ${row.namespace}/${row.method} 不该带没有 signal 的老 operator`);
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

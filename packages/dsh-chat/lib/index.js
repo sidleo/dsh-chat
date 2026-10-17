@@ -16,7 +16,7 @@ import { join as join6, resolve as resolve3 } from "node:path";
 
 // packages/dsh-chat/shared/contract.mjs
 var CONTRACT_VERSION = 1;
-var HUB_VERSION = "0.2.3";
+var HUB_VERSION = "0.2.4";
 var HOST_SERVICE = "dshChat";
 var RPC_PREFIX = "dsh-chat";
 var CONTROL_CHANNEL_ID = "control";
@@ -712,19 +712,38 @@ function itemText(item) {
     body = {};
   }
   const plain = (value) => typeof value === "string" ? value.trim() : "";
+  const raw = (value) => typeof value === "string" ? value : "";
   if (msgType === "text") return plain(body.text);
   if (msgType === "post") {
-    const localised = body.zh_cn ?? Object.values(body).find((value) => value && typeof value === "object");
-    const rows = Array.isArray(localised?.content) ? localised.content : [];
+    const byKey = /* @__PURE__ */ new Map();
+    const byOpenId = /* @__PURE__ */ new Map();
+    for (const mention of Array.isArray(item?.mentions) ? item.mentions : []) {
+      const key = plain(mention?.key);
+      if (key) byKey.set(key, mention);
+      const openId = typeof mention?.id === "string" ? plain(mention.id) : plain(mention?.id?.open_id);
+      if (openId) byOpenId.set(openId, mention);
+    }
+    const isWrapper = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && (Array.isArray(value.content) || Array.isArray(value.content_v2));
+    const localised = [body.zh_cn, body, ...Object.values(body ?? {})].find(isWrapper) ?? {};
+    const rows = Array.isArray(localised.content_v2) ? localised.content_v2 : Array.isArray(localised.content) ? localised.content : [];
     const lineOf = (node) => {
       if (!node || typeof node !== "object") return "";
-      if (node.tag === "img" || node.tag === "media") {
-        return `[${node.tag === "img" ? "\u56FE\u7247" : "\u89C6\u9891"}]`;
+      const tag = plain(node.tag);
+      if (tag === "img" || tag === "media") {
+        return `[${tag === "img" ? "\u56FE\u7247" : "\u89C6\u9891"}]`;
       }
-      if (node.tag === "at") return plain(node.user_id) ? `@${plain(node.user_id)}` : "@";
-      return plain(node.text ?? node.href);
+      if (tag === "emotion") return "[\u8868\u60C5]";
+      if (tag === "hr") return "---";
+      if (tag === "at") {
+        const placeholder = plain(node.user_id) || plain(node.key);
+        const mentioned = byKey.get(placeholder) ?? (/^ou_[A-Za-z0-9_-]+$/.test(placeholder) ? byOpenId.get(placeholder) : void 0);
+        const label2 = plain(node.user_name) || plain(mentioned?.name) || placeholder;
+        if (!label2) return "@";
+        return label2.startsWith("@") ? label2 : `@${label2}`;
+      }
+      return raw(node.text) || raw(node.href);
     };
-    const lines = rows.filter(Array.isArray).map((row) => row.map(lineOf).filter(Boolean).join("")).filter(Boolean);
+    const lines = rows.filter(Array.isArray).map((row) => row.map(lineOf).join("").trim()).filter((line2) => line2);
     const title = plain(localised?.title);
     return [title, ...lines].filter(Boolean).join("\n");
   }
@@ -4250,6 +4269,21 @@ function createSessionBridge({
   if (typeof gateway?.invoke !== "function") {
     throw new TypeError("\u4F1A\u8BDD\u6865\u9700\u8981 context \u7684 typertGateway.invoke\uFF08\u8BF7\u5728 inject \u4E2D\u58F0\u660E\uFF09\u3002");
   }
+  function operatorPeer() {
+    const connection = ctx?.connection;
+    if (!connection) return void 0;
+    for (const candidate of [connection.browserPeer, connection.operator]) {
+      if (candidate && candidate.signal && candidate.principal) return candidate;
+    }
+    return void 0;
+  }
+  function remoteRequest(namespace, method, args = {}, signal) {
+    const request = { namespace, method, args };
+    const peer = operatorPeer();
+    if (peer) request.peer = peer;
+    if (signal !== void 0) request.signal = signal;
+    return request;
+  }
   const activeTurns = /* @__PURE__ */ new Map();
   const turnQueues = /* @__PURE__ */ new Map();
   const queueDepth = /* @__PURE__ */ new Map();
@@ -4303,10 +4337,8 @@ function createSessionBridge({
     })).filter((row) => typeof row.sessionId === "string" && row.sessionId);
   }
   async function invoke(namespace, method, args = {}, signal) {
-    const request = { namespace, method, args };
-    if (signal !== void 0) request.signal = signal;
     try {
-      return await gateway.invoke(request);
+      return await gateway.invoke(remoteRequest(namespace, method, args, signal));
     } catch (error) {
       throw sessionError(error, "chat/gateway-failed");
     }
@@ -4317,10 +4349,8 @@ function createSessionBridge({
       error.code = "chat/stream-unavailable";
       throw error;
     }
-    const request = { namespace, method, args };
-    if (signal !== void 0) request.signal = signal;
     try {
-      return await gateway.stream(request);
+      return await gateway.stream(remoteRequest(namespace, method, args, signal));
     } catch (error) {
       throw sessionError(error, "chat/gateway-stream-failed");
     }

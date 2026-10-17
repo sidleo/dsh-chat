@@ -87,6 +87,23 @@ peerDependencies**（声明了会把 0.1.x 用户挡在安装门外）。两点�
 逐项证据见 `docs/dsh-0.2.0-compat.md`，验证记录见 `docs/dsh-0.2.0-verify.md`、
 对抗性审查见 `docs/dsh-0.2.0-review.md`。
 
+⚠️ **0.2.0 → 0.2.1 有破坏性改动：`gateway.invoke/stream` 必须带 `peer`**（2026-10 真机踩到）。
+0.2.0-rc.2 的 `prepareInvocation` 会兜底 `request.peer ?? this.operatorPeer()`；**0.2.1-rc.2 把这条
+兜底和 `operatorPeer()` 一起删了**，改成在 `remoteRequest()` 里先 `assertPeerLive(peer, …)`（读
+`peer.signal.aborted`）。所以不带 peer 的进程内调用会直接崩在**属性读取**上：
+`TypeError: Cannot read properties of undefined (reading 'signal')`——真机表现是**飞书每条消息都回
+「处理失败：Cannot read properties of undefined (reading 'signal')」**，`hub.log` 同时有一条
+`读取模型列表失败：` 同样文案。
+现在 `sessions.mjs` 的 `operatorPeer()` 按 `connection.browserPeer`（0.2.1）→ `connection.operator`（0.2.0）
+依次认，**必须同时有 `signal` 与 `principal` 才认**（0.2.0 那个没有 `signal`，传过去改成炸 `aborted`），
+认不出就**不传**（交给老 Host 兜底）；peer **每次调用现取**不缓存（换浏览器会换 Peer，
+缓存旧的在 `assertPeerLive` 里是 `gateway/peer-disposed`）。
+⚠️ **`npm run check:dsh` 验不出这类事**：它走的是本机 CLI，而**桌面端的 DSH 与 CLI 是两个版本**
+（真机上桌面端 0.2.1-rc.2、CLI 仍是 0.2.0-rc.2）。升级桌面端后要另外看 `app.asar` 里的
+`dsh/package.json` 版本，并对 `dsh-api-gateway` / `dsh-api-session-controller` / `dsh-api-remotes`
+做一次 `lib/index.js` diff（找新加的 `assert*`、被删的 `?? fallback`）。
+详见 `docs/dsh-0.2.1-peer-regression.md`。
+
 ## 上线与排查
 
 - **装/卸**：`dsh plugin --profile web add <包绝对路径>` / `remove <包名>`。改 host 代码必须**重启 dsh**；改 client 代码刷新页面即可。
@@ -566,6 +583,37 @@ peerDependencies**（声明了会把 0.1.x 用户挡在安装门外）。两点�
 - **设置页投递目标只显示 `oc_xxx` / `ou_xxx`**：名字解析要 `im:chat:readonly`（群名）与通讯录权限（人名），
   缺权限时卡片上会直接写明原因并给开通链接（`connection.status` 的 `nameHint`），日志里是 `读取群列表失败` / `读取用户信息失败`。
   这类失败会退避 30 分钟、期间不再重试（并发查询也合并成一次，免得把日志刷满），**开通权限后点「重新连接」即刻重取**。
+- **富文本（`post`）的完整口径：形状、节点、@ 还原三件事**（真机 2026-10-07，群「数数2026」摸出来的；
+  节点与形状逐条对过官方《接收消息内容结构》，结论见 `docs/` 之外的那次调研记录）：
+  ① **形状两种都要认**——`im.message.receive_v1` 事件与 `GET /im/v1/messages/:id` 给的是**平铺**
+  `{ title, content: [[…]], content_v2: [[…]] }`，只有发送接口是**多语言包裹** `{ zh_cn: { title, content } }`。
+  判据必须是"**真的带 `content` 段落数组的那一层**"：只判 `typeof === 'object'` 会把段落数组本身当包裹
+  （数组也是对象），rows 恒为空——真机上每条富文本都因此落进"内容无法解析"。
+  ⚠️ **段落数组优先取 `content_v2`**：官方口径是 `md` 标签**只出现在 v2**、`content` 是降级形态
+  （md 被拆成 text、列表被压平），原话"推荐优先读取 `content_v2`"。不含 md 时两份逐字相同，老消息不受影响。
+  ② **节点**：`text`/`a` 取文字（`a` 退回 href）、`img` 收 `image_key` 并留 `[图片]`、
+  `media`→`[视频]`（官方字段是 `image_key` 封面、**没有** duration）、`emotion`→`[表情]`、`hr`→`---`、
+  `code_block` 取 `text`、认不出的标签退回 `text||href`（**不丢整行**，飞书以后加标签也不会瞎）。
+  正文片段**按节点不 trim**：飞书把一行拆成多个节点，空格挂在前一个节点末尾（真机 `" /"`、`" 华哥，…"`），
+  trim 会把 `@黄华 华哥` 粘成 `@黄华华哥`。
+  ③ **@ 还原**：`at.user_id` **有两种形态**——占位符 `@_user_N`（官方口径，真机 14/14）或真实 `ou_…`
+  （官方 SDK 也兼容），所以要建**两张索引**：按 `key` 与按 open_id。人名取 `at.user_name`，
+  再退 `message.mentions[].name`；都没有就用占位符本身，**不**打印 `mentions[].id`。占位符自带 `@`，别补成 `@@_user_1`。
+  ⚠️ `mentions[].id` 也有两种形状：**事件里是对象 `{open_id}`、回读接口里是字符串**——两处都认。
+  群聊门禁**两道判据都看**：`message.mentions` 与正文里解析出的 `mentionedOpenIds`——
+  只看前者会漏掉"用户在富文本里 @ 了它、它却装没听见"（有的端把真 open_id 写在 `at` 节点里）。
+  答题那条路要用**去掉 @ 的那一份**（`mentionFreeText`），否则一个 @ 就把答案顶掉。
+- **两份实现必须一致**：渠道侧 `host/post-content.mjs`（入站消息 + 被引用的历史消息，`lark-gateway.mjs`
+  的 `getMessageText` 也走它）与 hub 侧 `shared/forwarded-messages.mjs`（合并转发里的子消息）是同一套口径的两份代码——
+  架构不变量①不许互相 import。**改一边必须同时改另一边**，`test/post-content-parity.test.mjs`
+  用同一组载荷钉住两边逐字一致（含"只有 `content_v2`"、"content 与 content_v2 不一致时优先 v2"、
+  "`at` 给真实 open_id"这几种形态）。
+- **群里没被 @ 也会插话：群聊 @ 门禁必须挡在*所有*出站回复之前**（同一次真机的第二半）：
+  那句「暂时还不能处理『富文本（内容无法解析）』」当时排在 @ 门禁**之前**，所以连"这条没 @ 我"都没看就发出去了。
+  现在兜底回复在门禁**之后**（私聊、群里被 @ 时才回，没被 @ 只留一行日志）。
+  单测钉住：`真机平铺形态…`、`真机载荷逐字还原…`、`正文里 @ 了机器人（mentions 里没有那一条）也要响应`、
+  `交互回答：富文本答题时用"去掉 @ 的那一份"认领`、`群里解析不出来的消息未 @ 时既不回复也不进模型`、
+  `合并转发：平铺形态的富文本子消息不再被整条丢掉`。
 
 ## 阶段与进度
 
