@@ -21,6 +21,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 import { askRow } from './turn-presenter.mjs';
+import { postText } from './post-content.mjs';
 
 /**
  * 等待上限的兜底与钳制范围。
@@ -1306,9 +1307,10 @@ export function createLarkGateway({
       if (msgType === 'text') {
         text = plain(body.text);
       } else if (msgType === 'post') {
-        // 富文本：`content` 是 [[{tag,text|href|...}]]，只取文字部分。
-        const rows = Array.isArray(body.content) ? body.content : [];
-        text = rows.flat().map((node) => plain(node?.text ?? node?.href)).filter(Boolean).join(' ');
+        // 富文本：形状/节点/@ 还原都走 `post-content.mjs`（与入站消息**同一份**实现）。
+        // 被引用的历史媒体只留占位、不下载（与合并转发同一口径），但 @ 要还原成人名、
+        // 段落要保留换行——早先这里只抠 text/href 再用空格连起来，引用一条富文本等于读了半句话。
+        text = postText(body, item.mentions);
       } else if (msgType === 'audio') {
         text = plain(body.text); // 飞书的语音消息可能带 ASR 文本。
       }

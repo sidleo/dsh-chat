@@ -113,6 +113,44 @@ test('合并转发：富文本子消息取文字、媒体只留占位（不下�
   assert.match(text, /（图片）/); // 媒体类型子消息给类型名，不下载字节。
 });
 
+test('合并转发：平铺形态的富文本子消息不再被整条丢掉，@ 还原成人名', () => {
+  // 真机（2026-10-07）形状：**没有多语言包裹**，`title`/`content`/`content_v2` 平铺在顶层，
+  // @ 节点是 `@_user_1` 占位符。早先按"第一个对象值当包裹"取到了 `content` 数组本身，
+  // rows 恒为空 → 整条富文本子消息被渲染成空串、静默消失。
+  const items = [
+    item('om_root', { type: 'merge_forward' }),
+    {
+      message_id: 'om_post_flat',
+      upper_message_id: 'om_root',
+      msg_type: 'post',
+      create_time: '1789000001000',
+      sender: { id: 'ou_a', name: '张志炜' },
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_huang' }, name: '黄华' }],
+      body: {
+        content: JSON.stringify({
+          title: '',
+          content: [[
+            { tag: 'at', user_id: '@_user_1', user_name: '黄华', style: [] },
+            { tag: 'text', text: ' 华哥，现金流的计算', style: [] },
+            { tag: 'text', text: '月均交易额', style: [] },
+            { tag: 'img', image_key: 'img_v2_a' },
+          ]],
+          content_v2: [[
+            { tag: 'at', user_id: '@_user_1', user_name: '黄华', style: [] },
+            { tag: 'text', text: ' 华哥，现金流的计算', style: [] },
+            { tag: 'text', text: '月均交易额', style: [] },
+            { tag: 'img', image_key: 'img_v2_a' },
+          ]],
+        }),
+      },
+    },
+  ];
+  const text = forwardedMessagesBlock({ messageId: 'om_root', items });
+  assert.match(text, /@黄华 华哥，现金流的计算月均交易额\[图片\]/, '节点之间的空格与拆分都要原样保住');
+  assert.doesNotMatch(text, /没有可读内容/, '有正文就不能再报"没有可读内容"');
+  assert.doesNotMatch(text, /@_user_1/, '占位符要换成人名');
+});
+
 test('合并转发：读不到 / 空包 / 没有可读内容，三种都要给结构化标记', () => {
   // 读不到（无权限/超时）：带原因。
   const unavailable = forwardedMessagesBlock({ messageId: 'om_x', reason: 'permission denied' });

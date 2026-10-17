@@ -11,6 +11,7 @@ import { stat } from 'node:fs/promises';
 
 import { createTurnPresenter } from './turn-presenter.mjs';
 import { panelAction, panelButton, panelCard, panelPick } from './panel-card.mjs';
+import { parsePostContent } from './post-content.mjs';
 
 /** 交付文件的单文件上限（与主动投递一致：飞书上传超过这个量既慢又容易失败）。 */
 const MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
@@ -114,61 +115,12 @@ function sniffImageMediaType(bytes, contentType) {
 }
 
 /**
- * 把飞书富文本（`post`）的 `content` 解析成正文 + 图片键。
- *
- * 飞书这个字段是**多语言包裹**的（`{ zh_cn: { title, content: [[{tag,...}]] } }`），
- * 优先取 `zh_cn`，没有就取第一个像样的语言分支。`title` 要拼在最前面——它就是正文的一部分。
- *
- * 为什么要单独收 `image_key`：富文本里的图片**是正文的一部分**（配图说明就是这个形态），
- * 只取文字等于把图丢了；收出来交给下游走与单张图片**完全相同**的下载/回退链路。
- *
- * @param content - `message.content`（JSON 字符串）。
- * @returns `{ text, imageKeys }`；解析失败给空值（绝不抛）。
- */
-function parsePostContent(content) {
-  let parsed = {};
-  try {
-    parsed = JSON.parse(content ?? '{}');
-  } catch {
-    return { text: '', imageKeys: [] };
-  }
-  const localised = parsed?.zh_cn
-    ?? Object.values(parsed ?? {}).find((value) => value && typeof value === 'object')
-    ?? {};
-  const rows = Array.isArray(localised.content) ? localised.content : [];
-  const imageKeys = [];
-  const lineOf = (node) => {
-    if (!node || typeof node !== 'object') return '';
-    if (node.tag === 'img') {
-      if (typeof node.image_key === 'string' && node.image_key) imageKeys.push(node.image_key);
-      return '[图片]';
-    }
-    if (node.tag === 'media') return '[视频]';
-    if (node.tag === 'at') {
-      const id = typeof node.user_id === 'string' ? node.user_id.trim() : '';
-      return id ? `@${id}` : '@';
-    }
-    const text = typeof node.text === 'string' ? node.text : '';
-    return text || (typeof node.href === 'string' ? node.href : '');
-  };
-  const lines = rows
-    .filter(Array.isArray)
-    .map((row) => row.map(lineOf).join(''))
-    .filter((line) => line.trim());
-  const title = typeof localised.title === 'string' ? localised.title.trim() : '';
-  return {
-    text: [title, ...lines].filter(Boolean).join('\n').trim(),
-    imageKeys,
-  };
-}
-
-/**
  * 解析入站消息的内容部分。
  *
  * @param message - 飞书消息体。
  * @returns `{ kind:'text', text }` | `{ kind:'image', fileKey }`
- *   | `{ kind:'post', text, imageKeys }` | `{ kind:'merge_forward' }`
- *   | `{ kind:'unsupported', label }`。
+ *   | `{ kind:'post', text, mentionFreeText, imageKeys, mentionedOpenIds }`
+ *   | `{ kind:'merge_forward' }` | `{ kind:'unsupported', label }`。
  */
 function parseInbound(message) {
   const text = messageText(message);
@@ -190,23 +142,48 @@ function parseInbound(message) {
     }
     return { kind: 'unsupported', label: `${type === 'image' ? '图片' : '文件'}（内容无法解析）` };
   }
-  // 富文本：文字进正文，内嵌图片按图片收（正文里保留 `[图片]` 占位说明位置）。
+  // 富文本：形状、节点与 @ 还原都在 `post-content.mjs`（入站与"被引用的历史消息"共用一份）。
   if (type === 'post') {
-    const { text: postText, imageKeys } = parsePostContent(message.content);
-    if (!postText && imageKeys.length === 0) {
+    const parsed = parsePostContent(message.content, { mentions: message.mentions });
+    if (!parsed.text && parsed.imageKeys.length === 0) {
       return { kind: 'unsupported', label: '富文本（内容无法解析）' };
     }
-    return { kind: 'post', text: postText, imageKeys };
+    return {
+      kind: 'post',
+      text: parsed.text,
+      mentionFreeText: parsed.mentionFreeText,
+      imageKeys: parsed.imageKeys,
+      mentionedOpenIds: parsed.mentionedOpenIds,
+    };
   }
   // 合并转发：飞书只给一个外壳 id，子消息要再查一次（展开在 hub 做）。
   if (type === 'merge_forward') return { kind: 'merge_forward' };
   return { kind: 'unsupported', label: type };
 }
 
-/** 群聊里"是否 @ 了本机器人"。 */
-function mentionsBot(message, botOpenId) {
-  if (!botOpenId || !Array.isArray(message?.mentions)) return false;
-  return message.mentions.some((mention) => mention?.id?.open_id === botOpenId);
+/**
+ * 群聊里"是否 @ 了本机器人"。
+ *
+ * 两道判据都要看：飞书把 @ 同时写进 `message.mentions` 和富文本正文的 `at` 节点里，
+ * 但**都不是"有一处就一定有另一处"**（回读/事件/不同端的形状不一样）。只看 `mentions`
+ * 会漏掉"用户在富文本里 @ 了它、它却装没听见"这一种，而那正是最该回的那种消息。
+ *
+ * @param message - 飞书消息体。
+ * @param botOpenId - 本机器人的 open_id。
+ * @param inbound - `parseInbound` 的结果（富文本会给 `mentionedOpenIds`）。
+ * @returns true 表示这条消息 @ 了本机器人。
+ */
+function mentionsBot(message, botOpenId, inbound = null) {
+  if (!botOpenId) return false;
+  // `mentions[].id` 两种形态都要认：事件里是 `{ open_id }`，回读接口里是 open_id 字符串（真机实测）。
+  const mentioned = (mention) => (typeof mention?.id === 'string'
+    ? mention.id
+    : mention?.id?.open_id);
+  if (Array.isArray(message?.mentions)
+    && message.mentions.some((mention) => mentioned(mention) === botOpenId)) {
+    return true;
+  }
+  return Array.isArray(inbound?.mentionedOpenIds) && inbound.mentionedOpenIds.includes(botOpenId);
 }
 
 /** 去掉 @ 占位符（飞书把 @ 渲染成 `@_user_1` 这样的 key）。 */
@@ -499,14 +476,6 @@ export function createFeishuBridge({
       return;
     }
     const inbound = parseInbound(message);
-    if (inbound.kind === 'unsupported') {
-      await gateway.replyText({
-        messageId: message.message_id,
-        text: `暂时还不能处理「${inbound.label}」类型的消息`
-          + '（目前支持文本、富文本、图片、文件与合并转发）。',
-      });
-      return;
-    }
 
     const conversationKey = conversationType === 'direct'
       ? `p2p:${senderId}`
@@ -515,9 +484,12 @@ export function createFeishuBridge({
     // 正在等这个会话回答 agent 的提问/审批：这条消息就是答案，不再进模型。
     // 位置很关键——放在门禁**之后**（陌生人不能替人回答）、@ 检查**之前**
     // （回答问题时不需要再 @ 机器人）。
-    // 富文本的手打答案也要认（用户按了富文本格式发"是"，同样是在回答问题）。
+    // 富文本的手打答案也要认（用户按了富文本格式发"是"，同样是在回答问题），
+    // 而且要用**去掉 @ 的那一份**：答题时顺手 @ 了谁，不能把这个 @ 带进来当答案的一部分。
     if (inbound.kind === 'text' || inbound.kind === 'post') {
-      const candidate = stripMentions(inbound.text, message.mentions);
+      const candidate = inbound.kind === 'post'
+        ? (inbound.mentionFreeText ?? stripMentions(inbound.text, message.mentions))
+        : stripMentions(inbound.text, message.mentions);
       if (candidate && deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
@@ -530,9 +502,22 @@ export function createFeishuBridge({
       }
     }
 
+    // 群聊 @ 门禁必须挡在**所有**出站回复之前。
+    // 位置很关键：早先"不支持的类型"的兜底回复排在这之前，于是群里任何一条解析不出来的消息
+    // （真机：富文本解析失败）都会让机器人在**没被 @** 的情况下插一句话。
     if (conversationType === 'group' && bot.groupResponseMode !== 'all'
-      && !mentionsBot(message, bot.botOpenId)) {
+      && !mentionsBot(message, bot.botOpenId, inbound)) {
       logger.info?.(`[dsh-chat-feishu] 群消息未 @ 本机器人，忽略（${bot.id} group=${message.chat_id}）`);
+      return;
+    }
+
+    // 不支持的类型：明确回一句（私聊、以及群里被 @ 时），绝不静默吞掉。
+    if (inbound.kind === 'unsupported') {
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: `暂时还不能处理「${inbound.label}」类型的消息`
+          + '（目前支持文本、富文本、图片、文件与合并转发）。',
+      });
       return;
     }
 
@@ -580,7 +565,8 @@ export function createFeishuBridge({
 
     if (inbound.kind === 'post') {
       // 富文本：文字进正文，内嵌图片按图片收（下载失败的图只是少一张，正文照进模型）。
-      text = stripMentions(inbound.text, message.mentions);
+      // @ 已经在解析层还原成人名（`@黄华`），这里不再按占位符去抠——抠了反而把"谁被 @ 了"丢掉。
+      text = inbound.text;
       const parts = [];
       for (const fileKey of inbound.imageKeys) {
         const { part } = await inboundImagePart(fileKey);

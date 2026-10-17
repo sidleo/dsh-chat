@@ -27734,8 +27734,8 @@ function getSdkVersion() {
   cachedVersion = "unknown";
   return "unknown";
 }
-function sanitizeSource(raw) {
-  return raw.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
+function sanitizeSource(raw2) {
+  return raw2.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
 }
 function buildUserAgent(source, opts) {
   let ua = `oapi-node-sdk/${getSdkVersion()}`;
@@ -28454,10 +28454,10 @@ function classifyError(err, context) {
 }
 function inferCode(err) {
   var _a, _b, _c, _d, _e, _f, _g, _h;
-  const raw = err;
-  const status = (_b = (_a = raw === null || raw === void 0 ? void 0 : raw.response) === null || _a === void 0 ? void 0 : _a.status) !== null && _b !== void 0 ? _b : raw === null || raw === void 0 ? void 0 : raw.status;
-  const feishuCode = (_g = (_e = (_d = (_c = raw === null || raw === void 0 ? void 0 : raw.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.code) !== null && _e !== void 0 ? _e : (_f = raw === null || raw === void 0 ? void 0 : raw.data) === null || _f === void 0 ? void 0 : _f.code) !== null && _g !== void 0 ? _g : raw === null || raw === void 0 ? void 0 : raw.code;
-  const msg = String((_h = raw === null || raw === void 0 ? void 0 : raw.message) !== null && _h !== void 0 ? _h : "").toLowerCase();
+  const raw2 = err;
+  const status = (_b = (_a = raw2 === null || raw2 === void 0 ? void 0 : raw2.response) === null || _a === void 0 ? void 0 : _a.status) !== null && _b !== void 0 ? _b : raw2 === null || raw2 === void 0 ? void 0 : raw2.status;
+  const feishuCode = (_g = (_e = (_d = (_c = raw2 === null || raw2 === void 0 ? void 0 : raw2.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.code) !== null && _e !== void 0 ? _e : (_f = raw2 === null || raw2 === void 0 ? void 0 : raw2.data) === null || _f === void 0 ? void 0 : _f.code) !== null && _g !== void 0 ? _g : raw2 === null || raw2 === void 0 ? void 0 : raw2.code;
+  const msg = String((_h = raw2 === null || raw2 === void 0 ? void 0 : raw2.message) !== null && _h !== void 0 ? _h : "").toLowerCase();
   if (typeof feishuCode === "number") {
     if (feishuCode === 230020 || feishuCode === 230017)
       return "target_revoked";
@@ -28476,15 +28476,15 @@ function inferCode(err) {
     return "target_revoked";
   if (msg.startsWith("ssrf_blocked"))
     return "ssrf_blocked";
-  if (msg.includes("timeout") || (raw === null || raw === void 0 ? void 0 : raw.code) === "ETIMEDOUT" || (raw === null || raw === void 0 ? void 0 : raw.code) === "ECONNABORTED") {
+  if (msg.includes("timeout") || (raw2 === null || raw2 === void 0 ? void 0 : raw2.code) === "ETIMEDOUT" || (raw2 === null || raw2 === void 0 ? void 0 : raw2.code) === "ECONNABORTED") {
     return "send_timeout";
   }
   return "unknown";
 }
 function extractMessage(err) {
   var _a, _b, _c, _d;
-  const raw = err;
-  return ((_b = (_a = raw === null || raw === void 0 ? void 0 : raw.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.msg) || ((_d = (_c = raw === null || raw === void 0 ? void 0 : raw.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.message) || (raw === null || raw === void 0 ? void 0 : raw.message) || String(err);
+  const raw2 = err;
+  return ((_b = (_a = raw2 === null || raw2 === void 0 ? void 0 : raw2.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.msg) || ((_d = (_c = raw2 === null || raw2 === void 0 ? void 0 : raw2.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.message) || (raw2 === null || raw2 === void 0 ? void 0 : raw2.message) || String(err);
 }
 function isRetryable(err) {
   return err.code === "rate_limited" || err.code === "unknown";
@@ -28504,8 +28504,8 @@ function retry(op, opts = {}) {
     for (let attempt = 1; attempt <= max; attempt++) {
       try {
         return yield op(attempt);
-      } catch (raw) {
-        const err = classifyError(raw, { attempt });
+      } catch (raw2) {
+        const err = classifyError(raw2, { attempt });
         lastErr = err;
         if (attempt >= max || !isRetryable(err)) {
           throw err;
@@ -28582,14 +28582,14 @@ function isStale(createTimeMs, windowMs = DEFAULT_STALE_MS) {
 function isMentionAll(m) {
   return m.key === "@_all";
 }
-function extractMentions(raw, botOpenId) {
+function extractMentions(raw2, botOpenId) {
   var _a, _b, _c;
   const mentions = /* @__PURE__ */ new Map();
   const mentionsByOpenId = /* @__PURE__ */ new Map();
   const mentionList = [];
   let mentionAll = false;
   let mentionedBot = false;
-  for (const m of raw !== null && raw !== void 0 ? raw : []) {
+  for (const m of raw2 !== null && raw2 !== void 0 ? raw2 : []) {
     if (isMentionAll(m)) {
       mentionAll = true;
       mentions.set(m.key, { key: m.key, name: m.name, isBot: false });
@@ -28632,11 +28632,11 @@ function resolveMentions(content, ctx) {
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function safeParse(raw) {
-  if (!raw)
+function safeParse(raw2) {
+  if (!raw2)
     return void 0;
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw2);
   } catch (_a) {
     return void 0;
   }
@@ -28713,8 +28713,8 @@ function indentLines(text, indent) {
 function escapeAttr(s) {
   return s.replace(/"/g, "&quot;");
 }
-function formatCalendarInner(raw) {
-  const parsed = safeParse(raw);
+function formatCalendarInner(raw2) {
+  const parsed = safeParse(raw2);
   if (!parsed)
     return "[calendar event]";
   const lines = [];
@@ -28929,14 +28929,14 @@ function extractPostPlainText(blocks) {
   }
   return lines.join("\n");
 }
-function dispatchConvert(raw, msgType, ctx) {
+function dispatchConvert(raw2, msgType, ctx) {
   var _a;
   return __awaiter(this, void 0, void 0, function* () {
     const fn = (_a = converters.get(msgType)) !== null && _a !== void 0 ? _a : convertUnknown;
     try {
-      return yield fn(raw, ctx);
+      return yield fn(raw2, ctx);
     } catch (_b) {
-      return convertUnknown(raw);
+      return convertUnknown(raw2);
     }
   });
 }
@@ -29082,14 +29082,14 @@ function detectMentionAllInContent(content) {
 function createLarkChannel(opts) {
   return new LarkChannel(opts);
 }
-function bufferFromStream(raw) {
+function bufferFromStream(raw2) {
   return __awaiter(this, void 0, void 0, function* () {
-    if (Buffer.isBuffer(raw))
-      return raw;
-    if (raw instanceof Uint8Array)
-      return Buffer.from(raw);
-    if (typeof raw === "object" && raw !== null) {
-      const r = raw;
+    if (Buffer.isBuffer(raw2))
+      return raw2;
+    if (raw2 instanceof Uint8Array)
+      return Buffer.from(raw2);
+    if (typeof raw2 === "object" && raw2 !== null) {
+      const r = raw2;
       if (typeof r.getReadableStream === "function") {
         return yield readableToBuffer(r.getReadableStream());
       }
@@ -122031,7 +122031,7 @@ var init_es = __esm({
         this.errorDescription = errorDescription;
       }
     };
-    ensureScheme = (raw) => raw.includes("://") ? raw : `https://${raw}`;
+    ensureScheme = (raw2) => raw2.includes("://") ? raw2 : `https://${raw2}`;
     TokenManager = class {
       constructor(params) {
         this.appId = params.appId;
@@ -125139,8 +125139,8 @@ var init_es = __esm({
               return this.rawSendWithRetry(Object.assign(Object.assign({}, args), { replyTo: void 0 }));
             }
             if (isFormatError(err) && args.msgType === "post") {
-              const plain = postToPlainText(args.content);
-              return this.rawSendWithRetry(Object.assign(Object.assign({}, args), { msgType: "text", content: { text: plain || "[message]" } }));
+              const plain2 = postToPlainText(args.content);
+              return this.rawSendWithRetry(Object.assign(Object.assign({}, args), { msgType: "text", content: { text: plain2 || "[message]" } }));
             }
             throw err;
           }
@@ -125690,8 +125690,8 @@ var init_es = __esm({
       }
     };
     LOCALE_PRIORITY = ["zh_cn", "en_us", "ja_jp"];
-    convertAudio = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertAudio = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const fileKey = parsed === null || parsed === void 0 ? void 0 : parsed.file_key;
       if (!fileKey)
         return { content: "[audio]", resources: [] };
@@ -125704,32 +125704,32 @@ var init_es = __esm({
       ];
       return { content, resources };
     });
-    convertCalendar = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertCalendar = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       return {
         content: `<calendar_invite>
-${formatCalendarInner(raw)}
+${formatCalendarInner(raw2)}
 </calendar_invite>`,
         resources: []
       };
     });
-    convertGeneralCalendar = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertGeneralCalendar = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       return {
         content: `<calendar>
-${formatCalendarInner(raw)}
+${formatCalendarInner(raw2)}
 </calendar>`,
         resources: []
       };
     });
-    convertShareCalendarEvent = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertShareCalendarEvent = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       return {
         content: `<calendar_share>
-${formatCalendarInner(raw)}
+${formatCalendarInner(raw2)}
 </calendar_share>`,
         resources: []
       };
     });
-    convertFile = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertFile = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const fileKey = parsed === null || parsed === void 0 ? void 0 : parsed.file_key;
       if (!fileKey)
         return { content: "[file]", resources: [] };
@@ -125739,29 +125739,29 @@ ${formatCalendarInner(raw)}
       const resources = [{ type: "file", fileKey, fileName }];
       return { content, resources };
     });
-    convertFolder = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertFolder = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const fileKey = parsed === null || parsed === void 0 ? void 0 : parsed.file_key;
       if (!fileKey)
         return { content: "[folder]", resources: [] };
       const nameAttr = (parsed === null || parsed === void 0 ? void 0 : parsed.file_name) ? ` name="${escapeAttr(parsed.file_name)}"` : "";
       return { content: `<folder key="${fileKey}"${nameAttr}/>`, resources: [] };
     });
-    convertHongbao = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertHongbao = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const textAttr = (parsed === null || parsed === void 0 ? void 0 : parsed.text) ? ` text="${escapeAttr(parsed.text)}"` : "";
       return { content: `<hongbao${textAttr}/>`, resources: [] };
     });
-    convertImage = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertImage = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const imageKey = parsed === null || parsed === void 0 ? void 0 : parsed.image_key;
       if (!imageKey)
         return { content: "[image]", resources: [] };
       const resources = [{ type: "image", fileKey: imageKey }];
       return { content: `![image](${imageKey})`, resources };
     });
-    convertInteractive = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertInteractive = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       if (parsed == null || typeof parsed !== "object") {
         return { content: "[interactive card]", resources: [] };
       }
@@ -125780,8 +125780,8 @@ ${formatCalendarInner(raw)}
       }
       return { content: out.join("\n"), resources: [] };
     });
-    convertLocation = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertLocation = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const name2 = parsed === null || parsed === void 0 ? void 0 : parsed.name;
       const lat = parsed === null || parsed === void 0 ? void 0 : parsed.latitude;
       const lng = parsed === null || parsed === void 0 ? void 0 : parsed.longitude;
@@ -125825,9 +125825,9 @@ ${formatCalendarInner(raw)}
       const content = yield formatSubTree(messageId, childrenMap, ctx, truncated);
       return { content, resources: [] };
     });
-    convertPost = (raw, ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertPost = (raw2, ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a;
-      const rawParsed = safeParse(raw);
+      const rawParsed = safeParse(raw2);
       if (rawParsed == null || typeof rawParsed !== "object") {
         return { content: "[rich text message]", resources: [] };
       }
@@ -125852,32 +125852,32 @@ ${formatCalendarInner(raw)}
       const content = lines.join("\n").trim() || "[rich text message]";
       return { content, resources };
     });
-    convertShareChat = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertShareChat = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a;
-      const parsed = safeParse(raw);
+      const parsed = safeParse(raw2);
       return {
         content: `<group_card id="${(_a = parsed === null || parsed === void 0 ? void 0 : parsed.chat_id) !== null && _a !== void 0 ? _a : ""}"/>`,
         resources: []
       };
     });
-    convertShareUser = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertShareUser = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _b;
-      const parsed = safeParse(raw);
+      const parsed = safeParse(raw2);
       return {
         content: `<contact_card id="${(_b = parsed === null || parsed === void 0 ? void 0 : parsed.user_id) !== null && _b !== void 0 ? _b : ""}"/>`,
         resources: []
       };
     });
-    convertSticker = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertSticker = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const fileKey = parsed === null || parsed === void 0 ? void 0 : parsed.file_key;
       if (!fileKey)
         return { content: "[sticker]", resources: [] };
       const resources = [{ type: "sticker", fileKey }];
       return { content: `<sticker key="${fileKey}"/>`, resources };
     });
-    convertSystem = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertSystem = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       if (!parsed || !parsed.template) {
         return { content: "[system message]", resources: [] };
       }
@@ -125893,13 +125893,13 @@ ${formatCalendarInner(raw)}
       });
       return { content: out.trim() || "[system message]", resources: [] };
     });
-    convertText = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertText = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a;
-      const parsed = safeParse(raw);
+      const parsed = safeParse(raw2);
       return { content: (_a = parsed === null || parsed === void 0 ? void 0 : parsed.text) !== null && _a !== void 0 ? _a : "", resources: [] };
     });
-    convertTodo = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertTodo = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       if (!(parsed === null || parsed === void 0 ? void 0 : parsed.summary))
         return { content: "<todo>\n[todo]\n</todo>", resources: [] };
       const lines = [];
@@ -125917,15 +125917,15 @@ ${formatCalendarInner(raw)}
 ${lines.join("\n")}
 </todo>`, resources: [] };
     });
-    convertUnknown = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertUnknown = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       if (parsed && typeof parsed.text === "string") {
         return { content: parsed.text, resources: [] };
       }
       return { content: "[unsupported message]", resources: [] };
     });
-    convertVideo = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertVideo = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       const fileKey = parsed === null || parsed === void 0 ? void 0 : parsed.file_key;
       if (!fileKey)
         return { content: "[video]", resources: [] };
@@ -125944,8 +125944,8 @@ ${lines.join("\n")}
       ];
       return { content, resources };
     });
-    convertVideoChat = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
-      const parsed = safeParse(raw);
+    convertVideoChat = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+      const parsed = safeParse(raw2);
       if (!parsed) {
         return { content: "<meeting>\n[video chat]\n</meeting>", resources: [] };
       }
@@ -125960,9 +125960,9 @@ ${lines.join("\n")}
 ${inner}
 </meeting>`, resources: [] };
     });
-    convertVote = (raw, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    convertVote = (raw2, _ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a, _b;
-      const parsed = safeParse(raw);
+      const parsed = safeParse(raw2);
       if (!parsed || !parsed.topic && !((_a = parsed.options) === null || _a === void 0 ? void 0 : _a.length)) {
         return { content: "<vote>\n[vote]\n</vote>", resources: [] };
       }
@@ -126389,9 +126389,9 @@ ${lines.join("\n")}
         };
         this.dispatcher.register({
           // IM message — full safety pipeline
-          "im.message.receive_v1": (raw) => __awaiter(this, void 0, void 0, function* () {
+          "im.message.receive_v1": (raw2) => __awaiter(this, void 0, void 0, function* () {
             try {
-              const msg = yield normalize(raw, normalizeOpts);
+              const msg = yield normalize(raw2, normalizeOpts);
               yield this.safety.pushMessage(msg);
             } catch (e) {
               this.emitError(e);
@@ -126402,8 +126402,8 @@ ${lines.join("\n")}
           // different buttons on the same card by the same user are NOT
           // collapsed by the dedup cache. A genuine Feishu re-delivery
           // of the same click still hashes to the same key.
-          "card.action.trigger": (raw) => __awaiter(this, void 0, void 0, function* () {
-            const evt = normalizeCardAction2(raw, { includeRaw });
+          "card.action.trigger": (raw2) => __awaiter(this, void 0, void 0, function* () {
+            const evt = normalizeCardAction2(raw2, { includeRaw });
             if (!evt)
               return;
             const actionId = cardActionId(evt.action);
@@ -126414,8 +126414,8 @@ ${lines.join("\n")}
             }));
           }),
           // Reactions — dedup only
-          "im.message.reaction.created_v1": (raw) => __awaiter(this, void 0, void 0, function* () {
-            const evt = normalizeReaction(raw, "added", { includeRaw });
+          "im.message.reaction.created_v1": (raw2) => __awaiter(this, void 0, void 0, function* () {
+            const evt = normalizeReaction(raw2, "added", { includeRaw });
             if (!evt)
               return;
             const key = reactionKey(evt);
@@ -126424,8 +126424,8 @@ ${lines.join("\n")}
               return (_b2 = (_a2 = this.handlers).reaction) === null || _b2 === void 0 ? void 0 : _b2.call(_a2, evt);
             });
           }),
-          "im.message.reaction.deleted_v1": (raw) => __awaiter(this, void 0, void 0, function* () {
-            const evt = normalizeReaction(raw, "removed", { includeRaw });
+          "im.message.reaction.deleted_v1": (raw2) => __awaiter(this, void 0, void 0, function* () {
+            const evt = normalizeReaction(raw2, "removed", { includeRaw });
             if (!evt)
               return;
             const key = reactionKey(evt);
@@ -126435,9 +126435,9 @@ ${lines.join("\n")}
             });
           }),
           // Bot added — direct fire, no safety
-          "im.chat.member.bot.added_v1": (raw) => {
+          "im.chat.member.bot.added_v1": (raw2) => {
             var _a2, _b2;
-            const evt = normalizeBotAdded(raw, { includeRaw });
+            const evt = normalizeBotAdded(raw2, { includeRaw });
             if (!evt)
               return;
             try {
@@ -126450,9 +126450,9 @@ ${lines.join("\n")}
           // The dedup key folds in replyId so thread replies on the same
           // top-level comment don't collide with each other (or with the
           // top-level comment itself).
-          "drive.notice.comment_add_v1": (raw) => __awaiter(this, void 0, void 0, function* () {
+          "drive.notice.comment_add_v1": (raw2) => __awaiter(this, void 0, void 0, function* () {
             var _g;
-            const evt = normalizeComment(raw, { includeRaw });
+            const evt = normalizeComment(raw2, { includeRaw });
             if (!evt)
               return;
             yield this.safety.pushAction(`comment:${evt.fileToken}:${evt.commentId}:${(_g = evt.replyId) !== null && _g !== void 0 ? _g : ""}`, evt.fileToken, () => __awaiter(this, void 0, void 0, function* () {
@@ -127696,6 +127696,105 @@ function panelButton(action) {
   return map[action] ?? null;
 }
 
+// packages/dsh-chat-feishu/host/post-content.mjs
+var NODE_PLACEHOLDERS = Object.freeze({
+  img: "[\u56FE\u7247]",
+  media: "[\u89C6\u9891]",
+  emotion: "[\u8868\u60C5]",
+  hr: "---"
+});
+function plain(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function raw(value) {
+  return typeof value === "string" ? value : "";
+}
+function isWrapper(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value) && (Array.isArray(value.content) || Array.isArray(value.content_v2));
+}
+function wrapperOf(parsed) {
+  return [parsed?.zh_cn, parsed, ...Object.values(parsed ?? {})].find(isWrapper) ?? {};
+}
+function rowsOf(wrapper) {
+  if (Array.isArray(wrapper.content_v2)) return wrapper.content_v2;
+  if (Array.isArray(wrapper.content)) return wrapper.content;
+  return [];
+}
+function mentionIndexes(mentions) {
+  const byKey = /* @__PURE__ */ new Map();
+  const byOpenId = /* @__PURE__ */ new Map();
+  for (const mention of Array.isArray(mentions) ? mentions : []) {
+    const key = plain(mention?.key);
+    if (key) byKey.set(key, mention);
+    const openId = openIdOfMention(mention);
+    if (openId) byOpenId.set(openId, mention);
+  }
+  return { byKey, byOpenId };
+}
+function openIdOfMention(mention) {
+  if (!mention) return "";
+  if (typeof mention.id === "string") return plain(mention.id);
+  return plain(mention.id?.open_id ?? mention.open_id);
+}
+function looksLikeOpenId(value) {
+  return /^ou_[A-Za-z0-9_-]+$/.test(plain(value));
+}
+function atLabel(name2, placeholder) {
+  const label = plain(name2) || plain(placeholder);
+  if (!label) return "@";
+  return label.startsWith("@") ? label : `@${label}`;
+}
+function parsePostContent(content, { mentions = [] } = {}) {
+  let parsed = content;
+  if (typeof content === "string") {
+    try {
+      parsed = JSON.parse(content || "{}");
+    } catch {
+      parsed = {};
+    }
+  }
+  if (!parsed || typeof parsed !== "object") parsed = {};
+  const indexes = mentionIndexes(mentions);
+  const imageKeys = /* @__PURE__ */ new Set();
+  const mentionedOpenIds = /* @__PURE__ */ new Set();
+  const lineOf = (node, { keepMentions }) => {
+    if (!node || typeof node !== "object") return "";
+    const tag = plain(node.tag);
+    if (tag === "at") {
+      if (!keepMentions) return "";
+      const placeholder2 = plain(node.user_id) || plain(node.key);
+      const directOpenId = looksLikeOpenId(node.user_id) ? plain(node.user_id) : "";
+      const mentioned = indexes.byKey.get(placeholder2) ?? (directOpenId ? indexes.byOpenId.get(directOpenId) : void 0);
+      const openId = openIdOfMention(mentioned) || directOpenId;
+      if (openId) mentionedOpenIds.add(openId);
+      return atLabel(node.user_name || mentioned?.name, placeholder2);
+    }
+    const placeholder = NODE_PLACEHOLDERS[tag];
+    if (tag === "img") {
+      const key = plain(node.image_key);
+      if (key) imageKeys.add(key);
+      return placeholder;
+    }
+    if (placeholder) return placeholder;
+    return raw(node.text) || raw(node.href);
+  };
+  const render = ({ keepMentions }) => rowsOf(wrapperOf(parsed)).filter(Array.isArray).map((row2) => row2.map((node) => lineOf(node, { keepMentions })).join("").trim()).filter((line) => line).join("\n").trim();
+  const wrapper = wrapperOf(parsed);
+  const title = plain(wrapper.title);
+  const body = render({ keepMentions: true });
+  const bodyWithoutMentions = render({ keepMentions: false });
+  return {
+    text: [title, body].filter(Boolean).join("\n").trim(),
+    mentionFreeText: [title, bodyWithoutMentions].filter(Boolean).join("\n").trim(),
+    imageKeys: [...imageKeys],
+    mentionedOpenIds: [...mentionedOpenIds],
+    title
+  };
+}
+function postText(content, mentions = []) {
+  return parsePostContent(content, { mentions }).text;
+}
+
 // packages/dsh-chat-feishu/host/bridge.mjs
 var MAX_DELIVERABLE_BYTES = 30 * 1024 * 1024;
 function messageText(message) {
@@ -127748,37 +127847,6 @@ function sniffImageMediaType(bytes, contentType) {
   if (head.length >= 12 && head.subarray(0, 4).toString("latin1") === "RIFF" && head.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
   return null;
 }
-function parsePostContent(content) {
-  let parsed = {};
-  try {
-    parsed = JSON.parse(content ?? "{}");
-  } catch {
-    return { text: "", imageKeys: [] };
-  }
-  const localised = parsed?.zh_cn ?? Object.values(parsed ?? {}).find((value) => value && typeof value === "object") ?? {};
-  const rows = Array.isArray(localised.content) ? localised.content : [];
-  const imageKeys = [];
-  const lineOf = (node) => {
-    if (!node || typeof node !== "object") return "";
-    if (node.tag === "img") {
-      if (typeof node.image_key === "string" && node.image_key) imageKeys.push(node.image_key);
-      return "[\u56FE\u7247]";
-    }
-    if (node.tag === "media") return "[\u89C6\u9891]";
-    if (node.tag === "at") {
-      const id = typeof node.user_id === "string" ? node.user_id.trim() : "";
-      return id ? `@${id}` : "@";
-    }
-    const text = typeof node.text === "string" ? node.text : "";
-    return text || (typeof node.href === "string" ? node.href : "");
-  };
-  const lines = rows.filter(Array.isArray).map((row2) => row2.map(lineOf).join("")).filter((line) => line.trim());
-  const title = typeof localised.title === "string" ? localised.title.trim() : "";
-  return {
-    text: [title, ...lines].filter(Boolean).join("\n").trim(),
-    imageKeys
-  };
-}
 function parseInbound(message) {
   const text = messageText(message);
   if (text !== null) return { kind: "text", text };
@@ -127797,18 +127865,28 @@ function parseInbound(message) {
     return { kind: "unsupported", label: `${type === "image" ? "\u56FE\u7247" : "\u6587\u4EF6"}\uFF08\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\uFF09` };
   }
   if (type === "post") {
-    const { text: postText, imageKeys } = parsePostContent(message.content);
-    if (!postText && imageKeys.length === 0) {
+    const parsed = parsePostContent(message.content, { mentions: message.mentions });
+    if (!parsed.text && parsed.imageKeys.length === 0) {
       return { kind: "unsupported", label: "\u5BCC\u6587\u672C\uFF08\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\uFF09" };
     }
-    return { kind: "post", text: postText, imageKeys };
+    return {
+      kind: "post",
+      text: parsed.text,
+      mentionFreeText: parsed.mentionFreeText,
+      imageKeys: parsed.imageKeys,
+      mentionedOpenIds: parsed.mentionedOpenIds
+    };
   }
   if (type === "merge_forward") return { kind: "merge_forward" };
   return { kind: "unsupported", label: type };
 }
-function mentionsBot(message, botOpenId) {
-  if (!botOpenId || !Array.isArray(message?.mentions)) return false;
-  return message.mentions.some((mention) => mention?.id?.open_id === botOpenId);
+function mentionsBot(message, botOpenId, inbound = null) {
+  if (!botOpenId) return false;
+  const mentioned = (mention) => typeof mention?.id === "string" ? mention.id : mention?.id?.open_id;
+  if (Array.isArray(message?.mentions) && message.mentions.some((mention) => mentioned(mention) === botOpenId)) {
+    return true;
+  }
+  return Array.isArray(inbound?.mentionedOpenIds) && inbound.mentionedOpenIds.includes(botOpenId);
 }
 function stripMentions(text, mentions) {
   if (!Array.isArray(mentions) || mentions.length === 0) return text;
@@ -127850,8 +127928,8 @@ function createFeishuBridge({
     } catch (error) {
       logger.warn?.(`[dsh-chat-feishu] \u53D6\u804A\u5929\u540D\u5931\u8D25\uFF08\u6807\u9898\u91CC\u5148\u7528\u63A9\u7801 id\uFF09\uFF1A${error?.message ?? error}`);
     }
-    const raw = typeof id === "string" ? id : "";
-    return `${kind} ${raw.length > 12 ? `${raw.slice(0, 12)}\u2026` : raw}`.trim();
+    const raw2 = typeof id === "string" ? id : "";
+    return `${kind} ${raw2.length > 12 ? `${raw2.slice(0, 12)}\u2026` : raw2}`.trim();
   }
   async function sendToConversation({ key, text }) {
     const separator = key.indexOf(":");
@@ -128013,16 +128091,9 @@ ${text}`
       return;
     }
     const inbound = parseInbound(message);
-    if (inbound.kind === "unsupported") {
-      await gateway.replyText({
-        messageId: message.message_id,
-        text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u3001\u5BCC\u6587\u672C\u3001\u56FE\u7247\u3001\u6587\u4EF6\u4E0E\u5408\u5E76\u8F6C\u53D1\uFF09\u3002`
-      });
-      return;
-    }
     const conversationKey = conversationType === "direct" ? `p2p:${senderId}` : `group:${message.chat_id}`;
     if (inbound.kind === "text" || inbound.kind === "post") {
-      const candidate = stripMentions(inbound.text, message.mentions);
+      const candidate = inbound.kind === "post" ? inbound.mentionFreeText ?? stripMentions(inbound.text, message.mentions) : stripMentions(inbound.text, message.mentions);
       if (candidate && deps.interactions?.offer?.({
         channelId: deps.channelId,
         botId: bot.id,
@@ -128034,8 +128105,15 @@ ${text}`
         return;
       }
     }
-    if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId)) {
+    if (conversationType === "group" && bot.groupResponseMode !== "all" && !mentionsBot(message, bot.botOpenId, inbound)) {
       logger.info?.(`[dsh-chat-feishu] \u7FA4\u6D88\u606F\u672A @ \u672C\u673A\u5668\u4EBA\uFF0C\u5FFD\u7565\uFF08${bot.id} group=${message.chat_id}\uFF09`);
+      return;
+    }
+    if (inbound.kind === "unsupported") {
+      await gateway.replyText({
+        messageId: message.message_id,
+        text: `\u6682\u65F6\u8FD8\u4E0D\u80FD\u5904\u7406\u300C${inbound.label}\u300D\u7C7B\u578B\u7684\u6D88\u606F\uFF08\u76EE\u524D\u652F\u6301\u6587\u672C\u3001\u5BCC\u6587\u672C\u3001\u56FE\u7247\u3001\u6587\u4EF6\u4E0E\u5408\u5E76\u8F6C\u53D1\uFF09\u3002`
+      });
       return;
     }
     const workingReaction = await markWorking(message);
@@ -128070,7 +128148,7 @@ ${text}`
       }
     };
     if (inbound.kind === "post") {
-      text = stripMentions(inbound.text, message.mentions);
+      text = inbound.text;
       const parts = [];
       for (const fileKey of inbound.imageKeys) {
         const { part } = await inboundImagePart(fileKey);
@@ -128912,15 +128990,15 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
     }
     const formValue = event?.action?.formValue ?? {};
     const formEntries = Object.entries(formValue).filter(([field2]) => field2.startsWith("chk_") || field2.startsWith("multi_") || field2.startsWith("text_"));
-    const truthy = (raw) => raw === true || raw === "true" || raw === 1 || raw === "1";
+    const truthy = (raw2) => raw2 === true || raw2 === "true" || raw2 === 1 || raw2 === "1";
     let label = "";
     let questionId;
     if (formEntries.length > 0) {
       const picked = [];
-      for (const [field2, raw] of formEntries) {
+      for (const [field2, raw2] of formEntries) {
         if (field2.startsWith("chk_")) {
           const matched = /^chk_(\d+)_(.+)$/.exec(field2);
-          if (!matched || !truthy(raw)) continue;
+          if (!matched || !truthy(raw2)) continue;
           const [, indexText, id] = matched;
           questionId = id;
           const question = questionBatches.get(`p2p:${operatorId}`)?.questions?.find((item) => item?.id === id) ?? questionBatches.get(`group:${chatId}`)?.questions?.find((item) => item?.id === id);
@@ -128930,11 +129008,11 @@ ${shown || "\uFF08\u6CA1\u6709\u8F93\u51FA\uFF09"}` });
         }
         questionId = field2.slice(field2.indexOf("_") + 1);
         if (field2.startsWith("multi_")) {
-          for (const item of Array.isArray(raw) ? raw : [raw]) {
+          for (const item of Array.isArray(raw2) ? raw2 : [raw2]) {
             if (typeof item === "string" && item.trim()) picked.push(item.trim());
           }
-        } else if (typeof raw === "string" && raw.trim()) {
-          picked.push(raw.trim());
+        } else if (typeof raw2 === "string" && raw2.trim()) {
+          picked.push(raw2.trim());
         }
       }
       label = picked.join("\u3001");
@@ -129095,11 +129173,11 @@ function resolveLarkIdentity(config, conversationType, identity2 = {}) {
   });
 }
 function identityFromConversationKey(key) {
-  const raw = typeof key === "string" ? key : "";
-  const separator = raw.indexOf(":");
+  const raw2 = typeof key === "string" ? key : "";
+  const separator = raw2.indexOf(":");
   if (separator <= 0) return { conversationType: null, chatId: null, senderId: null };
-  const kind = raw.slice(0, separator);
-  const id = raw.slice(separator + 1);
+  const kind = raw2.slice(0, separator);
+  const id = raw2.slice(separator + 1);
   if (kind === "p2p") return { conversationType: "direct", chatId: null, senderId: id || null };
   if (kind === "group") return { conversationType: "group", chatId: id || null, senderId: null };
   return { conversationType: null, chatId: null, senderId: null };
@@ -129142,10 +129220,10 @@ function larkError(code, message, details = {}) {
   return error;
 }
 function parseJson(text) {
-  const raw = typeof text === "string" ? text.trim() : "";
-  if (!raw) return null;
+  const raw2 = typeof text === "string" ? text.trim() : "";
+  if (!raw2) return null;
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw2);
   } catch {
     return null;
   }
@@ -129875,9 +129953,9 @@ import { stat as stat2 } from "node:fs/promises";
 var DEFAULT_CONNECT_TIMEOUT_MS = 15e4;
 var MIN_CONNECT_TIMEOUT_MS = 1e3;
 var MAX_CONNECT_TIMEOUT_MS = 9e5;
-function resolveConnectTimeoutMs(raw) {
-  if (raw === void 0 || raw === null || raw === "") return DEFAULT_CONNECT_TIMEOUT_MS;
-  const parsed = Number(raw);
+function resolveConnectTimeoutMs(raw2) {
+  if (raw2 === void 0 || raw2 === null || raw2 === "") return DEFAULT_CONNECT_TIMEOUT_MS;
+  const parsed = Number(raw2);
   if (!Number.isFinite(parsed)) return DEFAULT_CONNECT_TIMEOUT_MS;
   return Math.min(MAX_CONNECT_TIMEOUT_MS, Math.max(MIN_CONNECT_TIMEOUT_MS, parsed));
 }
@@ -129925,15 +130003,15 @@ function normalizeOptionValues(value, { splitCommas = true } = {}) {
   push(value);
   return [...new Set(flat)];
 }
-function normalizeCardAction(raw) {
-  if (raw === null || typeof raw !== "object") return null;
-  const context = raw.context ?? {};
-  const operator = raw.operator ?? {};
-  const action = raw.action ?? {};
-  const messageId = context.open_message_id ?? raw.open_message_id ?? raw.messageId;
-  const chatId = context.open_chat_id ?? raw.open_chat_id ?? raw.chatId;
+function normalizeCardAction(raw2) {
+  if (raw2 === null || typeof raw2 !== "object") return null;
+  const context = raw2.context ?? {};
+  const operator = raw2.operator ?? {};
+  const action = raw2.action ?? {};
+  const messageId = context.open_message_id ?? raw2.open_message_id ?? raw2.messageId;
+  const chatId = context.open_chat_id ?? raw2.open_chat_id ?? raw2.chatId;
   const openId = operator.open_id ?? operator.openId;
-  const token = raw.token ?? context.token ?? raw.event?.token;
+  const token = raw2.token ?? context.token ?? raw2.event?.token;
   if (typeof chatId !== "string" || !chatId || typeof openId !== "string" || !openId) return null;
   return Object.freeze({
     messageId: typeof messageId === "string" ? messageId : void 0,
@@ -129970,7 +130048,7 @@ function normalizeCardAction(raw) {
       ].filter((item, index, list) => item !== "" && list.indexOf(item) === index)),
       ...action.name === void 0 ? {} : { name: action.name }
     }),
-    raw
+    raw: raw2
   });
 }
 function fileTypeFor(name2) {
@@ -130055,8 +130133,8 @@ function createLarkProbe({
 function readableApiError(error) {
   const detail = error?.response?.data;
   if (detail?.msg) return `${detail.msg}${detail.code ? `\uFF08code ${detail.code}\uFF09` : ""}`;
-  const raw = typeof error?.message === "string" ? error.message : String(error);
-  const embedded = /\{[\s\S]*\}/.exec(raw);
+  const raw2 = typeof error?.message === "string" ? error.message : String(error);
+  const embedded = /\{[\s\S]*\}/.exec(raw2);
   if (embedded) {
     try {
       const parsed = JSON.parse(embedded[0]);
@@ -130064,7 +130142,7 @@ function readableApiError(error) {
     } catch {
     }
   }
-  return raw.slice(0, 300);
+  return raw2.slice(0, 300);
 }
 function createLarkGateway({
   appId,
@@ -130909,17 +130987,16 @@ function createLarkGateway({
         body = {};
       }
       const msgType = typeof item.msg_type === "string" ? item.msg_type : "unknown";
-      const plain = (value) => typeof value === "string" ? value.trim() : "";
+      const plain2 = (value) => typeof value === "string" ? value.trim() : "";
       let text = "";
       if (msgType === "text") {
-        text = plain(body.text);
+        text = plain2(body.text);
       } else if (msgType === "post") {
-        const rows = Array.isArray(body.content) ? body.content : [];
-        text = rows.flat().map((node) => plain(node?.text ?? node?.href)).filter(Boolean).join(" ");
+        text = postText(body, item.mentions);
       } else if (msgType === "audio") {
-        text = plain(body.text);
+        text = plain2(body.text);
       }
-      const fileName = plain(body.file_name) || plain(body.fileName) || null;
+      const fileName = plain2(body.file_name) || plain2(body.fileName) || null;
       return {
         messageId: item.message_id ?? messageId,
         senderId: item.sender?.id ?? item.sender?.sender_id?.open_id ?? null,
@@ -131414,9 +131491,9 @@ function createFeishuStateStore({ path: path2, logger = console } = {}) {
 
 // packages/dsh-chat-feishu/host/controller.mjs
 function deriveFeishuIdentity(appId) {
-  const raw = typeof appId === "string" ? appId.trim() : "";
-  if (!raw) throw new TypeError("deriveFeishuIdentity \u9700\u8981 appId\u3002");
-  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
+  const raw2 = typeof appId === "string" ? appId.trim() : "";
+  if (!raw2) throw new TypeError("deriveFeishuIdentity \u9700\u8981 appId\u3002");
+  const digest = createHash("sha256").update(raw2).digest("hex").slice(0, 24);
   return { botId: `fs_${digest}`, secretRef: `DSH_FEISHU_APP_SECRET_${digest.toUpperCase()}` };
 }
 var APP_ID_PATTERN2 = /^cli_[A-Za-z0-9_-]{4,64}$/;
@@ -132078,16 +132155,16 @@ function createFeishuController({ deps, logger = console, config = {}, internals
     qrCache.set(url2, dataUrl);
     return dataUrl;
   }
-  async function provisionStatus(raw) {
-    const url2 = typeof raw?.qrCodeUrl === "string" && /^https?:\/\//u.test(raw.qrCodeUrl) ? raw.qrCodeUrl : null;
-    const bot = raw?.bot?.botId ? provisionBotStatus(raw.bot.botId) : null;
+  async function provisionStatus(raw2) {
+    const url2 = typeof raw2?.qrCodeUrl === "string" && /^https?:\/\//u.test(raw2.qrCodeUrl) ? raw2.qrCodeUrl : null;
+    const bot = raw2?.bot?.botId ? provisionBotStatus(raw2.bot.botId) : null;
     return Object.freeze({
-      state: raw?.state ?? "idle",
-      attempt: raw?.attempt ?? 0,
+      state: raw2?.state ?? "idle",
+      attempt: raw2?.attempt ?? 0,
       verificationUrl: url2,
       qrCodeDataUrl: url2 ? await (internals.encodeQr ?? encodeQrDataUrl)(url2) : null,
-      remainingSeconds: raw?.remainingSeconds ?? null,
-      error: raw?.error ? Object.freeze({ ...raw.error }) : null,
+      remainingSeconds: raw2?.remainingSeconds ?? null,
+      error: raw2?.error ? Object.freeze({ ...raw2.error }) : null,
       bot
     });
   }
@@ -132309,8 +132386,8 @@ function createFeishuController({ deps, logger = console, config = {}, internals
        * 原因放在 `hint` 里，避免"名字没了却不知道为什么"。
        */
       "names.resolve": async (payload) => {
-        const raw = Array.isArray(payload?.ids) ? payload.ids : null;
-        if (typeof payload?.botId !== "string" || !payload.botId || raw === null) {
+        const raw2 = Array.isArray(payload?.ids) ? payload.ids : null;
+        if (typeof payload?.botId !== "string" || !payload.botId || raw2 === null) {
           return {
             ok: false,
             error: {
@@ -132327,7 +132404,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
             error: { code: "feishu/unknown-bot", message: `\u672A\u627E\u5230\u673A\u5668\u4EBA ${payload.botId}\u3002`, details: {} }
           };
         }
-        const ids2 = [...new Set(raw.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))];
+        const ids2 = [...new Set(raw2.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))];
         const limited = ids2.slice(0, MAX_RESOLVE_IDS);
         const pairs = await Promise.all(
           limited.map(async (id) => [id, await resolveName(payload.botId, id)])
@@ -132698,7 +132775,7 @@ function createFeishuController({ deps, logger = console, config = {}, internals
 }
 
 // packages/dsh-chat-feishu/host/index.mjs
-var CHANNEL_VERSION = "0.2.3";
+var CHANNEL_VERSION = "0.2.4";
 var name = "dsh-chat-feishu-host";
 var inject = ["dshChat"];
 var EXPECTED_CONTRACT = 1;

@@ -74,10 +74,17 @@ function indentLines(text, indent) {
 /**
  * 把飞书某条消息的正文压成一行可读文本。
  *
- * 只做"够用"的解析：文本取 `text`；富文本把各段文字/链接拼起来，图片留一个占位
- * （**不下载**历史媒体，与引用回复同一口径）；其余类型给类型名与文件名。
+ * 只做"够用"的解析：文本取 `text`；富文本把各段文字/链接拼起来，@ 还原成人名，
+ * 图片/视频/表情留占位（**不下载**历史媒体，与引用回复同一口径）；其余类型给类型名与文件名。
  *
- * @param item - 飞书消息条目（`{ msg_type, body:{content} }`）。
+ * ⚠️ 富文本这一段与飞书渠道的 `host/post-content.mjs` 是**同一套口径的两份实现**：
+ * 架构不变量①不允许渠道 import hub（也不许反向），可两边都必须能把富文本读成人话。
+ * **改一边必须同时改另一边**——`test/post-content-parity.test.mjs` 用同一组真机载荷
+ * 钉住两边输出一致。这里的两个坑都是真机踩出来的（2026-10-07）：① 只有"真的带 `content`
+ * 段落数组的那一层"才算多语言包裹，否则平铺形态下会把段落数组本身当包裹、整条子消息被丢掉；
+ * ② `at` 节点给的是 `@_user_1` 占位符，人名要靠 `mentions[].key` 对回来。
+ *
+ * @param item - 飞书消息条目（`{ msg_type, body:{content}, mentions }`）。
  * @returns 单行文本。
  */
 function itemText(item) {
@@ -89,25 +96,55 @@ function itemText(item) {
     body = {};
   }
   const plain = (value) => (typeof value === 'string' ? value.trim() : '');
+  // 正文片段**不 trim**：空格常常挂在前一个节点的末尾（真机：`{"text":" 华哥，…"}`），
+  // 按节点 trim 会把 `@黄华 华哥` 粘成 `@黄华华哥`。整行拼完再统一去首尾空格。
+  const raw = (value) => (typeof value === 'string' ? value : '');
 
   if (msgType === 'text') return plain(body.text);
   if (msgType === 'post') {
-    // 富文本是多语言包裹的：`{ zh_cn:{ title, content:[[{tag,...}]] } }`。
-    const localised = body.zh_cn ?? Object.values(body).find((value) => value && typeof value === 'object');
-    const rows = Array.isArray(localised?.content) ? localised.content : [];
+    /** `mentions[]` 两张索引：`at.user_id` 可能是 `@_user_N` 占位符，也可能是真实 `ou_…`。 */
+    const byKey = new Map();
+    const byOpenId = new Map();
+    for (const mention of Array.isArray(item?.mentions) ? item.mentions : []) {
+      const key = plain(mention?.key);
+      if (key) byKey.set(key, mention);
+      // 事件里 `id` 是对象、回读接口里是字符串（真机实测两种都有）。
+      const openId = typeof mention?.id === 'string' ? plain(mention.id) : plain(mention?.id?.open_id);
+      if (openId) byOpenId.set(openId, mention);
+    }
+    // 段落数组可能在多语言包裹里（发送接口形状），也可能平铺在顶层（事件与回读形状）。
+    const isWrapper = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+      && (Array.isArray(value.content) || Array.isArray(value.content_v2));
+    const localised = [body.zh_cn, body, ...Object.values(body ?? {})].find(isWrapper) ?? {};
+    // **优先 `content_v2`**：官方口径是 `md` 标签只在 v2 里、`content` 是降级形态（与渠道侧一致）。
+    const rows = Array.isArray(localised.content_v2)
+      ? localised.content_v2
+      : (Array.isArray(localised.content) ? localised.content : []);
     const lineOf = (node) => {
       if (!node || typeof node !== 'object') return '';
-      if (node.tag === 'img' || node.tag === 'media') {
-        // 媒体不下载，但要让模型知道"这里本来有一张图"。
-        return `[${node.tag === 'img' ? '图片' : '视频'}]`;
+      const tag = plain(node.tag);
+      if (tag === 'img' || tag === 'media') {
+        // 媒体不下载，但要让模型知道"这里本来有一张图/一段视频"。
+        return `[${tag === 'img' ? '图片' : '视频'}]`;
       }
-      if (node.tag === 'at') return plain(node.user_id) ? `@${plain(node.user_id)}` : '@';
-      return plain(node.text ?? node.href);
+      if (tag === 'emotion') return '[表情]';
+      if (tag === 'hr') return '---';
+      if (tag === 'at') {
+        const placeholder = plain(node.user_id) || plain(node.key);
+        const mentioned = byKey.get(placeholder)
+          ?? (/^ou_[A-Za-z0-9_-]+$/.test(placeholder) ? byOpenId.get(placeholder) : undefined);
+        // 人名优先；没有就退回占位符本身（占位符自带 `@`，别补成 `@@_user_1`）。
+        // **不**把 `mentions[].id` 打印出来——那是内部标识，与渠道侧同一口径。
+        const label = plain(node.user_name) || plain(mentioned?.name) || placeholder;
+        if (!label) return '@';
+        return label.startsWith('@') ? label : `@${label}`;
+      }
+      return raw(node.text) || raw(node.href);
     };
     const lines = rows
       .filter(Array.isArray)
-      .map((row) => row.map(lineOf).filter(Boolean).join(''))
-      .filter(Boolean);
+      .map((row) => row.map(lineOf).join('').trim())
+      .filter((line) => line);
     const title = plain(localised?.title);
     return [title, ...lines].filter(Boolean).join('\n');
   }

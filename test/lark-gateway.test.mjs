@@ -335,7 +335,7 @@ test('网关：读被引用消息的正文（文字 / 富文本 / 媒体只给�
     fileName: null,
   });
 
-  // 富文本：只取文字部分，链接取 href。
+  // 富文本（平铺形态，事件与回读给的就是这个）：文字/链接按行保留，@ 还原成人名、媒体留占位。
   sdk.__calls.messageGets = [];
   const sdkPost = createFakeSdk({
     createReturns: {
@@ -347,14 +347,48 @@ test('网关：读被引用消息的正文（文字 / 富文本 / 媒体只给�
             message_id: 'om_post',
             msg_type: 'post',
             sender: { id: 'ou_a' },
-            body: { content: JSON.stringify({ content: [[{ tag: 'text', text: '看这个' }, { tag: 'a', href: 'https://x' }]] }) },
+            mentions: [{ key: '@_user_1', id: { open_id: 'ou_huang' }, name: '黄华' }],
+            body: {
+              content: JSON.stringify({
+                title: '现金流',
+                content: [
+                  [{ tag: 'at', user_id: '@_user_1', user_name: '黄华' }, { tag: 'text', text: ' 看这个' }],
+                  [{ tag: 'img', image_key: 'img_x' }, { tag: 'a', href: 'https://x' }],
+                ],
+              }),
+            },
           }],
         },
       },
     },
   });
   const post = await makeGateway(sdkPost).getMessageText({ messageId: 'om_post' });
-  assert.equal(post.text, '看这个 https://x');
+  assert.equal(post.text, '现金流\n@黄华 看这个\n[图片]https://x');
+
+  // 多语言包裹（发送接口形状）也要认；@ 只有占位符时靠 mentions 还原人名。
+  const sdkPostZh = createFakeSdk({
+    createReturns: {
+      messageGet: {
+        code: 0,
+        msg: 'success',
+        data: {
+          items: [{
+            message_id: 'om_post_zh',
+            msg_type: 'post',
+            sender: { id: 'ou_a' },
+            mentions: [{ key: '@_user_1', id: { open_id: 'ou_huang' }, name: '黄华' }],
+            body: {
+              content: JSON.stringify({
+                zh_cn: { content: [[{ tag: 'at', user_id: '@_user_1' }, { tag: 'text', text: '你好' }]] },
+              }),
+            },
+          }],
+        },
+      },
+    },
+  });
+  const postZh = await makeGateway(sdkPostZh).getMessageText({ messageId: 'om_post_zh' });
+  assert.equal(postZh.text, '@黄华你好');
 
   // 媒体：不下载历史附件，只给类型与文件名。
   const sdkImage = createFakeSdk({

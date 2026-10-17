@@ -309,6 +309,16 @@ function postContent(nodes, { title = '' } = {}) {
   return JSON.stringify({ zh_cn: { ...(title ? { title } : {}), content: nodes } });
 }
 
+/**
+ * 真机形态的飞书富文本：**平铺**，没有多语言包裹。
+ *
+ * 事件与 `GET /im/v1/messages/:id` 给的就是这个形状（2026-10-07 回读一条真机 post 消息确认）；
+ * 只有发送接口用 `{ zh_cn: { … } }`。
+ */
+function flatPostContent(nodes, { title = '' } = {}) {
+  return JSON.stringify({ title, content: nodes, content_v2: nodes });
+}
+
 async function makeBridge({
   bot = BOT,
   contextEnhancement = null,
@@ -324,6 +334,8 @@ async function makeBridge({
   holdSettings = false,
   /** 会话标题里的聊天名解析器（控制器在真机上注入；不传就退回掩码 id）。 */
   resolveChatLabel = null,
+  /** 桥自己的日志出口：默认静默；要断言"静默丢弃也留了痕"的用例传一个收集器。 */
+  logger = silentLogger,
 } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-chat-feishu-'));
   const gateway = createFakeGateway();
@@ -409,7 +421,7 @@ async function makeBridge({
     },
   };
   const bridge = createFeishuBridge({
-    bot, deps, gateway, state, logger: silentLogger, resolveChatLabel,
+    bot, deps, gateway, state, logger, resolveChatLabel,
   });
   return {
     bridge,
@@ -1540,6 +1552,209 @@ test('富文本（post）：内容解析不出来时仍走"不支持"兜底，�
     }));
     assert.equal(app.gateway.calls.replies.length, 1);
     assert.match(app.gateway.calls.replies[0].text, /富文本（内容无法解析）/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：真机平铺形态（无多语言包裹）也解析出正文，@ 换成人名', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    // 2026-10-07 真机回读的载荷形状：`{title,content,content_v2}`，
+    // @ 节点是 `user_id:'@_user_1'` 占位符 + `user_name`。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_flat',
+      messageType: 'post',
+      content: flatPostContent([[
+        { tag: 'at', user_id: '@_user_1', user_name: '黄华', style: [] },
+        { tag: 'text', text: ' 华哥，现金流的计算', style: [] },
+      ]]),
+    }));
+
+    assert.equal(app.gateway.calls.replies.length, 0, '真机富文本不该再回"暂时还不能处理"');
+    assert.ok(asked, '正文要进模型');
+    assert.match(asked.content[0].text, /华哥，现金流的计算/);
+    assert.match(asked.content[0].text, /@黄华/);
+    assert.doesNotMatch(asked.content[0].text, /@_user_1/, '占位符要换成人名');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：真机载荷逐字还原——@ 人名、节点间空格、拆分节点都保住', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    // 逐字取自 2026-10-07 真机回读那条消息（`GET /im/v1/messages/:id` 的 body.content）：
+    // 一行被拆成多个 text 节点，空格挂在前一个节点末尾（`" /"`），@ 是人名 + 占位符。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_real',
+      messageType: 'post',
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_huang' }, name: '黄华' }],
+      content: flatPostContent([[
+        { tag: 'at', user_id: '@_user_1', user_name: '黄华', style: [] },
+        { tag: 'text', text: ' 华哥，现金流的计算，之前生鲜部采用', style: [] },
+        { tag: 'text', text: '月均交易额', style: [] },
+        { tag: 'text', text: ' /', style: [] },
+        { tag: 'text', text: '应付账款', style: [] },
+      ]]),
+    }));
+
+    assert.ok(asked, '正文要进模型');
+    assert.equal(
+      asked.content[0].text,
+      '@黄华 华哥，现金流的计算，之前生鲜部采用月均交易额 /应付账款',
+      '@ 还原成人名、节点之间的空格一个都不能丢',
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：表情/视频/分割线/链接都留得下痕迹，认不出的标签也不丢整行', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_nodes',
+      messageType: 'post',
+      content: flatPostContent([
+        [{ tag: 'text', text: '看这个' }, { tag: 'a', text: '报表', href: 'https://x' }],
+        [{ tag: 'img', image_key: 'img_a' }, { tag: 'emotion', emoji_type: 'SMILE' }],
+        [{ tag: 'media', file_key: 'file_v3_v' }],
+        [{ tag: 'hr' }],
+        [{ tag: 'unknown_new_tag', text: '以后新增的标签' }],
+      ]),
+    }));
+
+    assert.ok(asked, '一条富文本不该因为有个新标签就整条丢掉');
+    const body = asked.content[0].text;
+    assert.match(body, /看这个报表/);
+    assert.match(body, /\[图片\]\[表情\]/);
+    assert.match(body, /\[视频\]/);
+    assert.match(body, /---/);
+    assert.match(body, /以后新增的标签/);
+    assert.equal(asked.content.length, 2, '内嵌图片照样进模型');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：正文里 @ 了机器人（mentions 里没有那一条）也要响应', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    // 有的端/有的形态把真实 open_id 写在 `at` 节点里，`message.mentions` 反而没有这条；
+    // 只看顶层 mentions 会漏掉"用户在富文本里 @ 了它、它却装没听见"。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_at_bot',
+      chatType: 'group',
+      messageType: 'post',
+      content: flatPostContent([[
+        { tag: 'at', user_id: 'ou_bot', user_name: '测试机器人' },
+        { tag: 'text', text: ' 帮我看下昨天销售额' },
+      ]]),
+    }));
+
+    assert.equal(app.gateway.calls.replies.length, 0, '被 @ 了就不该回"暂时还不能处理"');
+    assert.ok(asked, '被 @ 的富文本必须进模型');
+    assert.match(asked.content[0].text, /帮我看下昨天销售额/);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('富文本（post）：at 带真实 open_id、没带 user_name 时，靠 mentions 反查人名', async () => {
+  let asked = null;
+  const app = await makeBridge({ onAsk: (options) => { asked = options; } });
+  try {
+    // 官方 SDK 对 `at.user_id` 两种形态都兼容：`@_user_N` 占位符，或真实 `ou_…`。
+    // 真实 open_id 时按 open_id 反查 `mentions` 才拿得到人名。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_openid_at',
+      messageType: 'post',
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bob' }, name: '鲍勃' }],
+      content: flatPostContent([[
+        { tag: 'at', user_id: 'ou_bob' },
+        { tag: 'text', text: ' 看下这个' },
+      ]]),
+    }));
+
+    assert.ok(asked, '正文要进模型');
+    assert.match(asked.content[0].text, /@鲍勃 看下这个/);
+    assert.doesNotMatch(asked.content[0].text, /ou_bob/, '不能把 open_id 写进提示词');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('交互回答：富文本答题时用"去掉 @ 的那一份"认领，@ 不混进答案', async () => {
+  const app = await makeBridge();
+  try {
+    app.interactions.claimed = true;
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_answer',
+      chatType: 'group',
+      text: undefined,
+      messageType: 'post',
+      content: flatPostContent([[
+        { tag: 'at', user_id: 'ou_bot', user_name: '测试机器人' },
+        { tag: 'text', text: ' 生产' },
+      ]]),
+    }));
+
+    assert.equal(app.offers.length, 1, '富文本里的手打答案要被认领');
+    assert.equal(app.offers[0].text, '生产', '答案里不能带 @');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('门禁：群里解析不出来的消息未 @ 时既不回复也不进模型（只留日志）', async () => {
+  const lines = [];
+  const logger = { info: (line) => lines.push(line), warn: () => {}, error: () => {} };
+  let asked = null;
+  const app = await makeBridge({ logger, onAsk: (options) => { asked = options; } });
+  try {
+    // 群聊、没 @ 机器人、内容又解析不出来 —— 早先这条路会直接回一句"暂时还不能处理"。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_post_group_silent',
+      chatType: 'group',
+      messageType: 'post',
+      content: '{"zh_cn":{}}',
+    }));
+    assert.equal(app.gateway.calls.replies.length, 0, '没被 @ 就不能说话');
+    assert.equal(asked, null, '也不该进模型');
+    assert.ok(lines.some((line) => /群消息未 @ 本机器人，忽略/.test(line)), '静默丢弃要留痕');
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('门禁：群里被 @ 的不支持类型照样给明确提示', async () => {
+  const app = await makeBridge();
+  try {
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_sticker_group',
+      chatType: 'group',
+      messageType: 'sticker',
+      text: undefined,
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+    }));
+    assert.equal(app.gateway.calls.replies.length, 1);
+    assert.match(app.gateway.calls.replies[0].text, /暂时还不能处理「sticker」/);
+
+    // 迁移/回读形态的 mentions：`id` 是 open_id 字符串（不是对象），门禁同样要认。
+    await app.bridge.accept(messageEvent({
+      messageId: 'om_sticker_group_str_id',
+      chatType: 'group',
+      messageType: 'sticker',
+      text: undefined,
+      mentions: [{ key: '@_user_1', id: 'ou_bot' }],
+    }));
+    assert.equal(app.gateway.calls.replies.length, 2, 'id 是字符串的形态也要认');
+    assert.match(app.gateway.calls.replies[1].text, /暂时还不能处理「sticker」/);
   } finally {
     await app.cleanup();
   }
